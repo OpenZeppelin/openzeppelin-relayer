@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use crate::models::NetworkType;
+use crate::services::{RelayerModelFactory, RelayerModelFactoryTrait};
 use crate::{
-    models::{
-        ApiResponse, NetworkTransactionRequest, RelayerModelFactory, RelayerModelFactoryTrait,
-    },
-    repositories::{NetworkType, Repository},
+    models::{ApiResponse, NetworkTransactionRequest},
+    repositories::Repository,
     AppState, RelayerApiError,
 };
 use actix_web::HttpResponse;

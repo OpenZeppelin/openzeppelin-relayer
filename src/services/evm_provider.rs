@@ -15,9 +15,7 @@ impl EvmProvider {
     pub fn new(url: &str) -> Result<Self> {
         let rpc_url = url.parse()?;
         let provider = ProviderBuilder::new().on_http(rpc_url);
-        Ok(Self {
-            provider,
-        })
+        Ok(Self { provider })
     }
 
     pub async fn get_block_number(&self) -> Result<u64> {

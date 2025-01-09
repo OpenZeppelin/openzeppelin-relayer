@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
-use crate::{repositories::NetworkType, RelayerApiError};
+use crate::{models::NetworkType, RelayerApiError};
 
 #[derive(Deserialize, Serialize)]
 pub struct EvmTransactionRequest {

@@ -5,7 +5,8 @@ use config::Config;
 use dotenvy::dotenv;
 use futures::future::try_join_all;
 use log::{error, info};
-use repositories::{InMemoryRelayerRepository, RelayerRepoModel, Repository};
+use models::RelayerRepoModel;
+use repositories::{InMemoryRelayerRepository, Repository};
 use simple_logger::SimpleLogger;
 
 mod config;

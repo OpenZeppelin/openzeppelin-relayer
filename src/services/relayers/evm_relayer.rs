@@ -1,21 +1,23 @@
 use std::sync::Arc;
 
-use super::Relayer;
-use crate::models::{NetworkTransactionRequest, RelayerError, SolanaNetwork};
-use crate::repositories::{RelayerRepoModel, TransactionRepoModel};
+use super::{Relayer, RelayerError};
+use crate::models::{EvmNetwork, NetworkTransactionRequest};
+use crate::models::{RelayerRepoModel, TransactionRepoModel};
+use crate::services::EvmProvider;
 use crate::AppState;
 use async_trait::async_trait;
 use log::info;
 
-pub struct SolanaRelayer {
+pub struct EvmRelayer {
     relayer: RelayerRepoModel,
-    network: SolanaNetwork,
+    network: EvmNetwork,
     state: Arc<AppState>,
+    // evm_provider: EvmProvider,
 }
 
-impl SolanaRelayer {
+impl EvmRelayer {
     pub fn new(relayer: RelayerRepoModel, state: Arc<AppState>) -> Result<Self, RelayerError> {
-        let network = match SolanaNetwork::from_network_str(&relayer.network) {
+        let network = match EvmNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
             Err(e) => return Err(RelayerError::NetworkInitError(e.to_string())),
         };
@@ -24,59 +26,62 @@ impl SolanaRelayer {
             relayer,
             network,
             state,
+            // evm_provider,
         })
     }
 }
 
 #[async_trait]
-impl Relayer for SolanaRelayer {
+impl Relayer for EvmRelayer {
     async fn send_transaction(
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
+        // create
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        info!("Solana Sending transaction...");
+        // send TODO
+        info!("EVM Sending transaction...");
         Ok(transaction)
     }
 
     async fn get_balance(&self) -> Result<bool, RelayerError> {
-        println!("Solana get_balance...");
+        println!("EVM get_balance...");
         Ok(true)
     }
 
     async fn get_nonce(&self) -> Result<bool, RelayerError> {
-        println!("Solana get_nonce...");
+        println!("EVM get_nonce...");
         Ok(true)
     }
 
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
-        println!("Solana delete_pending_transactions...");
+        println!("EVM delete_pending_transactions...");
         Ok(true)
     }
 
     async fn cancel_transaction(&self) -> Result<bool, RelayerError> {
-        println!("Solana cancel_transaction...");
+        println!("EVM cancel_transaction...");
         Ok(true)
     }
 
     async fn replace_transaction(&self) -> Result<bool, RelayerError> {
-        println!("Solana replace_transaction...");
+        println!("EVM replace_transaction...");
         Ok(true)
     }
 
     async fn sign_data(&self) -> Result<bool, RelayerError> {
-        println!("Solana sign_data...");
+        println!("EVM sign_data...");
         Ok(true)
     }
 
     async fn sign_typed_data(&self) -> Result<bool, RelayerError> {
-        println!("Solana sign_typed_data...");
+        println!("EVM sign_typed_data...");
         Ok(true)
     }
 
     async fn rpc(&self) -> Result<bool, RelayerError> {
-        println!("Solana rpc...");
+        println!("EVM rpc...");
         Ok(true)
     }
 }
@@ -89,7 +94,7 @@ mod tests {
     // fn test_new_evm_relayer() {
     //     let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
     //     let provider = EvmProvider::new();
-    //     let relayer = SolanaRelayer::new(network, provider);
+    //     let relayer = EvmRelayer::new(network, provider);
     //     assert!(!relayer.paused);
     // }
 }

@@ -1,26 +1,10 @@
 use crate::config::{NetworkType as ConfigNetworkType, RelayerConfig};
+use crate::models::{NetworkType, RelayerRepoModel, RepositoryError};
 use crate::repositories::*;
 use async_trait::async_trait;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use thiserror::Error;
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub enum NetworkType {
-    Evm,
-    Stellar,
-    Solana,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RelayerRepoModel {
-    pub id: String,
-    pub name: String,
-    pub network: String,
-    pub paused: bool,
-    pub network_type: NetworkType,
-}
 
 pub struct InMemoryRelayerRepository {
     store: Mutex<HashMap<String, RelayerRepoModel>>,

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::repositories::{NetworkType, RelayerRepoModel, RepositoryError, TransactionRepoModel};
+use crate::models::{EvmNetwork, NetworkTransactionRequest};
+use crate::models::{NetworkType, RelayerRepoModel, RepositoryError, TransactionRepoModel};
+
 use crate::services::EvmProvider;
-// use crate::services::EVMRpcService;
-use crate::RelayerApiError;
-use alloy::rpc;
+use crate::{AppState, RelayerApiError};
 use async_trait::async_trait;
 use thiserror::Error;
 
@@ -15,8 +15,6 @@ mod stellar_relayer;
 pub use evm_relayer::*;
 pub use solana_relayer::*;
 pub use stellar_relayer::*;
-
-use super::{AppState, EvmNetwork, NetworkTransactionRequest};
 
 #[derive(Error, Debug)]
 pub enum RelayerError {
@@ -79,9 +77,13 @@ impl RelayerModelFactoryTrait for RelayerModelFactory {
                 };
                 // use first url
                 // let rpc = EVMRpcService::new(&network.public_rpc_urls() )?;
-                let rpc_urls = network.public_rpc_urls().ok_or(RelayerError::ProviderInitError("No RPC URLs found".to_string()))?;
+                let rpc_urls = network
+                    .public_rpc_urls()
+                    .ok_or(RelayerError::ProviderInitError(
+                        "No RPC URLs found".to_string(),
+                    ))?;
                 let evm_provider = EvmProvider::new(&rpc_urls[0]);
-                let relayer = EvmRelayer::new(model, state.clone(), evm_provider)?;
+                let relayer = EvmRelayer::new(model, state.clone())?;
                 Ok(Box::new(relayer) as Box<dyn Relayer>)
             }
             NetworkType::Solana => {
