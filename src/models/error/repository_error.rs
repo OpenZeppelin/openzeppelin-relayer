@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::RelayerApiError;
+use crate::models::ApiError;
 
 #[derive(Debug, Error)]
 pub enum RepositoryError {
@@ -26,17 +26,12 @@ pub enum RepositoryError {
     Unknown(String),
 }
 
-impl From<RepositoryError> for RelayerApiError {
+impl From<RepositoryError> for ApiError {
     fn from(error: RepositoryError) -> Self {
         match error {
-            RepositoryError::NotFound(msg) => RelayerApiError::NotFound(msg),
-            RepositoryError::ConnectionError(msg) => RelayerApiError::InternalError,
-            RepositoryError::ConstraintViolation(msg) => RelayerApiError::InternalError,
-            RepositoryError::InvalidData(msg) => RelayerApiError::BadRequest(msg),
-            RepositoryError::TransactionFailure(msg) => RelayerApiError::InternalError,
-            RepositoryError::PermissionDenied(msg) => RelayerApiError::Unauthorized(msg),
-            RepositoryError::Unknown(msg) => RelayerApiError::InternalError,
-            _ => RelayerApiError::InternalError,
+            RepositoryError::NotFound(msg) => ApiError::NotFound(msg),
+            RepositoryError::Unknown(msg) => ApiError::InternalError(msg),
+            _ => ApiError::InternalError("An unknown error occurred".to_string()),
         }
     }
 }

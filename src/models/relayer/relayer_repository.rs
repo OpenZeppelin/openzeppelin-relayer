@@ -1,6 +1,7 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use strum::Display;
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Display)]
 pub enum NetworkType {
     Evm,
     Stellar,

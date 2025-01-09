@@ -1,5 +1,6 @@
 use crate::models::RepositoryError;
 use async_trait::async_trait;
+use eyre::Result;
 
 mod relayer_repository;
 mod transaction_repository;

@@ -1,36 +1,35 @@
 use actix_web::middleware::Logger;
 use actix_web::{middleware, web, App, HttpServer};
-use color_eyre::Result;
+use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
 use dotenvy::dotenv;
 use futures::future::try_join_all;
-use log::{error, info};
+use log::info;
 use models::RelayerRepoModel;
 use repositories::{InMemoryRelayerRepository, Repository};
 use simple_logger::SimpleLogger;
 
 mod config;
 mod controllers;
-mod errors;
 mod models;
 mod repositories;
 mod routes;
 mod services;
-pub use errors::*;
-pub use models::AppState;
+pub use models::{ApiError, AppState};
 
-fn setup_logging_and_env() {
+fn setup_logging_and_env() -> Result<()> {
     dotenv().ok();
-    if let Err(e) = SimpleLogger::new().env().init() {
-        eprintln!("Failed to initialize logger: {}", e);
-    }
+    SimpleLogger::new()
+        .env()
+        .init()
+        .wrap_err("Failed to initialize logger")
 }
 
-fn load_config_file() -> Config {
-    config::load_config().expect("Failed to load config file")
+fn load_config_file() -> Result<Config> {
+    config::load_config().wrap_err("Failed to load config file")
 }
 
-async fn initialize_app_state(config_file: Config) -> Result<web::Data<AppState>, std::io::Error> {
+async fn initialize_app_state(config_file: Config) -> Result<web::Data<AppState>> {
     let relayer_repository = InMemoryRelayerRepository::new();
     let transaction_repository = repositories::InMemoryTransactionRepository::new();
     let app_state = web::Data::new(AppState {
@@ -39,42 +38,39 @@ async fn initialize_app_state(config_file: Config) -> Result<web::Data<AppState>
     });
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
-        let repo_model = RelayerRepoModel::try_from(relayer.clone()).map_err(|e| {
-            error!("Failed to convert relayer config: {:?}", e);
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        })?;
-        if let Err(e) = app_state.relayer_repository.create(repo_model).await {
-            error!("Failed to create relayer repository entry: {:?}", e);
-            // TODO verify if this is the correct way to handle this error
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
-        }
-        Ok::<(), std::io::Error>(())
+        let repo_model = RelayerRepoModel::try_from(relayer.clone())
+            .wrap_err("Failed to convert relayer config")?;
+        app_state
+            .relayer_repository
+            .create(repo_model)
+            .await
+            .wrap_err("Failed to create relayer repository entry")?;
+        Ok::<(), Report>(())
     });
 
-    try_join_all(relayer_futures).await.map_err(|e| {
-        error!("Failed to initialize relayer repository: {:?}", e);
-        e
-    })?;
+    try_join_all(relayer_futures)
+        .await
+        .wrap_err("Failed to initialize relayer repository")?;
 
     Ok(app_state)
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    // Load environment variables from .env file
-    dotenv().ok();
+async fn main() -> Result<()> {
+    // Initialize error reporting with eyre
+    color_eyre::install().wrap_err("Failed to initialize error reporting")?;
+
+    setup_logging_and_env()?;
+
+    let config_file = load_config_file()?;
+    info!("Config: {:?}", config_file);
 
     let config = config::ServerConfig::from_env();
-
-    setup_logging_and_env();
-
-    let config_file = load_config_file();
-    info!("Config: {:?}", config_file);
 
     let app_state = initialize_app_state(config_file).await?;
 
     info!("Starting server on {}:{}", config.host, config.port);
-    let server = HttpServer::new(move || {
+    HttpServer::new(move || {
         App::new()
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
@@ -83,10 +79,10 @@ async fn main() -> std::io::Result<()> {
             .app_data(app_state.clone())
             .configure(routes::configure_routes)
     })
-    .bind((config.host.as_str(), config.port))?
-    .shutdown_timeout(5);
-
-    info!("Server running at http://{}:{}", config.host, config.port);
-
-    server.run().await
+    .bind((config.host.as_str(), config.port))
+    .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
+    .shutdown_timeout(5)
+    .run()
+    .await
+    .wrap_err("Server runtime error")
 }

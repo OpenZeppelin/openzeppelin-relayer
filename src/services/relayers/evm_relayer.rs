@@ -6,6 +6,7 @@ use crate::models::{RelayerRepoModel, TransactionRepoModel};
 use crate::services::EvmProvider;
 use crate::AppState;
 use async_trait::async_trait;
+use eyre::Result;
 use log::info;
 
 pub struct EvmRelayer {
@@ -19,7 +20,7 @@ impl EvmRelayer {
     pub fn new(relayer: RelayerRepoModel, state: Arc<AppState>) -> Result<Self, RelayerError> {
         let network = match EvmNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
-            Err(e) => return Err(RelayerError::NetworkInitError(e.to_string())),
+            Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
         };
 
         Ok(Self {

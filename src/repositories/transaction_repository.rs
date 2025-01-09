@@ -1,6 +1,7 @@
 use crate::models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus};
 use crate::repositories::*;
 use async_trait::async_trait;
+use eyre::Result;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -95,8 +96,8 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
         let mut store = self.store.lock().unwrap();
         if store.contains_key(&id) {
             let mut updated_tx = tx;
-            updated_tx.id = id;
-            // store.insert(id, updated_tx.clone());
+            updated_tx.id = id.clone();
+            store.insert(id, updated_tx.clone());
             Ok(updated_tx)
         } else {
             Err(RepositoryError::NotFound(format!(

@@ -2,6 +2,7 @@ use crate::config::{NetworkType as ConfigNetworkType, RelayerConfig};
 use crate::models::{NetworkType, RelayerRepoModel, RepositoryError};
 use crate::repositories::*;
 use async_trait::async_trait;
+use eyre::Result;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use thiserror::Error;
@@ -58,8 +59,8 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         if store.contains_key(&id) {
             // Ensure we update the existing entry
             let mut updated_relayer = relayer;
-            updated_relayer.id = id; // Preserve original ID
-                                     // store.insert(id.clone(), updated_relayer.clone());
+            updated_relayer.id = id.clone(); // Preserve original ID
+            store.insert(id, updated_relayer.clone());
             Ok(updated_relayer)
         } else {
             Err(RepositoryError::NotFound(format!(

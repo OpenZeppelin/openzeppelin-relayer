@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use crate::models::{EvmNetwork, NetworkTransactionRequest};
-use crate::models::{NetworkType, RelayerRepoModel, RepositoryError, TransactionRepoModel};
+use crate::models::{EvmNetwork, NetworkTransactionRequest, RelayerError};
+use crate::models::{NetworkType, RelayerRepoModel, TransactionRepoModel};
 
 use crate::services::EvmProvider;
-use crate::{AppState, RelayerApiError};
+use crate::AppState;
 use async_trait::async_trait;
-use thiserror::Error;
+use eyre::Result;
 
 mod evm_relayer;
 mod solana_relayer;
@@ -15,30 +15,6 @@ mod stellar_relayer;
 pub use evm_relayer::*;
 pub use solana_relayer::*;
 pub use stellar_relayer::*;
-
-#[derive(Error, Debug)]
-pub enum RelayerError {
-    #[error("Failed to initialize network: {0}")]
-    NetworkInitError(String),
-    #[error("Failed to initialize provider: {0}")]
-    ProviderInitError(String),
-}
-
-impl From<RelayerError> for RelayerApiError {
-    fn from(error: RelayerError) -> Self {
-        match error {
-            RelayerError::NetworkInitError(msg) => RelayerApiError::BadRequest(msg),
-            RelayerError::ProviderInitError(msg) => RelayerApiError::BadRequest(msg),
-            _ => RelayerApiError::InternalError,
-        }
-    }
-}
-
-impl From<RepositoryError> for RelayerError {
-    fn from(error: RepositoryError) -> Self {
-        RelayerError::NetworkInitError(error.to_string())
-    }
-}
 
 #[async_trait]
 pub trait Relayer {
@@ -73,15 +49,16 @@ impl RelayerModelFactoryTrait for RelayerModelFactory {
             NetworkType::Evm => {
                 let network = match EvmNetwork::from_network_str(&model.network) {
                     Ok(network) => network,
-                    Err(e) => return Err(RelayerError::NetworkInitError(e.to_string())),
+                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
                 // use first url
                 // let rpc = EVMRpcService::new(&network.public_rpc_urls() )?;
-                let rpc_urls = network
-                    .public_rpc_urls()
-                    .ok_or(RelayerError::ProviderInitError(
-                        "No RPC URLs found".to_string(),
-                    ))?;
+                let rpc_urls =
+                    network
+                        .public_rpc_urls()
+                        .ok_or(RelayerError::NetworkConfiguration(
+                            "No RPC URLs found".to_string(),
+                        ))?;
                 let evm_provider = EvmProvider::new(&rpc_urls[0]);
                 let relayer = EvmRelayer::new(model, state.clone())?;
                 Ok(Box::new(relayer) as Box<dyn Relayer>)

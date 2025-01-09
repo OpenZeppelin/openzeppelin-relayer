@@ -5,13 +5,15 @@ use crate::services::{RelayerModelFactory, RelayerModelFactoryTrait};
 use crate::{
     models::{ApiResponse, NetworkTransactionRequest},
     repositories::Repository,
-    AppState, RelayerApiError,
+    ApiError, AppState,
 };
 use actix_web::HttpResponse;
+use eyre::{Context, Result};
 use log::info;
 
-pub async fn list_relayers(state: &AppState) -> Result<HttpResponse, RelayerApiError> {
+pub async fn list_relayers(state: &AppState) -> Result<HttpResponse, ApiError> {
     let relayers = state.relayer_repository.list_all().await?;
+
     info!("Relayers: {:?}", relayers);
 
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
@@ -21,14 +23,12 @@ pub async fn list_relayers(state: &AppState) -> Result<HttpResponse, RelayerApiE
     })))
 }
 
-pub async fn get_relayer(
-    relayer_id: String,
-    state: &AppState,
-) -> Result<HttpResponse, RelayerApiError> {
+pub async fn get_relayer(relayer_id: String, state: &AppState) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
         .get_by_id(relayer_id.to_string())
         .await?;
+
     info!("Relayer: {:?}", relayer);
 
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
@@ -38,7 +38,7 @@ pub async fn get_relayer(
     })))
 }
 
-pub async fn get_relayer_status(relayer_id: String) -> Result<HttpResponse, RelayerApiError> {
+pub async fn get_relayer_status(relayer_id: String) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -46,7 +46,7 @@ pub async fn get_relayer_status(relayer_id: String) -> Result<HttpResponse, Rela
     })))
 }
 
-pub async fn get_relayer_balance(relayer_id: String) -> Result<HttpResponse, RelayerApiError> {
+pub async fn get_relayer_balance(relayer_id: String) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -54,7 +54,7 @@ pub async fn get_relayer_balance(relayer_id: String) -> Result<HttpResponse, Rel
     })))
 }
 
-pub async fn get_relayer_nonce(relayer_id: String) -> Result<HttpResponse, RelayerApiError> {
+pub async fn get_relayer_nonce(relayer_id: String) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -66,11 +66,12 @@ pub async fn send_transaction(
     relayer_id: String,
     state: Arc<AppState>,
     request: serde_json::Value,
-) -> Result<HttpResponse, RelayerApiError> {
+) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository
         .get_by_id(relayer_id.to_string())
-        .await?;
+        .await
+        .wrap_err_with(|| format!("Failed to fetch relayer with ID {}", relayer_id))?;
     info!("Relayer: {:?}", relayer_repo_model);
 
     let tx_request: NetworkTransactionRequest =
@@ -92,7 +93,7 @@ pub async fn get_transaction_by_id(
     relayer_id: String,
     transaction_id: String,
     state: &AppState,
-) -> Result<HttpResponse, RelayerApiError> {
+) -> Result<HttpResponse, ApiError> {
     state
         .relayer_repository
         .get_by_id(relayer_id.to_string())
@@ -114,7 +115,7 @@ pub async fn get_transaction_by_nonce(
     relayer_id: String,
     nonce: u64,
     state: &AppState,
-) -> Result<HttpResponse, RelayerApiError> {
+) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
         .get_by_id(relayer_id.to_string())
@@ -122,7 +123,7 @@ pub async fn get_transaction_by_nonce(
 
     // get by nonce is only supported for EVM network
     if relayer.network_type != NetworkType::Evm {
-        return Err(RelayerApiError::NotSupported(
+        return Err(ApiError::NotSupported(
             "Nonce lookup only supported for EVM networks".into(),
         ));
     }
@@ -131,9 +132,7 @@ pub async fn get_transaction_by_nonce(
         .transaction_repository
         .find_by_nonce(&relayer_id, nonce) // New optimized method
         .await?
-        .ok_or_else(|| {
-            RelayerApiError::NotFound(format!("Transaction with nonce {} not found", nonce))
-        })?;
+        .ok_or_else(|| ApiError::NotFound(format!("Transaction with nonce {} not found", nonce)))?;
 
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
@@ -145,7 +144,7 @@ pub async fn get_transaction_by_nonce(
 pub async fn list_transactions(
     relayer_id: String,
     state: &AppState,
-) -> Result<HttpResponse, RelayerApiError> {
+) -> Result<HttpResponse, ApiError> {
     state
         .relayer_repository
         .get_by_id(relayer_id.to_string())
@@ -163,9 +162,7 @@ pub async fn list_transactions(
     })))
 }
 
-pub async fn delete_pending_transactions(
-    relayer_id: String,
-) -> Result<HttpResponse, RelayerApiError> {
+pub async fn delete_pending_transactions(relayer_id: String) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -176,7 +173,7 @@ pub async fn delete_pending_transactions(
 pub async fn cancel_transaction(
     relayer_id: String,
     transaction_id: String,
-) -> Result<HttpResponse, RelayerApiError> {
+) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -187,7 +184,7 @@ pub async fn cancel_transaction(
 pub async fn replace_transaction(
     relayer_id: String,
     transaction_id: String,
-) -> Result<HttpResponse, RelayerApiError> {
+) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -195,7 +192,7 @@ pub async fn replace_transaction(
     })))
 }
 
-pub async fn sign_data(relayer_id: String) -> Result<HttpResponse, RelayerApiError> {
+pub async fn sign_data(relayer_id: String) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -203,7 +200,7 @@ pub async fn sign_data(relayer_id: String) -> Result<HttpResponse, RelayerApiErr
     })))
 }
 
-pub async fn sign_typed_data(relayer_id: String) -> Result<HttpResponse, RelayerApiError> {
+pub async fn sign_typed_data(relayer_id: String) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(relayer_id),
@@ -214,7 +211,7 @@ pub async fn sign_typed_data(relayer_id: String) -> Result<HttpResponse, Relayer
 pub async fn relayer_rpc(
     relayer_id: String,
     request: serde_json::Value,
-) -> Result<HttpResponse, RelayerApiError> {
+) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
         data: Some(true),

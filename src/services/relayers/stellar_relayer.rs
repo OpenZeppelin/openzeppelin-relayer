@@ -3,6 +3,7 @@ use crate::models::{
 };
 use crate::AppState;
 use async_trait::async_trait;
+use eyre::Result;
 use log::info;
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ impl StellarRelayer {
     pub fn new(relayer: RelayerRepoModel, state: Arc<AppState>) -> Result<Self, RelayerError> {
         let network = match StellarNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
-            Err(e) => return Err(RelayerError::NetworkInitError(e.to_string())),
+            Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
         };
         Ok(Self {
             network,
