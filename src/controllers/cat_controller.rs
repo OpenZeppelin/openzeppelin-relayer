@@ -1,9 +1,9 @@
-use crate::errors::RelayerError;
+use crate::errors::RelayerApiError;
 use crate::models::CreateCatRequest;
 use crate::services::CatService;
 use actix_web::{web, HttpResponse};
 
-type CatResult = Result<HttpResponse, RelayerError>;
+type CatResult = Result<HttpResponse, RelayerApiError>;
 
 pub async fn get_cats() -> CatResult {
     let cats = CatService::get_all_cats();
@@ -14,7 +14,7 @@ pub async fn get_cat(cat_id: web::Path<u32>) -> CatResult {
     let cat_id = cat_id.into_inner();
     match CatService::find_cat_by_id(cat_id) {
         Some(cat) => Ok(HttpResponse::Ok().json(cat)),
-        None => Err(RelayerError::NotFound("Cat not found".to_string())),
+        None => Err(RelayerApiError::NotFound("Cat not found".to_string())),
     }
 }
 
@@ -33,17 +33,17 @@ pub async fn update_cat(
 
     match CatService::update_cat(cat_id, cat_request) {
         Some(updated) => Ok(HttpResponse::Ok().json(updated)),
-        None => Err(RelayerError::NotFound("Cat not found".to_string())),
+        None => Err(RelayerApiError::NotFound("Cat not found".to_string())),
     }
 }
 
-pub async fn delete_cat(cat_id: web::Path<u32>) -> Result<HttpResponse, RelayerError> {
+pub async fn delete_cat(cat_id: web::Path<u32>) -> Result<HttpResponse, RelayerApiError> {
     let cat_id = cat_id.into_inner();
 
     if CatService::delete_cat(cat_id) {
         Ok(HttpResponse::Ok().body("Cat deleted"))
     } else {
-        Err(RelayerError::NotFound("Cat not found".to_string()))
+        Err(RelayerApiError::NotFound("Cat not found".to_string()))
     }
 }
 

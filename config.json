@@ -1,0 +1,41 @@
+{
+  "relayers": [
+    {
+      "id": "test-mainnet",
+      "name": "Test Mainnet",
+      "network": "testnet",
+      "paused": false,
+      "notification_id": "notification-test",
+      "signer_id": "local-signer",
+      "network_type": "solana"
+    },
+    {
+      "id": "test-sepolia",
+      "name": "Test Sepolia",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-test",
+      "signer_id": "local-signer",
+      "network_type": "evm"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-test",
+      "type": "webhook",
+      "url": "https://api.example.com/notifications"
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "passphrase": "123456"
+    }
+  ],
+  "networks": [
+    {
+      "id": "private-network",
+      "name": "Mainnet"
+    }]
+}
