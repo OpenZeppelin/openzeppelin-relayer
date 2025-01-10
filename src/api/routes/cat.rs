@@ -1,4 +1,4 @@
-use crate::controllers::cat;
+use crate::api::controllers::cat;
 use crate::models::CreateCatRequest;
 use actix_web::{delete, get, post, put, web, Responder};
 

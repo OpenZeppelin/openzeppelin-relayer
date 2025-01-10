@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::controllers::relayer;
+use crate::api::controllers::relayer;
 use crate::models::AppState;
 use actix_web::{delete, get, post, put, web, Responder};
 use serde::Deserialize;

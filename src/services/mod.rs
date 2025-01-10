@@ -1,8 +1,8 @@
 mod cat;
 pub use cat::*;
 
-mod providers;
-pub use providers::*;
+mod provider;
+pub use provider::*;
 
-mod relayers;
-pub use relayers::*;
+mod relayer;
+pub use relayer::*;

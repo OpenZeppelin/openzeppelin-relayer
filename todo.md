@@ -4,6 +4,7 @@ introduce signer service
 complete routes definitions - in progress
 add tests
 introduce cron jobs
+nonce management
 
 
 
