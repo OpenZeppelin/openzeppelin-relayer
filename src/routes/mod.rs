@@ -1,11 +1,11 @@
-pub mod cat_routes;
-pub mod health_routes;
-pub mod relayer_routes;
+pub mod cat;
+pub mod health;
+pub mod relayer;
 
 use actix_web::web;
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    cfg.configure(health_routes::init)
-        .configure(cat_routes::init)
-        .configure(relayer_routes::init);
+    cfg.configure(health::init)
+        .configure(cat::init)
+        .configure(relayer::init);
 }

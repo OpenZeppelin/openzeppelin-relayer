@@ -8,13 +8,13 @@ use crate::AppState;
 use async_trait::async_trait;
 use eyre::Result;
 
-mod evm_relayer;
-mod solana_relayer;
-mod stellar_relayer;
+mod evm;
+mod solana;
+mod stellar;
 
-pub use evm_relayer::*;
-pub use solana_relayer::*;
-pub use stellar_relayer::*;
+pub use evm::*;
+pub use solana::*;
+pub use stellar::*;
 
 #[async_trait]
 pub trait Relayer {

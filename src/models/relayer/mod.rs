@@ -1,5 +1,5 @@
-mod relayer_repository;
-pub use relayer_repository::*;
+mod repository;
+pub use repository::*;
 
-mod relayer_response;
-pub use relayer_response::*;
+mod response;
+pub use response::*;

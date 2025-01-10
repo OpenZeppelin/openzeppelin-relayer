@@ -1,8 +1,8 @@
-mod transaction_request;
-pub use transaction_request::*;
+mod request;
+pub use request::*;
 
-mod transaction_response;
-pub use transaction_response::*;
+mod response;
+pub use response::*;
 
-mod transaction_repository;
-pub use transaction_repository::*;
+mod repository;
+pub use repository::*;

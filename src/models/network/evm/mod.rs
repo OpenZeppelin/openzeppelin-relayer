@@ -1,5 +1,5 @@
-mod evm_named_network;
-mod evm_network;
+mod named_network;
+mod network;
 
-pub use evm_named_network::*;
-pub use evm_network::*;
+pub use named_network::*;
+pub use network::*;

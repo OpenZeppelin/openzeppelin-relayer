@@ -1,2 +1,2 @@
-pub mod cat_controller;
-pub mod relayer_controller;
+pub mod cat;
+pub mod relayer;

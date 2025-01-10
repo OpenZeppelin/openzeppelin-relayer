@@ -1,8 +1,8 @@
-mod api_error;
-pub use api_error::*;
+mod api;
+pub use api::*;
 
-mod repository_error;
-pub use repository_error::*;
+mod repository;
+pub use repository::*;
 
-mod relayer_error;
-pub use relayer_error::*;
+mod relayer;
+pub use relayer::*;

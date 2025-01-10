@@ -1,5 +1,5 @@
-mod solana_named_network;
-mod solana_network;
+mod named_network;
+mod network;
 
-pub use solana_named_network::*;
-pub use solana_network::*;
+pub use named_network::*;
+pub use network::*;

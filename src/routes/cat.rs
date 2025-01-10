@@ -1,20 +1,20 @@
-use crate::controllers::cat_controller;
+use crate::controllers::cat;
 use crate::models::CreateCatRequest;
 use actix_web::{delete, get, post, put, web, Responder};
 
 #[get("/cats")]
 async fn get_cats() -> impl Responder {
-    cat_controller::get_cats().await
+    cat::get_cats().await
 }
 
 #[get("/cats/{id}")]
 async fn get_cat(cat_id: web::Path<u32>) -> impl Responder {
-    cat_controller::get_cat(cat_id).await
+    cat::get_cat(cat_id).await
 }
 
 #[post("/cats")]
 async fn create_cat(cat_req: web::Json<CreateCatRequest>) -> impl Responder {
-    cat_controller::create_cat(cat_req).await
+    cat::create_cat(cat_req).await
 }
 
 #[put("/cats/{id}")]
@@ -22,12 +22,12 @@ async fn update_cat(
     cat_id: web::Path<u32>,
     updated_cat: web::Json<CreateCatRequest>,
 ) -> impl Responder {
-    cat_controller::update_cat(cat_id, updated_cat).await
+    cat::update_cat(cat_id, updated_cat).await
 }
 
 #[delete("/cats/{id}")]
 async fn delete_cat(cat_id: web::Path<u32>) -> impl Responder {
-    cat_controller::delete_cat(cat_id).await
+    cat::delete_cat(cat_id).await
 }
 
 pub fn init(cfg: &mut web::ServiceConfig) {

@@ -2,11 +2,11 @@ use crate::models::RepositoryError;
 use async_trait::async_trait;
 use eyre::Result;
 
-mod relayer_repository;
-mod transaction_repository;
+mod relayer;
+mod transaction;
 
-pub use relayer_repository::*;
-pub use transaction_repository::*;
+pub use relayer::*;
+pub use transaction::*;
 
 #[async_trait]
 pub trait Repository<T, ID> {
