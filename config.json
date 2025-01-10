@@ -7,7 +7,10 @@
       "paused": false,
       "notification_id": "notification-test",
       "signer_id": "local-signer",
-      "network_type": "solana"
+      "network_type": "solana",
+      "policies": {
+        "confirmation_blocks": 5
+      }
     },
     {
       "id": "test-sepolia",

@@ -1,5 +1,8 @@
-use crate::config::{NetworkType as ConfigNetworkType, RelayerConfig};
-use crate::models::{NetworkType, RelayerRepoModel, RepositoryError};
+use crate::config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig};
+use crate::models::{
+    NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
+    RelayerStellarPolicy, RepositoryError,
+};
 use crate::repositories::*;
 use async_trait::async_trait;
 use eyre::Result;
@@ -105,14 +108,26 @@ pub enum ConversionError {
     InvalidNetworkType(String),
 }
 
-impl TryFrom<RelayerConfig> for RelayerRepoModel {
+impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
     type Error = ConversionError;
 
-    fn try_from(config: RelayerConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: RelayerFileConfig) -> Result<Self, Self::Error> {
         let network_type = match config.network_type {
-            ConfigNetworkType::Evm => NetworkType::Evm,
-            ConfigNetworkType::Stellar => NetworkType::Stellar,
-            ConfigNetworkType::Solana => NetworkType::Solana,
+            ConfigFileNetworkType::Evm => NetworkType::Evm,
+            ConfigFileNetworkType::Stellar => NetworkType::Stellar,
+            ConfigFileNetworkType::Solana => NetworkType::Solana,
+        };
+
+        let policies = if let Some(config_policies) = config.policies {
+            Some(
+                RelayerNetworkPolicy::try_from(config_policies).map_err(|_| {
+                    ConversionError::InvalidNetworkType(
+                        "Failed to convert network policy".to_string(),
+                    )
+                })?,
+            )
+        } else {
+            None
         };
 
         Ok(RelayerRepoModel {
@@ -121,7 +136,39 @@ impl TryFrom<RelayerConfig> for RelayerRepoModel {
             network: config.network,
             paused: config.paused,
             network_type,
+            policies,
         })
+    }
+}
+
+impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
+    type Error = eyre::Error;
+
+    fn try_from(policy: ConfigFileRelayerNetworkPolicy) -> Result<Self, Self::Error> {
+        match policy {
+            ConfigFileRelayerNetworkPolicy::Evm(evm) => {
+                Ok(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                    gas_price_cap: evm.gas_price_cap,
+                    whitelist_receivers: evm.whitelist_receivers,
+                    eip1559_pricing: evm.eip1559_pricing,
+                    private_transactions: evm.private_transactions,
+                }))
+            }
+            ConfigFileRelayerNetworkPolicy::Solana(solana) => {
+                Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                    max_retries: solana.max_retries,
+                    confirmation_blocks: solana.confirmation_blocks,
+                    timeout_seconds: solana.timeout_seconds,
+                }))
+            }
+            ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {
+                Ok(RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                    max_fee: stellar.max_fee,
+                    timeout_seconds: stellar.timeout_seconds,
+                    min_account_balance: stellar.min_account_balance,
+                }))
+            }
+        }
     }
 }
 
@@ -136,6 +183,7 @@ mod tests {
             network: "TestNet".to_string(),
             paused: false,
             network_type: NetworkType::Evm,
+            policies: None,
         }
     }
 

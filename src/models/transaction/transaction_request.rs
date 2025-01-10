@@ -3,6 +3,15 @@ use std::convert::TryFrom;
 
 use crate::models::{ApiError, NetworkType};
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Speed {
+    Fastest,
+    Fast,
+    Average,
+    Slow,
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct EvmTransactionRequest {
     pub to: String,
@@ -10,6 +19,7 @@ pub struct EvmTransactionRequest {
     pub data: String,
     pub gas_limit: u64,
     pub gas_price: u64,
+    pub speed: Option<Speed>,
 }
 
 impl TryFrom<serde_json::Value> for EvmTransactionRequest {

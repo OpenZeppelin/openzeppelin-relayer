@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::models::NetworkType;
+use crate::models::{NetworkType, RelayerResponse, TransactionResponse};
 use crate::services::{RelayerModelFactory, RelayerModelFactoryTrait};
 use crate::{
     models::{ApiResponse, NetworkTransactionRequest},
@@ -31,9 +31,11 @@ pub async fn get_relayer(relayer_id: String, state: &AppState) -> Result<HttpRes
 
     info!("Relayer: {:?}", relayer);
 
+    let relayer_response: RelayerResponse = relayer.into();
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(relayer),
+        data: Some(relayer_response),
         error: None,
     })))
 }
@@ -82,9 +84,11 @@ pub async fn send_transaction(
 
     let transaction = relayer_model.send_transaction(tx_request).await?;
 
+    let transaction_response: TransactionResponse = transaction.into();
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(transaction),
+        data: Some(transaction_response),
         error: None,
     })))
 }
