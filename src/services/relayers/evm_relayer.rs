@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use super::{Relayer, RelayerError};
-use crate::models::{EvmNetwork, NetworkTransactionRequest};
+use crate::models::{EvmNetwork, NetworkTransactionRequest, RepositoryError};
 use crate::models::{RelayerRepoModel, TransactionRepoModel};
+use crate::repositories::Repository;
 use crate::services::EvmProvider;
 use crate::AppState;
 use async_trait::async_trait;
@@ -12,22 +13,28 @@ use log::info;
 pub struct EvmRelayer {
     relayer: RelayerRepoModel,
     network: EvmNetwork,
-    state: Arc<AppState>,
-    // evm_provider: EvmProvider,
+    app_state: Arc<AppState>,
+    evm_provider: EvmProvider,
 }
 
 impl EvmRelayer {
-    pub fn new(relayer: RelayerRepoModel, state: Arc<AppState>) -> Result<Self, RelayerError> {
-        let network = match EvmNetwork::from_network_str(&relayer.network) {
-            Ok(network) => network,
-            Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-        };
+    pub fn new(relayer: RelayerRepoModel, app_state: Arc<AppState>) -> Result<Self, RelayerError> {
+        let network = EvmNetwork::from_network_str(&relayer.network)
+            .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+        let rpc_url = network
+            .public_rpc_urls()
+            .and_then(|urls| urls.first().cloned())
+            .ok_or_else(|| {
+                RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
+            })?;
+
+        let evm_provider = EvmProvider::new(&rpc_url).unwrap();
 
         Ok(Self {
             relayer,
             network,
-            state,
-            // evm_provider,
+            app_state,
+            evm_provider,
         })
     }
 }
@@ -41,8 +48,17 @@ impl Relayer for EvmRelayer {
         // create
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
+        let test = self.evm_provider.get_block_number().await.unwrap();
+
+        info!("EVM test: {:?}", test);
+
         // send TODO
         info!("EVM Sending transaction...");
+        self.app_state
+            .transaction_repository
+            .create(transaction.clone())
+            .await
+            .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
         Ok(transaction)
     }
 
@@ -88,14 +104,4 @@ impl Relayer for EvmRelayer {
 }
 
 #[cfg(test)]
-mod tests {
-    // use super::*;
-
-    // #[test]
-    // fn test_new_evm_relayer() {
-    //     let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
-    //     let provider = EvmProvider::new();
-    //     let relayer = EvmRelayer::new(network, provider);
-    //     assert!(!relayer.paused);
-    // }
-}
+mod tests {}

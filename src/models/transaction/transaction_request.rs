@@ -32,7 +32,6 @@ impl TryFrom<serde_json::Value> for EvmTransactionRequest {
 
 #[derive(Deserialize, Serialize)]
 pub struct SolanaTransactionRequest {
-    pub from: String,
     pub to: String,
     pub lamports: u64,
     pub recent_blockhash: String,

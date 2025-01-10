@@ -108,9 +108,11 @@ pub async fn get_transaction_by_id(
         .get_by_id(transaction_id.to_string())
         .await?;
 
+    let transaction_response: TransactionResponse = transaction.into();
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(transaction),
+        data: Some(transaction_response),
         error: None,
     })))
 }
@@ -138,9 +140,11 @@ pub async fn get_transaction_by_nonce(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Transaction with nonce {} not found", nonce)))?;
 
+    let transaction_response: TransactionResponse = transaction.into();
+
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
-        data: Some(transaction),
+        data: Some(transaction_response),
         error: None,
     }))
 }
@@ -159,9 +163,12 @@ pub async fn list_transactions(
         .find_by_relayer_id(&relayer_id)
         .await?;
 
+    let transaction_response_list: Vec<TransactionResponse> =
+        transactions.into_iter().map(|t| t.into()).collect();
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(transactions),
+        data: Some(transaction_response_list),
         error: None,
     })))
 }

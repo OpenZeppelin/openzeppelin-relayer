@@ -1,8 +1,10 @@
 use crate::models::transaction::{NetworkTransactionData, TransactionRepoModel, TransactionStatus};
+use chrono::{TimeZone, Utc};
 use serde::Serialize;
+use serde::Serializer;
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
+#[serde(untagged)]
 pub enum TransactionResponse {
     Evm(EvmTransactionResponse),
     Solana(SolanaTransactionResponse),
@@ -14,8 +16,11 @@ pub struct EvmTransactionResponse {
     pub id: String,
     pub hash: String,
     pub status: TransactionStatus,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub created_at: u64,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub sent_at: u64,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub confirmed_at: u64,
     pub gas_price: u64,
     pub gas_limit: u64,
@@ -23,6 +28,7 @@ pub struct EvmTransactionResponse {
     pub value: u64,
     pub from: String,
     pub to: String,
+    pub relayer_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,8 +36,11 @@ pub struct SolanaTransactionResponse {
     pub id: String,
     pub hash: String,
     pub status: TransactionStatus,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub created_at: u64,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub sent_at: u64,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub confirmed_at: u64,
     pub recent_blockhash: String,
     pub fee_payer: String,
@@ -42,12 +51,26 @@ pub struct StellarTransactionResponse {
     pub id: String,
     pub hash: String,
     pub status: TransactionStatus,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub created_at: u64,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub sent_at: u64,
     pub confirmed_at: u64,
     pub source_account: String,
     pub fee: u32,
     pub sequence_number: u64,
+}
+
+fn serialize_timestamp<S>(timestamp: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let datetime = Utc
+        .timestamp_opt(*timestamp as i64, 0)
+        .single()
+        .unwrap_or_else(|| Utc::now());
+
+    serializer.serialize_str(&datetime.to_rfc3339())
 }
 
 impl From<TransactionRepoModel> for TransactionResponse {
@@ -67,6 +90,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     value: evm_data.value,
                     from: evm_data.from,
                     to: evm_data.to,
+                    relayer_id: model.relayer_id,
                 })
             }
             NetworkTransactionData::Solana(solana_data) => {

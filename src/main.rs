@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use actix_web::middleware::Logger;
 use actix_web::{middleware, web, App, HttpServer};
 use color_eyre::{eyre::WrapErr, Report, Result};
@@ -29,13 +31,14 @@ fn load_config_file() -> Result<Config> {
     config::load_config().wrap_err("Failed to load config file")
 }
 
-async fn initialize_app_state(config_file: Config) -> Result<web::Data<AppState>> {
+async fn initialize_app_state(config_file: Config) -> Result<web::Data<Arc<AppState>>> {
     let relayer_repository = InMemoryRelayerRepository::new();
     let transaction_repository = repositories::InMemoryTransactionRepository::new();
-    let app_state = web::Data::new(AppState {
+    let test = Arc::new(AppState {
         relayer_repository,
         transaction_repository,
     });
+    let app_state = web::Data::new(test);
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
         let repo_model = RelayerRepoModel::try_from(relayer.clone())

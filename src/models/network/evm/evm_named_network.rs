@@ -568,8 +568,9 @@ impl EvmNamedNetwork {
                 "https://goerli.etherscan.io",
             ],
             Sepolia => &[
-                "https://api-sepolia.etherscan.io/api",
+                "https://eth-sepolia.api.onfinality.io/public",
                 "https://sepolia.etherscan.io",
+                "https://api-sepolia.etherscan.io/api",
             ],
             Holesky => &[
                 "https://api-holesky.etherscan.io/api",
