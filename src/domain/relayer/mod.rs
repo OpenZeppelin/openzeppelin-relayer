@@ -32,16 +32,16 @@ pub trait Relayer {
     async fn rpc(&self) -> Result<bool, RelayerError>;
 }
 
-pub trait RelayerModelFactoryTrait {
-    fn create_relayer_model(
+pub trait RelayerFactoryTrait {
+    fn create_relayer(
         model: RelayerRepoModel,
         state: Arc<AppState>,
     ) -> Result<Box<dyn Relayer>, RelayerError>;
 }
-pub struct RelayerModelFactory;
+pub struct RelayerFactory;
 
-impl RelayerModelFactoryTrait for RelayerModelFactory {
-    fn create_relayer_model(
+impl RelayerFactoryTrait for RelayerFactory {
+    fn create_relayer(
         model: RelayerRepoModel,
         state: Arc<AppState>,
     ) -> Result<Box<dyn Relayer>, RelayerError> {
@@ -51,16 +51,15 @@ impl RelayerModelFactoryTrait for RelayerModelFactory {
                     Ok(network) => network,
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
-                // use first url
-                // let rpc = EVMRpcService::new(&network.public_rpc_urls() )?;
-                let rpc_urls =
-                    network
-                        .public_rpc_urls()
-                        .ok_or(RelayerError::NetworkConfiguration(
-                            "No RPC URLs found".to_string(),
-                        ))?;
-                let evm_provider = EvmProvider::new(&rpc_urls[0]);
-                let relayer = EvmRelayer::new(model, state.clone())?;
+                let rpc_url = network
+                    .public_rpc_urls()
+                    .and_then(|urls| urls.first().cloned())
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
+                    })?;
+                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url).unwrap();
+                let relayer = EvmRelayer::new(model, state.clone(), evm_provider, network)?;
+
                 Ok(Box::new(relayer) as Box<dyn Relayer>)
             }
             NetworkType::Solana => {

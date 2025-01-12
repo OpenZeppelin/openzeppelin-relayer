@@ -14,27 +14,21 @@ pub struct EvmRelayer {
     relayer: RelayerRepoModel,
     network: EvmNetwork,
     app_state: Arc<AppState>,
-    evm_provider: EvmProvider,
+    provider: EvmProvider,
 }
 
 impl EvmRelayer {
-    pub fn new(relayer: RelayerRepoModel, app_state: Arc<AppState>) -> Result<Self, RelayerError> {
-        let network = EvmNetwork::from_network_str(&relayer.network)
-            .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-        let rpc_url = network
-            .public_rpc_urls()
-            .and_then(|urls| urls.first().cloned())
-            .ok_or_else(|| {
-                RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
-            })?;
-
-        let evm_provider = EvmProvider::new(&rpc_url).unwrap();
-
+    pub fn new(
+        relayer: RelayerRepoModel,
+        app_state: Arc<AppState>,
+        provider: EvmProvider,
+        network: EvmNetwork,
+    ) -> Result<Self, RelayerError> {
         Ok(Self {
             relayer,
             network,
             app_state,
-            evm_provider,
+            provider,
         })
     }
 }
@@ -48,7 +42,7 @@ impl Relayer for EvmRelayer {
         // create
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        let test = self.evm_provider.get_block_number().await.unwrap();
+        let test = self.provider.get_block_number().await.unwrap();
 
         info!("EVM test: {:?}", test);
 
@@ -59,6 +53,7 @@ impl Relayer for EvmRelayer {
             .create(transaction.clone())
             .await
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
         Ok(transaction)
     }
 

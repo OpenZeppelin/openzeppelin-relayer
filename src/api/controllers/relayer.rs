@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::{RelayerModelFactory, RelayerModelFactoryTrait};
+use crate::domain::{RelayerFactory, RelayerFactoryTrait};
 use crate::models::{NetworkType, RelayerResponse, TransactionResponse};
 use crate::{
     models::{ApiResponse, NetworkTransactionRequest},
@@ -79,10 +79,9 @@ pub async fn send_transaction(
     let tx_request: NetworkTransactionRequest =
         NetworkTransactionRequest::from_json(&relayer_repo_model.network_type, request.clone())?;
 
-    let relayer_model =
-        RelayerModelFactory::create_relayer_model(relayer_repo_model, state.clone()).unwrap();
+    let relayer = RelayerFactory::create_relayer(relayer_repo_model, state.clone()).unwrap();
 
-    let transaction = relayer_model.send_transaction(tx_request).await?;
+    let transaction = relayer.send_transaction(tx_request).await?;
 
     let transaction_response: TransactionResponse = transaction.into();
 
@@ -136,7 +135,7 @@ pub async fn get_transaction_by_nonce(
 
     let transaction = state
         .transaction_repository
-        .find_by_nonce(&relayer_id, nonce) // New optimized method
+        .find_by_nonce(&relayer_id, nonce)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Transaction with nonce {} not found", nonce)))?;
 
@@ -183,7 +182,7 @@ pub async fn delete_pending_transactions(relayer_id: String) -> Result<HttpRespo
 
 pub async fn cancel_transaction(
     relayer_id: String,
-    transaction_id: String,
+    _transaction_id: String,
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
@@ -194,7 +193,7 @@ pub async fn cancel_transaction(
 
 pub async fn replace_transaction(
     relayer_id: String,
-    transaction_id: String,
+    _transaction_id: String,
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
@@ -220,8 +219,8 @@ pub async fn sign_typed_data(relayer_id: String) -> Result<HttpResponse, ApiErro
 }
 
 pub async fn relayer_rpc(
-    relayer_id: String,
-    request: serde_json::Value,
+    _relayer_id: String,
+    _request: serde_json::Value,
 ) -> Result<HttpResponse, ApiError> {
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
