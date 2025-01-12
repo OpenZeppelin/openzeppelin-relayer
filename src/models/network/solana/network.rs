@@ -1,4 +1,4 @@
-use crate::models::{Network, SolanaNamedNetwork};
+use crate::models::SolanaNamedNetwork;
 use core::{fmt, str::FromStr, time::Duration};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -105,20 +105,6 @@ impl SolanaNetwork {
     }
 
     pub const fn explorer_urls(self) -> &'static [&'static str] {
-        self.0.explorer_urls()
-    }
-}
-
-impl Network for SolanaNetwork {
-    fn average_blocktime(&self) -> Option<Duration> {
-        self.0.average_blocktime()
-    }
-
-    fn public_rpc_urls(&self) -> &'static [&'static str] {
-        self.0.public_rpc_urls()
-    }
-
-    fn explorer_urls(&self) -> &'static [&'static str] {
         self.0.explorer_urls()
     }
 }

@@ -1,4 +1,4 @@
-// TODO add is_l2 method
+// TODO improve this file
 use core::{fmt, time::Duration};
 
 #[derive(

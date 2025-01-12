@@ -1,4 +1,4 @@
-use crate::models::{Network, StellarNamedNetwork};
+use crate::models::StellarNamedNetwork;
 use core::{fmt, str::FromStr, time::Duration};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -105,20 +105,5 @@ impl StellarNetwork {
 
     pub const fn explorer_urls(self) -> &'static [&'static str] {
         self.0.explorer_urls()
-    }
-}
-
-// Implement the trait for StellarNetwork
-impl Network for StellarNetwork {
-    fn average_blocktime(&self) -> Option<Duration> {
-        self.0.average_blocktime()
-    }
-
-    fn public_rpc_urls(&self) -> &'static [&'static str] {
-        self.public_rpc_urls()
-    }
-
-    fn explorer_urls(&self) -> &'static [&'static str] {
-        self.explorer_urls()
     }
 }

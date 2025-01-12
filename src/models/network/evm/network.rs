@@ -1,4 +1,4 @@
-use crate::models::{EvmNamedNetwork, Network};
+use crate::models::EvmNamedNetwork;
 use core::{cmp::Ordering, fmt, str::FromStr, time::Duration};
 use thiserror::Error;
 
@@ -236,20 +236,6 @@ impl EvmNetwork {
             EvmNetworkKind::Named(named) => named.public_rpc_urls(),
             EvmNetworkKind::Id(_) => None,
         }
-    }
-}
-
-impl Network for EvmNetwork {
-    fn average_blocktime(&self) -> Option<Duration> {
-        self.average_blocktime()
-    }
-
-    fn public_rpc_urls(&self) -> &'static [&'static str] {
-        self.public_rpc_urls()
-    }
-
-    fn explorer_urls(&self) -> &'static [&'static str] {
-        self.explorer_urls()
     }
 }
 

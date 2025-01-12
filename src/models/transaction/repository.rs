@@ -43,6 +43,7 @@ pub struct EvmTransactionData {
     pub data: String,
     pub from: String,
     pub to: String,
+    pub chain_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     data: evm_request.data.clone(),
                     from: "0x".to_string(), // TODO
                     to: evm_request.to.clone(),
+                    chain_id: 1, // TODO
                 }),
             }),
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {

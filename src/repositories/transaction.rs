@@ -154,6 +154,7 @@ mod tests {
                 data: "Ox".to_string(),
                 from: "0x".to_string(),
                 to: "0x".to_string(),
+                chain_id: 1,
             }),
         }
     }
