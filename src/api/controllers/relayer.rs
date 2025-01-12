@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::domain::{RelayerModelFactory, RelayerModelFactoryTrait};
 use crate::models::{NetworkType, RelayerResponse, TransactionResponse};
-use crate::services::{RelayerModelFactory, RelayerModelFactoryTrait};
 use crate::{
     models::{ApiResponse, NetworkTransactionRequest},
     repositories::Repository,

@@ -13,6 +13,7 @@ use simple_logger::SimpleLogger;
 
 mod api;
 mod config;
+mod domain;
 mod models;
 mod repositories;
 mod services;

@@ -233,7 +233,6 @@ impl RelayerFileConfig {
         Ok(())
     }
 
-    // TODO add networks validation
     // TODO add validation that multiple relayers on same network cannot use same signer
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         if self.id.is_empty() {
@@ -255,9 +254,6 @@ impl RelayerFileConfig {
         }
         if self.network.is_empty() {
             return Err(ConfigFileError::MissingField("network".into()));
-        }
-        if self.network.is_empty() {
-            return Err(ConfigFileError::MissingField("paused".into()));
         }
 
         self.validate_network()?;
@@ -281,7 +277,7 @@ mod tests {
             relayers: vec![RelayerFileConfig {
                 id: "test-1".to_string(),
                 name: "Test Relayer".to_string(),
-                network: "testnet".to_string(),
+                network: "sepolia".to_string(),
                 paused: false,
                 network_type: ConfigFileNetworkType::Evm,
                 policies: None,

@@ -49,11 +49,28 @@ pub enum EvmNamedNetwork {
     #[serde(alias = "arbitrum-nova")]
     ArbitrumNova = 42170,
 
-    #[strum(serialize = "bnb-smart-chain")]
-    #[serde(alias = "binance-smart-chain")]
+    #[strum(
+        to_string = "bsc",
+        serialize = "binance-smart-chain",
+        serialize = "bnb-smart-chain"
+    )]
+    #[serde(
+        alias = "bsc",
+        alias = "bnb-smart-chain",
+        alias = "binance-smart-chain"
+    )]
     BinanceSmartChain = 56,
-    #[strum(serialize = "bnb-smart-chain-testnet")]
-    #[serde(alias = "binance-smart-chain-testnet")]
+    #[strum(
+        to_string = "bsc-testnet",
+        serialize = "binance-smart-chain-testnet",
+        serialize = "bnb-smart-chain-testnet"
+    )]
+    #[serde(
+        alias = "bsc_testnet",
+        alias = "bsc-testnet",
+        alias = "bnb-smart-chain-testnet",
+        alias = "binance-smart-chain-testnet"
+    )]
     BinanceSmartChainTestnet = 97,
 
     Scroll = 534352,
