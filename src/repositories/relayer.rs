@@ -14,11 +14,22 @@ pub struct InMemoryRelayerRepository {
     store: Mutex<HashMap<String, RelayerRepoModel>>,
 }
 
+#[allow(dead_code)]
 impl InMemoryRelayerRepository {
     pub fn new() -> Self {
         Self {
             store: Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let store = self.store.lock().unwrap();
+        let active_relayers: Vec<RelayerRepoModel> = store
+            .values()
+            .filter(|&relayer| !relayer.paused)
+            .cloned()
+            .collect();
+        Ok(active_relayers)
     }
 }
 
@@ -53,6 +64,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         }
     }
 
+    #[allow(clippy::map_entry)]
     async fn update(
         &self,
         id: String,
@@ -87,12 +99,8 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         let store = self.store.lock().unwrap();
-        let active_relayers: Vec<RelayerRepoModel> = store
-            .values()
-            .cloned()
-            .filter(|relayer| relayer.paused == false)
-            .collect();
-        Ok(active_relayers)
+        let relayers: Vec<RelayerRepoModel> = store.values().cloned().collect();
+        Ok(relayers)
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
@@ -223,9 +231,22 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn test_list_relayers() {
+        let repo = InMemoryRelayerRepository::new();
+        let relayer1 = create_test_relayer("test".to_string());
+        let relayer2 = create_test_relayer("test2".to_string());
+
+        repo.create(relayer1.clone()).await.unwrap();
+        repo.create(relayer2).await.unwrap();
+
+        let relayers = repo.list_all().await.unwrap();
+        assert_eq!(relayers.len(), 2);
+    }
+
+    #[actix_web::test]
     async fn test_list_active_relayers() {
         let repo = InMemoryRelayerRepository::new();
-        let mut relayer1 = create_test_relayer("test".to_string());
+        let relayer1 = create_test_relayer("test".to_string());
         let mut relayer2 = create_test_relayer("test2".to_string());
 
         relayer2.paused = true;
@@ -233,7 +254,7 @@ mod tests {
         repo.create(relayer1.clone()).await.unwrap();
         repo.create(relayer2).await.unwrap();
 
-        let active_relayers = repo.list_all().await.unwrap();
+        let active_relayers = repo.list_active().await.unwrap();
         assert_eq!(active_relayers.len(), 1);
         assert_eq!(active_relayers[0].id, "test".to_string());
     }

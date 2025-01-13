@@ -12,6 +12,7 @@ pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,
 }
 
+#[allow(dead_code)]
 impl EvmProvider {
     pub fn new(url: &str) -> Result<Self> {
         let rpc_url = url.parse()?;

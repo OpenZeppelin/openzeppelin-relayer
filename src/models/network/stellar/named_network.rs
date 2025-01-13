@@ -14,6 +14,7 @@ impl Default for StellarNamedNetwork {
     }
 }
 
+#[allow(dead_code)]
 impl StellarNamedNetwork {
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -80,7 +81,7 @@ impl<'de> Deserialize<'de> for StellarNamedNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct NetworkVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for NetworkVisitor {
+        impl serde::de::Visitor<'_> for NetworkVisitor {
             type Value = StellarNamedNetwork;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

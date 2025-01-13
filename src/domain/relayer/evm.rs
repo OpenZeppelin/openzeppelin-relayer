@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use log::info;
 
+#[allow(dead_code)]
 pub struct EvmRelayer {
     relayer: RelayerRepoModel,
     network: EvmNetwork,

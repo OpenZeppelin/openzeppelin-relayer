@@ -68,7 +68,7 @@ where
     let datetime = Utc
         .timestamp_opt(*timestamp as i64, 0)
         .single()
-        .unwrap_or_else(|| Utc::now());
+        .unwrap_or_else(Utc::now);
 
     serializer.serialize_str(&datetime.to_rfc3339())
 }

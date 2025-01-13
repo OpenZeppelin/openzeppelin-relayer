@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use super::{Relayer, RelayerError};
 
+#[allow(dead_code)]
 pub struct StellarRelayer {
     relayer: RelayerRepoModel,
     network: StellarNetwork,

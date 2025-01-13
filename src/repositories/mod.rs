@@ -9,6 +9,7 @@ pub use relayer::*;
 pub use transaction::*;
 
 #[async_trait]
+#[allow(dead_code)]
 pub trait Repository<T, ID> {
     async fn create(&self, entity: T) -> Result<T, RepositoryError>;
     async fn get_by_id(&self, id: ID) -> Result<T, RepositoryError>;

@@ -59,7 +59,7 @@ impl<'de> Deserialize<'de> for SolanaNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct NetworkVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for NetworkVisitor {
+        impl serde::de::Visitor<'_> for NetworkVisitor {
             type Value = SolanaNetwork;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -75,6 +75,7 @@ impl<'de> Deserialize<'de> for SolanaNetwork {
     }
 }
 
+#[allow(dead_code)]
 impl SolanaNetwork {
     pub const fn from_named(named: SolanaNamedNetwork) -> Self {
         Self(named)

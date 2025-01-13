@@ -118,7 +118,7 @@ async fn replace_relayer_transaction(
 }
 
 #[post("/relayers/{relayer_id}/sign")]
-async fn relayer_sign(relayer_id: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
+async fn relayer_sign(relayer_id: web::Path<String>, _data: web::Data<AppState>) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner()).await
 }
 

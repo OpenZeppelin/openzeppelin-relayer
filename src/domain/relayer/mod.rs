@@ -17,6 +17,7 @@ pub use solana::*;
 pub use stellar::*;
 
 #[async_trait]
+#[allow(dead_code)]
 pub trait Relayer {
     async fn send_transaction(
         &self,
@@ -57,7 +58,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     .ok_or_else(|| {
                         RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
-                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url).unwrap();
+                let evm_provider: EvmProvider = EvmProvider::new(rpc_url).unwrap();
                 let relayer = EvmRelayer::new(model, state.clone(), evm_provider, network)?;
 
                 Ok(Box::new(relayer) as Box<dyn Relayer>)

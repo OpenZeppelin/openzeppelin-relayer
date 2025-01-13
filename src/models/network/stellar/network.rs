@@ -59,7 +59,7 @@ impl<'de> Deserialize<'de> for StellarNetwork {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct NetworkVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for NetworkVisitor {
+        impl serde::de::Visitor<'_> for NetworkVisitor {
             type Value = StellarNetwork;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -75,6 +75,7 @@ impl<'de> Deserialize<'de> for StellarNetwork {
     }
 }
 
+#[allow(dead_code)]
 impl StellarNetwork {
     pub const fn from_named(named: StellarNamedNetwork) -> Self {
         Self(named)
@@ -86,7 +87,7 @@ impl StellarNetwork {
 
     pub fn from_network_str(network: &str) -> Result<Self, NetworkError> {
         if let Ok(named) = StellarNamedNetwork::from_str(network) {
-            return Ok(Self::from_named(named));
+            Ok(Self::from_named(named))
         } else {
             Err(NetworkError::InvalidNetwork(format!(
                 "Invalid network: {}, expected named network or chain ID",

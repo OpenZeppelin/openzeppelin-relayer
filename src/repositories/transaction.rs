@@ -88,6 +88,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
         })
     }
 
+    #[allow(clippy::map_entry)]
     async fn update(
         &self,
         id: String,
@@ -189,5 +190,74 @@ mod tests {
 
         let updated = repo.update("test-1".to_string(), tx).await.unwrap();
         assert!(matches!(updated.status, TransactionStatus::Confirmed));
+    }
+
+    #[actix_web::test]
+    async fn test_delete_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+        
+        repo.create(tx).await.unwrap();
+        repo.delete_by_id("test-1".to_string()).await.unwrap();
+        
+        let result = repo.get_by_id("test-1".to_string()).await;
+        assert!(result.is_err());
+    }
+
+    #[actix_web::test]
+    async fn test_list_all_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx1 = create_test_transaction("test-1");
+        let tx2 = create_test_transaction("test-2");
+        
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+        
+        let transactions = repo.list_all().await.unwrap();
+        assert_eq!(transactions.len(), 2);
+    }
+
+    #[actix_web::test]
+    async fn test_count_transactions() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+        
+        assert_eq!(repo.count().await.unwrap(), 0);
+        repo.create(tx).await.unwrap();
+        assert_eq!(repo.count().await.unwrap(), 1);
+    }
+
+
+    #[actix_web::test]
+    async fn test_get_nonexistent_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo.get_by_id("nonexistent".to_string()).await;
+        assert!(matches!(result, 
+            Err(RepositoryError::NotFound(_))
+        ));
+    }
+
+    #[actix_web::test]
+    async fn test_duplicate_transaction_creation() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+        
+        repo.create(tx.clone()).await.unwrap();
+        let result = repo.create(tx).await;
+        
+        assert!(matches!(result, 
+            Err(RepositoryError::ConstraintViolation(_))
+        ));
+    }
+
+    #[actix_web::test]
+    async fn test_update_nonexistent_transaction() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+        
+        let result = repo.update("nonexistent".to_string(), tx).await;
+        assert!(matches!(result, 
+            Err(RepositoryError::NotFound(_))
+        ));
     }
 }
