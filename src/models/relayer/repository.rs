@@ -2,6 +2,7 @@ use serde::Serialize;
 use strum::Display;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Display)]
+#[serde(rename_all = "lowercase")]
 pub enum NetworkType {
     Evm,
     Stellar,

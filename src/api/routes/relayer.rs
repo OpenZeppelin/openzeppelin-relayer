@@ -7,13 +7,13 @@ use serde::Deserialize;
 
 // list all relayers
 #[get("/relayers")]
-async fn list_relayers(data: web::Data<AppState>) -> impl Responder {
+async fn list_relayers(data: web::Data<Arc<AppState>>) -> impl Responder {
     relayer::list_relayers(&data).await
 }
 
 // get relayer details
 #[get("/relayers/{relayer_id}")]
-async fn get_relayer(relayer_id: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
+async fn get_relayer(relayer_id: web::Path<String>, data: web::Data<Arc<AppState>>) -> impl Responder {
     relayer::get_relayer(relayer_id.into_inner(), &data).await
 }
 
@@ -118,7 +118,7 @@ async fn replace_relayer_transaction(
 }
 
 #[post("/relayers/{relayer_id}/sign")]
-async fn relayer_sign(relayer_id: web::Path<String>, _data: web::Data<AppState>) -> impl Responder {
+async fn relayer_sign(relayer_id: web::Path<String>, _data: web::Data<Arc<AppState>>) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner()).await
 }
 

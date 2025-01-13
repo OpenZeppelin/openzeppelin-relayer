@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
             .wrap(middleware::DefaultHeaders::new())
             .wrap(Logger::default())
             .app_data(app_state.clone())
-            .configure(api::routes::configure_routes)
+            .service(web::scope("/api/v1").configure(api::routes::configure_routes))
     })
     .bind((config.host.as_str(), config.port))
     .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
