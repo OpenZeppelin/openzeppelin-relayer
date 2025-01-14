@@ -4,7 +4,7 @@ use super::{Relayer, RelayerError};
 use crate::models::{
     NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel,
 };
-use crate::AppState;
+use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
 use async_trait::async_trait;
 use eyre::Result;
 use log::info;
@@ -13,11 +13,16 @@ use log::info;
 pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
     network: SolanaNetwork,
-    state: Arc<AppState>,
+    relayer_repository: Arc<InMemoryRelayerRepository>,
+    transaction_repository: Arc<InMemoryTransactionRepository>,
 }
 
 impl SolanaRelayer {
-    pub fn new(relayer: RelayerRepoModel, state: Arc<AppState>) -> Result<Self, RelayerError> {
+    pub fn new(
+        relayer: RelayerRepoModel,
+        relayer_repository: Arc<InMemoryRelayerRepository>,
+        transaction_repository: Arc<InMemoryTransactionRepository>,
+    ) -> Result<Self, RelayerError> {
         let network = match SolanaNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
             Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
@@ -26,7 +31,8 @@ impl SolanaRelayer {
         Ok(Self {
             relayer,
             network,
-            state,
+            relayer_repository,
+            transaction_repository,
         })
     }
 }
@@ -48,6 +54,11 @@ impl Relayer for SolanaRelayer {
         Ok(true)
     }
 
+    async fn get_status(&self) -> Result<bool, RelayerError> {
+        println!("Solana get_status...");
+        Ok(true)
+    }
+
     async fn get_nonce(&self) -> Result<bool, RelayerError> {
         println!("Solana get_nonce...");
         Ok(true)
@@ -55,16 +66,6 @@ impl Relayer for SolanaRelayer {
 
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
         println!("Solana delete_pending_transactions...");
-        Ok(true)
-    }
-
-    async fn cancel_transaction(&self) -> Result<bool, RelayerError> {
-        println!("Solana cancel_transaction...");
-        Ok(true)
-    }
-
-    async fn replace_transaction(&self) -> Result<bool, RelayerError> {
-        println!("Solana replace_transaction...");
         Ok(true)
     }
 

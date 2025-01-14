@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::api::controllers::relayer;
 use crate::models::AppState;
 use actix_web::{delete, get, post, put, web, Responder};
@@ -7,33 +5,30 @@ use serde::Deserialize;
 
 // list all relayers
 #[get("/relayers")]
-async fn list_relayers(data: web::Data<Arc<AppState>>) -> impl Responder {
-    relayer::list_relayers(&data).await
+async fn list_relayers(data: web::Data<AppState>) -> impl Responder {
+    relayer::list_relayers(data).await
 }
 
 // get relayer details
 #[get("/relayers/{relayer_id}")]
-async fn get_relayer(
-    relayer_id: web::Path<String>,
-    data: web::Data<Arc<AppState>>,
-) -> impl Responder {
-    relayer::get_relayer(relayer_id.into_inner(), &data).await
+async fn get_relayer(relayer_id: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
+    relayer::get_relayer(relayer_id.into_inner(), data).await
 }
 
 // get relayer status
 #[post("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
-    relayer::get_relayer_status(relayer_id.into_inner()).await
+    relayer::get_relayer_status(relayer_id.into_inner(), data).await
 }
 
 // get relayer balance
 #[post("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
+    _data: web::Data<AppState>,
 ) -> impl Responder {
     relayer::get_relayer_balance(relayer_id.into_inner()).await
 }
@@ -42,7 +37,7 @@ async fn get_relayer_balance(
 #[post("/relayers/{relayer_id}/nonce")]
 async fn get_relayer_nonce(
     relayer_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
+    _data: web::Data<AppState>,
 ) -> impl Responder {
     relayer::get_relayer_nonce(relayer_id.into_inner()).await
 }
@@ -52,14 +47,9 @@ async fn get_relayer_nonce(
 async fn send_relayer_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::Data<Arc<AppState>>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
-    relayer::send_transaction(
-        relayer_id.into_inner(),
-        data.get_ref().clone(),
-        req.into_inner(),
-    )
-    .await
+    relayer::send_transaction(relayer_id.into_inner(), data, req.into_inner()).await
 }
 
 #[derive(Deserialize)]
@@ -71,33 +61,33 @@ pub struct TransactionPath {
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_relayer_transaction_by_id(
     path: web::Path<TransactionPath>,
-    data: web::Data<Arc<AppState>>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
     let path = path.into_inner();
-    relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, &data).await
+    relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, data).await
 }
 
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_relayer_transaction_by_nonce(
     relayer_id: web::Path<String>,
     nonce: web::Path<u64>,
-    data: web::Data<Arc<AppState>>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
-    relayer::get_transaction_by_nonce(relayer_id.into_inner(), nonce.into_inner(), &data).await
+    relayer::get_transaction_by_nonce(relayer_id.into_inner(), nonce.into_inner(), data).await
 }
 
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_relayer_transactions(
     relayer_id: web::Path<String>,
-    data: web::Data<Arc<AppState>>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
-    relayer::list_transactions(relayer_id.into_inner(), &data).await
+    relayer::list_transactions(relayer_id.into_inner(), data).await
 }
 
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
+    _data: web::Data<AppState>,
 ) -> impl Responder {
     relayer::delete_pending_transactions(relayer_id.into_inner()).await
 }
@@ -106,32 +96,29 @@ async fn delete_pending_transactions(
 async fn cancel_relayer_transaction(
     relayer_id: web::Path<String>,
     transaction_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
-    relayer::cancel_transaction(relayer_id.into_inner(), transaction_id.into_inner()).await
+    relayer::cancel_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
 }
 
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_relayer_transaction(
     relayer_id: web::Path<String>,
     transaction_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
-    relayer::replace_transaction(relayer_id.into_inner(), transaction_id.into_inner()).await
+    relayer::replace_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
 }
 
 #[post("/relayers/{relayer_id}/sign")]
-async fn relayer_sign(
-    relayer_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
-) -> impl Responder {
+async fn relayer_sign(relayer_id: web::Path<String>, _data: web::Data<AppState>) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner()).await
 }
 
 #[post("/relayers/{relayer_id}/sign-typed-data")]
 async fn relayer_sign_typed_data(
     relayer_id: web::Path<String>,
-    _data: web::Data<Arc<AppState>>,
+    _data: web::Data<AppState>,
 ) -> impl Responder {
     relayer::sign_typed_data(relayer_id.into_inner()).await
 }
@@ -140,7 +127,7 @@ async fn relayer_sign_typed_data(
 async fn relayer_rpc(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    _data: web::Data<Arc<AppState>>,
+    _data: web::Data<AppState>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner()).await
 }

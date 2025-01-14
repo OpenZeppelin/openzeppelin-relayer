@@ -8,7 +8,7 @@ use dotenvy::dotenv;
 use futures::future::try_join_all;
 use log::info;
 use models::RelayerRepoModel;
-use repositories::{InMemoryRelayerRepository, Repository};
+use repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository};
 use simple_logger::SimpleLogger;
 
 mod api;
@@ -31,14 +31,14 @@ fn load_config_file() -> Result<Config> {
     config::load_config().wrap_err("Failed to load config file")
 }
 
-async fn initialize_app_state(config_file: Config) -> Result<web::Data<Arc<AppState>>> {
-    let relayer_repository = InMemoryRelayerRepository::new();
-    let transaction_repository = repositories::InMemoryTransactionRepository::new();
-    let test = Arc::new(AppState {
+async fn initialize_app_state(config_file: Config) -> Result<web::Data<AppState>> {
+    let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
+    let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
+
+    let app_state = web::Data::new(AppState {
         relayer_repository,
         transaction_repository,
     });
-    let app_state = web::Data::new(test);
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
         let repo_model = RelayerRepoModel::try_from(relayer.clone())

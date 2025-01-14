@@ -1,17 +1,15 @@
-use std::sync::Arc;
-
-use crate::domain::{RelayerFactory, RelayerFactoryTrait};
+use crate::domain::{RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory};
 use crate::models::{NetworkType, RelayerResponse, TransactionResponse};
 use crate::{
     models::{ApiResponse, NetworkTransactionRequest},
     repositories::Repository,
     ApiError, AppState,
 };
-use actix_web::HttpResponse;
+use actix_web::{web, HttpResponse};
 use eyre::{Context, Result};
 use log::info;
 
-pub async fn list_relayers(state: &AppState) -> Result<HttpResponse, ApiError> {
+pub async fn list_relayers(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
     let relayers = state.relayer_repository.list_all().await?;
 
     info!("Relayers: {:?}", relayers);
@@ -23,7 +21,10 @@ pub async fn list_relayers(state: &AppState) -> Result<HttpResponse, ApiError> {
     })))
 }
 
-pub async fn get_relayer(relayer_id: String, state: &AppState) -> Result<HttpResponse, ApiError> {
+pub async fn get_relayer(
+    relayer_id: String,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
         .get_by_id(relayer_id.to_string())
@@ -40,10 +41,29 @@ pub async fn get_relayer(relayer_id: String, state: &AppState) -> Result<HttpRes
     })))
 }
 
-pub async fn get_relayer_status(relayer_id: String) -> Result<HttpResponse, ApiError> {
+pub async fn get_relayer_status(
+    relayer_id: String,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    let relayer_repo_model = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await
+        .wrap_err_with(|| format!("Failed to fetch relayer with ID {}", relayer_id))?;
+    info!("Relayer: {:?}", relayer_repo_model);
+
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    let status = relayer.get_status().await?;
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(relayer_id),
+        data: Some(status),
         error: None,
     })))
 }
@@ -66,7 +86,7 @@ pub async fn get_relayer_nonce(relayer_id: String) -> Result<HttpResponse, ApiEr
 
 pub async fn send_transaction(
     relayer_id: String,
-    state: Arc<AppState>,
+    state: web::Data<AppState>,
     request: serde_json::Value,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
@@ -79,7 +99,12 @@ pub async fn send_transaction(
     let tx_request: NetworkTransactionRequest =
         NetworkTransactionRequest::from_json(&relayer_repo_model.network_type, request.clone())?;
 
-    let relayer = RelayerFactory::create_relayer(relayer_repo_model, state.clone()).unwrap();
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
 
     let transaction = relayer.send_transaction(tx_request).await?;
 
@@ -95,7 +120,7 @@ pub async fn send_transaction(
 pub async fn get_transaction_by_id(
     relayer_id: String,
     transaction_id: String,
-    state: &AppState,
+    state: web::Data<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     state
         .relayer_repository
@@ -119,7 +144,7 @@ pub async fn get_transaction_by_id(
 pub async fn get_transaction_by_nonce(
     relayer_id: String,
     nonce: u64,
-    state: &AppState,
+    state: web::Data<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
@@ -150,7 +175,7 @@ pub async fn get_transaction_by_nonce(
 
 pub async fn list_transactions(
     relayer_id: String,
-    state: &AppState,
+    state: web::Data<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     state
         .relayer_repository
@@ -182,22 +207,66 @@ pub async fn delete_pending_transactions(relayer_id: String) -> Result<HttpRespo
 
 pub async fn cancel_transaction(
     relayer_id: String,
-    _transaction_id: String,
+    transaction_id: String,
+    state: web::Data<AppState>,
 ) -> Result<HttpResponse, ApiError> {
+    let relayer = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await?;
+
+    let transaction_to_cancel = state
+        .transaction_repository
+        .get_by_id(transaction_id)
+        .await?;
+
+    let relayer_transaction = RelayerTransactionFactory::create_transaction(
+        relayer,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    let canceled_transaction = relayer_transaction
+        .cancel_transaction(transaction_to_cancel)
+        .await?;
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(relayer_id),
+        data: Some(canceled_transaction),
         error: None,
     })))
 }
 
 pub async fn replace_transaction(
     relayer_id: String,
-    _transaction_id: String,
+    transaction_id: String,
+    state: web::Data<AppState>,
 ) -> Result<HttpResponse, ApiError> {
+    let relayer = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await?;
+
+    let transaction_to_replace = state
+        .transaction_repository
+        .get_by_id(transaction_id)
+        .await?;
+
+    let relayer_transaction = RelayerTransactionFactory::create_transaction(
+        relayer,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    let replaced_transaction = relayer_transaction
+        .replace_transaction(transaction_to_replace)
+        .await?;
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(relayer_id),
+        data: Some(replaced_transaction),
         error: None,
     })))
 }

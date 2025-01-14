@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::models::{EvmNetwork, NetworkTransactionRequest, RelayerError};
 use crate::models::{NetworkType, RelayerRepoModel, TransactionRepoModel};
 
+use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
 use crate::services::EvmProvider;
-use crate::AppState;
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -26,29 +26,30 @@ pub trait Relayer {
     async fn get_balance(&self) -> Result<bool, RelayerError>;
     async fn get_nonce(&self) -> Result<bool, RelayerError>;
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
-    async fn cancel_transaction(&self) -> Result<bool, RelayerError>;
-    async fn replace_transaction(&self) -> Result<bool, RelayerError>;
     async fn sign_data(&self) -> Result<bool, RelayerError>;
     async fn sign_typed_data(&self) -> Result<bool, RelayerError>;
     async fn rpc(&self) -> Result<bool, RelayerError>;
+    async fn get_status(&self) -> Result<bool, RelayerError>;
 }
 
 pub trait RelayerFactoryTrait {
     fn create_relayer(
         model: RelayerRepoModel,
-        state: Arc<AppState>,
+        relayer_repository: Arc<InMemoryRelayerRepository>,
+        transaction_repository: Arc<InMemoryTransactionRepository>,
     ) -> Result<Box<dyn Relayer>, RelayerError>;
 }
 pub struct RelayerFactory;
 
 impl RelayerFactoryTrait for RelayerFactory {
     fn create_relayer(
-        model: RelayerRepoModel,
-        state: Arc<AppState>,
+        relayer: RelayerRepoModel,
+        relayer_repository: Arc<InMemoryRelayerRepository>,
+        transaction_repository: Arc<InMemoryTransactionRepository>,
     ) -> Result<Box<dyn Relayer>, RelayerError> {
-        match model.network_type {
+        match relayer.network_type {
             NetworkType::Evm => {
-                let network = match EvmNetwork::from_network_str(&model.network) {
+                let network = match EvmNetwork::from_network_str(&relayer.network) {
                     Ok(network) => network,
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
@@ -59,16 +60,24 @@ impl RelayerFactoryTrait for RelayerFactory {
                         RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url).unwrap();
-                let relayer = EvmRelayer::new(model, state.clone(), evm_provider, network)?;
+                let relayer = EvmRelayer::new(
+                    relayer,
+                    evm_provider,
+                    network,
+                    relayer_repository,
+                    transaction_repository,
+                )?;
 
                 Ok(Box::new(relayer) as Box<dyn Relayer>)
             }
             NetworkType::Solana => {
-                let relayer = SolanaRelayer::new(model, state.clone())?;
+                let relayer =
+                    SolanaRelayer::new(relayer, relayer_repository, transaction_repository)?;
                 Ok(Box::new(relayer))
             }
             NetworkType::Stellar => {
-                let relayer = StellarRelayer::new(model, state.clone())?;
+                let relayer =
+                    StellarRelayer::new(relayer, relayer_repository, transaction_repository)?;
                 Ok(Box::new(relayer))
             }
         }

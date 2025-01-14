@@ -1,7 +1,7 @@
 use crate::models::{
     NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel,
 };
-use crate::AppState;
+use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
 use async_trait::async_trait;
 use eyre::Result;
 use log::info;
@@ -13,19 +13,26 @@ use super::{Relayer, RelayerError};
 pub struct StellarRelayer {
     relayer: RelayerRepoModel,
     network: StellarNetwork,
-    state: Arc<AppState>,
+    relayer_repository: Arc<InMemoryRelayerRepository>,
+    transaction_repository: Arc<InMemoryTransactionRepository>,
 }
 
 impl StellarRelayer {
-    pub fn new(relayer: RelayerRepoModel, state: Arc<AppState>) -> Result<Self, RelayerError> {
+    pub fn new(
+        relayer: RelayerRepoModel,
+        relayer_repository: Arc<InMemoryRelayerRepository>,
+        transaction_repository: Arc<InMemoryTransactionRepository>,
+    ) -> Result<Self, RelayerError> {
         let network = match StellarNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
             Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
         };
+
         Ok(Self {
-            network,
             relayer,
-            state,
+            network,
+            relayer_repository,
+            transaction_repository,
         })
     }
 }
@@ -47,6 +54,11 @@ impl Relayer for StellarRelayer {
         Ok(true)
     }
 
+    async fn get_status(&self) -> Result<bool, RelayerError> {
+        println!("Stellar get_status...");
+        Ok(true)
+    }
+
     async fn get_nonce(&self) -> Result<bool, RelayerError> {
         println!("Stellar get_nonce...");
         Ok(true)
@@ -54,16 +66,6 @@ impl Relayer for StellarRelayer {
 
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
         println!("Stellar delete_pending_transactions...");
-        Ok(true)
-    }
-
-    async fn cancel_transaction(&self) -> Result<bool, RelayerError> {
-        println!("Stellar cancel_transaction...");
-        Ok(true)
-    }
-
-    async fn replace_transaction(&self) -> Result<bool, RelayerError> {
-        println!("Stellar replace_transaction...");
         Ok(true)
     }
 
