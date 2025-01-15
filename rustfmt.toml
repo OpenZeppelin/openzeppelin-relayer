@@ -1,0 +1,10 @@
+# Basic code style
+max_width = 100
+tab_spaces = 4
+edition = "2021"
+
+# Consistency
+newline_style = "Auto"
+use_small_heuristics = "Default"
+reorder_imports = true
+reorder_modules = true
