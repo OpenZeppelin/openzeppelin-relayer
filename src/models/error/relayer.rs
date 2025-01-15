@@ -1,7 +1,8 @@
 use super::{ApiError, RepositoryError};
+use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize)]
 pub enum RelayerError {
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),

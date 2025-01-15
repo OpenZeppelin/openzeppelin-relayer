@@ -1,5 +1,16 @@
+//! # Relayer Controller
+//!
+//! Handles HTTP endpoints for relayer operations including:
+//! - Listing relayers
+//! - Getting relayer details
+//! - Submitting transactions
+//! - Signing messages
+//! - JSON-RPC proxy
 use crate::{
-    domain::{RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory},
+    domain::{
+        JsonRpcRequest, RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory,
+        SignDataRequest,
+    },
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, RelayerResponse, TransactionResponse,
     },
@@ -69,18 +80,29 @@ pub async fn get_relayer_status(
     })))
 }
 
-pub async fn get_relayer_balance(relayer_id: String) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(relayer_id),
-        error: None,
-    })))
-}
+pub async fn get_relayer_balance(
+    relayer_id: String,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    let relayer_repo_model = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await
+        .wrap_err_with(|| format!("Failed to fetch relayer with ID {}", relayer_id))?;
+    info!("Relayer: {:?}", relayer_repo_model);
 
-pub async fn get_relayer_nonce(relayer_id: String) -> Result<HttpResponse, ApiError> {
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    let result = relayer.get_balance().await?;
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(relayer_id),
+        data: Some(result),
         error: None,
     })))
 }
@@ -198,12 +220,31 @@ pub async fn list_transactions(
     })))
 }
 
-pub async fn delete_pending_transactions(relayer_id: String) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(relayer_id),
-        error: None,
-    })))
+pub async fn delete_pending_transactions(
+    relayer_id: String,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    let relayer_repo_model = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await?;
+
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    relayer.delete_pending_transactions().await?;
+
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::<()> {
+            success: true,
+            data: None,
+            error: None,
+        })),
+    )
 }
 
 pub async fn cancel_transaction(
@@ -272,29 +313,85 @@ pub async fn replace_transaction(
     })))
 }
 
-pub async fn sign_data(relayer_id: String) -> Result<HttpResponse, ApiError> {
+pub async fn sign_data(
+    relayer_id: String,
+    request: serde_json::Value,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    let relayer_repo_model = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await?;
+
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    let sign_request: SignDataRequest = serde_json::from_value(request)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid Sign Typed Data request: {}", e)))?;
+
+    let result = relayer.sign_data(sign_request).await?;
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(relayer_id),
+        data: Some(result),
         error: None,
     })))
 }
 
-pub async fn sign_typed_data(relayer_id: String) -> Result<HttpResponse, ApiError> {
+pub async fn sign_typed_data(
+    relayer_id: String,
+    request: serde_json::Value,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    let relayer_repo_model = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await?;
+
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    let sign_request: SignDataRequest = serde_json::from_value(request)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid Sign Typed Data request: {}", e)))?;
+
+    let result = relayer.sign_typed_data(sign_request).await?;
+
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
         success: true,
-        data: Some(relayer_id),
+        data: Some(result),
         error: None,
     })))
 }
 
 pub async fn relayer_rpc(
-    _relayer_id: String,
-    _request: serde_json::Value,
+    relayer_id: String,
+    request: serde_json::Value,
+    state: web::Data<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(true),
-        error: None,
-    })))
+    let relayer_repo_model = state
+        .relayer_repository
+        .get_by_id(relayer_id.to_string())
+        .await?;
+
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+    )
+    .unwrap();
+
+    let json_rpc_request: JsonRpcRequest = serde_json::from_value(request)
+        .map_err(|e| ApiError::BadRequest(format!("Invalid JSON-RPC request: {}", e)))?;
+
+    let result = relayer.rpc(json_rpc_request).await?;
+
+    Ok(HttpResponse::Ok().json(serde_json::json!(result)))
 }

@@ -1,3 +1,12 @@
+//! # API Routes Module
+//!
+//! Configures HTTP routes for the relayer service API.
+//!
+//! ## Routes
+//!
+//! * `/health` - Health check endpoints
+//! * `/relayers` - Relayer management endpoints
+
 pub mod cat;
 pub mod health;
 pub mod relayer;

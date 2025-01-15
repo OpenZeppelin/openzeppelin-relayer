@@ -17,8 +17,8 @@ pub struct EvmTransactionRequest {
     pub to: String,
     pub value: u64,
     pub data: String,
-    pub gas_limit: u64,
-    pub gas_price: u64,
+    pub gas_limit: u128,
+    pub gas_price: u128,
     pub speed: Option<Speed>,
 }
 
@@ -53,7 +53,7 @@ pub struct StellarTransactionRequest {
     pub asset_code: String,
     pub asset_issuer: Option<String>,
     pub memo: Option<String>,
-    pub fee: u32,
+    pub fee: u128,
     pub sequence_number: String,
 }
 

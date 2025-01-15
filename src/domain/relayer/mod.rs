@@ -1,3 +1,14 @@
+//! # Relayer Domain Module
+//!
+//! This module contains the core domain logic for the relayer service.
+//! It handles transaction submission, validation, and monitoring across
+//! different blockchain networks.
+//! ## Architecture
+//!
+//! The relayer domain is organized into network-specific implementations
+//! that share common interfaces for transaction handling and monitoring.
+
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::models::{
@@ -27,13 +38,56 @@ pub trait Relayer {
         &self,
         tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError>;
-    async fn get_balance(&self) -> Result<bool, RelayerError>;
-    async fn get_nonce(&self) -> Result<bool, RelayerError>;
+    async fn get_balance(&self) -> Result<u128, RelayerError>;
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
-    async fn sign_data(&self) -> Result<bool, RelayerError>;
-    async fn sign_typed_data(&self) -> Result<bool, RelayerError>;
-    async fn rpc(&self) -> Result<bool, RelayerError>;
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError>;
+    async fn sign_typed_data(
+        &self,
+        request: SignDataRequest,
+    ) -> Result<SignDataResponse, RelayerError>;
+    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn get_status(&self) -> Result<bool, RelayerError>;
+    async fn validate_relayer(&self) -> Result<bool, RelayerError>;
+    async fn sync_relayer(&self) -> Result<bool, RelayerError>;
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignDataRequest {
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignDataResponse {
+    pub sig: String,
+    pub r: String,
+    pub s: String,
+    pub v: u8,
+}
+
+// JSON-RPC Request struct
+#[derive(Serialize, Deserialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: String,
+    pub method: String,
+    pub params: serde_json::Value,
+    pub id: u64,
+}
+
+// JSON-RPC Response struct
+#[derive(Serialize, Deserialize)]
+pub struct JsonRpcResponse {
+    pub jsonrpc: String,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<JsonRpcError>,
+    pub id: u64,
+}
+
+// JSON-RPC Error struct
+#[derive(Serialize, Deserialize)]
+pub struct JsonRpcError {
+    pub code: i32,
+    pub message: String,
+    pub data: Option<serde_json::Value>,
 }
 
 pub trait RelayerFactoryTrait {

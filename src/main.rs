@@ -1,3 +1,28 @@
+//! # OpenZeppelin Relayer
+//!
+//! A blockchain transaction relayer service that supports multiple networks
+//! including EVM, Solana, and Stellar.
+//!
+//! ## Features
+//!
+//! - Multi-network support
+//! - Transaction monitoring
+//! - Policy enforcement
+//! - REST API
+//!
+//! ## Architecture
+//!
+//! The service is built using Actix-web and provides:
+//! - HTTP endpoints for transaction submission
+//! - In-memory repository implementations
+//! - Configurable network policies
+//!
+//! ## Usage
+//!
+//! ```bash
+//! cargo run
+//! ```
+
 use std::sync::Arc;
 
 use actix_web::{middleware, middleware::Logger, web, App, HttpServer};
@@ -18,6 +43,17 @@ mod repositories;
 mod services;
 pub use models::{ApiError, AppState};
 
+/// Sets up logging and environment configuration
+///
+/// # Returns
+///
+/// * `Result<()>` - Setup result
+///
+/// # Errors
+///
+/// Returns error if:
+/// - Environment file cannot be loaded
+/// - Logger initialization fails
 fn setup_logging_and_env() -> Result<()> {
     dotenv().ok();
     SimpleLogger::new()
@@ -30,6 +66,17 @@ fn load_config_file() -> Result<Config> {
     config::load_config().wrap_err("Failed to load config file")
 }
 
+/// Initializes application state and repositories
+///
+/// # Returns
+///
+/// * `Result<web::Data<AppState>>` - Initialized application state
+///
+/// # Errors
+///
+/// Returns error if:
+/// - Repository initialization fails
+/// - Configuration loading fails
 async fn initialize_app_state(config_file: Config) -> Result<web::Data<AppState>> {
     let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());

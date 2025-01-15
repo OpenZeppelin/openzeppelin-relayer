@@ -36,8 +36,8 @@ pub enum NetworkTransactionData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionData {
-    pub gas_price: u64,
-    pub gas_limit: u64,
+    pub gas_price: u128,
+    pub gas_limit: u128,
     pub nonce: u64,
     pub value: u64,
     pub data: String,
@@ -56,7 +56,7 @@ pub struct SolanaTransactionData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StellarTransactionData {
     pub source_account: String,
-    pub fee: u32,
+    pub fee: u128,
     pub sequence_number: u64,
     pub operations: Vec<String>,
 }

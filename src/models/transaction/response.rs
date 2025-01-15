@@ -21,8 +21,8 @@ pub struct EvmTransactionResponse {
     pub sent_at: u64,
     #[serde(serialize_with = "serialize_timestamp")]
     pub confirmed_at: u64,
-    pub gas_price: u64,
-    pub gas_limit: u64,
+    pub gas_price: u128,
+    pub gas_limit: u128,
     pub nonce: u64,
     pub value: u64,
     pub from: String,
@@ -56,7 +56,7 @@ pub struct StellarTransactionResponse {
     pub sent_at: u64,
     pub confirmed_at: u64,
     pub source_account: String,
-    pub fee: u32,
+    pub fee: u128,
     pub sequence_number: u64,
 }
 

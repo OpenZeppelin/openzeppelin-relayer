@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::{
-    domain::relayer::{Relayer, RelayerError},
+    domain::{
+        relayer::{Relayer, RelayerError},
+        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+    },
     models::{
         EvmNetwork, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
         TransactionRepoModel,
@@ -63,18 +66,13 @@ impl Relayer for EvmRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<bool, RelayerError> {
+    async fn get_balance(&self) -> Result<u128, RelayerError> {
         println!("EVM get_balance...");
-        Ok(true)
+        Ok(0)
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
         println!("EVM get_status...");
-        Ok(true)
-    }
-
-    async fn get_nonce(&self) -> Result<bool, RelayerError> {
-        println!("EVM get_nonce...");
         Ok(true)
     }
 
@@ -83,18 +81,46 @@ impl Relayer for EvmRelayer {
         Ok(true)
     }
 
-    async fn sign_data(&self) -> Result<bool, RelayerError> {
+    async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         println!("EVM sign_data...");
-        Ok(true)
+        Ok(SignDataResponse {
+            sig: "".to_string(),
+            r: "".to_string(),
+            s: "".to_string(),
+            v: 0,
+        })
     }
 
-    async fn sign_typed_data(&self) -> Result<bool, RelayerError> {
+    async fn sign_typed_data(
+        &self,
+        _request: SignDataRequest,
+    ) -> Result<SignDataResponse, RelayerError> {
         println!("EVM sign_typed_data...");
+        Ok(SignDataResponse {
+            sig: "".to_string(),
+            r: "".to_string(),
+            s: "".to_string(),
+            v: 0,
+        })
+    }
+
+    async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+        println!("EVM rpc...");
+        Ok(JsonRpcResponse {
+            id: 1,
+            jsonrpc: "2.0".to_string(),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        })
+    }
+
+    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
+        println!("EVM validate relayer...");
         Ok(true)
     }
 
-    async fn rpc(&self) -> Result<bool, RelayerError> {
-        println!("EVM rpc...");
+    async fn sync_relayer(&self) -> Result<bool, RelayerError> {
+        println!("EVM sync relayer...");
         Ok(true)
     }
 }

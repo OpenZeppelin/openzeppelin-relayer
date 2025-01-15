@@ -1,3 +1,7 @@
+//! # Repository Module
+//!
+//! Implements data persistence layer for the relayer service using Repository pattern.
+
 use crate::models::RepositoryError;
 use async_trait::async_trait;
 use eyre::Result;

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::{
-    domain::relayer::{Relayer, RelayerError},
+    domain::{
+        relayer::{Relayer, RelayerError},
+        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+    },
     models::{NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
 };
@@ -49,18 +52,13 @@ impl Relayer for SolanaRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<bool, RelayerError> {
+    async fn get_balance(&self) -> Result<u128, RelayerError> {
         println!("Solana get_balance...");
-        Ok(true)
+        Ok(0)
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
         println!("Solana get_status...");
-        Ok(true)
-    }
-
-    async fn get_nonce(&self) -> Result<bool, RelayerError> {
-        println!("Solana get_nonce...");
         Ok(true)
     }
 
@@ -69,31 +67,49 @@ impl Relayer for SolanaRelayer {
         Ok(true)
     }
 
-    async fn sign_data(&self) -> Result<bool, RelayerError> {
+    async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         println!("Solana sign_data...");
-        Ok(true)
+        Ok(SignDataResponse {
+            sig: "".to_string(),
+            r: "".to_string(),
+            s: "".to_string(),
+            v: 0,
+        })
     }
 
-    async fn sign_typed_data(&self) -> Result<bool, RelayerError> {
+    async fn sign_typed_data(
+        &self,
+        _request: SignDataRequest,
+    ) -> Result<SignDataResponse, RelayerError> {
         println!("Solana sign_typed_data...");
+        Ok(SignDataResponse {
+            sig: "".to_string(),
+            r: "".to_string(),
+            s: "".to_string(),
+            v: 0,
+        })
+    }
+
+    async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+        println!("Solana rpc...");
+        Ok(JsonRpcResponse {
+            id: 1,
+            jsonrpc: "2.0".to_string(),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        })
+    }
+
+    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
+        println!("Solana validate relayer...");
         Ok(true)
     }
 
-    async fn rpc(&self) -> Result<bool, RelayerError> {
-        println!("Solana rpc...");
+    async fn sync_relayer(&self) -> Result<bool, RelayerError> {
+        println!("Stellar sync relayer...");
         Ok(true)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    // use super::*;
-
-    // #[test]
-    // fn test_new_evm_relayer() {
-    //     let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
-    //     let provider = EvmProvider::new();
-    //     let relayer = SolanaRelayer::new(network, provider);
-    //     assert!(!relayer.paused);
-    // }
-}
+mod tests {}

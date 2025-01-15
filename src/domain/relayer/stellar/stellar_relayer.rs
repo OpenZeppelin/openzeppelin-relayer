@@ -1,4 +1,5 @@
 use crate::{
+    domain::{JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse},
     models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
 };
@@ -49,18 +50,13 @@ impl Relayer for StellarRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<bool, RelayerError> {
+    async fn get_balance(&self) -> Result<u128, RelayerError> {
         println!("Stellar get_balance...");
-        Ok(true)
+        Ok(0)
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
         println!("Stellar get_status...");
-        Ok(true)
-    }
-
-    async fn get_nonce(&self) -> Result<bool, RelayerError> {
-        println!("Stellar get_nonce...");
         Ok(true)
     }
 
@@ -69,18 +65,46 @@ impl Relayer for StellarRelayer {
         Ok(true)
     }
 
-    async fn sign_data(&self) -> Result<bool, RelayerError> {
-        println!("Stellar sign_data...");
-        Ok(true)
+    async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
+        info!("Stellar sign_data...");
+        Ok(SignDataResponse {
+            sig: "".to_string(),
+            r: "".to_string(),
+            s: "".to_string(),
+            v: 0,
+        })
     }
 
-    async fn sign_typed_data(&self) -> Result<bool, RelayerError> {
-        println!("Stellar sign_typed_data...");
-        Ok(true)
+    async fn sign_typed_data(
+        &self,
+        _request: SignDataRequest,
+    ) -> Result<SignDataResponse, RelayerError> {
+        info!("Stellar sign_typed_data...");
+        Ok(SignDataResponse {
+            sig: "".to_string(),
+            r: "".to_string(),
+            s: "".to_string(),
+            v: 0,
+        })
     }
 
-    async fn rpc(&self) -> Result<bool, RelayerError> {
+    async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
         println!("Stellar rpc...");
+        Ok(JsonRpcResponse {
+            id: 1,
+            jsonrpc: "2.0".to_string(),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        })
+    }
+
+    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
+        println!("Stellar validate relayer...");
+        Ok(true)
+    }
+
+    async fn sync_relayer(&self) -> Result<bool, RelayerError> {
+        println!("Stellar sync relayer...");
         Ok(true)
     }
 }
