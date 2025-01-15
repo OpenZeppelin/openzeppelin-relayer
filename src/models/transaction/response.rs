@@ -1,7 +1,6 @@
 use crate::models::transaction::{NetworkTransactionData, TransactionRepoModel, TransactionStatus};
 use chrono::{TimeZone, Utc};
-use serde::Serialize;
-use serde::Serializer;
+use serde::{Serialize, Serializer};
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]

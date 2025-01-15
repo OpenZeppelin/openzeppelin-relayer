@@ -1,9 +1,10 @@
-use crate::models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus};
-use crate::repositories::*;
+use crate::{
+    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
+    repositories::*,
+};
 use async_trait::async_trait;
 use eyre::Result;
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,

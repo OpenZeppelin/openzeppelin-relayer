@@ -1,5 +1,7 @@
-use crate::models::{ApiError, CreateCatRequest};
-use crate::services::CatService;
+use crate::{
+    models::{ApiError, CreateCatRequest},
+    services::CatService,
+};
 use actix_web::{web, HttpResponse};
 
 type CatResult = Result<HttpResponse, ApiError>;

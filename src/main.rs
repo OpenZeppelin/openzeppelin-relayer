@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use actix_web::middleware::Logger;
-use actix_web::{middleware, web, App, HttpServer};
+use actix_web::{middleware, middleware::Logger, web, App, HttpServer};
 use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
 use dotenvy::dotenv;

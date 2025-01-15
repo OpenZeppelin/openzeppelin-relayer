@@ -1,5 +1,4 @@
-use core::fmt;
-use core::time::Duration;
+use core::{fmt, time::Duration};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 

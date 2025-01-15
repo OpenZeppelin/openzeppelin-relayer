@@ -1,29 +1,29 @@
-use std::sync::Arc;
-
-use super::{Relayer, RelayerError};
-use crate::models::{
-    NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel,
+use crate::{
+    models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
+    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
 };
-use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
 use async_trait::async_trait;
 use eyre::Result;
 use log::info;
+use std::sync::Arc;
+
+use crate::domain::relayer::{Relayer, RelayerError};
 
 #[allow(dead_code)]
-pub struct SolanaRelayer {
+pub struct StellarRelayer {
     relayer: RelayerRepoModel,
-    network: SolanaNetwork,
+    network: StellarNetwork,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
 }
 
-impl SolanaRelayer {
+impl StellarRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
     ) -> Result<Self, RelayerError> {
-        let network = match SolanaNetwork::from_network_str(&relayer.network) {
+        let network = match StellarNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
             Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
         };
@@ -38,62 +38,49 @@ impl SolanaRelayer {
 }
 
 #[async_trait]
-impl Relayer for SolanaRelayer {
+impl Relayer for StellarRelayer {
     async fn send_transaction(
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        info!("Solana Sending transaction...");
+        info!("Stellar Sending transaction...");
         Ok(transaction)
     }
 
     async fn get_balance(&self) -> Result<bool, RelayerError> {
-        println!("Solana get_balance...");
+        println!("Stellar get_balance...");
         Ok(true)
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
-        println!("Solana get_status...");
+        println!("Stellar get_status...");
         Ok(true)
     }
 
     async fn get_nonce(&self) -> Result<bool, RelayerError> {
-        println!("Solana get_nonce...");
+        println!("Stellar get_nonce...");
         Ok(true)
     }
 
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
-        println!("Solana delete_pending_transactions...");
+        println!("Stellar delete_pending_transactions...");
         Ok(true)
     }
 
     async fn sign_data(&self) -> Result<bool, RelayerError> {
-        println!("Solana sign_data...");
+        println!("Stellar sign_data...");
         Ok(true)
     }
 
     async fn sign_typed_data(&self) -> Result<bool, RelayerError> {
-        println!("Solana sign_typed_data...");
+        println!("Stellar sign_typed_data...");
         Ok(true)
     }
 
     async fn rpc(&self) -> Result<bool, RelayerError> {
-        println!("Solana rpc...");
+        println!("Stellar rpc...");
         Ok(true)
     }
-}
-
-#[cfg(test)]
-mod tests {
-    // use super::*;
-
-    // #[test]
-    // fn test_new_evm_relayer() {
-    //     let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
-    //     let provider = EvmProvider::new();
-    //     let relayer = SolanaRelayer::new(network, provider);
-    //     assert!(!relayer.paused);
-    // }
 }

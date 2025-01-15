@@ -1,0 +1,25 @@
+# Base image
+FROM cgr.dev/chainguard/rust as base
+EXPOSE 8080 
+
+# making the directory
+USER root
+RUN mkdir -p /usr/app && chown -R nonroot:nonroot /usr/app
+
+USER nonroot
+WORKDIR /usr/app
+
+# Setting up build directories
+RUN mkdir -p /tmp/relayer && chown -R nonroot:nonroot /tmp/relayer
+COPY --chown=nonroot:nonroot . /tmp/relayer
+
+# building the app
+WORKDIR /tmp/relayer
+RUN cargo install --root /usr/app --path . --debug 
+
+# cleaning up
+RUN rm -Rf /tmp/*
+
+# starting up
+ENTRYPOINT ["/usr/app/bin/openzeppelin-relayer"]
+

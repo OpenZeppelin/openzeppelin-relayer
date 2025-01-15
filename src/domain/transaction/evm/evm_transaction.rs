@@ -2,10 +2,12 @@ use async_trait::async_trait;
 use eyre::Result;
 use std::sync::Arc;
 
-use super::Transaction;
-use crate::models::{RelayerRepoModel, TransactionError, TransactionRepoModel};
-use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
-use crate::services::EvmProvider;
+use crate::{
+    domain::transaction::Transaction,
+    models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
+    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    services::EvmProvider,
+};
 
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction {

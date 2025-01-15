@@ -1,7 +1,8 @@
-use crate::domain::{RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory};
-use crate::models::{NetworkType, RelayerResponse, TransactionResponse};
 use crate::{
-    models::{ApiResponse, NetworkTransactionRequest},
+    domain::{RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory},
+    models::{
+        ApiResponse, NetworkTransactionRequest, NetworkType, RelayerResponse, TransactionResponse,
+    },
     repositories::Repository,
     ApiError, AppState,
 };

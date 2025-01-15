@@ -1,13 +1,14 @@
-use crate::config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig};
-use crate::models::{
-    NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-    RelayerStellarPolicy, RepositoryError,
+use crate::{
+    config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
+    models::{
+        NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
+        RelayerStellarPolicy, RepositoryError,
+    },
+    repositories::*,
 };
-use crate::repositories::*;
 use async_trait::async_trait;
 use eyre::Result;
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 use thiserror::Error;
 
 pub struct InMemoryRelayerRepository {

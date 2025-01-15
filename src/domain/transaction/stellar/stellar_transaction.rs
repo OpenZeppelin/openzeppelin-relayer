@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use eyre::Result;
 use std::sync::Arc;
 
-use super::Transaction;
 use crate::{
+    domain::transaction::Transaction,
     models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
 };

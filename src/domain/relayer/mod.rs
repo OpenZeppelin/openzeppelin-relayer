@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
-use crate::models::{EvmNetwork, NetworkTransactionRequest, RelayerError};
-use crate::models::{NetworkType, RelayerRepoModel, TransactionRepoModel};
+use crate::models::{
+    EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+    TransactionRepoModel,
+};
 
-use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
-use crate::services::EvmProvider;
+use crate::{
+    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    services::EvmProvider,
+};
 use async_trait::async_trait;
 use eyre::Result;
 

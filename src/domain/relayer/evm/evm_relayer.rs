@@ -1,36 +1,39 @@
-use crate::models::{
-    NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel,
+use std::sync::Arc;
+
+use crate::{
+    domain::relayer::{Relayer, RelayerError},
+    models::{
+        EvmNetwork, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
+        TransactionRepoModel,
+    },
+    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
+    services::EvmProvider,
 };
-use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
 use async_trait::async_trait;
 use eyre::Result;
 use log::info;
-use std::sync::Arc;
-
-use super::{Relayer, RelayerError};
 
 #[allow(dead_code)]
-pub struct StellarRelayer {
+pub struct EvmRelayer {
     relayer: RelayerRepoModel,
-    network: StellarNetwork,
+    network: EvmNetwork,
+    provider: EvmProvider,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
 }
 
-impl StellarRelayer {
+impl EvmRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
+        provider: EvmProvider,
+        network: EvmNetwork,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
     ) -> Result<Self, RelayerError> {
-        let network = match StellarNetwork::from_network_str(&relayer.network) {
-            Ok(network) => network,
-            Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-        };
-
         Ok(Self {
             relayer,
             network,
+            provider,
             relayer_repository,
             transaction_repository,
         })
@@ -38,49 +41,63 @@ impl StellarRelayer {
 }
 
 #[async_trait]
-impl Relayer for StellarRelayer {
+impl Relayer for EvmRelayer {
     async fn send_transaction(
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
+        // create
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        info!("Stellar Sending transaction...");
+        let test = self.provider.get_block_number().await.unwrap();
+
+        info!("EVM test: {:?}", test);
+
+        // send TODO
+        info!("EVM Sending transaction...");
+        self.transaction_repository
+            .create(transaction.clone())
+            .await
+            .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
         Ok(transaction)
     }
 
     async fn get_balance(&self) -> Result<bool, RelayerError> {
-        println!("Stellar get_balance...");
+        println!("EVM get_balance...");
         Ok(true)
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
-        println!("Stellar get_status...");
+        println!("EVM get_status...");
         Ok(true)
     }
 
     async fn get_nonce(&self) -> Result<bool, RelayerError> {
-        println!("Stellar get_nonce...");
+        println!("EVM get_nonce...");
         Ok(true)
     }
 
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
-        println!("Stellar delete_pending_transactions...");
+        println!("EVM delete_pending_transactions...");
         Ok(true)
     }
 
     async fn sign_data(&self) -> Result<bool, RelayerError> {
-        println!("Stellar sign_data...");
+        println!("EVM sign_data...");
         Ok(true)
     }
 
     async fn sign_typed_data(&self) -> Result<bool, RelayerError> {
-        println!("Stellar sign_typed_data...");
+        println!("EVM sign_typed_data...");
         Ok(true)
     }
 
     async fn rpc(&self) -> Result<bool, RelayerError> {
-        println!("Stellar rpc...");
+        println!("EVM rpc...");
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod tests {}
