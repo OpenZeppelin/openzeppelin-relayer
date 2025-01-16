@@ -21,7 +21,7 @@ use actix_web::{web, HttpResponse};
 use eyre::{Context, Result};
 use log::info;
 
-pub async fn list_relayers(state: web::Data<AppState>) -> Result<HttpResponse, ApiError> {
+pub async fn list_relayers(state: web::ThinData<AppState>) -> Result<HttpResponse, ApiError> {
     let relayers = state.relayer_repository.list_all().await?;
 
     info!("Relayers: {:?}", relayers);
@@ -35,7 +35,7 @@ pub async fn list_relayers(state: web::Data<AppState>) -> Result<HttpResponse, A
 
 pub async fn get_relayer(
     relayer_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
@@ -55,7 +55,7 @@ pub async fn get_relayer(
 
 pub async fn get_relayer_status(
     relayer_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository
@@ -82,7 +82,7 @@ pub async fn get_relayer_status(
 
 pub async fn get_relayer_balance(
     relayer_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository
@@ -109,7 +109,7 @@ pub async fn get_relayer_balance(
 
 pub async fn send_transaction(
     relayer_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
     request: serde_json::Value,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
@@ -143,7 +143,7 @@ pub async fn send_transaction(
 pub async fn get_transaction_by_id(
     relayer_id: String,
     transaction_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     state
         .relayer_repository
@@ -167,7 +167,7 @@ pub async fn get_transaction_by_id(
 pub async fn get_transaction_by_nonce(
     relayer_id: String,
     nonce: u64,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
@@ -198,7 +198,7 @@ pub async fn get_transaction_by_nonce(
 
 pub async fn list_transactions(
     relayer_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     state
         .relayer_repository
@@ -222,7 +222,7 @@ pub async fn list_transactions(
 
 pub async fn delete_pending_transactions(
     relayer_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository
@@ -250,7 +250,7 @@ pub async fn delete_pending_transactions(
 pub async fn cancel_transaction(
     relayer_id: String,
     transaction_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
@@ -283,7 +283,7 @@ pub async fn cancel_transaction(
 pub async fn replace_transaction(
     relayer_id: String,
     transaction_id: String,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = state
         .relayer_repository
@@ -316,7 +316,7 @@ pub async fn replace_transaction(
 pub async fn sign_data(
     relayer_id: String,
     request: serde_json::Value,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository
@@ -345,7 +345,7 @@ pub async fn sign_data(
 pub async fn sign_typed_data(
     relayer_id: String,
     request: serde_json::Value,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository
@@ -374,7 +374,7 @@ pub async fn sign_typed_data(
 pub async fn relayer_rpc(
     relayer_id: String,
     request: serde_json::Value,
-    state: web::Data<AppState>,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository

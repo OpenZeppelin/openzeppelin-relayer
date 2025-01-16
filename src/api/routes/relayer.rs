@@ -4,13 +4,16 @@ use serde::Deserialize;
 
 // list all relayers
 #[get("/relayers")]
-async fn list_relayers(data: web::Data<AppState>) -> impl Responder {
+async fn list_relayers(data: web::ThinData<AppState>) -> impl Responder {
     relayer::list_relayers(data).await
 }
 
 // get relayer details
 #[get("/relayers/{relayer_id}")]
-async fn get_relayer(relayer_id: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
+async fn get_relayer(
+    relayer_id: web::Path<String>,
+    data: web::ThinData<AppState>,
+) -> impl Responder {
     relayer::get_relayer(relayer_id.into_inner(), data).await
 }
 
@@ -18,7 +21,7 @@ async fn get_relayer(relayer_id: web::Path<String>, data: web::Data<AppState>) -
 #[post("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::get_relayer_status(relayer_id.into_inner(), data).await
 }
@@ -27,7 +30,7 @@ async fn get_relayer_status(
 #[post("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::get_relayer_balance(relayer_id.into_inner(), data).await
 }
@@ -37,7 +40,7 @@ async fn get_relayer_balance(
 async fn send_relayer_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::send_transaction(relayer_id.into_inner(), data, req.into_inner()).await
 }
@@ -51,7 +54,7 @@ pub struct TransactionPath {
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_relayer_transaction_by_id(
     path: web::Path<TransactionPath>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, data).await
@@ -61,7 +64,7 @@ async fn get_relayer_transaction_by_id(
 async fn get_relayer_transaction_by_nonce(
     relayer_id: web::Path<String>,
     nonce: web::Path<u64>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::get_transaction_by_nonce(relayer_id.into_inner(), nonce.into_inner(), data).await
 }
@@ -69,7 +72,7 @@ async fn get_relayer_transaction_by_nonce(
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_relayer_transactions(
     relayer_id: web::Path<String>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::list_transactions(relayer_id.into_inner(), data).await
 }
@@ -77,7 +80,7 @@ async fn list_relayer_transactions(
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::delete_pending_transactions(relayer_id.into_inner(), data).await
 }
@@ -86,7 +89,7 @@ async fn delete_pending_transactions(
 async fn cancel_relayer_transaction(
     relayer_id: web::Path<String>,
     transaction_id: web::Path<String>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::cancel_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
 }
@@ -95,7 +98,7 @@ async fn cancel_relayer_transaction(
 async fn replace_relayer_transaction(
     relayer_id: web::Path<String>,
     transaction_id: web::Path<String>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::replace_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
 }
@@ -104,7 +107,7 @@ async fn replace_relayer_transaction(
 async fn relayer_sign(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -113,7 +116,7 @@ async fn relayer_sign(
 async fn relayer_sign_typed_data(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -122,7 +125,7 @@ async fn relayer_sign_typed_data(
 async fn relayer_rpc(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::Data<AppState>,
+    data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
 }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository};
 
+#[derive(Clone)]
 pub struct AppState {
     pub relayer_repository: Arc<InMemoryRelayerRepository>,
     pub transaction_repository: Arc<InMemoryTransactionRepository>,

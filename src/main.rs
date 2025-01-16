@@ -77,11 +77,11 @@ fn load_config_file() -> Result<Config> {
 /// Returns error if:
 /// - Repository initialization fails
 /// - Configuration loading fails
-async fn initialize_app_state(config_file: Config) -> Result<web::Data<AppState>> {
+async fn initialize_app_state(config_file: Config) -> Result<web::ThinData<AppState>> {
     let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
 
-    let app_state = web::Data::new(AppState {
+    let app_state = web::ThinData(AppState {
         relayer_repository,
         transaction_repository,
     });
