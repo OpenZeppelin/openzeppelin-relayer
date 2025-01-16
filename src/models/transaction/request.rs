@@ -1,6 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
-
 use crate::models::{ApiError, NetworkType};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -22,27 +20,11 @@ pub struct EvmTransactionRequest {
     pub speed: Option<Speed>,
 }
 
-impl TryFrom<serde_json::Value> for EvmTransactionRequest {
-    type Error = ApiError;
-
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value).map_err(|e| ApiError::BadRequest(e.to_string()))
-    }
-}
-
 #[derive(Deserialize, Serialize)]
 pub struct SolanaTransactionRequest {
     pub to: String,
     pub lamports: u64,
     pub recent_blockhash: String,
-}
-
-impl TryFrom<serde_json::Value> for SolanaTransactionRequest {
-    type Error = ApiError;
-
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value).map_err(|e| ApiError::BadRequest(e.to_string()))
-    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -57,14 +39,7 @@ pub struct StellarTransactionRequest {
     pub sequence_number: String,
 }
 
-impl TryFrom<serde_json::Value> for StellarTransactionRequest {
-    type Error = ApiError;
-
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value).map_err(|e| ApiError::BadRequest(e.to_string()))
-    }
-}
-
+#[derive(Serialize)]
 pub enum NetworkTransactionRequest {
     Evm(EvmTransactionRequest),
     Solana(SolanaTransactionRequest),
@@ -77,9 +52,15 @@ impl NetworkTransactionRequest {
         json: serde_json::Value,
     ) -> Result<Self, ApiError> {
         match network_type {
-            NetworkType::Evm => Ok(Self::Evm(EvmTransactionRequest::try_from(json)?)),
-            NetworkType::Solana => Ok(Self::Solana(SolanaTransactionRequest::try_from(json)?)),
-            NetworkType::Stellar => Ok(Self::Stellar(StellarTransactionRequest::try_from(json)?)),
+            NetworkType::Evm => Ok(Self::Evm(
+                serde_json::from_value(json).map_err(|e| ApiError::BadRequest(e.to_string()))?,
+            )),
+            NetworkType::Solana => Ok(Self::Solana(
+                serde_json::from_value(json).map_err(|e| ApiError::BadRequest(e.to_string()))?,
+            )),
+            NetworkType::Stellar => Ok(Self::Stellar(
+                serde_json::from_value(json).map_err(|e| ApiError::BadRequest(e.to_string()))?,
+            )),
         }
     }
 }
