@@ -2,6 +2,8 @@ use actix_web::{HttpResponse, ResponseError};
 use eyre::Report;
 use thiserror::Error;
 
+use crate::models::ApiResponse;
+
 #[derive(Error, Debug)]
 pub enum ApiError {
     #[error("Internal Server Error: {0}")]
@@ -26,14 +28,22 @@ pub enum ApiError {
 impl ResponseError for ApiError {
     fn error_response(&self) -> HttpResponse {
         match self {
-            ApiError::InternalError(err) => HttpResponse::InternalServerError()
-                .json(format!("Internal Server Error: {:?}", err)),
-            ApiError::NotFound(msg) => HttpResponse::NotFound().json(msg),
-            ApiError::BadRequest(msg) => HttpResponse::BadRequest().json(msg),
-            ApiError::Unauthorized(msg) => HttpResponse::Unauthorized().json(msg),
-            ApiError::NotSupported(msg) => HttpResponse::NotImplemented().json(msg),
-            ApiError::InternalEyreError(err) => HttpResponse::InternalServerError()
-                .json(format!("Internal Server Error: {:?}", err)),
+            ApiError::InternalError(msg) => {
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(msg))
+            }
+            ApiError::NotFound(msg) => HttpResponse::NotFound().json(ApiResponse::<()>::error(msg)),
+            ApiError::BadRequest(msg) => {
+                HttpResponse::BadRequest().json(ApiResponse::<()>::error(msg))
+            }
+            ApiError::Unauthorized(msg) => {
+                HttpResponse::Unauthorized().json(ApiResponse::<()>::error(msg))
+            }
+            ApiError::NotSupported(msg) => {
+                HttpResponse::NotImplemented().json(ApiResponse::<()>::error(msg))
+            }
+            ApiError::InternalEyreError(msg) => {
+                HttpResponse::InternalServerError().json(ApiResponse::<()>::error(msg.to_string()))
+            }
         }
     }
 }

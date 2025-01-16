@@ -16,6 +16,7 @@ pub struct ApiResponse<T> {
     pub pagination: Option<PaginationMeta>,
 }
 
+#[allow(dead_code)]
 impl<T> ApiResponse<T> {
     pub fn new(data: Option<T>, error: Option<String>, pagination: Option<PaginationMeta>) -> Self {
         Self {

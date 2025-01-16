@@ -1,5 +1,4 @@
-use crate::models::EvmNamedNetwork;
-use crate::models::error::NetworkError;
+use crate::models::{error::NetworkError, EvmNamedNetwork};
 use core::{cmp::Ordering, fmt, str::FromStr, time::Duration};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

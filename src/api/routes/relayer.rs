@@ -1,7 +1,7 @@
 use crate::{
     api::controllers::relayer,
     domain::{JsonRpcRequest, SignDataRequest},
-    models::{AppState, NetworkTransactionRequest, PaginationQuery},
+    models::{AppState, PaginationQuery},
 };
 use actix_web::{delete, get, post, put, web, Responder};
 use serde::Deserialize;

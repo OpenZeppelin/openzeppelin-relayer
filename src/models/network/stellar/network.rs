@@ -1,7 +1,6 @@
-use crate::models::StellarNamedNetwork;
+use crate::models::{error::NetworkError, StellarNamedNetwork};
 use core::{fmt, str::FromStr, time::Duration};
 use serde::{Deserialize, Serialize};
-use crate::models::error::NetworkError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StellarNetwork(StellarNamedNetwork);
@@ -12,7 +11,6 @@ impl fmt::Debug for StellarNetwork {
         self.kind().fmt(f)
     }
 }
-
 
 impl Default for StellarNetwork {
     fn default() -> Self {

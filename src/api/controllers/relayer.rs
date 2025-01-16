@@ -8,8 +8,8 @@
 //! - JSON-RPC proxy
 use crate::{
     domain::{
-        JsonRpcRequest, RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory,
-        SignDataRequest,
+        JsonRpcRequest, Relayer, RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory,
+        SignDataRequest, Transaction,
     },
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,

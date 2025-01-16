@@ -1,7 +1,6 @@
-use crate::models::SolanaNamedNetwork;
+use crate::models::{error::NetworkError, SolanaNamedNetwork};
 use core::{fmt, str::FromStr, time::Duration};
 use serde::{Deserialize, Serialize};
-use crate::models::error::NetworkError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SolanaNetwork(SolanaNamedNetwork);

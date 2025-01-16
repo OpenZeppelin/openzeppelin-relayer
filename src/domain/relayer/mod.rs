@@ -51,6 +51,145 @@ pub trait Relayer {
     async fn sync_relayer(&self) -> Result<bool, RelayerError>;
 }
 
+pub enum NetworkRelayer {
+    Evm(EvmRelayer),
+    Solana(SolanaRelayer),
+    Stellar(StellarRelayer),
+}
+
+#[async_trait]
+impl Relayer for NetworkRelayer {
+    async fn send_transaction(
+        &self,
+        tx_request: NetworkTransactionRequest,
+    ) -> Result<TransactionRepoModel, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.send_transaction(tx_request).await,
+            NetworkRelayer::Solana(relayer) => relayer.send_transaction(tx_request).await,
+            NetworkRelayer::Stellar(relayer) => relayer.send_transaction(tx_request).await,
+        }
+    }
+
+    async fn get_balance(&self) -> Result<u128, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.get_balance().await,
+            NetworkRelayer::Solana(relayer) => relayer.get_balance().await,
+            NetworkRelayer::Stellar(relayer) => relayer.get_balance().await,
+        }
+    }
+
+    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
+            NetworkRelayer::Solana(relayer) => relayer.delete_pending_transactions().await,
+            NetworkRelayer::Stellar(relayer) => relayer.delete_pending_transactions().await,
+        }
+    }
+
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.sign_data(request).await,
+            NetworkRelayer::Solana(relayer) => relayer.sign_data(request).await,
+            NetworkRelayer::Stellar(relayer) => relayer.sign_data(request).await,
+        }
+    }
+
+    async fn sign_typed_data(
+        &self,
+        request: SignDataRequest,
+    ) -> Result<SignDataResponse, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.sign_typed_data(request).await,
+            NetworkRelayer::Solana(relayer) => relayer.sign_typed_data(request).await,
+            NetworkRelayer::Stellar(relayer) => relayer.sign_typed_data(request).await,
+        }
+    }
+
+    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.rpc(request).await,
+            NetworkRelayer::Solana(relayer) => relayer.rpc(request).await,
+            NetworkRelayer::Stellar(relayer) => relayer.rpc(request).await,
+        }
+    }
+
+    async fn get_status(&self) -> Result<bool, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.get_status().await,
+            NetworkRelayer::Solana(relayer) => relayer.get_status().await,
+            NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
+        }
+    }
+
+    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.validate_relayer().await,
+            NetworkRelayer::Solana(relayer) => relayer.validate_relayer().await,
+            NetworkRelayer::Stellar(relayer) => relayer.validate_relayer().await,
+        }
+    }
+
+    async fn sync_relayer(&self) -> Result<bool, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.sync_relayer().await,
+            NetworkRelayer::Solana(relayer) => relayer.sync_relayer().await,
+            NetworkRelayer::Stellar(relayer) => relayer.sync_relayer().await,
+        }
+    }
+}
+
+pub trait RelayerFactoryTrait {
+    fn create_relayer(
+        model: RelayerRepoModel,
+        relayer_repository: Arc<InMemoryRelayerRepository>,
+        transaction_repository: Arc<InMemoryTransactionRepository>,
+    ) -> Result<NetworkRelayer, RelayerError>;
+}
+pub struct RelayerFactory;
+
+impl RelayerFactoryTrait for RelayerFactory {
+    fn create_relayer(
+        relayer: RelayerRepoModel,
+        relayer_repository: Arc<InMemoryRelayerRepository>,
+        transaction_repository: Arc<InMemoryTransactionRepository>,
+    ) -> Result<NetworkRelayer, RelayerError> {
+        match relayer.network_type {
+            NetworkType::Evm => {
+                let network = match EvmNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
+                };
+                let rpc_url = network
+                    .public_rpc_urls()
+                    .and_then(|urls| urls.first().cloned())
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
+                    })?;
+                let evm_provider: EvmProvider = EvmProvider::new(rpc_url).unwrap();
+                let relayer = EvmRelayer::new(
+                    relayer,
+                    evm_provider,
+                    network,
+                    relayer_repository,
+                    transaction_repository,
+                )?;
+
+                Ok(NetworkRelayer::Evm(relayer))
+            }
+            NetworkType::Solana => {
+                let relayer =
+                    SolanaRelayer::new(relayer, relayer_repository, transaction_repository)?;
+                Ok(NetworkRelayer::Solana(relayer))
+            }
+            NetworkType::Stellar => {
+                let relayer =
+                    StellarRelayer::new(relayer, relayer_repository, transaction_repository)?;
+                Ok(NetworkRelayer::Stellar(relayer))
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct SignDataRequest {
     pub message: String,
@@ -88,56 +227,4 @@ pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     pub data: Option<serde_json::Value>,
-}
-
-pub trait RelayerFactoryTrait {
-    fn create_relayer(
-        model: RelayerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-    ) -> Result<Box<dyn Relayer>, RelayerError>;
-}
-pub struct RelayerFactory;
-
-impl RelayerFactoryTrait for RelayerFactory {
-    fn create_relayer(
-        relayer: RelayerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-    ) -> Result<Box<dyn Relayer>, RelayerError> {
-        match relayer.network_type {
-            NetworkType::Evm => {
-                let network = match EvmNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-                };
-                let rpc_url = network
-                    .public_rpc_urls()
-                    .and_then(|urls| urls.first().cloned())
-                    .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
-                    })?;
-                let evm_provider: EvmProvider = EvmProvider::new(rpc_url).unwrap();
-                let relayer = EvmRelayer::new(
-                    relayer,
-                    evm_provider,
-                    network,
-                    relayer_repository,
-                    transaction_repository,
-                )?;
-
-                Ok(Box::new(relayer) as Box<dyn Relayer>)
-            }
-            NetworkType::Solana => {
-                let relayer =
-                    SolanaRelayer::new(relayer, relayer_repository, transaction_repository)?;
-                Ok(Box::new(relayer))
-            }
-            NetworkType::Stellar => {
-                let relayer =
-                    StellarRelayer::new(relayer, relayer_repository, transaction_repository)?;
-                Ok(Box::new(relayer))
-            }
-        }
-    }
 }
