@@ -1,6 +1,7 @@
 use crate::{
     api::controllers::relayer,
-    models::{AppState, PaginationQuery},
+    domain::{JsonRpcRequest, SignDataRequest},
+    models::{AppState, NetworkTransactionRequest, PaginationQuery},
 };
 use actix_web::{delete, get, post, put, web, Responder};
 use serde::Deserialize;
@@ -48,7 +49,7 @@ async fn send_relayer_transaction(
     req: web::Json<serde_json::Value>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
-    relayer::send_transaction(relayer_id.into_inner(), data, req.into_inner()).await
+    relayer::send_transaction(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
 #[derive(Deserialize)]
@@ -113,7 +114,7 @@ async fn replace_relayer_transaction(
 #[post("/relayers/{relayer_id}/sign")]
 async fn relayer_sign(
     relayer_id: web::Path<String>,
-    req: web::Json<serde_json::Value>,
+    req: web::Json<SignDataRequest>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner(), req.into_inner(), data).await
@@ -122,7 +123,7 @@ async fn relayer_sign(
 #[post("/relayers/{relayer_id}/sign-typed-data")]
 async fn relayer_sign_typed_data(
     relayer_id: web::Path<String>,
-    req: web::Json<serde_json::Value>,
+    req: web::Json<SignDataRequest>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await
@@ -131,7 +132,7 @@ async fn relayer_sign_typed_data(
 #[post("/relayers/{relayer_id}/rpc")]
 async fn relayer_rpc(
     relayer_id: web::Path<String>,
-    req: web::Json<serde_json::Value>,
+    req: web::Json<JsonRpcRequest>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await

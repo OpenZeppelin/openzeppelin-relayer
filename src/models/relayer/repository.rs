@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use strum::Display;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Display)]
+#[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkType {
     Evm,

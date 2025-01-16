@@ -106,8 +106,8 @@ pub async fn get_relayer_balance(
 
 pub async fn send_transaction(
     relayer_id: String,
-    state: web::ThinData<AppState>,
     request: serde_json::Value,
+    state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
         .relayer_repository
@@ -312,7 +312,7 @@ pub async fn replace_transaction(
 
 pub async fn sign_data(
     relayer_id: String,
-    request: serde_json::Value,
+    request: SignDataRequest,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
@@ -327,17 +327,14 @@ pub async fn sign_data(
     )
     .unwrap();
 
-    let sign_request: SignDataRequest = serde_json::from_value(request)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid Sign Typed Data request: {}", e)))?;
-
-    let result = relayer.sign_data(sign_request).await?;
+    let result = relayer.sign_data(request).await?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(result))))
 }
 
 pub async fn sign_typed_data(
     relayer_id: String,
-    request: serde_json::Value,
+    request: SignDataRequest,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
@@ -352,17 +349,14 @@ pub async fn sign_typed_data(
     )
     .unwrap();
 
-    let sign_request: SignDataRequest = serde_json::from_value(request)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid Sign Typed Data request: {}", e)))?;
-
-    let result = relayer.sign_typed_data(sign_request).await?;
+    let result = relayer.sign_typed_data(request).await?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(result))))
 }
 
 pub async fn relayer_rpc(
     relayer_id: String,
-    request: serde_json::Value,
+    request: JsonRpcRequest,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = state
@@ -377,10 +371,7 @@ pub async fn relayer_rpc(
     )
     .unwrap();
 
-    let json_rpc_request: JsonRpcRequest = serde_json::from_value(request)
-        .map_err(|e| ApiError::BadRequest(format!("Invalid JSON-RPC request: {}", e)))?;
-
-    let result = relayer.rpc(json_rpc_request).await?;
+    let result = relayer.rpc(request).await?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(result))))
 }
