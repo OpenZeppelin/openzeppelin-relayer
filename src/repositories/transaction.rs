@@ -20,13 +20,41 @@ impl InMemoryTransactionRepository {
     pub async fn find_by_relayer_id(
         &self,
         relayer_id: &str,
-    ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let store = self.store.lock().unwrap();
-        Ok(store
+        let filtered: Vec<TransactionRepoModel> = store
             .values()
             .filter(|tx| tx.relayer_id == relayer_id)
             .cloned()
-            .collect())
+            .collect();
+
+        let total = filtered.len() as u64;
+
+        if total == 0 {
+            return Ok(PaginatedResult::<TransactionRepoModel> {
+                items: vec![],
+                total: 0,
+                page: query.page,
+                per_page: query.per_page,
+            });
+        }
+
+        let start = ((query.page - 1) * query.per_page) as usize;
+
+        // Sort and paginate
+        let items = filtered
+            .into_iter()
+            .skip(start)
+            .take(query.per_page as usize)
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total,
+            page: query.page,
+            per_page: query.per_page,
+        })
     }
 
     pub async fn find_by_status(
@@ -124,6 +152,30 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         let store = self.store.lock().unwrap();
         Ok(store.values().cloned().collect())
+    }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        let total = self.count().await?;
+        let start = ((query.page - 1) * query.per_page) as usize;
+        let items: Vec<TransactionRepoModel> = self
+            .store
+            .lock()
+            .unwrap()
+            .values()
+            .skip(start)
+            .take(query.per_page as usize)
+            .cloned()
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total: total as u64,
+            page: query.page,
+            per_page: query.per_page,
+        })
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {

@@ -1,11 +1,17 @@
-use crate::{api::controllers::relayer, models::AppState};
+use crate::{
+    api::controllers::relayer,
+    models::{AppState, PaginationQuery},
+};
 use actix_web::{delete, get, post, put, web, Responder};
 use serde::Deserialize;
 
 // list all relayers
 #[get("/relayers")]
-async fn list_relayers(data: web::ThinData<AppState>) -> impl Responder {
-    relayer::list_relayers(data).await
+async fn list_relayers(
+    query: web::Query<PaginationQuery>,
+    data: web::ThinData<AppState>,
+) -> impl Responder {
+    relayer::list_relayers(query.into_inner(), data).await
 }
 
 // get relayer details
@@ -72,9 +78,10 @@ async fn get_relayer_transaction_by_nonce(
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_relayer_transactions(
     relayer_id: web::Path<String>,
+    query: web::Query<PaginationQuery>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
-    relayer::list_transactions(relayer_id.into_inner(), data).await
+    relayer::list_transactions(relayer_id.into_inner(), query.into_inner(), data).await
 }
 
 #[delete("/relayers/{relayer_id}/transactions/pending")]

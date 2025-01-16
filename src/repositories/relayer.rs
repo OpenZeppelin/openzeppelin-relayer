@@ -104,6 +104,30 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         Ok(relayers)
     }
 
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
+        let total = self.count().await?;
+        let start = ((query.page - 1) * query.per_page) as usize;
+        let items: Vec<RelayerRepoModel> = self
+            .store
+            .lock()
+            .unwrap()
+            .values()
+            .skip(start)
+            .take(query.per_page as usize)
+            .cloned()
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total: total as u64,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
     async fn count(&self) -> Result<usize, RepositoryError> {
         let store = self.store.lock().unwrap();
         let relayers_length = store.len();

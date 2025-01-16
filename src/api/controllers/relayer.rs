@@ -12,7 +12,8 @@ use crate::{
         SignDataRequest,
     },
     models::{
-        ApiResponse, NetworkTransactionRequest, NetworkType, RelayerResponse, TransactionResponse,
+        ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
+        RelayerResponse, TransactionResponse,
     },
     repositories::Repository,
     ApiError, AppState,
@@ -21,16 +22,24 @@ use actix_web::{web, HttpResponse};
 use eyre::{Context, Result};
 use log::info;
 
-pub async fn list_relayers(state: web::ThinData<AppState>) -> Result<HttpResponse, ApiError> {
-    let relayers = state.relayer_repository.list_all().await?;
+pub async fn list_relayers(
+    query: PaginationQuery,
+    state: web::ThinData<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    let relayers = state.relayer_repository.list_paginated(query).await?;
 
     info!("Relayers: {:?}", relayers);
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(relayers),
-        error: None,
-    })))
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::paginated(
+            relayers.items,
+            PaginationMeta {
+                total_items: relayers.total,
+                current_page: relayers.page,
+                per_page: relayers.per_page,
+            }
+        ))),
+    )
 }
 
 pub async fn get_relayer(
@@ -46,11 +55,7 @@ pub async fn get_relayer(
 
     let relayer_response: RelayerResponse = relayer.into();
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(relayer_response),
-        error: None,
-    })))
+    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(relayer_response))))
 }
 
 pub async fn get_relayer_status(
@@ -73,11 +78,7 @@ pub async fn get_relayer_status(
 
     let status = relayer.get_status().await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(status),
-        error: None,
-    })))
+    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(status))))
 }
 
 pub async fn get_relayer_balance(
@@ -100,11 +101,7 @@ pub async fn get_relayer_balance(
 
     let result = relayer.get_balance().await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(result),
-        error: None,
-    })))
+    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(result))))
 }
 
 pub async fn send_transaction(
@@ -133,11 +130,11 @@ pub async fn send_transaction(
 
     let transaction_response: TransactionResponse = transaction.into();
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(transaction_response),
-        error: None,
-    })))
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(
+            transaction_response
+        ))),
+    )
 }
 
 pub async fn get_transaction_by_id(
@@ -157,11 +154,11 @@ pub async fn get_transaction_by_id(
 
     let transaction_response: TransactionResponse = transaction.into();
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(transaction_response),
-        error: None,
-    })))
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(
+            transaction_response
+        ))),
+    )
 }
 
 pub async fn get_transaction_by_nonce(
@@ -189,15 +186,16 @@ pub async fn get_transaction_by_nonce(
 
     let transaction_response: TransactionResponse = transaction.into();
 
-    Ok(HttpResponse::Ok().json(ApiResponse {
-        success: true,
-        data: Some(transaction_response),
-        error: None,
-    }))
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(
+            transaction_response
+        ))),
+    )
 }
 
 pub async fn list_transactions(
     relayer_id: String,
+    query: PaginationQuery,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     state
@@ -207,17 +205,22 @@ pub async fn list_transactions(
 
     let transactions = state
         .transaction_repository
-        .find_by_relayer_id(&relayer_id)
+        .find_by_relayer_id(&relayer_id, query)
         .await?;
 
     let transaction_response_list: Vec<TransactionResponse> =
-        transactions.into_iter().map(|t| t.into()).collect();
+        transactions.items.into_iter().map(|t| t.into()).collect();
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(transaction_response_list),
-        error: None,
-    })))
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::paginated(
+            transaction_response_list,
+            PaginationMeta {
+                total_items: transactions.total,
+                current_page: transactions.page,
+                per_page: transactions.per_page,
+            }
+        ))),
+    )
 }
 
 pub async fn delete_pending_transactions(
@@ -238,13 +241,7 @@ pub async fn delete_pending_transactions(
 
     relayer.delete_pending_transactions().await?;
 
-    Ok(
-        HttpResponse::Ok().json(serde_json::json!(ApiResponse::<()> {
-            success: true,
-            data: None,
-            error: None,
-        })),
-    )
+    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(()))))
 }
 
 pub async fn cancel_transaction(
@@ -273,11 +270,11 @@ pub async fn cancel_transaction(
         .cancel_transaction(transaction_to_cancel)
         .await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(canceled_transaction),
-        error: None,
-    })))
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(
+            canceled_transaction
+        ))),
+    )
 }
 
 pub async fn replace_transaction(
@@ -306,11 +303,11 @@ pub async fn replace_transaction(
         .replace_transaction(transaction_to_replace)
         .await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(replaced_transaction),
-        error: None,
-    })))
+    Ok(
+        HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(
+            replaced_transaction
+        ))),
+    )
 }
 
 pub async fn sign_data(
@@ -335,11 +332,7 @@ pub async fn sign_data(
 
     let result = relayer.sign_data(sign_request).await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(result),
-        error: None,
-    })))
+    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(result))))
 }
 
 pub async fn sign_typed_data(
@@ -364,11 +357,7 @@ pub async fn sign_typed_data(
 
     let result = relayer.sign_typed_data(sign_request).await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse {
-        success: true,
-        data: Some(result),
-        error: None,
-    })))
+    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(result))))
 }
 
 pub async fn relayer_rpc(
@@ -393,5 +382,5 @@ pub async fn relayer_rpc(
 
     let result = relayer.rpc(json_rpc_request).await?;
 
-    Ok(HttpResponse::Ok().json(serde_json::json!(result)))
+    Ok(HttpResponse::Ok().json(serde_json::json!(ApiResponse::success(result))))
 }
