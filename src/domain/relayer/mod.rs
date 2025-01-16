@@ -165,7 +165,8 @@ impl RelayerFactoryTrait for RelayerFactory {
                     .ok_or_else(|| {
                         RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
-                let evm_provider: EvmProvider = EvmProvider::new(rpc_url).unwrap();
+                let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
+                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
                 let relayer = EvmRelayer::new(
                     relayer,
                     evm_provider,

@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::models::{ApiError, NetworkType};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]

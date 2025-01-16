@@ -24,6 +24,8 @@ pub enum ConfigFileError {
     InvalidNetwork { network_type: String, name: String },
     #[error("Invalid policy: {0}")]
     InvalidPolicy(String),
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -238,11 +240,15 @@ impl RelayerFileConfig {
         if self.id.is_empty() {
             return Err(ConfigFileError::MissingField("relayer id".into()));
         }
-        if !Regex::new(r"^[a-zA-Z0-9-_]+$").unwrap().is_match(&self.id) {
+        let id_regex = Regex::new(r"^[a-zA-Z0-9-_]+$").map_err(|e| {
+            ConfigFileError::InternalError(format!("Regex compilation error: {}", e))
+        })?;
+        if !id_regex.is_match(&self.id) {
             return Err(ConfigFileError::InvalidIdFormat(
                 "ID must contain only letters, numbers, dashes and underscores".into(),
             ));
         }
+
         if self.id.len() > Self::MAX_ID_LENGTH {
             return Err(ConfigFileError::InvalidIdLength(format!(
                 "ID length must not exceed {} characters",

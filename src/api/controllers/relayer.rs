@@ -73,8 +73,7 @@ pub async fn get_relayer_status(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let status = relayer.get_status().await?;
 
@@ -96,8 +95,7 @@ pub async fn get_relayer_balance(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let result = relayer.get_balance().await?;
 
@@ -123,8 +121,7 @@ pub async fn send_transaction(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let transaction = relayer.send_transaction(tx_request).await?;
 
@@ -236,8 +233,7 @@ pub async fn delete_pending_transactions(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     relayer.delete_pending_transactions().await?;
 
@@ -263,8 +259,7 @@ pub async fn cancel_transaction(
         relayer,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let canceled_transaction = relayer_transaction
         .cancel_transaction(transaction_to_cancel)
@@ -296,8 +291,7 @@ pub async fn replace_transaction(
         relayer,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let replaced_transaction = relayer_transaction
         .replace_transaction(transaction_to_replace)
@@ -324,8 +318,7 @@ pub async fn sign_data(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let result = relayer.sign_data(request).await?;
 
@@ -346,8 +339,7 @@ pub async fn sign_typed_data(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let result = relayer.sign_typed_data(request).await?;
 
@@ -368,8 +360,7 @@ pub async fn relayer_rpc(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
-    )
-    .unwrap();
+    )?;
 
     let result = relayer.rpc(request).await?;
 

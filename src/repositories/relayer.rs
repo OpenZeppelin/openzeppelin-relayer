@@ -8,7 +8,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, sync::{Mutex, MutexGuard}};
 use thiserror::Error;
 
 pub struct InMemoryRelayerRepository {
@@ -23,8 +23,13 @@ impl InMemoryRelayerRepository {
         }
     }
 
+    fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+        lock.lock()
+            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))
+    }
+
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let store = self.store.lock().unwrap();
+        let store = Self::acquire_lock(&self.store)?;
         let active_relayers: Vec<RelayerRepoModel> = store
             .values()
             .filter(|&relayer| !relayer.paused)
@@ -43,7 +48,7 @@ impl Default for InMemoryRelayerRepository {
 #[async_trait]
 impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     async fn create(&self, relayer: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
-        let mut store = self.store.lock().unwrap();
+        let mut store = Self::acquire_lock(&self.store)?;
         if store.contains_key(&relayer.id) {
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Relayer with ID {} already exists",
@@ -55,7 +60,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
-        let store = self.store.lock().unwrap();
+        let store = Self::acquire_lock(&self.store)?;
         match store.get(&id) {
             Some(relayer) => Ok(relayer.clone()),
             None => Err(RepositoryError::NotFound(format!(
@@ -71,7 +76,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         id: String,
         relayer: RelayerRepoModel,
     ) -> Result<RelayerRepoModel, RepositoryError> {
-        let mut store = self.store.lock().unwrap();
+        let mut store = Self::acquire_lock(&self.store)?;
         if store.contains_key(&id) {
             // Ensure we update the existing entry
             let mut updated_relayer = relayer;
@@ -87,7 +92,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
-        let mut store = self.store.lock().unwrap();
+        let mut store = Self::acquire_lock(&self.store)?;
         if store.remove(&id).is_some() {
             Ok(())
         } else {
@@ -99,7 +104,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let store = self.store.lock().unwrap();
+        let store = Self::acquire_lock(&self.store)?;
         let relayers: Vec<RelayerRepoModel> = store.values().cloned().collect();
         Ok(relayers)
     }
@@ -113,7 +118,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         let items: Vec<RelayerRepoModel> = self
             .store
             .lock()
-            .unwrap()
+            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))?
             .values()
             .skip(start)
             .take(query.per_page as usize)
@@ -129,7 +134,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let store = self.store.lock().unwrap();
+        let store = Self::acquire_lock(&self.store)?;
         let relayers_length = store.len();
         Ok(relayers_length)
     }

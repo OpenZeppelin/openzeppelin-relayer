@@ -52,10 +52,6 @@ impl Relayer for EvmRelayer {
         // create
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        let test = self.provider.get_block_number().await.unwrap();
-
-        info!("EVM test: {:?}", test);
-
         // send TODO
         info!("EVM Sending transaction...");
         self.transaction_repository

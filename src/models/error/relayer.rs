@@ -6,12 +6,15 @@ use thiserror::Error;
 pub enum RelayerError {
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),
+    #[error("Provider error: {0}")]
+    ProviderError(String),
 }
 
 impl From<RelayerError> for ApiError {
     fn from(error: RelayerError) -> Self {
         match error {
             RelayerError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
+            RelayerError::ProviderError(msg) => ApiError::InternalError(msg),
         }
     }
 }

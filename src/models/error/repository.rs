@@ -7,6 +7,9 @@ pub enum RepositoryError {
     #[error("Entity not found: {0}")]
     NotFound(String),
 
+    #[error("Entity already exists: {0}")]
+    LockError(String),
+
     #[error("Failed to connect to the database: {0}")]
     ConnectionError(String),
 

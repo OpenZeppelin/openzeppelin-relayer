@@ -153,7 +153,8 @@ impl RelayerTransactionFactory {
                     .ok_or_else(|| {
                         TransactionError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
-                let evm_provider: EvmProvider = EvmProvider::new(rpc_url).unwrap();
+                let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
                     relayer,
