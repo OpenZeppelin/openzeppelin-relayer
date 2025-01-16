@@ -1,6 +1,6 @@
 use crate::models::EvmNamedNetwork;
+use crate::models::error::NetworkError;
 use core::{cmp::Ordering, fmt, str::FromStr, time::Duration};
-use thiserror::Error;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EvmNetwork(EvmNetworkKind);
@@ -9,12 +9,6 @@ pub struct EvmNetwork(EvmNetworkKind);
 pub enum EvmNetworkKind {
     Named(EvmNamedNetwork),
     Id(u64),
-}
-
-#[derive(Debug, Error)]
-pub enum NetworkError {
-    #[error("Invalid network: {0}")]
-    InvalidNetwork(String),
 }
 
 impl fmt::Debug for EvmNetwork {

@@ -1,7 +1,7 @@
 use crate::models::StellarNamedNetwork;
 use core::{fmt, str::FromStr, time::Duration};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use crate::models::error::NetworkError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StellarNetwork(StellarNamedNetwork);
@@ -13,11 +13,6 @@ impl fmt::Debug for StellarNetwork {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum NetworkError {
-    #[error("Invalid network: {0}")]
-    InvalidNetwork(String),
-}
 
 impl Default for StellarNetwork {
     fn default() -> Self {
@@ -32,13 +27,16 @@ impl From<StellarNamedNetwork> for StellarNetwork {
 }
 
 impl FromStr for StellarNetwork {
-    type Err = core::num::ParseIntError;
+    type Err = NetworkError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(network) = StellarNamedNetwork::from_str(s) {
             Ok(Self::from_named(network))
         } else {
-            panic!("does not exist")
+            Err(NetworkError::InvalidNetwork(format!(
+                "Invalid network: {}, expected named network or chain ID",
+                s
+            )))
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::models::SolanaNamedNetwork;
 use core::{fmt, str::FromStr, time::Duration};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use crate::models::error::NetworkError;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SolanaNetwork(SolanaNamedNetwork);
@@ -11,12 +11,6 @@ impl fmt::Debug for SolanaNetwork {
         f.write_str("Network::")?;
         self.kind().fmt(f)
     }
-}
-
-#[derive(Debug, Error)]
-pub enum NetworkError {
-    #[error("Invalid network: {0}")]
-    InvalidNetwork(String),
 }
 
 impl Default for SolanaNetwork {
@@ -32,13 +26,16 @@ impl From<SolanaNamedNetwork> for SolanaNetwork {
 }
 
 impl FromStr for SolanaNetwork {
-    type Err = core::num::ParseIntError;
+    type Err = NetworkError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(network) = SolanaNamedNetwork::from_str(s) {
             Ok(Self::from_named(network))
         } else {
-            panic!("does not exist")
+            Err(NetworkError::InvalidNetwork(format!(
+                "Invalid network: {}, expected named network or chain ID",
+                s
+            )))
         }
     }
 }
