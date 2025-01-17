@@ -26,7 +26,6 @@
 use std::sync::Arc;
 
 use actix_web::{middleware, middleware::Logger, web, App, HttpServer};
-use apalis::prelude::WorkerBuilder;
 use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
 use dotenvy::dotenv;
@@ -34,10 +33,9 @@ use futures::future::try_join_all;
 use log::info;
 use models::RelayerRepoModel;
 use repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository};
-use services::{process_email_job, Email};
+use services::{start_processing_email_queue, Email};
 use simple_logger::SimpleLogger;
 use apalis::prelude::*;
-use apalis_redis::{Config as RedisStorageConfig, RedisStorage};
 
 
 mod api;
@@ -109,23 +107,6 @@ async fn initialize_app_state(config_file: Config) -> Result<web::ThinData<AppSt
     Ok(app_state)
 }
 
-pub(crate) async fn start_processing_email_queue() -> eyre::Result<RedisStorage<Email>> {
-    let redis_url = std::env::var("REDIS_URL").expect("Missing env variable REDIS_URL");
-    let conn = apalis_redis::connect(redis_url).await?;
-    let config = RedisStorageConfig::default().set_namespace("send_email");
-    let storage = RedisStorage::new_with_config(conn, config);
-
-    // create unmonitored workers for handling emails
-    let worker = WorkerBuilder::new("job-handler")
-        .concurrency(2)
-        .backend(storage.clone())
-        .build_fn(process_email_job);
-
-    #[allow(clippy::let_underscore_future)]
-    let _ = tokio::spawn(worker.run());
-
-    Ok(storage)
-}
 
 #[actix_web::main]
 async fn main() -> Result<()> {
@@ -141,7 +122,13 @@ async fn main() -> Result<()> {
 
     let app_state = initialize_app_state(config_file).await?;
 
-    let email_sender = start_processing_email_queue().await?;
+    let mut email_sender = start_processing_email_queue().await?;
+
+    email_sender
+        .push(Email {
+            to: "tes1t@example.com".to_string(),
+        })
+        .await?;
 
     info!("Starting server on {}:{}", config.host, config.port);
     HttpServer::new(move || {

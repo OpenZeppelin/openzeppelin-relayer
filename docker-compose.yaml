@@ -19,18 +19,12 @@ services:
       - ./config.json:/app/config.json
 
   redis:
-    image: cgr.dev/chainguard/redis:latest
+    image: redis:latest
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis_data:/data 
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
-    healthcheck:
-      test: redis-cli ping || exit 1
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     networks:
       - relayer-network
     restart: always
