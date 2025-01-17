@@ -9,7 +9,7 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn from_env() -> Self {
         Self {
-            host: env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
+            host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: env::var("PORT")
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
