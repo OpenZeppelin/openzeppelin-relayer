@@ -1,25 +1,27 @@
 # Base image
-FROM cgr.dev/chainguard/rust as base
-EXPOSE 8080 
+FROM cgr.dev/chainguard/rust:latest-dev as base
 
-# making the directory
-USER root
-RUN mkdir -p /usr/app && chown -R nonroot:nonroot /usr/app
-
-USER nonroot
 WORKDIR /usr/app
 
+USER root
+RUN apk update && apk add openssl-dev
+ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig
+
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo install --root /usr/app --path . --debug
+
 # Setting up build directories
-RUN mkdir -p /tmp/relayer && chown -R nonroot:nonroot /tmp/relayer
-COPY --chown=nonroot:nonroot . /tmp/relayer
+FROM cgr.dev/chainguard/glibc-dynamic
 
-# building the app
-WORKDIR /tmp/relayer
-RUN cargo install --root /usr/app --path . --debug 
+COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
+COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3 
+# COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /usr/local/bin/openzeppelin-relayer
 
-# cleaning up
-RUN rm -Rf /tmp/*
+WORKDIR /app
+COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 
 # starting up
-ENTRYPOINT ["/usr/app/bin/openzeppelin-relayer"]
+ENTRYPOINT ["/app/openzeppelin-relayer"]
 

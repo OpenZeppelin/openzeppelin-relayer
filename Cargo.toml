@@ -24,3 +24,8 @@ uuid = { version = "1.11", features = ["v4"] }
 chrono = "0.4"
 eyre = "0.6"
 color-eyre = "0.6"
+apalis = { version = "0.6", features = ["limit"] }
+apalis-redis = { version = "0.6" }
+tokio = { version = "1.43", features = ["sync", "io-util"] }
+redis = { version = "0.28" }
+rand = "0.8"
