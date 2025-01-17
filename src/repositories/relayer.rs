@@ -8,7 +8,10 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use std::{collections::HashMap, sync::{Mutex, MutexGuard}};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, MutexGuard},
+};
 use thiserror::Error;
 
 pub struct InMemoryRelayerRepository {

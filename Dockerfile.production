@@ -1,0 +1,21 @@
+# Base image
+FROM cgr.dev/chainguard/rust:latest-dev as base
+
+WORKDIR /usr/app
+
+USER root
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo install --root /usr/app --path .
+
+
+# Setting up build directories
+FROM cgr.dev/chainguard/glibc-dynamic
+
+WORKDIR /app
+COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
+
+# starting up
+ENTRYPOINT ["/app/openzeppelin-relayer"]
+
