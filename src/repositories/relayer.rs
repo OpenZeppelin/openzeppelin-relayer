@@ -14,6 +14,7 @@ use std::{
 };
 use thiserror::Error;
 
+#[derive(Debug)]
 pub struct InMemoryRelayerRepository {
     store: Mutex<HashMap<String, RelayerRepoModel>>,
 }

@@ -9,6 +9,7 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
+#[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
 }

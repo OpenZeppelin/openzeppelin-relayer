@@ -15,14 +15,6 @@ pub use job::*;
 
 use crate::AppState;
 
-pub async fn initialise_queue(mut app_state: ThinData<AppState>) -> Queue {
-    let queue = Queue::setup().await;
-
-    app_state.with_queue(queue.clone());
-
-    setup_workers(queue.clone(), app_state).await;
-
-    info!("Queue initialised");
-
-    queue
+pub async fn initialise_workers(app_state: ThinData<AppState>) {
+    setup_workers(app_state).await;
 }

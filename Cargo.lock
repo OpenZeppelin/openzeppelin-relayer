@@ -2750,6 +2750,7 @@ dependencies = [
  "log",
  "num_enum",
  "once_cell",
+ "parking_lot",
  "rand",
  "redis 0.28.1",
  "regex",

@@ -23,13 +23,12 @@ pub use notification_queue_worker_handler::*;
 mod status_queue_worker_handler;
 pub use status_queue_worker_handler::*;
 
-use super::Queue;
-
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_RATE_LIMIT: u64 = 20;
 const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);
 
-pub async fn setup_workers(queue: Queue, app_state: ThinData<AppState>) -> Result<()> {
+pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
+    let queue = app_state.job_producer.get_queue()?;
     let transaction_queue_worker = WorkerBuilder::new("transaction_handler")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()

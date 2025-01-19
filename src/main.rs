@@ -34,7 +34,7 @@ use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
 use dotenvy::dotenv;
 use futures::future::try_join_all;
-use jobs::initialise_queue;
+use jobs::{initialise_workers, Queue};
 use log::info;
 use models::RelayerRepoModel;
 use repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository};
@@ -86,16 +86,14 @@ fn load_config_file() -> Result<Config> {
 async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
     let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
+    let queue = Queue::setup().await;
+    let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
-    let mut app_state = web::ThinData(AppState {
+    let app_state = web::ThinData(AppState {
         relayer_repository,
         transaction_repository,
-        queue: None,
+        job_producer,
     });
-
-    let queue = initialise_queue(app_state.clone()).await;
-
-    app_state.with_queue(queue);
 
     Ok(app_state)
 }
@@ -130,6 +128,9 @@ async fn main() -> Result<()> {
     let config = config::ServerConfig::from_env();
 
     let app_state = initialize_app_state().await?;
+
+    // revisit adding ?
+    initialise_workers(app_state.clone()).await;
 
     info!("Processing config file");
 

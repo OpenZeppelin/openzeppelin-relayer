@@ -29,3 +29,4 @@ apalis-redis = { version = "0.6" }
 tokio = { version = "1.43", features = ["sync", "io-util"] }
 redis = { version = "0.28" }
 rand = "0.8"
+parking_lot = "0.12"

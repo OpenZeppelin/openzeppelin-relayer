@@ -1,32 +1,27 @@
 use std::sync::Arc;
 
 use crate::{
-    jobs::Queue,
+    jobs::JobProducer,
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppState {
     pub relayer_repository: Arc<InMemoryRelayerRepository>,
     pub transaction_repository: Arc<InMemoryTransactionRepository>,
-    pub queue: Option<Arc<Queue>>,
+    pub job_producer: Arc<JobProducer>,
 }
 
 impl AppState {
     pub fn relayer_repository(&self) -> Arc<InMemoryRelayerRepository> {
-        self.relayer_repository.clone()
+        Arc::clone(&self.relayer_repository)
     }
 
     pub fn transaction_repository(&self) -> Arc<InMemoryTransactionRepository> {
-        self.transaction_repository.clone()
+        Arc::clone(&self.transaction_repository)
     }
 
-    pub fn queue(&self) -> Arc<Queue> {
-        self.queue.clone().expect("Queue not set")
-    }
-
-    pub fn with_queue(&mut self, queue: Queue) -> Self {
-        self.queue = Some(Arc::new(queue));
-        self.clone()
+    pub fn job_producer(&self) -> Arc<JobProducer> {
+        Arc::clone(&self.job_producer)
     }
 }

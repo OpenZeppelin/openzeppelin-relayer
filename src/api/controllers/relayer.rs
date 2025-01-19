@@ -11,7 +11,7 @@ use crate::{
         JsonRpcRequest, Relayer, RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory,
         SignDataRequest, Transaction,
     },
-    jobs::{Job, JobProducer, TransactionProcess},
+    jobs::{Job, TransactionProcess},
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
         RelayerResponse, TransactionResponse,
@@ -123,20 +123,15 @@ pub async fn send_transaction(
     )?;
 
     let transaction = relayer.send_transaction(tx_request).await?;
-
-    let mut job_producer = JobProducer::new((*state.queue()).clone());
-
-    job_producer
-        .handle_transaction(Job::new(
-            crate::jobs::JobType::TransactionProcess,
-            TransactionProcess::new(
-                transaction.id.clone(),
-                transaction.relayer_id.clone(),
-                transaction.network_type.to_string(),
-                "",
-            ),
-        ))
-        .await;
+    
+    state.job_producer().handle_transaction(Job::new(
+        crate::jobs::JobType::TransactionProcess,
+        TransactionProcess::new(
+            transaction.id.clone(),
+            relayer_id.clone(),
+            "",
+            ""
+    ))).await?;
 
     let transaction_response: TransactionResponse = transaction.into();
 
