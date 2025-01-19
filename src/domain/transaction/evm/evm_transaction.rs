@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use eyre::Result;
+use log::info;
 use std::sync::Arc;
 
 use crate::{
@@ -40,6 +41,7 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        info!("submitting transaction");
         Ok(tx)
     }
 
