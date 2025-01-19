@@ -7,15 +7,10 @@ use crate::{
     AppState,
 };
 
-pub async fn submission_queue_worker_handler(
+pub async fn transaction_submission_handler(
     job: Job<TransactionSubmit>,
     context: Data<ThinData<AppState>>,
 ) -> Result<(), Error> {
-    handle_transaction().await;
-
+    info!("handling transaction submission: {:?}", job.data);
     Ok(())
-}
-
-pub async fn handle_transaction() {
-    info!("handling transaction");
 }

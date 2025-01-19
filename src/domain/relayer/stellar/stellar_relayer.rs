@@ -1,5 +1,6 @@
 use crate::{
     domain::{JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse},
+    jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
 };
@@ -16,6 +17,7 @@ pub struct StellarRelayer {
     network: StellarNetwork,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
+    job_producer: Arc<JobProducer>,
 }
 
 impl StellarRelayer {
@@ -23,6 +25,7 @@ impl StellarRelayer {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
         let network = match StellarNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
@@ -34,13 +37,14 @@ impl StellarRelayer {
             network,
             relayer_repository,
             transaction_repository,
+            job_producer,
         })
     }
 }
 
 #[async_trait]
 impl Relayer for StellarRelayer {
-    async fn send_transaction(
+    async fn process_transaction_request(
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {

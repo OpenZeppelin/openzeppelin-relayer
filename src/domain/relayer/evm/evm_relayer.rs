@@ -5,6 +5,7 @@ use crate::{
         relayer::{Relayer, RelayerError},
         JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
     },
+    jobs::{JobProducer, TransactionRequest},
     models::{
         EvmNetwork, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
         TransactionRepoModel,
@@ -23,6 +24,7 @@ pub struct EvmRelayer {
     provider: EvmProvider,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
+    job_producer: Arc<JobProducer>,
 }
 
 impl EvmRelayer {
@@ -32,6 +34,7 @@ impl EvmRelayer {
         network: EvmNetwork,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
         Ok(Self {
             relayer,
@@ -39,25 +42,25 @@ impl EvmRelayer {
             provider,
             relayer_repository,
             transaction_repository,
+            job_producer,
         })
     }
 }
 
 #[async_trait]
 impl Relayer for EvmRelayer {
-    async fn send_transaction(
+    async fn process_transaction_request(
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
-        // create
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        // send TODO
-        info!("EVM Sending transaction...");
         self.transaction_repository
             .create(transaction.clone())
             .await
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
+        // self.job_producer.produce_transaction_request_job().await?;
 
         Ok(transaction)
     }

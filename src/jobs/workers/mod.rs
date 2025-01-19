@@ -11,17 +11,17 @@ use tokio::signal::unix::SignalKind;
 
 use crate::AppState;
 
-mod transaction_queue_worker_handler;
-pub use transaction_queue_worker_handler::*;
+mod transaction_request_handler;
+pub use transaction_request_handler::*;
 
-mod submission_queue_worker_handler;
-pub use submission_queue_worker_handler::*;
+mod transaction_submission_handler;
+pub use transaction_submission_handler::*;
 
-mod notification_queue_worker_handler;
-pub use notification_queue_worker_handler::*;
+mod notification_handler;
+pub use notification_handler::*;
 
-mod status_queue_worker_handler;
-pub use status_queue_worker_handler::*;
+mod transaction_status_handler;
+pub use transaction_status_handler::*;
 
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_RATE_LIMIT: u64 = 20;
@@ -29,32 +29,32 @@ const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);
 
 pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
     let queue = app_state.job_producer.get_queue()?;
-    let transaction_queue_worker = WorkerBuilder::new("transaction_handler")
+    let transaction_request_queue_worker = WorkerBuilder::new("transaction_handler")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
-        .backend(queue.transaction_queue.clone())
-        .build_fn(transaction_queue_worker_handler);
+        .backend(queue.transaction_request_queue.clone())
+        .build_fn(transaction_request_handler);
 
-    let submission_queue_worker = WorkerBuilder::new("transaction_sender")
+    let transaction_submission_queue_worker = WorkerBuilder::new("transaction_sender")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
-        .backend(queue.submission_queue.clone())
-        .build_fn(submission_queue_worker_handler);
+        .backend(queue.transaction_submission_queue.clone())
+        .build_fn(transaction_submission_handler);
 
-    let status_queue_worker = WorkerBuilder::new("transaction_status_checker")
+    let transaction_status_queue_worker = WorkerBuilder::new("transaction_status_checker")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .concurrency(DEFAULT_CONCURRENCY)
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .data(app_state.clone())
-        .backend(queue.status_queue.clone())
-        .build_fn(status_queue_worker_handler);
+        .backend(queue.transaction_status_queue.clone())
+        .build_fn(transaction_status_handler);
 
     let notification_queue_worker = WorkerBuilder::new("notification_sender")
         .layer(ErrorHandlingLayer::new())
@@ -63,12 +63,12 @@ pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
         .backend(queue.notification_queue.clone())
-        .build_fn(notification_queue_worker_handler);
+        .build_fn(notification_handler);
 
     let monitor_future = Monitor::new()
-        .register(transaction_queue_worker)
-        .register(submission_queue_worker)
-        .register(status_queue_worker)
+        .register(transaction_request_queue_worker)
+        .register(transaction_submission_queue_worker)
+        .register(transaction_status_queue_worker)
         .register(notification_queue_worker)
         .on_event(|e| {
             let worker_id = e.id();

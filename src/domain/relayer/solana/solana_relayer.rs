@@ -5,6 +5,7 @@ use crate::{
         relayer::{Relayer, RelayerError},
         JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
     },
+    jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
 };
@@ -18,6 +19,7 @@ pub struct SolanaRelayer {
     network: SolanaNetwork,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
+    job_producer: Arc<JobProducer>,
 }
 
 impl SolanaRelayer {
@@ -25,6 +27,7 @@ impl SolanaRelayer {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
         let network = match SolanaNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
@@ -36,13 +39,14 @@ impl SolanaRelayer {
             network,
             relayer_repository,
             transaction_repository,
+            job_producer,
         })
     }
 }
 
 #[async_trait]
 impl Relayer for SolanaRelayer {
-    async fn send_transaction(
+    async fn process_transaction_request(
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {

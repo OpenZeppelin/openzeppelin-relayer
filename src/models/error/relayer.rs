@@ -8,6 +8,8 @@ pub enum RelayerError {
     NetworkConfiguration(String),
     #[error("Provider error: {0}")]
     ProviderError(String),
+    #[error("Queue error: {0}")]
+    QueueError(String),
 }
 
 impl From<RelayerError> for ApiError {
@@ -15,6 +17,7 @@ impl From<RelayerError> for ApiError {
         match error {
             RelayerError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             RelayerError::ProviderError(msg) => ApiError::InternalError(msg),
+            RelayerError::QueueError(msg) => ApiError::InternalError(msg),
         }
     }
 }

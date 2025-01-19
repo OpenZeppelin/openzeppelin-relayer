@@ -11,7 +11,7 @@ use crate::{
         JsonRpcRequest, Relayer, RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory,
         SignDataRequest, Transaction,
     },
-    jobs::{Job, TransactionProcess},
+    jobs::TransactionRequest,
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
         RelayerResponse, TransactionResponse,
@@ -72,6 +72,7 @@ pub async fn get_relayer_status(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.job_producer(),
     )?;
 
     let status = relayer.get_status().await?;
@@ -94,6 +95,7 @@ pub async fn get_relayer_balance(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.job_producer(),
     )?;
 
     let result = relayer.get_balance().await?;
@@ -113,25 +115,28 @@ pub async fn send_transaction(
         .wrap_err_with(|| format!("Failed to fetch relayer with ID {}", relayer_id))?;
     info!("Relayer: {:?}", relayer_repo_model);
 
+    let relayer = RelayerFactory::create_relayer(
+        relayer_repo_model.clone(),
+        state.relayer_repository(),
+        state.transaction_repository(),
+        state.job_producer(),
+    )?;
+
+    relayer.validate_relayer().await?;
+
     let tx_request: NetworkTransactionRequest =
         NetworkTransactionRequest::from_json(&relayer_repo_model.network_type, request.clone())?;
 
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model,
-        state.relayer_repository(),
-        state.transaction_repository(),
-    )?;
+    let transaction = relayer.process_transaction_request(tx_request).await?;
 
-    let transaction = relayer.send_transaction(tx_request).await?;
-    
-    state.job_producer().handle_transaction(Job::new(
-        crate::jobs::JobType::TransactionProcess,
-        TransactionProcess::new(
-            transaction.id.clone(),
-            relayer_id.clone(),
-            "",
-            ""
-    ))).await?;
+    state.job_producer().produce_transaction_request_job().await;
+    // state
+    //     .job_producer()
+    //     .produce_transaction_request_job(TransactionRequest::new(
+    //         transaction.id.clone(),
+    //         relayer_id.clone(),
+    //     ))
+    //     .await?;
 
     let transaction_response: TransactionResponse = transaction.into();
 
@@ -227,6 +232,7 @@ pub async fn delete_pending_transactions(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.job_producer(),
     )?;
 
     relayer.delete_pending_transactions().await?;
@@ -304,6 +310,7 @@ pub async fn sign_data(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.job_producer(),
     )?;
 
     let result = relayer.sign_data(request).await?;
@@ -325,6 +332,7 @@ pub async fn sign_typed_data(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.job_producer(),
     )?;
 
     let result = relayer.sign_typed_data(request).await?;
@@ -346,6 +354,7 @@ pub async fn relayer_rpc(
         relayer_repo_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.job_producer(),
     )?;
 
     let result = relayer.rpc(request).await?;

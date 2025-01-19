@@ -1,6 +1,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use strum::Display;
 use uuid::Uuid;
 
 // Common message structure
@@ -9,7 +10,6 @@ pub struct Job<T> {
     pub message_id: String,
     pub version: String,
     pub timestamp: String,
-    pub source: Option<String>,
     pub job_type: JobType,
     pub data: T,
 }
@@ -20,23 +20,17 @@ impl<T> Job<T> {
             message_id: Uuid::new_v4().to_string(),
             version: "1.0".to_string(),
             timestamp: Utc::now().timestamp().to_string(),
-            source: None,
             job_type,
             data,
         }
     }
-
-    pub fn with_source(mut self, source: impl Into<String>) -> Self {
-        self.source = Some(source.into());
-        self
-    }
 }
 
 // Enum to represent different message types
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Display)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobType {
-    TransactionProcess,
+    TransactionRequest,
     TransactionSubmit,
     TransactionStatusCheck,
     NotificationSend,
@@ -44,26 +38,17 @@ pub enum JobType {
 
 // Example message data for transaction request
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TransactionProcess {
+pub struct TransactionRequest {
     pub transaction_id: String,
     pub relayer_id: String,
-    pub network_type: String,
-    pub network: String,
     pub metadata: Option<HashMap<String, String>>,
 }
 
-impl TransactionProcess {
-    pub fn new(
-        transaction_id: impl Into<String>,
-        relayer_id: impl Into<String>,
-        network_type: impl Into<String>,
-        network: impl Into<String>,
-    ) -> Self {
+impl TransactionRequest {
+    pub fn new(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
-            network_type: network_type.into(),
-            network: network.into(),
             metadata: None,
         }
     }
@@ -79,8 +64,6 @@ impl TransactionProcess {
 pub struct TransactionSubmit {
     pub transaction_id: String,
     pub relayer_id: String,
-    pub network_type: String,
-    pub network: String,
     pub metadata: Option<HashMap<String, String>>,
 }
 
@@ -89,8 +72,6 @@ pub struct TransactionSubmit {
 pub struct TransactionStatusCheck {
     pub transaction_id: String,
     pub relayer_id: String,
-    pub network_type: String,
-    pub network: String,
     pub metadata: Option<HashMap<String, String>>,
 }
 

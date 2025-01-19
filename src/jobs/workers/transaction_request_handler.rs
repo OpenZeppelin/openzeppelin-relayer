@@ -1,20 +1,19 @@
-use actix_web::web::{self, ThinData};
+use actix_web::web::ThinData;
 use apalis::prelude::{Data, Error};
-use apalis_redis::RedisStorage;
 use log::info;
 
 use crate::{
     domain::{RelayerTransactionFactory, Transaction},
-    jobs::{Job, TransactionProcess},
+    jobs::{Job, TransactionRequest},
     repositories::Repository,
     AppState,
 };
 
-pub async fn transaction_queue_worker_handler(
-    job: Job<TransactionProcess>,
+pub async fn transaction_request_handler(
+    job: Job<TransactionRequest>,
     state: Data<ThinData<AppState>>,
 ) -> Result<(), Error> {
-    info!("handling transaction");
+    info!("handling transaction: {:?}", job.data);
 
     let relayer = state
         .relayer_repository
@@ -41,8 +40,4 @@ pub async fn transaction_queue_worker_handler(
         .unwrap();
 
     Ok(())
-}
-
-pub async fn handle_transaction() {
-    info!("handling transaction");
 }
