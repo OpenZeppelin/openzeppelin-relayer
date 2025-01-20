@@ -51,6 +51,7 @@ impl JobProducer {
     pub async fn produce_transaction_request_job(
         &self,
         transaction_process_job: TransactionRequest,
+        scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         info!(
             "Producing transaction request job: {:?}",
@@ -58,9 +59,19 @@ impl JobProducer {
         );
         let mut queue = self.queue.lock().await;
         let job = Job::new(JobType::TransactionRequest, transaction_process_job);
-        queue.transaction_request_queue.push(job).await?;
 
-        info!("Transaction job produced successfully");
+        match scheduled_on {
+            Some(scheduled_on) => {
+                queue
+                    .transaction_request_queue
+                    .schedule(job, scheduled_on)
+                    .await?;
+            }
+            None => {
+                queue.transaction_request_queue.push(job).await?;
+            }
+        }
+        info!("Transaction job produced successfully!!!!!!!!!");
 
         Ok(())
     }
@@ -68,12 +79,19 @@ impl JobProducer {
     pub async fn produce_submit_transaction_job(
         &self,
         transaction_submit_job: TransactionSubmit,
+        scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
         let job = Job::new(JobType::TransactionSubmit, transaction_submit_job);
 
-        // queue.transaction_submission_queue.push(job).await?;
-        queue.transaction_submission_queue.push(job).await?;
+        match scheduled_on {
+            Some(on) => {
+                queue.transaction_submission_queue.schedule(job, on).await?;
+            }
+            None => {
+                queue.transaction_submission_queue.push(job).await?;
+            }
+        }
         info!("Transaction Submit job produced successfully");
 
         Ok(())
@@ -82,27 +100,41 @@ impl JobProducer {
     pub async fn produce_check_transaction_status_job(
         &self,
         transaction_status_check_job: TransactionStatusCheck,
+        scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
         let job = Job::new(
             JobType::TransactionStatusCheck,
             transaction_status_check_job,
         );
-
-        queue.transaction_status_queue.push(job).await?;
+        match scheduled_on {
+            Some(on) => {
+                queue.transaction_status_queue.schedule(job, on).await?;
+            }
+            None => {
+                queue.transaction_status_queue.push(job).await?;
+            }
+        }
         info!("Transaction Status Check job produced successfully");
-
         Ok(())
     }
 
     pub async fn produce_send_notification_job(
         &self,
         notification_send_job: NotificationSend,
+        scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
         let job = Job::new(JobType::TransactionStatusCheck, notification_send_job);
 
-        queue.notification_queue.push(job).await?;
+        match scheduled_on {
+            Some(on) => {
+                queue.notification_queue.schedule(job, on).await?;
+            }
+            None => {
+                queue.notification_queue.push(job).await?;
+            }
+        }
 
         info!("Notification Send job produced successfully");
 

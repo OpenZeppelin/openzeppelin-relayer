@@ -60,10 +60,10 @@ impl Relayer for EvmRelayer {
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
 
         self.job_producer
-            .produce_transaction_request_job(TransactionRequest::new(
-                transaction.id.clone(),
-                transaction.relayer_id.clone(),
-            ))
+            .produce_transaction_request_job(
+                TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                None,
+            )
             .await?;
 
         Ok(transaction)

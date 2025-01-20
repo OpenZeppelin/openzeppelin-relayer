@@ -49,10 +49,10 @@ impl Transaction for EvmRelayerTransaction {
 
         // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
-            .produce_submit_transaction_job(TransactionSubmit::new(
-                tx.id.clone(),
-                tx.relayer_id.clone(),
-            ))
+            .produce_submit_transaction_job(
+                TransactionSubmit::new(tx.id.clone(), tx.relayer_id.clone()),
+                None,
+            )
             .await?;
         Ok(tx)
     }
@@ -65,10 +65,10 @@ impl Transaction for EvmRelayerTransaction {
 
         // after submitting the transaction, we need to handle the transaction status
         self.job_producer
-            .produce_check_transaction_status_job(TransactionStatusCheck::new(
-                tx.id.clone(),
-                tx.relayer_id.clone(),
-            ))
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                None,
+            )
             .await?;
 
         Ok(tx)
@@ -79,10 +79,10 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         self.job_producer
-            .produce_send_notification_job(NotificationSend::new(
-                tx.id.clone(),
-                tx.relayer_id.clone(),
-            ))
+            .produce_send_notification_job(
+                NotificationSend::new(tx.id.clone(), tx.relayer_id.clone()),
+                None,
+            )
             .await?;
         Ok(tx)
     }

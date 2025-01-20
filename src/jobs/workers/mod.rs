@@ -4,7 +4,10 @@
 use std::time::Duration;
 
 use actix_web::web::ThinData;
-use apalis::{layers::ErrorHandlingLayer, prelude::*};
+use apalis::{
+    layers::{retry::RetryPolicy, ErrorHandlingLayer},
+    prelude::*,
+};
 use eyre::Result;
 use log::{error, info};
 use tokio::signal::unix::SignalKind;
@@ -32,18 +35,21 @@ const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);
 
 pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
     let queue = app_state.job_producer.get_queue().await?;
-    let transaction_request_queue_worker = WorkerBuilder::new("transaction_handler")
+    let transaction_request_queue_worker = WorkerBuilder::new("transaction_request_handler")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
+        .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
+        .retry(RetryPolicy::default())
         .backend(queue.transaction_request_queue.clone())
         .build_fn(transaction_request_handler);
 
     let transaction_submission_queue_worker = WorkerBuilder::new("transaction_sender")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
+        .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
@@ -52,6 +58,7 @@ pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
 
     let transaction_status_queue_worker = WorkerBuilder::new("transaction_status_checker")
         .layer(ErrorHandlingLayer::new())
+        .catch_panic()
         .enable_tracing()
         .concurrency(DEFAULT_CONCURRENCY)
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
@@ -62,6 +69,7 @@ pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
     let notification_queue_worker = WorkerBuilder::new("notification_sender")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
+        .catch_panic()
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())

@@ -5,7 +5,7 @@ use strum::Display;
 use uuid::Uuid;
 
 // Common message structure
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Job<T> {
     pub message_id: String,
     pub version: String,
@@ -27,7 +27,7 @@ impl<T> Job<T> {
 }
 
 // Enum to represent different message types
-#[derive(Debug, Serialize, Deserialize, Display)]
+#[derive(Debug, Serialize, Deserialize, Display, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobType {
     TransactionRequest,
@@ -37,7 +37,7 @@ pub enum JobType {
 }
 
 // Example message data for transaction request
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransactionRequest {
     pub transaction_id: String,
     pub relayer_id: String,
