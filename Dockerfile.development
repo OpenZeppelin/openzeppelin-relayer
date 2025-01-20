@@ -24,4 +24,3 @@ COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/
 
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]
-

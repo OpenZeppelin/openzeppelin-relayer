@@ -178,7 +178,6 @@ impl RelayerFactoryTrait for RelayerFactory {
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-
                 let relayer = EvmRelayer::new(
                     relayer,
                     evm_provider,
