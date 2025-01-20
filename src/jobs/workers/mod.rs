@@ -23,6 +23,9 @@ pub use notification_handler::*;
 mod transaction_status_handler;
 pub use transaction_status_handler::*;
 
+mod handler_error;
+pub use handler_error::*;
+
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_RATE_LIMIT: u64 = 20;
 const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);

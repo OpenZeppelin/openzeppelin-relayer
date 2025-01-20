@@ -15,7 +15,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
 
 #[allow(dead_code)]
 pub struct EvmRelayer {
@@ -60,7 +59,12 @@ impl Relayer for EvmRelayer {
             .await
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
 
-        // self.job_producer.produce_transaction_request_job().await?;
+        self.job_producer
+            .produce_transaction_request_job(TransactionRequest::new(
+                transaction.id.clone(),
+                transaction.relayer_id.clone(),
+            ))
+            .await?;
 
         Ok(transaction)
     }

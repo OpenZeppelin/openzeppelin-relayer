@@ -8,10 +8,10 @@
 //! - JSON-RPC proxy
 use crate::{
     domain::{
-        JsonRpcRequest, Relayer, RelayerFactory, RelayerFactoryTrait, RelayerTransactionFactory,
-        SignDataRequest, Transaction,
+        get_network_relayer, get_relayer_by_id, get_relayer_transaction,
+        get_transaction_by_id as get_tx_by_id, JsonRpcRequest, Relayer, RelayerFactory,
+        RelayerFactoryTrait, SignDataRequest, Transaction,
     },
-    jobs::TransactionRequest,
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
         RelayerResponse, TransactionResponse,
@@ -20,7 +20,7 @@ use crate::{
     ApiError, AppState,
 };
 use actix_web::{web, HttpResponse};
-use eyre::{Context, Result};
+use eyre::Result;
 use log::info;
 
 pub async fn list_relayers(
@@ -45,10 +45,7 @@ pub async fn get_relayer(
     relayer_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
+    let relayer = get_relayer_by_id(relayer_id, &state).await?;
 
     info!("Relayer: {:?}", relayer);
 
@@ -61,19 +58,7 @@ pub async fn get_relayer_status(
     relayer_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer_repo_model = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await
-        .wrap_err_with(|| format!("Failed to fetch relayer with ID {}", relayer_id))?;
-    info!("Relayer: {:?}", relayer_repo_model);
-
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model,
-        state.relayer_repository(),
-        state.transaction_repository(),
-        state.job_producer(),
-    )?;
+    let relayer = get_network_relayer(relayer_id, &state).await?;
 
     let status = relayer.get_status().await?;
 
@@ -84,19 +69,7 @@ pub async fn get_relayer_balance(
     relayer_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer_repo_model = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await
-        .wrap_err_with(|| format!("Failed to fetch relayer with ID {}", relayer_id))?;
-    info!("Relayer: {:?}", relayer_repo_model);
-
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model,
-        state.relayer_repository(),
-        state.transaction_repository(),
-        state.job_producer(),
-    )?;
+    let relayer = get_network_relayer(relayer_id, &state).await?;
 
     let result = relayer.get_balance().await?;
 
@@ -108,12 +81,7 @@ pub async fn send_transaction(
     request: serde_json::Value,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer_repo_model = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await
-        .wrap_err_with(|| format!("Failed to fetch relayer with ID {}", relayer_id))?;
-    info!("Relayer: {:?}", relayer_repo_model);
+    let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
 
     let relayer = RelayerFactory::create_relayer(
         relayer_repo_model.clone(),
@@ -129,15 +97,6 @@ pub async fn send_transaction(
 
     let transaction = relayer.process_transaction_request(tx_request).await?;
 
-    state.job_producer().produce_transaction_request_job().await;
-    // state
-    //     .job_producer()
-    //     .produce_transaction_request_job(TransactionRequest::new(
-    //         transaction.id.clone(),
-    //         relayer_id.clone(),
-    //     ))
-    //     .await?;
-
     let transaction_response: TransactionResponse = transaction.into();
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
@@ -148,15 +107,10 @@ pub async fn get_transaction_by_id(
     transaction_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
+    // validation purpose only
+    get_relayer_by_id(relayer_id, &state).await?;
 
-    let transaction = state
-        .transaction_repository
-        .get_by_id(transaction_id.to_string())
-        .await?;
+    let transaction = get_tx_by_id(transaction_id, &state).await?;
 
     let transaction_response: TransactionResponse = transaction.into();
 
@@ -168,10 +122,7 @@ pub async fn get_transaction_by_nonce(
     nonce: u64,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
+    let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     // get by nonce is only supported for EVM network
     if relayer.network_type != NetworkType::Evm {
@@ -196,10 +147,7 @@ pub async fn list_transactions(
     query: PaginationQuery,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
+    get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     let transactions = state
         .transaction_repository
@@ -223,17 +171,7 @@ pub async fn delete_pending_transactions(
     relayer_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer_repo_model = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
-
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model,
-        state.relayer_repository(),
-        state.transaction_repository(),
-        state.job_producer(),
-    )?;
+    let relayer = get_network_relayer(relayer_id, &state).await?;
 
     relayer.delete_pending_transactions().await?;
 
@@ -245,21 +183,9 @@ pub async fn cancel_transaction(
     transaction_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
+    let relayer_transaction = get_relayer_transaction(relayer_id, &state).await?;
 
-    let transaction_to_cancel = state
-        .transaction_repository
-        .get_by_id(transaction_id)
-        .await?;
-
-    let relayer_transaction = RelayerTransactionFactory::create_transaction(
-        relayer,
-        state.relayer_repository(),
-        state.transaction_repository(),
-    )?;
+    let transaction_to_cancel = get_tx_by_id(transaction_id, &state).await?;
 
     let canceled_transaction = relayer_transaction
         .cancel_transaction(transaction_to_cancel)
@@ -273,21 +199,12 @@ pub async fn replace_transaction(
     transaction_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
+    let relayer_transaction = get_relayer_transaction(relayer_id, &state).await?;
 
     let transaction_to_replace = state
         .transaction_repository
         .get_by_id(transaction_id)
         .await?;
-
-    let relayer_transaction = RelayerTransactionFactory::create_transaction(
-        relayer,
-        state.relayer_repository(),
-        state.transaction_repository(),
-    )?;
 
     let replaced_transaction = relayer_transaction
         .replace_transaction(transaction_to_replace)
@@ -301,17 +218,7 @@ pub async fn sign_data(
     request: SignDataRequest,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer_repo_model = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
-
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model,
-        state.relayer_repository(),
-        state.transaction_repository(),
-        state.job_producer(),
-    )?;
+    let relayer = get_network_relayer(relayer_id, &state).await?;
 
     let result = relayer.sign_data(request).await?;
 
@@ -323,17 +230,7 @@ pub async fn sign_typed_data(
     request: SignDataRequest,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer_repo_model = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
-
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model,
-        state.relayer_repository(),
-        state.transaction_repository(),
-        state.job_producer(),
-    )?;
+    let relayer = get_network_relayer(relayer_id, &state).await?;
 
     let result = relayer.sign_typed_data(request).await?;
 
@@ -345,17 +242,7 @@ pub async fn relayer_rpc(
     request: JsonRpcRequest,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
-    let relayer_repo_model = state
-        .relayer_repository
-        .get_by_id(relayer_id.to_string())
-        .await?;
-
-    let relayer = RelayerFactory::create_relayer(
-        relayer_repo_model,
-        state.relayer_repository(),
-        state.transaction_repository(),
-        state.job_producer(),
-    )?;
+    let relayer = get_network_relayer(relayer_id, &state).await?;
 
     let result = relayer.rpc(request).await?;
 

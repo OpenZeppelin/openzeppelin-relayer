@@ -3,7 +3,6 @@ use crate::{
         Job, NotificationSend, Queue, TransactionRequest, TransactionStatusCheck, TransactionSubmit,
     },
     models::RelayerError,
-    ApiError,
 };
 use apalis::prelude::Storage;
 use apalis_redis::RedisError;
@@ -20,30 +19,28 @@ pub enum JobProducerError {
 }
 
 impl From<RedisError> for JobProducerError {
-    fn from(error: RedisError) -> Self {
-        match error {
-            _ => JobProducerError::QueueError("Redis error".to_string()),
-        }
+    fn from(_: RedisError) -> Self {
+        JobProducerError::QueueError("Queue error".to_string())
     }
 }
 
 impl From<JobProducerError> for RelayerError {
-    fn from(error: JobProducerError) -> Self {
-        match error {
-            JobProducerError::QueueError(msg) => RelayerError::QueueError(msg),
-        }
+    fn from(_: JobProducerError) -> Self {
+        RelayerError::QueueError("Queue error".to_string())
     }
 }
 
 #[derive(Debug)]
 pub struct JobProducer {
     queue: Mutex<Queue>,
+    queue1: Queue,
 }
 
 impl JobProducer {
     pub fn new(queue: Queue) -> Self {
         Self {
-            queue: Mutex::new(queue),
+            queue: Mutex::new(queue.clone()),
+            queue1: queue.clone(),
         }
     }
 
@@ -56,17 +53,24 @@ impl JobProducer {
         Ok(lock.lock())
     }
 
-    pub async fn produce_transaction_request_job(&self) -> Result<(), JobProducerError> {
-        let transaction_request_job = TransactionRequest::new("", "");
+    pub async fn produce_transaction_request_job(
+        &self,
+        transaction_process_job: TransactionRequest,
+    ) -> Result<(), JobProducerError> {
         info!(
             "Producing transaction request job: {:?}",
-            transaction_request_job
+            transaction_process_job
         );
+        // let mut queue = Self::acquire_lock(&self.queue)?;
+        let job = Job::new(JobType::TransactionRequest, transaction_process_job);
 
-        let mut queue = Self::acquire_lock(&self.queue)?;
-        let job = Job::new(JobType::TransactionRequest, transaction_request_job);
+        // queue.transaction_request_queue.push(job).await?;
 
-        queue.transaction_request_queue.push(job).await?;
+        self.queue1
+            .transaction_request_queue
+            .clone()
+            .push(job)
+            .await?;
 
         info!("Transaction job produced successfully");
 
@@ -74,42 +78,51 @@ impl JobProducer {
     }
 
     pub async fn produce_submit_transaction_job(
-        &mut self,
+        &self,
         transaction_submit_job: TransactionSubmit,
     ) -> Result<(), JobProducerError> {
-        let mut queue = Self::acquire_lock(&self.queue)?;
+        // let mut queue = Self::acquire_lock(&self.queue)?;
         let job = Job::new(JobType::TransactionSubmit, transaction_submit_job);
 
-        queue.transaction_submission_queue.push(job).await?;
+        // queue.transaction_submission_queue.push(job).await?;
+        self.queue1
+            .transaction_submission_queue
+            .clone()
+            .push(job)
+            .await?;
         info!("Transaction Submit job produced successfully");
 
         Ok(())
     }
 
     pub async fn produce_check_transaction_status_job(
-        &mut self,
+        &self,
         transaction_status_check_job: TransactionStatusCheck,
     ) -> Result<(), JobProducerError> {
-        let mut queue = Self::acquire_lock(&self.queue)?;
+        // let mut queue = Self::acquire_lock(&self.queue)?;
         let job = Job::new(
             JobType::TransactionStatusCheck,
             transaction_status_check_job,
         );
 
-        queue.transaction_status_queue.push(job).await?;
+        self.queue1
+            .clone()
+            .transaction_status_queue
+            .push(job)
+            .await?;
         info!("Transaction Status Check job produced successfully");
 
         Ok(())
     }
 
     pub async fn produce_send_notification_job(
-        &mut self,
+        &self,
         notification_send_job: NotificationSend,
     ) -> Result<(), JobProducerError> {
-        let mut queue = Self::acquire_lock(&self.queue)?;
+        // let mut queue = Self::acquire_lock(&self.queue)?;
         let job = Job::new(JobType::TransactionStatusCheck, notification_send_job);
 
-        queue.notification_queue.push(job).await?;
+        self.queue1.clone().notification_queue.push(job).await?;
 
         info!("Notification Send job produced successfully");
 

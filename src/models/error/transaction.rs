@@ -1,3 +1,5 @@
+use crate::jobs::JobProducerError;
+
 use super::{ApiError, RepositoryError};
 use thiserror::Error;
 
@@ -8,6 +10,9 @@ pub enum TransactionError {
 
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),
+
+    #[error("Job producer error: {0}")]
+    JobProducerError(#[from] JobProducerError),
 }
 
 impl From<TransactionError> for ApiError {
@@ -15,6 +20,7 @@ impl From<TransactionError> for ApiError {
         match error {
             TransactionError::ValidationError(msg) => ApiError::BadRequest(msg),
             TransactionError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
+            TransactionError::JobProducerError(msg) => ApiError::InternalError(msg.to_string()),
         }
     }
 }

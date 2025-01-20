@@ -34,7 +34,7 @@ use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
 use dotenvy::dotenv;
 use futures::future::try_join_all;
-use jobs::{initialise_workers, Queue};
+use jobs::{setup_workers, Queue};
 use log::info;
 use models::RelayerRepoModel;
 use repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository};
@@ -129,8 +129,7 @@ async fn main() -> Result<()> {
 
     let app_state = initialize_app_state().await?;
 
-    // revisit adding ?
-    initialise_workers(app_state.clone()).await;
+    setup_workers(app_state.clone()).await?;
 
     info!("Processing config file");
 

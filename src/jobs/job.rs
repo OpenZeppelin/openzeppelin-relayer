@@ -67,6 +67,21 @@ pub struct TransactionSubmit {
     pub metadata: Option<HashMap<String, String>>,
 }
 
+impl TransactionSubmit {
+    pub fn new(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+        Self {
+            transaction_id: transaction_id.into(),
+            relayer_id: relayer_id.into(),
+            metadata: None,
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
 // Struct for individual order item
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionStatusCheck {
@@ -75,9 +90,33 @@ pub struct TransactionStatusCheck {
     pub metadata: Option<HashMap<String, String>>,
 }
 
+impl TransactionStatusCheck {
+    pub fn new(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+        Self {
+            transaction_id: transaction_id.into(),
+            relayer_id: relayer_id.into(),
+            metadata: None,
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
 // Example message data for notifications
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NotificationSend {
     pub notification_id: String,
     pub message: String,
+}
+
+impl NotificationSend {
+    pub fn new(notification_id: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            notification_id: notification_id.into(),
+            message: message.into(),
+        }
+    }
 }

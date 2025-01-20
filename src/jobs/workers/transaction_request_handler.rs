@@ -1,43 +1,29 @@
 use actix_web::web::ThinData;
-use apalis::prelude::{Data, Error};
+use apalis::prelude::Data;
+use eyre::Result;
 use log::info;
 
 use crate::{
-    domain::{RelayerTransactionFactory, Transaction},
+    domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{Job, TransactionRequest},
-    repositories::Repository,
     AppState,
 };
+
+use super::HandlerError;
 
 pub async fn transaction_request_handler(
     job: Job<TransactionRequest>,
     state: Data<ThinData<AppState>>,
-) -> Result<(), Error> {
-    info!("handling transaction: {:?}", job.data);
+) -> Result<(), HandlerError> {
+    info!("Handling transaction request: {:?}", job.data);
 
-    let relayer = state
-        .relayer_repository
-        .get_by_id(job.data.relayer_id)
-        .await
-        .unwrap();
+    let relayer_transaction = get_relayer_transaction(job.data.relayer_id.clone(), &state).await?;
 
-    let transaction = state
-        .transaction_repository
-        .get_by_id(job.data.transaction_id)
-        .await
-        .unwrap();
+    let transaction = get_transaction_by_id(job.data.transaction_id, &state).await?;
 
-    let relayer_transaction = RelayerTransactionFactory::create_transaction(
-        relayer,
-        state.relayer_repository(),
-        state.transaction_repository(),
-    )
-    .unwrap();
+    relayer_transaction.prepare_transaction(transaction).await?;
 
-    relayer_transaction
-        .submit_transaction(transaction)
-        .await
-        .unwrap();
+    info!("Transaction request handled successfully");
 
     Ok(())
 }

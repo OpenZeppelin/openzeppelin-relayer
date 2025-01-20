@@ -1,5 +1,5 @@
 use actix_web::web::ThinData;
-use apalis::prelude::{Data, Error};
+use apalis::prelude::Data;
 use log::info;
 
 use crate::{
@@ -7,10 +7,12 @@ use crate::{
     AppState,
 };
 
+use super::HandlerError;
+
 pub async fn notification_handler(
     job: Job<NotificationSend>,
-    context: Data<ThinData<AppState>>,
-) -> Result<(), Error> {
+    _context: Data<ThinData<AppState>>,
+) -> Result<(), HandlerError> {
     info!("handling notification: {:?}", job.data);
 
     Ok(())

@@ -1,4 +1,5 @@
 use crate::{
+    jobs::JobProducer,
     models::{EvmNetwork, NetworkType, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::EvmProvider,
@@ -10,14 +11,21 @@ use std::sync::Arc;
 mod evm;
 mod solana;
 mod stellar;
+mod util;
 
 pub use evm::*;
 pub use solana::*;
 pub use stellar::*;
+pub use util::*;
 
 #[async_trait]
 #[allow(dead_code)]
 pub trait Transaction {
+    async fn prepare_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError>;
+
     async fn submit_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -57,6 +65,17 @@ pub enum NetworkTransaction {
 
 #[async_trait]
 impl Transaction for NetworkTransaction {
+    async fn prepare_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        match self {
+            NetworkTransaction::Evm(relayer) => relayer.prepare_transaction(tx).await,
+            NetworkTransaction::Solana(relayer) => relayer.prepare_transaction(tx).await,
+            NetworkTransaction::Stellar(relayer) => relayer.prepare_transaction(tx).await,
+        }
+    }
+
     async fn submit_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -130,6 +149,7 @@ pub trait RelayerTransactionFactoryTrait {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
 }
 pub struct RelayerTransactionFactory;
@@ -140,6 +160,7 @@ impl RelayerTransactionFactory {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
             NetworkType::Evm => {
@@ -161,18 +182,21 @@ impl RelayerTransactionFactory {
                     evm_provider,
                     relayer_repository,
                     transaction_repository,
+                    job_producer,
                 )?))
             }
             NetworkType::Solana => Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                 relayer,
                 relayer_repository,
                 transaction_repository,
+                job_producer,
             )?)),
             NetworkType::Stellar => {
                 Ok(NetworkTransaction::Stellar(StellarRelayerTransaction::new(
                     relayer,
                     relayer_repository,
                     transaction_repository,
+                    job_producer,
                 )?))
             }
         }

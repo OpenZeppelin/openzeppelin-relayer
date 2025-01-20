@@ -29,10 +29,12 @@ use eyre::Result;
 mod evm;
 mod solana;
 mod stellar;
+mod util;
 
 pub use evm::*;
 pub use solana::*;
 pub use stellar::*;
+pub use util::*;
 
 #[async_trait]
 #[allow(dead_code)]
