@@ -31,7 +31,7 @@ const DEFAULT_RATE_LIMIT: u64 = 20;
 const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);
 
 pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
-    let queue = app_state.job_producer.get_queue()?;
+    let queue = app_state.job_producer.get_queue().await?;
     let transaction_request_queue_worker = WorkerBuilder::new("transaction_handler")
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()

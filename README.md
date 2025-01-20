@@ -1,4 +1,4 @@
-# OpenZeppelin Monitor
+# OpenZeppelin Relayer
 
 
 ### Developer setup
