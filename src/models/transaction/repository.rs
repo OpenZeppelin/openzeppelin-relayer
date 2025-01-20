@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Pending,
     Confirmed,
