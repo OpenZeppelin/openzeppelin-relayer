@@ -1,0 +1,66 @@
+//! Notification handling worker implementation.
+//!
+//! This module implements the notification handling worker that processes
+//! notification jobs from the queue.
+
+use actix_web::web::ThinData;
+use apalis::prelude::{Attempt, Data, *};
+
+use eyre::Result;
+use log::info;
+
+use crate::{
+    jobs::{handle_job_result, Job, NotificationSend},
+    AppState,
+};
+
+/// Handles incoming notification jobs from the queue.
+///
+/// # Arguments
+/// * `job` - The notification job containing recipient and message details
+/// * `context` - Application state containing notification services
+///
+/// # Returns
+/// * `Result<(), Error>` - Success or failure of notification processing
+/// ```
+pub async fn notification_handler(
+    job: Job<NotificationSend>,
+    _context: Data<ThinData<AppState>>,
+    attempt: Attempt,
+) -> Result<(), Error> {
+    info!("handling notification: {:?}", job.data);
+
+    let result = handle_request(job.data, _context).await;
+
+    handle_job_result(result, attempt, "Notification", 5)
+
+    // match result {
+    //     Ok(_) => Ok(()),
+    //     Err(e) => {
+    //         info!("Notification request failed: {:?}", e);
+    //         match attempt {
+    //             attempt if attempt.current() == 5 => {
+    //                 info!("Max attempts reached, failing job");
+    //                 Err(Error::Failed(Arc::new(
+    //                     "Failed to handle Notification request".into(),
+    //                 )))
+    //             }
+    //             _ => {
+    //                 info!("Retrying job");
+    //                 Err(Error::Failed(Arc::new(
+    //                     "Failed to handle Notification request".into(),
+    //                 )))
+    //             }
+    //         }
+    //     }
+    // }
+}
+
+pub async fn handle_request(
+    _request: NotificationSend,
+    _state: Data<ThinData<AppState>>,
+) -> Result<()> {
+    // handle notification
+
+    Ok(())
+}

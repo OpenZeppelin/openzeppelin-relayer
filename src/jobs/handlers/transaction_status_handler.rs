@@ -1,35 +1,31 @@
+//! Transaction status monitoring handler.
+//!
+//! Monitors the status of submitted transactions by:
+//! - Checking transaction status on the network
+//! - Updating transaction status in storage
+//! - Triggering notifications on status changes
 use actix_web::web::ThinData;
-use apalis::prelude::{Data, *};
+use apalis::prelude::{Attempt, Data, *};
+
 use eyre::Result;
 use log::info;
-use std::sync::Arc;
 
 use crate::{
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{Job, TransactionStatusCheck},
+    jobs::{handle_job_result, Job, TransactionStatusCheck},
     AppState,
 };
 
 pub async fn transaction_status_handler(
     job: Job<TransactionStatusCheck>,
     state: Data<ThinData<AppState>>,
+    attempt: Attempt,
 ) -> Result<(), Error> {
     info!("Handling transaction status job: {:?}", job.data);
 
     let result = handle_request(job.data, state).await;
 
-    match result {
-        Ok(_) => {
-            info!("Transaction request handled successfully");
-            Ok(())
-        }
-        Err(e) => {
-            info!("Transaction request failed: {:?}", e);
-            Err(Error::Failed(Arc::new(
-                "Failed to handle transaction request".into(),
-            )))
-        }
-    }
+    handle_job_result(result, attempt, "Transaction Status", 5)
 }
 
 pub async fn handle_request(

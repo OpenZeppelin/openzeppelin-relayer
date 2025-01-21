@@ -129,6 +129,7 @@ async fn main() -> Result<()> {
 
     let app_state = initialize_app_state().await?;
 
+    // Setup workers for processing jobs
     setup_workers(app_state.clone()).await?;
 
     info!("Processing config file");

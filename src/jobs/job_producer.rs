@@ -1,3 +1,11 @@
+//! Job producer module for enqueueing jobs to Redis queues.
+//!
+//! Provides functionality for producing various types of jobs:
+//! - Transaction processing jobs
+//! - Transaction submission jobs
+//! - Status monitoring jobs
+//! - Notification jobs
+
 use crate::{
     jobs::{
         Job, NotificationSend, Queue, TransactionRequest, TransactionSend, TransactionStatusCheck,

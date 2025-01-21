@@ -1,3 +1,10 @@
+//! Queue management module for job processing.
+//!
+//! This module provides Redis-backed queue implementation for handling different types of jobs:
+//! - Transaction requests
+//! - Transaction submissions
+//! - Transaction status checks
+//! - Notifications
 use apalis_redis::{Config, RedisStorage};
 use serde::{Deserialize, Serialize};
 

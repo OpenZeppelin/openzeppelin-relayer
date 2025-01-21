@@ -1,3 +1,9 @@
+//! Job processing module for handling asynchronous tasks.
+//!
+//! Provides generic job structure for different types of operations:
+//! - Transaction processing
+//! - Status monitoring
+//! - Notifications
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -68,7 +74,7 @@ pub enum TransactionCommand {
 }
 
 // Example message data for order creation
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransactionSend {
     pub transaction_id: String,
     pub relayer_id: String,
@@ -126,7 +132,7 @@ impl TransactionSend {
 }
 
 // Struct for individual order item
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransactionStatusCheck {
     pub transaction_id: String,
     pub relayer_id: String,
@@ -149,7 +155,7 @@ impl TransactionStatusCheck {
 }
 
 // Example message data for notifications
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NotificationSend {
     pub notification_id: String,
     pub message: String,

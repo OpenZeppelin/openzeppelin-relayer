@@ -1,35 +1,31 @@
+//! Transaction submission handler for processing submission jobs.
+//!
+//! Handles the submission of prepared transactions to networks:
+//! - Submits transactions to appropriate networks
+//! - Handles different submission commands (Submit, Cancel, Resubmit)
+//! - Updates transaction status after submission
+//! - Enqueues status monitoring jobs
 use actix_web::web::ThinData;
-use apalis::prelude::{Data, *};
+use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
 use log::info;
-use std::sync::Arc;
 
 use crate::{
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{Job, TransactionCommand, TransactionSend},
+    jobs::{handle_job_result, Job, TransactionCommand, TransactionSend},
     AppState,
 };
 
 pub async fn transaction_submission_handler(
     job: Job<TransactionSend>,
     state: Data<ThinData<AppState>>,
+    attempt: Attempt,
 ) -> Result<(), Error> {
     info!("handling transaction submission: {:?}", job.data);
 
     let result = handle_request(job.data, state).await;
 
-    match result {
-        Ok(_) => {
-            info!("Transaction request handled successfully");
-            Ok(())
-        }
-        Err(e) => {
-            info!("Transaction request failed: {:?}", e);
-            Err(Error::Failed(Arc::new(
-                "Failed to handle transaction request".into(),
-            )))
-        }
-    }
+    handle_job_result(result, attempt, "Transaction Sender", 5)
 }
 
 pub async fn handle_request(

@@ -9,7 +9,7 @@
 //! use std::time::Duration;
 //!
 //! let policy = BackoffRetryPolicy {
-//!     retries: 3,
+//!     retries: 5,
 //!     initial_backoff: Duration::from_secs(1),
 //!     multiplier: 2.0,
 //!     max_backoff: Duration::from_secs(60),
@@ -40,7 +40,7 @@ type Err = Error;
 ///
 /// ```rust
 /// let policy = BackoffRetryPolicy {
-///     retries: 3,
+///     retries: 5,
 ///     initial_backoff: Duration::from_secs(1),
 ///     multiplier: 2.0,
 ///     max_backoff: Duration::from_secs(60),
