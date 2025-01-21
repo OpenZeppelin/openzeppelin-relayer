@@ -17,7 +17,6 @@ FROM cgr.dev/chainguard/glibc-dynamic
 
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3 
-# COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /usr/local/bin/openzeppelin-relayer
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer

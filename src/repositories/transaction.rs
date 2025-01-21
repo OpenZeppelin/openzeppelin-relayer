@@ -94,6 +94,16 @@ impl InMemoryTransactionRepository {
             })
             .cloned())
     }
+
+    pub async fn update_status(
+        &self,
+        tx_id: String,
+        status: TransactionStatus,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut tx = self.get_by_id(tx_id.clone()).await?;
+        tx.status = status;
+        self.update(tx_id, tx).await
+    }
 }
 
 impl Default for InMemoryTransactionRepository {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use apalis::prelude::{Attempt, Context, Data, Error, TaskId, Worker};
+use apalis::prelude::{Attempt, Error};
 use eyre::Report;
 
 mod transaction_request_handler;

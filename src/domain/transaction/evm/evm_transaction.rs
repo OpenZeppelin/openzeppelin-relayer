@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::{
     domain::transaction::Transaction,
     jobs::{JobProducer, NotificationSend, TransactionSend, TransactionStatusCheck},
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
+    models::{RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::EvmProvider,
 };
@@ -46,6 +46,7 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
+        // validate the transaction
 
         // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
@@ -53,6 +54,9 @@ impl Transaction for EvmRelayerTransaction {
                 TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),
                 None,
             )
+            .await?;
+        self.transaction_repository
+            .update_status(tx.id.clone(), TransactionStatus::Sent)
             .await?;
         Ok(tx)
     }
@@ -62,6 +66,10 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("submitting transaction");
+
+        self.transaction_repository
+            .update_status(tx.id.clone(), TransactionStatus::Submitted)
+            .await?;
 
         // after submitting the transaction, we need to handle the transaction status
         self.job_producer
@@ -78,9 +86,14 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        let updated: TransactionRepoModel = self
+            .transaction_repository
+            .update_status(tx.id.clone(), TransactionStatus::Confirmed)
+            .await?;
+
         self.job_producer
             .produce_send_notification_job(
-                NotificationSend::new(tx.id.clone(), tx.relayer_id.clone()),
+                NotificationSend::new(tx.id.clone(), updated.relayer_id.clone()),
                 None,
             )
             .await?;

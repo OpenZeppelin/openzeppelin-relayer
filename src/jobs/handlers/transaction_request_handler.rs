@@ -42,7 +42,7 @@ pub async fn handle_request(
     request: TransactionRequest,
     state: Data<ThinData<AppState>>,
 ) -> Result<()> {
-    let relayer_transaction = get_relayer_transaction("sdsd".to_owned(), &state).await?;
+    let relayer_transaction = get_relayer_transaction(request.relayer_id, &state).await?;
 
     let transaction = get_transaction_by_id(request.transaction_id, &state).await?;
 
