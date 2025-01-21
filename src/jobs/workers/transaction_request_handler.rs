@@ -31,15 +31,13 @@ pub async fn transaction_request_handler(
     match result {
         Ok(_) => {
             info!("Transaction request handled successfully");
-            #[allow(clippy::needless_return)]
-            return Ok(());
+            Ok(())
         }
         Err(e) => {
             info!("Transaction request failed: {:?}", e);
-            #[allow(clippy::needless_return)]
-            return Err(Error::Failed(Arc::new(
+            Err(Error::Failed(Arc::new(
                 "Failed to handle transaction request".into(),
-            )));
+            )))
         }
     }
 }
@@ -48,7 +46,8 @@ pub async fn handle_request(
     request: TransactionRequest,
     state: Data<ThinData<AppState>>,
 ) -> Result<()> {
-    let relayer_transaction = get_relayer_transaction(request.relayer_id.to_string(), &state).await?;
+    let relayer_transaction =
+        get_relayer_transaction(request.relayer_id.to_string(), &state).await?;
 
     let transaction = get_transaction_by_id(request.transaction_id, &state).await?;
 

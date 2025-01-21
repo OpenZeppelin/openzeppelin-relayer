@@ -22,11 +22,9 @@ pub use notification_handler::*;
 mod transaction_status_handler;
 pub use transaction_status_handler::*;
 
-mod handler_error;
-pub use handler_error::*;
-
 mod retry_backoff;
 
+// Review and fine tune configuration for the workers
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_RATE_LIMIT: u64 = 20;
 const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);

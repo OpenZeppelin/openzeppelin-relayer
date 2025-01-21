@@ -1,3 +1,21 @@
+//! Retry policy implementation with exponential backoff for job processing.
+//!
+//! This module provides a configurable retry mechanism with exponential backoff
+//! for handling transient failures in job processing.
+//!
+//! # Example
+//! ```rust
+//! use crate::jobs::workers::retry_backoff::BackoffRetryPolicy;
+//! use std::time::Duration;
+//!
+//! let policy = BackoffRetryPolicy {
+//!     retries: 3,
+//!     initial_backoff: Duration::from_secs(1),
+//!     multiplier: 2.0,
+//!     max_backoff: Duration::from_secs(60),
+//! };
+//! ```
+
 use apalis::prelude::*;
 use std::time::Duration;
 use tokio::time::{sleep, Sleep};
@@ -6,18 +24,45 @@ use tower::retry::Policy;
 type Req<T, Ctx> = Request<T, Ctx>;
 type Err = Error;
 
+/// A retry policy that implements exponential backoff.
+///
+/// This policy will retry failed operations with increasing delays between attempts,
+/// using an exponential backoff algorithm with a configurable multiplier.
+///
+/// # Fields
+///
+/// * `retries` - Maximum number of retry attempts
+/// * `initial_backoff` - Initial delay duration before first retry
+/// * `multiplier` - Factor by which the delay increases after each attempt
+/// * `max_backoff` - Maximum delay duration between retries
+///
+/// # Example
+///
+/// ```rust
+/// let policy = BackoffRetryPolicy {
+///     retries: 3,
+///     initial_backoff: Duration::from_secs(1),
+///     multiplier: 2.0,
+///     max_backoff: Duration::from_secs(60),
+/// };
+/// ```
 #[derive(Clone, Debug)]
 pub struct BackoffRetryPolicy {
+    /// Maximum number of retry attempts
     pub retries: usize,
+    /// Initial delay duration before first retry
     pub initial_backoff: Duration,
+    /// Factor by which the delay increases after each attempt
     pub multiplier: f64,
+    /// Maximum delay duration between retries
     pub max_backoff: Duration,
 }
 
+/// Default configuration for retry policy
 impl Default for BackoffRetryPolicy {
     fn default() -> Self {
         Self {
-            retries: 25,
+            retries: 5,
             initial_backoff: Duration::from_millis(1000),
             multiplier: 1.5,
             max_backoff: Duration::from_secs(60),

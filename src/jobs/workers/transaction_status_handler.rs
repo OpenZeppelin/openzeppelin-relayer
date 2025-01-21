@@ -21,15 +21,13 @@ pub async fn transaction_status_handler(
     match result {
         Ok(_) => {
             info!("Transaction request handled successfully");
-            #[allow(clippy::needless_return)]
-            return Ok(());
+            Ok(())
         }
         Err(e) => {
             info!("Transaction request failed: {:?}", e);
-            #[allow(clippy::needless_return)]
-            return Err(Error::Failed(Arc::new(
+            Err(Error::Failed(Arc::new(
                 "Failed to handle transaction request".into(),
-            )));
+            )))
         }
     }
 }
