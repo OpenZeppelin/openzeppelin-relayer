@@ -3,12 +3,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ServerConfig;
 
-use super::{Job, NotificationSend, TransactionRequest, TransactionStatusCheck, TransactionSubmit};
+use super::{Job, NotificationSend, TransactionRequest, TransactionSend, TransactionStatusCheck};
 
 #[derive(Clone, Debug)]
 pub struct Queue {
     pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
-    pub transaction_submission_queue: RedisStorage<Job<TransactionSubmit>>,
+    pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
     pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
 }

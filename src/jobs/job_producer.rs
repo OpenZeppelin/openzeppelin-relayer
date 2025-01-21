@@ -1,6 +1,6 @@
 use crate::{
     jobs::{
-        Job, NotificationSend, Queue, TransactionRequest, TransactionStatusCheck, TransactionSubmit,
+        Job, NotificationSend, Queue, TransactionRequest, TransactionSend, TransactionStatusCheck,
     },
     models::RelayerError,
 };
@@ -78,11 +78,11 @@ impl JobProducer {
 
     pub async fn produce_submit_transaction_job(
         &self,
-        transaction_submit_job: TransactionSubmit,
+        transaction_submit_job: TransactionSend,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
-        let job = Job::new(JobType::TransactionSubmit, transaction_submit_job);
+        let job = Job::new(JobType::TransactionSend, transaction_submit_job);
 
         match scheduled_on {
             Some(on) => {

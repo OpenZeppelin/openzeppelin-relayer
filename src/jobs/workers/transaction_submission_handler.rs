@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use crate::{
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{Job, TransactionSubmit},
+    jobs::{Job, TransactionCommand, TransactionSend},
     AppState,
 };
 
 pub async fn transaction_submission_handler(
-    job: Job<TransactionSubmit>,
+    job: Job<TransactionSend>,
     state: Data<ThinData<AppState>>,
 ) -> Result<(), Error> {
     info!("handling transaction submission: {:?}", job.data);
@@ -33,7 +33,7 @@ pub async fn transaction_submission_handler(
 }
 
 pub async fn handle_request(
-    status_request: TransactionSubmit,
+    status_request: TransactionSend,
     state: Data<ThinData<AppState>>,
 ) -> Result<()> {
     let relayer_transaction =
@@ -41,9 +41,25 @@ pub async fn handle_request(
 
     let transaction = get_transaction_by_id(status_request.transaction_id, &state).await?;
 
-    relayer_transaction.submit_transaction(transaction).await?;
+    match status_request.command {
+        TransactionCommand::Submit => {
+            relayer_transaction.submit_transaction(transaction).await?;
+        }
+        TransactionCommand::Cancel { reason } => {
+            info!("Cancelling transaction: {:?}", reason);
+            relayer_transaction.submit_transaction(transaction).await?;
+        }
+        TransactionCommand::Resubmit => {
+            info!("Resubmitting transaction");
+            relayer_transaction.submit_transaction(transaction).await?;
+        }
+        TransactionCommand::Resend => {
+            info!("Resending transaction");
+            relayer_transaction.submit_transaction(transaction).await?;
+        }
+    };
 
-    info!("Transaction submit handled successfully");
+    info!("Transaction handled successfully");
 
     Ok(())
 }

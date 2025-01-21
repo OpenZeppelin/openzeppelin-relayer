@@ -31,7 +31,7 @@ impl<T> Job<T> {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobType {
     TransactionRequest,
-    TransactionSubmit,
+    TransactionSend,
     TransactionStatusCheck,
     NotificationSend,
 }
@@ -59,19 +59,62 @@ impl TransactionRequest {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum TransactionCommand {
+    Submit,
+    Cancel { reason: String },
+    Resubmit,
+    Resend,
+}
+
 // Example message data for order creation
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TransactionSubmit {
+pub struct TransactionSend {
     pub transaction_id: String,
     pub relayer_id: String,
+    pub command: TransactionCommand,
     pub metadata: Option<HashMap<String, String>>,
 }
 
-impl TransactionSubmit {
-    pub fn new(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+impl TransactionSend {
+    pub fn submit(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
+            command: TransactionCommand::Submit,
+            metadata: None,
+        }
+    }
+
+    pub fn cancel(
+        transaction_id: impl Into<String>,
+        relayer_id: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            transaction_id: transaction_id.into(),
+            relayer_id: relayer_id.into(),
+            command: TransactionCommand::Cancel {
+                reason: reason.into(),
+            },
+            metadata: None,
+        }
+    }
+
+    pub fn resubmit(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+        Self {
+            transaction_id: transaction_id.into(),
+            relayer_id: relayer_id.into(),
+            command: TransactionCommand::Resubmit,
+            metadata: None,
+        }
+    }
+
+    pub fn resend(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
+        Self {
+            transaction_id: transaction_id.into(),
+            relayer_id: relayer_id.into(),
+            command: TransactionCommand::Resend,
             metadata: None,
         }
     }

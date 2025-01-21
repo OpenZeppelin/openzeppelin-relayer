@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::{
     domain::transaction::Transaction,
-    jobs::{JobProducer, NotificationSend, TransactionStatusCheck, TransactionSubmit},
+    jobs::{JobProducer, NotificationSend, TransactionSend, TransactionStatusCheck},
     models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::EvmProvider,
@@ -50,7 +50,7 @@ impl Transaction for EvmRelayerTransaction {
         // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
-                TransactionSubmit::new(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),
                 None,
             )
             .await?;
