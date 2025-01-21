@@ -18,12 +18,12 @@ impl Queue {
         let conn = apalis_redis::connect(ServerConfig::from_env().redis_url.clone())
             .await
             .expect("Could not connect to Redis Jobs DB");
-        RedisStorage::new_with_config(
-            conn,
-            Config::default()
-                .set_namespace(namespace)
-                .set_max_retries(10),
-        )
+
+        let config = Config::default()
+            .set_namespace(namespace)
+            .set_max_retries(5);
+
+        RedisStorage::new_with_config(conn, config)
     }
 
     pub async fn setup() -> Self {

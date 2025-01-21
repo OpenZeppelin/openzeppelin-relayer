@@ -1,15 +1,11 @@
 //! # Workers Module
 //! Handles background job processing for the relayer service.
 
-use std::time::Duration;
-
 use actix_web::web::ThinData;
-use apalis::{
-    layers::{retry::RetryPolicy, ErrorHandlingLayer},
-    prelude::*,
-};
+use apalis::{layers::ErrorHandlingLayer, prelude::*};
 use eyre::Result;
 use log::{error, info};
+use std::time::Duration;
 use tokio::signal::unix::SignalKind;
 
 use crate::AppState;
@@ -29,6 +25,8 @@ pub use transaction_status_handler::*;
 mod handler_error;
 pub use handler_error::*;
 
+mod retry_backoff;
+
 const DEFAULT_CONCURRENCY: usize = 2;
 const DEFAULT_RATE_LIMIT: u64 = 20;
 const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_secs(1);
@@ -42,7 +40,6 @@ pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
         .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
         .concurrency(DEFAULT_CONCURRENCY)
         .data(app_state.clone())
-        .retry(RetryPolicy::default())
         .backend(queue.transaction_request_queue.clone())
         .build_fn(transaction_request_handler);
 
