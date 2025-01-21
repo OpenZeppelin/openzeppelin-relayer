@@ -16,7 +16,7 @@ pub use notification_handler::*;
 mod transaction_status_handler;
 pub use transaction_status_handler::*;
 
-pub fn handle_job_result(
+pub fn handle_result(
     result: Result<(), Report>,
     attempt: Attempt,
     job_type: &str,

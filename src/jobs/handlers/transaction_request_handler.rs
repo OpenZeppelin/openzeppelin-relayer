@@ -10,7 +10,7 @@ use log::info;
 
 use crate::{
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_job_result, Job, TransactionRequest},
+    jobs::{handle_result, Job, TransactionRequest, DEFAULT_MAXIMUM_RETRIES},
     AppState,
 };
 
@@ -30,7 +30,12 @@ pub async fn transaction_request_handler(
 
     let result = handle_request(job.data, state).await;
 
-    handle_job_result(result, attempt, "Transaction Request", 5)
+    handle_result(
+        result,
+        attempt,
+        "Transaction Request",
+        DEFAULT_MAXIMUM_RETRIES,
+    )
 }
 
 pub async fn handle_request(

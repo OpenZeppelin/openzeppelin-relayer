@@ -10,7 +10,7 @@ use eyre::Result;
 use log::info;
 
 use crate::{
-    jobs::{handle_job_result, Job, NotificationSend},
+    jobs::{handle_result, Job, NotificationSend, DEFAULT_MAXIMUM_RETRIES},
     AppState,
 };
 
@@ -32,28 +32,7 @@ pub async fn notification_handler(
 
     let result = handle_request(job.data, _context).await;
 
-    handle_job_result(result, attempt, "Notification", 5)
-
-    // match result {
-    //     Ok(_) => Ok(()),
-    //     Err(e) => {
-    //         info!("Notification request failed: {:?}", e);
-    //         match attempt {
-    //             attempt if attempt.current() == 5 => {
-    //                 info!("Max attempts reached, failing job");
-    //                 Err(Error::Failed(Arc::new(
-    //                     "Failed to handle Notification request".into(),
-    //                 )))
-    //             }
-    //             _ => {
-    //                 info!("Retrying job");
-    //                 Err(Error::Failed(Arc::new(
-    //                     "Failed to handle Notification request".into(),
-    //                 )))
-    //             }
-    //         }
-    //     }
-    // }
+    handle_result(result, attempt, "Notification", DEFAULT_MAXIMUM_RETRIES)
 }
 
 pub async fn handle_request(
