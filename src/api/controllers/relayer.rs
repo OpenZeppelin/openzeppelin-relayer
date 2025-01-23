@@ -82,16 +82,18 @@ pub async fn send_transaction(
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
-    let signer_config = state.signer_repository.get_by_id(relayer_repo_model.signer_id.clone).await?;
+    let signer_config = state
+        .signer_repository
+        .get_by_id(relayer_repo_model.signer_id.clone())
+        .await?;
 
     let relayer = RelayerFactory::create_relayer(
         relayer_repo_model.clone(),
+        signer_config,
         state.relayer_repository(),
         state.transaction_repository(),
-        state.signer_repository(),
         state.job_producer(),
-    )
-    .await?;
+    )?;
 
     relayer.validate_relayer().await?;
 

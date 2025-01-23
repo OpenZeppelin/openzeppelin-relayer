@@ -15,14 +15,13 @@ use crate::{
     jobs::JobProducer,
     models::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        TransactionRepoModel,
+        SignerRepoModel, TransactionRepoModel,
     },
+    services::EvmSignerFactory,
 };
 
 use crate::{
-    repositories::{
-        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionRepository,
-    },
+    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::EvmProvider,
 };
 use async_trait::async_trait;
@@ -149,25 +148,23 @@ impl Relayer for NetworkRelayer {
     }
 }
 
-#[async_trait]
 pub trait RelayerFactoryTrait {
-    async fn create_relayer(
-        model: RelayerRepoModel,
+    fn create_relayer(
+        relayer: RelayerRepoModel,
+        signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
-        signer_repository: Arc<InMemorySignerRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
 pub struct RelayerFactory;
 
-#[async_trait]
 impl RelayerFactoryTrait for RelayerFactory {
-    async fn create_relayer(
+    fn create_relayer(
         relayer: RelayerRepoModel,
+        signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
-        signer_repository: Arc<InMemorySignerRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
@@ -184,16 +181,16 @@ impl RelayerFactoryTrait for RelayerFactory {
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer)?;
                 let relayer = EvmRelayer::new(
                     relayer,
+                    signer_service,
                     evm_provider,
                     network,
                     relayer_repository,
                     transaction_repository,
-                    signer_repository,
                     job_producer,
-                )
-                .await?;
+                )?;
 
                 Ok(NetworkRelayer::Evm(relayer))
             }

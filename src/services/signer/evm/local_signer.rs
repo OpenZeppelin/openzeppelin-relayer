@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use alloy::signers::{k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient};
 
-use alloy::{primitives::Address as AlloyAddress};
+use alloy::primitives::Address as AlloyAddress;
 
 use async_trait::async_trait;
 use bytes::Bytes;

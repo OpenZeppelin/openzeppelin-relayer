@@ -24,14 +24,17 @@ pub async fn get_network_relayer(
     state: &ThinData<AppState>,
 ) -> Result<NetworkRelayer, ApiError> {
     let relayer_model = get_relayer_by_id(relayer_id, state).await?;
+    let signer_model = state
+        .signer_repository
+        .get_by_id(relayer_model.signer_id.clone())
+        .await?;
 
     RelayerFactory::create_relayer(
         relayer_model,
+        signer_model,
         state.relayer_repository(),
         state.transaction_repository(),
-        state.signer_repository(),
         state.job_producer(),
     )
-    .await
     .map_err(|e| e.into())
 }
