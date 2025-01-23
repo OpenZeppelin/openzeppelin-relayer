@@ -12,9 +12,12 @@ pub use solana::*;
 mod stellar;
 pub use stellar::*;
 
-use crate::models::{Address, SignerRepoModel, SignerType, TransactionRepoModel};
+use crate::{
+    domain::{SignDataRequest, SignDataResponse},
+    models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
+};
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize)]
 pub enum SignerError {
     #[error("Failed to sign transaction: {0}")]
     Signing(String),
@@ -24,6 +27,9 @@ pub enum SignerError {
 
     #[error("Provider error: {0}")]
     Provider(String),
+
+    #[error("Unsupported signer type: {0}")]
+    UnsupportedType(String),
 }
 
 #[async_trait]
@@ -76,27 +82,41 @@ impl Signer for NetworkSigner {
     }
 }
 
-// #[async_trait]
-// impl EvmSignerTrait for NetworkSigner {
-//     async fn sign_data(&self) -> Result<Address, SignerError> {
-//         match self {
-//             Self::Evm(signer) => signer.sign_data().await,
-//             Self::Solana(signer) => signer.address().await,
-//             Self::Stellar(signer) => signer.address().await,
-//         }
-//     }
+#[async_trait]
+impl EvmSignerTrait for NetworkSigner {
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
+        match self {
+            Self::Evm(signer) => signer
+                .sign_data(request)
+                .await
+                .map_err(|e| SignerError::UnsupportedType(e.to_string())),
+            Self::Solana(_) => Err(SignerError::UnsupportedType(
+                "Solana: sign data not supported".into(),
+            )),
+            Self::Stellar(_) => Err(SignerError::UnsupportedType(
+                "Stellar: sign data not supported".into(),
+            )),
+        }
+    }
 
-//     async fn sign_transaction(
-//         &self,
-//         transaction: TransactionRepoModel,
-//     ) -> Result<Vec<u8>, SignerError> {
-//         match self {
-//             Self::Evm(signer) => signer.sign_transaction(transaction).await,
-//             Self::Solana(signer) => signer.sign_transaction(transaction).await,
-//             Self::Stellar(signer) => signer.sign_transaction(transaction).await,
-//         }
-//     }
-// }
+    async fn sign_typed_data(
+        &self,
+        request: SignDataRequest,
+    ) -> Result<SignDataResponse, SignerError> {
+        match self {
+            Self::Evm(signer) => signer
+                .sign_typed_data(request)
+                .await
+                .map_err(|e| SignerError::UnsupportedType(e.to_string())),
+            Self::Solana(_) => Err(SignerError::UnsupportedType(
+                "Solana: Signing typed data not supported".into(),
+            )),
+            Self::Stellar(_) => Err(SignerError::UnsupportedType(
+                "Stellar: Signing typed data not supported".into(),
+            )),
+        }
+    }
+}
 
 pub struct SignerFactory;
 

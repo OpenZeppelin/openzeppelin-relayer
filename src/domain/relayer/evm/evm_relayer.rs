@@ -11,7 +11,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
-    services::{EvmProvider, EvmSigner},
+    services::{EvmProvider, EvmSigner, EvmSignerTrait},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -87,29 +87,19 @@ impl Relayer for EvmRelayer {
         Ok(true)
     }
 
-    async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
-        println!("EVM sign_data...");
-        // let result = self.signer.sign_data(request)?;
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
+        let result = self.signer.sign_data(request).await?;
+
+        Ok(result)
     }
 
     async fn sign_typed_data(
         &self,
-        _request: SignDataRequest,
+        request: SignDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
-        // let result = self.signer.sign_typed_data(request)?;
-        println!("EVM sign_typed_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        let result = self.signer.sign_typed_data(request).await?;
+
+        Ok(result)
     }
 
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {

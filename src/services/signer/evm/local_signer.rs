@@ -3,10 +3,9 @@ use alloy::signers::{k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSi
 use alloy::primitives::{Address as AlloyAddress, FixedBytes};
 
 use async_trait::async_trait;
-use bytes::Bytes;
-use serde_json::Value;
 
 use crate::{
+    domain::{SignDataRequest, SignDataResponse},
     models::{Address, SignerRepoModel, TransactionRepoModel},
     services::{Signer, SignerError},
 };
@@ -55,11 +54,14 @@ impl Signer for LocalSigner {
 
 #[async_trait]
 impl EvmSignerTrait for LocalSigner {
-    async fn sign_data(&self, _data: Bytes) -> Result<Vec<u8>, SignerError> {
+    async fn sign_data(&self, _data: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         todo!()
     }
 
-    async fn sign_typed_data(&self, _typed_data: Value) -> Result<Vec<u8>, SignerError> {
+    async fn sign_typed_data(
+        &self,
+        _typed_data: SignDataRequest,
+    ) -> Result<SignDataResponse, SignerError> {
         todo!()
     }
 }

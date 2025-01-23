@@ -1,4 +1,4 @@
-use crate::services::SignerFactoryError;
+use crate::services::{SignerError, SignerFactoryError};
 
 use super::{ApiError, RepositoryError};
 use serde::Serialize;
@@ -12,8 +12,10 @@ pub enum RelayerError {
     ProviderError(String),
     #[error("Queue error: {0}")]
     QueueError(String),
+    #[error("Signer factory error: {0}")]
+    SignerFactoryError(#[from] SignerFactoryError),
     #[error("Signer error: {0}")]
-    SignerError(#[from] SignerFactoryError),
+    SignerError(#[from] SignerError),
     #[error("Not supported: {0}")]
     NotSupported(String),
 }
@@ -25,6 +27,7 @@ impl From<RelayerError> for ApiError {
             RelayerError::ProviderError(msg) => ApiError::InternalError(msg),
             RelayerError::QueueError(msg) => ApiError::InternalError(msg),
             RelayerError::SignerError(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::SignerFactoryError(err) => ApiError::InternalError(err.to_string()),
             RelayerError::NotSupported(msg) => ApiError::BadRequest(msg),
         }
     }

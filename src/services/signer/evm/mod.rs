@@ -1,10 +1,11 @@
 mod local_signer;
 use async_trait::async_trait;
 pub use local_signer::*;
-use serde_json::Value;
 
-use crate::models::{Address, SignerRepoModel, SignerType, TransactionRepoModel};
-use bytes::Bytes;
+use crate::{
+    domain::{SignDataRequest, SignDataResponse},
+    models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
+};
 use eyre::Result;
 
 use super::{Signer, SignerError, SignerFactoryError};
@@ -12,10 +13,13 @@ use super::{Signer, SignerError, SignerFactoryError};
 #[async_trait]
 pub trait EvmSignerTrait: Send + Sync {
     /// Signs arbitrary message data
-    async fn sign_data(&self, data: Bytes) -> Result<Vec<u8>, SignerError>;
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError>;
 
     /// Signs EIP-712 typed data
-    async fn sign_typed_data(&self, typed_data: Value) -> Result<Vec<u8>, SignerError>;
+    async fn sign_typed_data(
+        &self,
+        request: SignDataRequest,
+    ) -> Result<SignDataResponse, SignerError>;
 }
 
 pub enum EvmSigner {
@@ -42,15 +46,18 @@ impl Signer for EvmSigner {
 
 #[async_trait]
 impl EvmSignerTrait for EvmSigner {
-    async fn sign_data(&self, data: Bytes) -> Result<Vec<u8>, SignerError> {
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         match self {
-            Self::Local(signer) => signer.sign_data(data).await,
+            Self::Local(signer) => signer.sign_data(request).await,
         }
     }
 
-    async fn sign_typed_data(&self, typed_data: Value) -> Result<Vec<u8>, SignerError> {
+    async fn sign_typed_data(
+        &self,
+        request: SignDataRequest,
+    ) -> Result<SignDataResponse, SignerError> {
         match self {
-            Self::Local(signer) => signer.sign_typed_data(typed_data).await,
+            Self::Local(signer) => signer.sign_typed_data(request).await,
         }
     }
 }
