@@ -76,8 +76,8 @@ fn setup_logging_and_env() -> Result<()> {
         .wrap_err("Failed to initialize logger")
 }
 
-fn load_config_file() -> Result<Config> {
-    config::load_config().wrap_err("Failed to load config file")
+fn load_config_file(config_file_path: &str) -> Result<Config> {
+    config::load_config(config_file_path).wrap_err("Failed to load config file")
 }
 
 /// Initializes application state
@@ -167,9 +167,9 @@ async fn main() -> Result<()> {
 
     setup_logging_and_env()?;
 
-    let config_file = load_config_file()?;
-    // info!("Config: {:?}", config_file);
     let config = config::ServerConfig::from_env();
+    // info!("Config: {:?}", config_file);
+    let config_file = load_config_file(&config.config_file_path)?;
 
     let app_state = initialize_app_state().await?;
 

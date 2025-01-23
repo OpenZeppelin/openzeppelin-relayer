@@ -23,3 +23,7 @@ Run Redis container:
 docker run --name openzeppelin-redis \
   -p 6379:6379 \
   -d redis:latest
+
+### Config file
+
+Create `config/config.json` file before starting service in dev mode `cargo run`.

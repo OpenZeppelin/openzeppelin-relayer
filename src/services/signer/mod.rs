@@ -1,49 +1,38 @@
-// use alloy::primitives::Address;
-// use async_trait::async_trait;
-// use eyre::Result;
-// use thiserror::Error;
+use async_trait::async_trait;
+use eyre::Result;
+use thiserror::Error;
 
-// #[derive(Error, Debug)]
-// pub enum SignerError {
-//     #[error("Failed to sign transaction: {0}")]
-//     SigningError(String),
+mod evm;
+pub use evm::*;
 
-//     #[error("Invalid key format: {0}")]
-//     KeyError(String),
+mod solana;
+pub use solana::*;
 
-//     #[error("Provider error: {0}")]
-//     ProviderError(String),
-// }
+mod stellar;
+pub use stellar::*;
 
-// #[async_trait]
-// pub trait Signer: Send + Sync {
-//     /// Returns the signer's ethereum address
-//     async fn address(&self) -> Result<Address, SignerError>;
+use crate::models::{Address, TransactionRepoModel};
 
-//     /// Signs an Ethereum transaction
-//     async fn sign_transaction(
-//         &self,
-//         transaction: TransactionRequest,
-//     ) -> Result<Vec<u8>, SignerError>;
-// }
+#[derive(Error, Debug)]
+pub enum SignerError {
+    #[error("Failed to sign transaction: {0}")]
+    SigningError(String),
 
-// // Example local implementation
-// pub struct LocalSigner {
-//     private_key: SecretKey,
-// }
+    #[error("Invalid key format: {0}")]
+    KeyError(String),
 
-// #[async_trait]
-// impl Signer for LocalSigner {
-//     async fn address(&self) -> Result<Address, SignerError> {
-//         // Implementation
-//         todo!()
-//     }
+    #[error("Provider error: {0}")]
+    ProviderError(String),
+}
 
-//     async fn sign_transaction(
-//         &self,
-//         transaction: TransactionRequest,
-//     ) -> Result<Vec<u8>, SignerError> {
-//         // Implementation
-//         todo!()
-//     }
-// }
+#[async_trait]
+pub trait Signer: Send + Sync {
+    /// Returns the signer's ethereum address
+    async fn address(&self) -> Result<Address, SignerError>;
+
+    async fn sign_transaction(
+        &self,
+        transaction: TransactionRepoModel, /* TODO introduce Transactions models for specific
+                                            * operations */
+    ) -> Result<Vec<u8>, SignerError>;
+}

@@ -2839,6 +2839,7 @@ dependencies = [
  "dotenvy",
  "eyre",
  "futures",
+ "hex",
  "log",
  "num_enum",
  "once_cell",

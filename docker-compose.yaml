@@ -16,7 +16,7 @@ services:
       - relayer-network
     restart: always
     volumes:
-      - ./config.json:/app/config.json
+      - ./config.json:/app/config/config.json
 
   redis:
     image: redis:latest

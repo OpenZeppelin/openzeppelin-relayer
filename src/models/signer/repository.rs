@@ -1,3 +1,4 @@
+// TODO save the passphrase in a secure way
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -83,8 +83,8 @@ impl Config {
     }
 }
 
-pub fn load_config() -> Result<Config, ConfigFileError> {
-    let config_str = fs::read_to_string("config.json")?;
+pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
+    let config_str = fs::read_to_string(config_file_path)?;
     let config: Config = serde_json::from_str(&config_str)?;
     config.validate()?;
     Ok(config)

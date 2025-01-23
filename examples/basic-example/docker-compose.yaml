@@ -12,7 +12,7 @@ services:
       - LOG_LEVEL=debug
       - LOCAL_SIGNER_KEY_PASSPHRASE=test #todo
     volumes:
-      - ./config.json:/app/config.json
+      - ./config.json:/app/config/config.json
       - ./keys:/app/keys:ro
     depends_on:
       - redis
