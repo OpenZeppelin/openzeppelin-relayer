@@ -27,6 +27,9 @@ pub enum RepositoryError {
 
     #[error("An unknown error occurred: {0}")]
     Unknown(String),
+
+    #[error("Not supported: {0}")]
+    NotSupported(String),
 }
 
 impl From<RepositoryError> for ApiError {

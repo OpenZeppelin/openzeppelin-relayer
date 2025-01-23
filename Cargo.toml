@@ -31,3 +31,4 @@ redis = { version = "0.28" }
 rand = "0.8"
 parking_lot = "0.12"
 tower = "0.5"
+oz-keystore = { version = "0.1"}

@@ -1,0 +1,39 @@
+version: '3.9'
+
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
+      - LOCAL_SIGNER_KEY_PASSPHRASE=test #todo
+    volumes:
+      - ./config.json:/app/config.json
+      - ./keys:/app/keys:ro
+    depends_on:
+      - redis
+    networks:
+      - relayer-network
+    restart: always
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - relayer-network
+    restart: always
+
+networks:
+  relayer-network:
+    driver: bridge
+
+volumes:
+  redis_data:

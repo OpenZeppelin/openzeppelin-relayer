@@ -33,7 +33,11 @@
     {
       "id": "local-signer",
       "type": "local",
-      "passphrase": "123456"
+      "path": "examples/basic-example/keys/local-signer.json",
+      "passphrase": {
+        "type": "plain",
+        "value": "test"
+      }
     }
   ],
   "networks": [

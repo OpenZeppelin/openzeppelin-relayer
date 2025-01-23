@@ -7,10 +7,13 @@ use async_trait::async_trait;
 use eyre::Result;
 
 mod relayer;
-mod transaction;
-
 pub use relayer::*;
+
+mod transaction;
 pub use transaction::*;
+
+mod signer;
+pub use signer::*;
 
 #[derive(Debug)]
 pub struct PaginatedResult<T> {

@@ -1,0 +1,24 @@
+{
+  "relayers": [
+    {
+      "id": "test-sepolia",
+      "name": "Test Sepolia",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-test",
+      "signer_id": "local-signer",
+      "network_type": "evm"
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "path": "keys/local-signer.json",
+      "passphrase": {
+        "type": "plain",
+        "value": "test"
+      }
+    }
+  ]
+}
