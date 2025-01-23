@@ -16,13 +16,13 @@ use crate::models::{Address, TransactionRepoModel};
 #[derive(Error, Debug)]
 pub enum SignerError {
     #[error("Failed to sign transaction: {0}")]
-    SigningError(String),
+    Signing(String),
 
     #[error("Invalid key format: {0}")]
-    KeyError(String),
+    Key(String),
 
     #[error("Provider error: {0}")]
-    ProviderError(String),
+    Provider(String),
 }
 
 #[async_trait]

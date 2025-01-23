@@ -20,7 +20,9 @@ use crate::{
 };
 
 use crate::{
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    repositories::{
+        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionRepository,
+    },
     services::EvmProvider,
 };
 use async_trait::async_trait;
@@ -147,21 +149,25 @@ impl Relayer for NetworkRelayer {
     }
 }
 
+#[async_trait]
 pub trait RelayerFactoryTrait {
-    fn create_relayer(
+    async fn create_relayer(
         model: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        signer_repository: Arc<InMemorySignerRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
 pub struct RelayerFactory;
 
+#[async_trait]
 impl RelayerFactoryTrait for RelayerFactory {
-    fn create_relayer(
+    async fn create_relayer(
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        signer_repository: Arc<InMemorySignerRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
@@ -184,8 +190,10 @@ impl RelayerFactoryTrait for RelayerFactory {
                     network,
                     relayer_repository,
                     transaction_repository,
+                    signer_repository,
                     job_producer,
-                )?;
+                )
+                .await?;
 
                 Ok(NetworkRelayer::Evm(relayer))
             }

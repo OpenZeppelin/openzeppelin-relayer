@@ -178,6 +178,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             network: config.network,
             paused: config.paused,
             network_type,
+            signer_id: config.signer_id,
             policies,
         })
     }
@@ -226,6 +227,7 @@ mod tests {
             paused: false,
             network_type: NetworkType::Evm,
             policies: None,
+            signer_id: "test".to_string(),
         }
     }
 

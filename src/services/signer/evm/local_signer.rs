@@ -1,30 +1,27 @@
 use std::str::FromStr;
 
-use alloy::{
-    network::{EthereumWallet, NetworkWallet},
-    primitives::FixedBytes,
-    signers::{
-        k256::{ecdsa::SigningKey, Secp256k1},
-        local::LocalSigner as AlloyLocalSignerClient,
-    },
-};
+use alloy::signers::{k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient};
+
+use alloy::{primitives::Address as AlloyAddress};
+
 use async_trait::async_trait;
+use bytes::Bytes;
+use serde_json::Value;
 
 use crate::{
     models::{Address, SignerRepoModel, TransactionRepoModel},
     services::{Signer, SignerError},
 };
 
-// TODO introduce Address model
-// TODO
-// Example local implementation
+use super::EvmSignerTrait;
+
 pub struct LocalSigner {
     signer_model: SignerRepoModel,
     local_signer_client: AlloyLocalSignerClient<SigningKey>,
 }
 
 impl LocalSigner {
-    fn new(signer_model: SignerRepoModel) -> Self {
+    pub fn new(signer_model: SignerRepoModel) -> Self {
         let local_signer_client = AlloyLocalSignerClient::from_str("").unwrap();
         Self {
             signer_model,
@@ -33,18 +30,35 @@ impl LocalSigner {
     }
 }
 
-// #[async_trait]
-// impl Signer for LocalSigner {
-//   async fn address(&self) -> Result<Address, SignerError> {
-//       // Implementation
-//       let address: Address::Evm = self.local_signer_client.address();
-//   }
+impl From<AlloyAddress> for Address {
+    fn from(addr: AlloyAddress) -> Self {
+        Address::Evm(addr.into_array())
+    }
+}
 
-//   async fn sign_transaction(
-//       &self,
-//       transaction: TransactionRepoModel,
-//   ) -> Result<Vec<u8>, SignerError> {
-//       // Implementation
-//       todo!()
-//   }
-// }
+#[async_trait]
+impl Signer for LocalSigner {
+    async fn address(&self) -> Result<Address, SignerError> {
+        let addr = self.local_signer_client.address();
+        let address: Address = addr.into();
+        Ok(address)
+    }
+
+    async fn sign_transaction(
+        &self,
+        transaction: TransactionRepoModel,
+    ) -> Result<Vec<u8>, SignerError> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl EvmSignerTrait for LocalSigner {
+    async fn sign_data(&self, data: Bytes) -> Result<Vec<u8>, SignerError> {
+        todo!()
+    }
+
+    async fn sign_typed_data(&self, typed_data: Value) -> Result<Vec<u8>, SignerError> {
+        todo!()
+    }
+}

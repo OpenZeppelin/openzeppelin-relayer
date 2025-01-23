@@ -10,8 +10,11 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
         TransactionRepoModel,
     },
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
-    services::EvmProvider,
+    repositories::{
+        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionRepository,
+        Repository,
+    },
+    services::{EvmProvider, EvmSigner, EvmSignerFactory},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -24,17 +27,24 @@ pub struct EvmRelayer {
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
+    signer: Arc<EvmSigner>,
 }
 
 impl EvmRelayer {
-    pub fn new(
+    pub async fn new(
         relayer: RelayerRepoModel,
         provider: EvmProvider,
         network: EvmNetwork,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        signer_repository: Arc<InMemorySignerRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
+        let signer_config = signer_repository
+            .get_by_id(relayer.signer_id.clone())
+            .await?;
+        let signer = EvmSignerFactory::create_evm_signer(signer_config)?;
+
         Ok(Self {
             relayer,
             network,
@@ -42,6 +52,7 @@ impl EvmRelayer {
             relayer_repository,
             transaction_repository,
             job_producer,
+            signer,
         })
     }
 }

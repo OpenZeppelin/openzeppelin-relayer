@@ -33,3 +33,4 @@ parking_lot = "0.12"
 tower = "0.5"
 oz-keystore = { version = "0.1"}
 hex = { version = "0.4"}
+bytes = { version = "1.9" }

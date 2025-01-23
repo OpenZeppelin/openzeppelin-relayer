@@ -1,3 +1,5 @@
+use crate::services::SignerFactoryError;
+
 use super::{ApiError, RepositoryError};
 use serde::Serialize;
 use thiserror::Error;
@@ -10,6 +12,8 @@ pub enum RelayerError {
     ProviderError(String),
     #[error("Queue error: {0}")]
     QueueError(String),
+    #[error("Signer error: {0}")]
+    SignerError(#[from] SignerFactoryError),
 }
 
 impl From<RelayerError> for ApiError {
@@ -18,6 +22,7 @@ impl From<RelayerError> for ApiError {
             RelayerError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             RelayerError::ProviderError(msg) => ApiError::InternalError(msg),
             RelayerError::QueueError(msg) => ApiError::InternalError(msg),
+            RelayerError::SignerError(err) => ApiError::InternalError(err.to_string()),
         }
     }
 }

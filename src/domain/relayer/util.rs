@@ -29,7 +29,9 @@ pub async fn get_network_relayer(
         relayer_model,
         state.relayer_repository(),
         state.transaction_repository(),
+        state.signer_repository(),
         state.job_producer(),
     )
+    .await
     .map_err(|e| e.into())
 }
