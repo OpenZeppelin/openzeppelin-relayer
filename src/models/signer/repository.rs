@@ -1,7 +1,6 @@
-// TODO save the passphrase in a secure way
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SignerType {
     Local,
@@ -21,5 +20,6 @@ pub struct SignerRepoModel {
     pub id: String,
     pub signer_type: SignerType,
     pub path: Option<String>,
+    pub raw_key: Option<Vec<u8>>,
     pub passphrase: Option<SignerPassphrase>,
 }

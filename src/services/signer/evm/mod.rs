@@ -1,16 +1,13 @@
 mod local_signer;
 use async_trait::async_trait;
 pub use local_signer::*;
-use serde::Serialize;
 use serde_json::Value;
 
 use crate::models::{Address, SignerRepoModel, SignerType, TransactionRepoModel};
 use bytes::Bytes;
 use eyre::Result;
-use std::sync::Arc;
-use thiserror::Error;
 
-use super::{Signer, SignerError};
+use super::{Signer, SignerError, SignerFactoryError};
 
 #[async_trait]
 pub trait EvmSignerTrait: Send + Sync {
@@ -43,21 +40,27 @@ impl Signer for EvmSigner {
     }
 }
 
-#[derive(Error, Debug, Serialize)]
-pub enum SignerFactoryError {
-    #[error("Unsupported signer type: {0}")]
-    UnsupportedType(String),
-    #[error("Invalid configuration: {0}")]
-    InvalidConfig(String),
-    #[error("Signer creation failed: {0}")]
-    CreationError(String),
+#[async_trait]
+impl EvmSignerTrait for EvmSigner {
+    async fn sign_data(&self, data: Bytes) -> Result<Vec<u8>, SignerError> {
+        match self {
+            Self::Local(signer) => signer.sign_data(data).await,
+        }
+    }
+
+    async fn sign_typed_data(&self, typed_data: Value) -> Result<Vec<u8>, SignerError> {
+        match self {
+            Self::Local(signer) => signer.sign_typed_data(typed_data).await,
+        }
+    }
 }
+
 pub struct EvmSignerFactory;
 
 impl EvmSignerFactory {
     pub fn create_evm_signer(
         signer_model: SignerRepoModel,
-    ) -> Result<Arc<EvmSigner>, SignerFactoryError> {
+    ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match signer_model.signer_type {
             SignerType::Local => EvmSigner::Local(LocalSigner::new(signer_model)),
             SignerType::AwsKms => {
@@ -66,7 +69,7 @@ impl EvmSignerFactory {
             SignerType::Vault => return Err(SignerFactoryError::UnsupportedType("Vault".into())),
         };
 
-        Ok(Arc::new(signer))
+        Ok(signer)
     }
 }
 

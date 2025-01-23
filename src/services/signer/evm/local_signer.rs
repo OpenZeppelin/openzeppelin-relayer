@@ -1,8 +1,6 @@
-use std::str::FromStr;
-
 use alloy::signers::{k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient};
 
-use alloy::primitives::Address as AlloyAddress;
+use alloy::primitives::{Address as AlloyAddress, FixedBytes};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -16,15 +14,19 @@ use crate::{
 use super::EvmSignerTrait;
 
 pub struct LocalSigner {
-    signer_model: SignerRepoModel,
     local_signer_client: AlloyLocalSignerClient<SigningKey>,
 }
 
 impl LocalSigner {
     pub fn new(signer_model: SignerRepoModel) -> Self {
-        let local_signer_client = AlloyLocalSignerClient::from_str("").unwrap();
+        let raw_key = signer_model.raw_key.expect("keystore not found");
+
+        // transforms the key into alloy wallet
+        let key_bytes = FixedBytes::from_slice(&raw_key);
+        let local_signer_client =
+            AlloyLocalSignerClient::from_bytes(&key_bytes).expect("failed to create signer");
+
         Self {
-            signer_model,
             local_signer_client,
         }
     }
@@ -39,14 +41,13 @@ impl From<AlloyAddress> for Address {
 #[async_trait]
 impl Signer for LocalSigner {
     async fn address(&self) -> Result<Address, SignerError> {
-        let addr = self.local_signer_client.address();
-        let address: Address = addr.into();
+        let address: Address = self.local_signer_client.address().into();
         Ok(address)
     }
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel,
+        _transaction: TransactionRepoModel,
     ) -> Result<Vec<u8>, SignerError> {
         todo!()
     }
@@ -54,11 +55,11 @@ impl Signer for LocalSigner {
 
 #[async_trait]
 impl EvmSignerTrait for LocalSigner {
-    async fn sign_data(&self, data: Bytes) -> Result<Vec<u8>, SignerError> {
+    async fn sign_data(&self, _data: Bytes) -> Result<Vec<u8>, SignerError> {
         todo!()
     }
 
-    async fn sign_typed_data(&self, typed_data: Value) -> Result<Vec<u8>, SignerError> {
+    async fn sign_typed_data(&self, _typed_data: Value) -> Result<Vec<u8>, SignerError> {
         todo!()
     }
 }

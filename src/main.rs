@@ -30,22 +30,18 @@ use actix_web::{
     web::{self, ThinData},
     App, HttpServer,
 };
-use alloy::{
-    network::{EthereumWallet, NetworkWallet},
-    primitives::FixedBytes,
-    signers::local::LocalSigner,
-};
+
 use color_eyre::{eyre::WrapErr, Report, Result};
-use config::Config;
+use config::{Config, SignerConfigKeystore};
 use dotenvy::dotenv;
 use futures::future::try_join_all;
 use jobs::{setup_workers, Queue};
-use log::{error, info};
-use models::{RelayerRepoModel, SignerRepoModel};
-use oz_keystore::LocalClient;
+use log::info;
+use models::{RelayerRepoModel, SignerRepoModel, SignerType};
 use repositories::{
     InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionRepository, Repository,
 };
+use services::{Signer, SignerFactory};
 use simple_logger::SimpleLogger;
 
 mod api;
@@ -110,40 +106,19 @@ async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
 }
 
 async fn process_config_file(config_file: Config, app_state: ThinData<AppState>) -> Result<()> {
-    error!("Loaded key");
-    let key_raw = LocalClient::load(
-        "examples/basic-example/keys/local-signer.json".into(),
-        "test".into(),
-    );
-    // transforms the key into alloy wallet
-    let key_bytes = FixedBytes::from_slice(&key_raw);
-    let signer = LocalSigner::from_bytes(&key_bytes).expect("failed to create signer");
-
-    // info!("Key {:?}", key_raw);
-
-    let relayer_futures = config_file.relayers.iter().map(|relayer| async {
-        let repo_model = RelayerRepoModel::try_from(relayer.clone())
-            .wrap_err("Failed to convert relayer config")?;
-        // TODO populate address
-        app_state
-            .relayer_repository
-            .create(repo_model)
-            .await
-            .wrap_err("Failed to create relayer repository entry")?;
-        Ok::<(), Report>(())
-    });
-
-    try_join_all(relayer_futures)
-        .await
-        .wrap_err("Failed to initialize relayer repository")?;
-
     let signer_futures = config_file.signers.iter().map(|signer| async {
-        let repo_model = SignerRepoModel::try_from(signer.clone())
+        let mut signer_repo_model = SignerRepoModel::try_from(signer.clone())
             .wrap_err("Failed to convert signer config")?;
-        // TODO populate address
+
+        // TODO explore safe ways to store key in memory
+        if signer_repo_model.signer_type == SignerType::Local {
+            let raw_key = signer.load_keystore().await?;
+            signer_repo_model.raw_key = Some(raw_key);
+        }
+
         app_state
             .signer_repository
-            .create(repo_model)
+            .create(signer_repo_model)
             .await
             .wrap_err("Failed to create signer repository entry")?;
         Ok::<(), Report>(())
@@ -155,7 +130,33 @@ async fn process_config_file(config_file: Config, app_state: ThinData<AppState>)
 
     let signers = app_state.signer_repository.list_all().await?;
 
-    info!("Signers: {:?}", signers);
+    let relayer_futures = config_file.relayers.iter().map(|relayer| async {
+        let mut repo_model = RelayerRepoModel::try_from(relayer.clone())
+            .wrap_err("Failed to convert relayer config")?;
+        let signer_model = signers
+            .iter()
+            .find(|s| s.id == repo_model.signer_id)
+            .ok_or_else(|| eyre::eyre!("Signer not found"))?;
+        let signer_service = SignerFactory::create_signer(signer_model.clone())
+            .wrap_err("Failed to create signer service")?;
+
+        // obtain relayer address
+        let address = signer_service.address().await?;
+
+        // set relayer address
+        repo_model.address = Some(address.to_string());
+
+        app_state
+            .relayer_repository
+            .create(repo_model)
+            .await
+            .wrap_err("Failed to create relayer repository entry")?;
+        Ok::<(), Report>(())
+    });
+
+    try_join_all(relayer_futures)
+        .await
+        .wrap_err("Failed to initialize relayer repository")?;
 
     Ok(())
 }

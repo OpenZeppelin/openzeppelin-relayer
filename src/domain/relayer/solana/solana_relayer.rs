@@ -85,13 +85,9 @@ impl Relayer for SolanaRelayer {
         &self,
         _request: SignDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
-        println!("Solana sign_typed_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        Err(RelayerError::NotSupported(
+            "Signing typed data not supported for Solana".to_string(),
+        ))
     }
 
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {

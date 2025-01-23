@@ -38,6 +38,8 @@ pub enum ConfigFileError {
     FileNotFound(String),
     #[error("Invalid reference: {0}")]
     InvalidReference(String),
+    #[error("File read error: {0}")]
+    FileRead(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

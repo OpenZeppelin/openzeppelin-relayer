@@ -7,7 +7,7 @@ use crate::{
     },
     jobs::{JobProducer, TransactionRequest},
     models::{
-        EvmNetwork, NetworkTransactionRequest, RelayerRepoModel, RepositoryError, SignerRepoModel,
+        EvmNetwork, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
         TransactionRepoModel,
     },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
@@ -19,7 +19,7 @@ use eyre::Result;
 #[allow(dead_code)]
 pub struct EvmRelayer {
     relayer: RelayerRepoModel,
-    signer: Arc<EvmSigner>,
+    signer: EvmSigner,
     network: EvmNetwork,
     provider: EvmProvider,
     relayer_repository: Arc<InMemoryRelayerRepository>,
@@ -30,7 +30,7 @@ pub struct EvmRelayer {
 impl EvmRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
-        signer: Arc<EvmSigner>,
+        signer: EvmSigner,
         provider: EvmProvider,
         network: EvmNetwork,
         relayer_repository: Arc<InMemoryRelayerRepository>,
@@ -89,6 +89,7 @@ impl Relayer for EvmRelayer {
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         println!("EVM sign_data...");
+        // let result = self.signer.sign_data(request)?;
         Ok(SignDataResponse {
             sig: "".to_string(),
             r: "".to_string(),
@@ -101,6 +102,7 @@ impl Relayer for EvmRelayer {
         &self,
         _request: SignDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
+        // let result = self.signer.sign_typed_data(request)?;
         println!("EVM sign_typed_data...");
         Ok(SignDataResponse {
             sig: "".to_string(),

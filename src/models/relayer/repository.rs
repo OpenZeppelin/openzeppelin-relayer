@@ -49,4 +49,5 @@ pub struct RelayerRepoModel {
     pub network_type: NetworkType,
     pub signer_id: String,
     pub policies: Option<RelayerNetworkPolicy>,
+    pub address: Option<String>,
 }

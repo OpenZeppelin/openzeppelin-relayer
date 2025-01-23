@@ -1,6 +1,14 @@
 use super::ConfigFileError;
+use async_trait::async_trait;
+use oz_keystore::LocalClient;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::Path};
+
+#[async_trait]
+pub trait SignerConfigKeystore {
+    async fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError>;
+    async fn get_passphrase(&self) -> Result<String, ConfigFileError>;
+}
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -9,6 +17,48 @@ pub struct SignerFileConfig {
     pub r#type: SignerFileConfigType,
     pub path: Option<String>,
     pub passphrase: Option<SignerFileConfigPassphrase>,
+}
+
+#[async_trait]
+impl SignerConfigKeystore for SignerFileConfig {
+    async fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError> {
+        match &self.r#type {
+            SignerFileConfigType::Local => {
+                let path = self.path.as_ref().ok_or_else(|| {
+                    ConfigFileError::MissingField("Signer path is required for local signer".into())
+                })?;
+                let passphrase = self.get_passphrase().await?;
+                let key_raw = LocalClient::load(Path::new(path).to_path_buf(), passphrase);
+                Ok(key_raw)
+            }
+            SignerFileConfigType::AwsKms => {
+                Err(ConfigFileError::InternalError("Not implemented".into()))
+            }
+            SignerFileConfigType::Vault => {
+                Err(ConfigFileError::InternalError("Not implemented".into()))
+            }
+        }
+    }
+
+    async fn get_passphrase(&self) -> Result<String, ConfigFileError> {
+        match &self.passphrase {
+            Some(passphrase) => match passphrase {
+                SignerFileConfigPassphrase::Env { name } => {
+                    let passphrase = std::env::var(name).map_err(|_| {
+                        ConfigFileError::MissingEnvVar(format!(
+                            "Environment variable {} not found",
+                            name
+                        ))
+                    })?;
+                    Ok(passphrase)
+                }
+                SignerFileConfigPassphrase::Plain { value } => Ok(value.clone()),
+            },
+            None => Err(ConfigFileError::MissingField(
+                "Passphrase cannot be empty".into(),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -126,15 +176,6 @@ impl SignerFileConfig {
         }
         Ok(())
     }
-
-    // pub fn get_passphrase(&self) -> Result<String, ConfigFileError> {
-    //     match &self.passphrase {
-    //         SignerFileConfigPassphrase::Env { name } => std::env::var(name).map_err(|_| {
-    //             ConfigFileError::MissingEnv(format!("Environment variable {} not found",
-    // name))         }),
-    //         SignerFileConfigPassphrase::Plain { value } => Ok(value.clone()),
-    //     }
-    // }
 }
 
 use serde::{de, Deserializer};

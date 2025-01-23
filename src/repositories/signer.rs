@@ -122,6 +122,7 @@ impl TryFrom<SignerFileConfig> for SignerRepoModel {
                 SignerFileConfigType::Vault => SignerType::Vault,
             },
             path: config.path,
+            raw_key: None,
             passphrase: match config.passphrase {
                 Some(passphrase) => match passphrase {
                     SignerFileConfigPassphrase::Env { name } => {
@@ -149,6 +150,7 @@ mod tests {
             passphrase: Some(SignerPassphrase::Plain {
                 value: "test".to_string(),
             }),
+            raw_key: None,
         }
     }
 

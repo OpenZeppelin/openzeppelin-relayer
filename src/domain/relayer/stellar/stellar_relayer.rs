@@ -70,26 +70,18 @@ impl Relayer for StellarRelayer {
     }
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
-        info!("Stellar sign_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        Err(RelayerError::NotSupported(
+            "Signing data not supported for Stellar".to_string(),
+        ))
     }
 
     async fn sign_typed_data(
         &self,
         _request: SignDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
-        info!("Stellar sign_typed_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+        Err(RelayerError::NotSupported(
+            "Signing typed data not supported for Stellar".to_string(),
+        ))
     }
 
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {

@@ -41,6 +41,20 @@ impl InMemoryRelayerRepository {
             .collect();
         Ok(active_relayers)
     }
+
+    // set address for relayer
+    pub async fn set_address(&self, id: String, address: String) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store)?;
+        if let Some(relayer) = store.get_mut(&id) {
+            relayer.address = Some(address);
+            Ok(())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                id
+            )))
+        }
+    }
 }
 
 impl Default for InMemoryRelayerRepository {
@@ -180,6 +194,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             network_type,
             signer_id: config.signer_id,
             policies,
+            address: None,
         })
     }
 }
@@ -228,6 +243,7 @@ mod tests {
             network_type: NetworkType::Evm,
             policies: None,
             signer_id: "test".to_string(),
+            address: None,
         }
     }
 

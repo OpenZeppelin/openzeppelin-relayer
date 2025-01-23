@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use eyre::Result;
+use serde::Serialize;
 use thiserror::Error;
 
 mod evm;
@@ -11,7 +12,7 @@ pub use solana::*;
 mod stellar;
 pub use stellar::*;
 
-use crate::models::{Address, TransactionRepoModel};
+use crate::models::{Address, SignerRepoModel, SignerType, TransactionRepoModel};
 
 #[derive(Error, Debug)]
 pub enum SignerError {
@@ -35,4 +36,85 @@ pub trait Signer: Send + Sync {
         transaction: TransactionRepoModel, /* TODO introduce Transactions models for specific
                                             * operations */
     ) -> Result<Vec<u8>, SignerError>;
+}
+
+#[derive(Error, Debug, Serialize)]
+pub enum SignerFactoryError {
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+    #[error("Signer creation failed: {0}")]
+    CreationFailed(String),
+    #[error("Unsupported signer type: {0}")]
+    UnsupportedType(String),
+}
+
+pub enum NetworkSigner {
+    Evm(EvmSigner),
+    Solana(EvmSigner),  // TODO replace with SolanaSigner
+    Stellar(EvmSigner), // TODO replace with StellarSigner
+}
+
+#[async_trait]
+impl Signer for NetworkSigner {
+    async fn address(&self) -> Result<Address, SignerError> {
+        match self {
+            Self::Evm(signer) => signer.address().await,
+            Self::Solana(signer) => signer.address().await,
+            Self::Stellar(signer) => signer.address().await,
+        }
+    }
+
+    async fn sign_transaction(
+        &self,
+        transaction: TransactionRepoModel,
+    ) -> Result<Vec<u8>, SignerError> {
+        match self {
+            Self::Evm(signer) => signer.sign_transaction(transaction).await,
+            Self::Solana(signer) => signer.sign_transaction(transaction).await,
+            Self::Stellar(signer) => signer.sign_transaction(transaction).await,
+        }
+    }
+}
+
+// #[async_trait]
+// impl EvmSignerTrait for NetworkSigner {
+//     async fn sign_data(&self) -> Result<Address, SignerError> {
+//         match self {
+//             Self::Evm(signer) => signer.sign_data().await,
+//             Self::Solana(signer) => signer.address().await,
+//             Self::Stellar(signer) => signer.address().await,
+//         }
+//     }
+
+//     async fn sign_transaction(
+//         &self,
+//         transaction: TransactionRepoModel,
+//     ) -> Result<Vec<u8>, SignerError> {
+//         match self {
+//             Self::Evm(signer) => signer.sign_transaction(transaction).await,
+//             Self::Solana(signer) => signer.sign_transaction(transaction).await,
+//             Self::Stellar(signer) => signer.sign_transaction(transaction).await,
+//         }
+//     }
+// }
+
+pub struct SignerFactory;
+
+impl SignerFactory {
+    pub fn create_signer(
+        signer_model: SignerRepoModel,
+    ) -> Result<NetworkSigner, SignerFactoryError> {
+        let signer = match signer_model.signer_type {
+            SignerType::Local => {
+                let evm_signer = EvmSignerFactory::create_evm_signer(signer_model)?;
+                NetworkSigner::Evm(evm_signer)
+            }
+            SignerType::AwsKms => {
+                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
+            }
+            SignerType::Vault => return Err(SignerFactoryError::UnsupportedType("Vault".into())),
+        };
+
+        Ok(signer)
+    }
 }

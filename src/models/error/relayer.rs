@@ -14,6 +14,8 @@ pub enum RelayerError {
     QueueError(String),
     #[error("Signer error: {0}")]
     SignerError(#[from] SignerFactoryError),
+    #[error("Not supported: {0}")]
+    NotSupported(String),
 }
 
 impl From<RelayerError> for ApiError {
@@ -23,6 +25,7 @@ impl From<RelayerError> for ApiError {
             RelayerError::ProviderError(msg) => ApiError::InternalError(msg),
             RelayerError::QueueError(msg) => ApiError::InternalError(msg),
             RelayerError::SignerError(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::NotSupported(msg) => ApiError::BadRequest(msg),
         }
     }
 }
