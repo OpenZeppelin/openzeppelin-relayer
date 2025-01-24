@@ -1,6 +1,7 @@
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Address {
     /// Ethereum-like address (20 bytes)
     Evm([u8; 20]),
@@ -22,6 +23,7 @@ impl fmt::Display for Address {
 
 impl Address {
     /// Validates an address based on the type
+    #[allow(dead_code)]
     pub fn validate(&self) -> bool {
         match self {
             Address::Evm(addr) => addr.len() == 20,

@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use async_trait::async_trait;
 use eyre::Result;
 use serde::Serialize;
@@ -54,6 +55,7 @@ pub enum SignerFactoryError {
     UnsupportedType(String),
 }
 
+#[allow(dead_code)]
 pub enum NetworkSigner {
     Evm(EvmSigner),
     Solana(EvmSigner),  // TODO replace with SolanaSigner
