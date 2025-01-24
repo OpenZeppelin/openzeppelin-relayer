@@ -1,3 +1,20 @@
+//! Signer service module for handling cryptographic operations across different blockchain networks.
+//!
+//! This module provides:
+//! - Common signer traits for different blockchain networks
+//! - Network-specific signer implementations (EVM, Solana, Stellar)
+//! - Factory methods for creating signers
+//! - Error handling for signing operations
+//!
+//! # Architecture
+//!
+//! ```text
+//! Signer Trait (Common Interface)
+//!   ├── EvmSigner
+//!   │   └── LocalSigner
+//!   ├── SolanaSigner
+//!   └── StellarSigner
+
 #![allow(unused_imports)]
 use async_trait::async_trait;
 use eyre::Result;

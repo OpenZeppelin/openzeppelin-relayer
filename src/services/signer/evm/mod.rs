@@ -1,3 +1,16 @@
+//! EVM signer implementation for managing Ethereum-compatible private keys and signing operations.
+//!
+//! Provides:
+//! - Local keystore support (encrypted JSON files)
+//!
+//! # Architecture
+//!
+//! ```text
+//! EvmSigner
+//!   ├── LocalSigner (encrypted JSON keystore)
+//!   ├── AwsKmsSigner (AWS KMS backend) [NOT IMPLEMENTED]
+//!   └── VaultSigner (HashiCorp Vault backend) [NOT IMPLEMENTED]
+//! ```
 mod local_signer;
 use async_trait::async_trait;
 pub use local_signer::*;

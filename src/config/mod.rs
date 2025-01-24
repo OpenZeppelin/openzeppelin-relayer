@@ -1,12 +1,16 @@
-//! # Configuration Module
+//! Configuration system for OpenZeppelin Relayer.
 //!
-//! Handles application configuration loading and validation.
+//! This module handles:
+//! - Loading and parsing config files
+//! - Environment variable integration
+//! - Configuration validation
+//! - Type-safe config access
 //!
-//! ## Components
+//! # Structure
 //!
-//! * `server_config` - HTTP server configuration
-//! * `config_file` - Relayer configuration file parsing
-
+//! Configuration is organized into sections:
+//! - Relayers: Network-specific relayer configurations
+//! - Signers: Key management and signing configurations
 mod server_config;
 pub use server_config::*;
 

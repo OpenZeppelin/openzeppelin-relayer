@@ -1,3 +1,10 @@
+//! Configuration file definitions for relayer services.
+//!
+//! Provides configuration structures and validation for relayer settings:
+//! - Network configuration (EVM, Solana, Stellar)
+//! - Gas/fee policies
+//! - Transaction validation rules
+//! - Network endpoints
 use super::{ConfigFileError, ConfigFileNetworkType};
 use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
 use regex::Regex;
