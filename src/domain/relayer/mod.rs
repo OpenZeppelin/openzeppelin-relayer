@@ -49,7 +49,7 @@ pub trait Relayer {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError>;
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError>;
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn get_status(&self) -> Result<bool, RelayerError>;
@@ -106,7 +106,7 @@ impl Relayer for NetworkRelayer {
 
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.sign_typed_data(request).await,
@@ -222,11 +222,29 @@ pub struct SignDataRequest {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct SignDataResponse {
-    pub sig: String,
+pub struct SignDataResponseEvm {
     pub r: String,
     pub s: String,
     pub v: u8,
+    pub sig: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignDataResponseSolana {
+    pub signature: String,
+    pub public_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum SignDataResponse {
+    Evm(SignDataResponseEvm),
+    Solana(SignDataResponseSolana),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignTypedDataRequest {
+    pub domain_separator: String,
+    pub hash_struct_message: String,
 }
 
 // JSON-RPC Request struct

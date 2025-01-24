@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::{
     domain::{
         relayer::{Relayer, RelayerError},
-        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse, SignDataResponseSolana,
+        SignTypedDataRequest,
     },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel},
@@ -73,17 +74,18 @@ impl Relayer for SolanaRelayer {
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         println!("Solana sign_data...");
-        Ok(SignDataResponse {
-            sig: "".to_string(),
-            r: "".to_string(),
-            s: "".to_string(),
-            v: 0,
-        })
+
+        let signature = SignDataResponseSolana {
+            signature: "".to_string(),
+            public_key: "".to_string(),
+        };
+
+        Ok(SignDataResponse::Solana(signature))
     }
 
     async fn sign_typed_data(
         &self,
-        _request: SignDataRequest,
+        _request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
         Err(RelayerError::NotSupported(
             "Signing typed data not supported for Solana".to_string(),

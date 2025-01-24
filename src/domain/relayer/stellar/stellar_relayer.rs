@@ -1,5 +1,7 @@
 use crate::{
-    domain::{JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse},
+    domain::{
+        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+    },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
@@ -77,7 +79,7 @@ impl Relayer for StellarRelayer {
 
     async fn sign_typed_data(
         &self,
-        _request: SignDataRequest,
+        _request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
         Err(RelayerError::NotSupported(
             "Signing typed data not supported for Stellar".to_string(),

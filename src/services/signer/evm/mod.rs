@@ -3,7 +3,7 @@ use async_trait::async_trait;
 pub use local_signer::*;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse},
+    domain::{SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTypedDataRequest},
     models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
 };
 use eyre::Result;
@@ -11,14 +11,14 @@ use eyre::Result;
 use super::{Signer, SignerError, SignerFactoryError};
 
 #[async_trait]
-pub trait EvmSignerTrait: Send + Sync {
+pub trait DataSignerTrait: Send + Sync {
     /// Signs arbitrary message data
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError>;
 
     /// Signs EIP-712 typed data
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError>;
 }
 
@@ -45,7 +45,7 @@ impl Signer for EvmSigner {
 }
 
 #[async_trait]
-impl EvmSignerTrait for EvmSigner {
+impl DataSignerTrait for EvmSigner {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_data(request).await,
@@ -54,7 +54,7 @@ impl EvmSignerTrait for EvmSigner {
 
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_typed_data(request).await,

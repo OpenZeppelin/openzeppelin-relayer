@@ -10,7 +10,7 @@ use crate::{
     domain::{
         get_network_relayer, get_relayer_by_id, get_relayer_transaction,
         get_transaction_by_id as get_tx_by_id, JsonRpcRequest, Relayer, RelayerFactory,
-        RelayerFactoryTrait, SignDataRequest, Transaction,
+        RelayerFactoryTrait, SignDataRequest, SignDataResponse, SignTypedDataRequest, Transaction,
     },
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
@@ -227,12 +227,17 @@ pub async fn sign_data(
 
     let result = relayer.sign_data(request).await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+    let sign_data = match result {
+        SignDataResponse::Evm(sig) => sig,
+        _ => return Err(ApiError::NotSupported("Sign data not supported".into())),
+    };
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(sign_data)))
 }
 
 pub async fn sign_typed_data(
     relayer_id: String,
-    request: SignDataRequest,
+    request: SignTypedDataRequest,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_network_relayer(relayer_id, &state).await?;

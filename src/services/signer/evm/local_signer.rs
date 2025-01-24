@@ -1,16 +1,19 @@
-use alloy::signers::{k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient};
+use alloy::signers::{
+    k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient, Signer as AlloySigner,
+    SignerSync,
+};
 
 use alloy::primitives::{Address as AlloyAddress, FixedBytes};
 
 use async_trait::async_trait;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse},
+    domain::{SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTypedDataRequest},
     models::{Address, SignerRepoModel, TransactionRepoModel},
     services::{Signer, SignerError},
 };
 
-use super::EvmSignerTrait;
+use super::DataSignerTrait;
 
 pub struct LocalSigner {
     local_signer_client: AlloyLocalSignerClient<SigningKey>,
@@ -53,14 +56,29 @@ impl Signer for LocalSigner {
 }
 
 #[async_trait]
-impl EvmSignerTrait for LocalSigner {
-    async fn sign_data(&self, _data: SignDataRequest) -> Result<SignDataResponse, SignerError> {
-        todo!()
+impl DataSignerTrait for LocalSigner {
+    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
+        let message = request.message.as_bytes();
+
+        let signature = self
+            .local_signer_client
+            .sign_message(message)
+            .await
+            .unwrap();
+
+        let ste = signature.as_bytes();
+
+        Ok(SignDataResponse::Evm(SignDataResponseEvm {
+            r: hex::encode(&ste[0..32]),
+            s: hex::encode(&ste[32..64]),
+            v: ste[64],
+            sig: hex::encode(ste),
+        }))
     }
 
     async fn sign_typed_data(
         &self,
-        _typed_data: SignDataRequest,
+        _typed_data: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
         todo!()
     }

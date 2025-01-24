@@ -1,6 +1,6 @@
 use crate::{
     api::controllers::relayer,
-    domain::{JsonRpcRequest, SignDataRequest},
+    domain::{JsonRpcRequest, SignDataRequest, SignTypedDataRequest},
     models::{AppState, PaginationQuery},
 };
 use actix_web::{delete, get, post, put, web, Responder};
@@ -123,7 +123,7 @@ async fn relayer_sign(
 #[post("/relayers/{relayer_id}/sign-typed-data")]
 async fn relayer_sign_typed_data(
     relayer_id: web::Path<String>,
-    req: web::Json<SignDataRequest>,
+    req: web::Json<SignTypedDataRequest>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await

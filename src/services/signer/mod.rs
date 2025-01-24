@@ -14,7 +14,7 @@ mod stellar;
 pub use stellar::*;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse},
+    domain::{SignDataRequest, SignDataResponse, SignTypedDataRequest},
     models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
 };
 
@@ -85,13 +85,17 @@ impl Signer for NetworkSigner {
 }
 
 #[async_trait]
-impl EvmSignerTrait for NetworkSigner {
+impl DataSignerTrait for NetworkSigner {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         match self {
-            Self::Evm(signer) => signer
-                .sign_data(request)
-                .await
-                .map_err(|e| SignerError::UnsupportedType(e.to_string())),
+            Self::Evm(signer) => {
+                let signature = signer
+                    .sign_data(request)
+                    .await
+                    .map_err(|e| SignerError::UnsupportedType(e.to_string()))?;
+
+                Ok(signature)
+            }
             Self::Solana(_) => Err(SignerError::UnsupportedType(
                 "Solana: sign data not supported".into(),
             )),
@@ -103,7 +107,7 @@ impl EvmSignerTrait for NetworkSigner {
 
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
         match self {
             Self::Evm(signer) => signer

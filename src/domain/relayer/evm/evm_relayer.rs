@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     domain::{
         relayer::{Relayer, RelayerError},
-        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
     },
     jobs::{JobProducer, TransactionRequest},
     models::{
@@ -11,7 +11,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
-    services::{EvmProvider, EvmSigner, EvmSignerTrait},
+    services::{DataSignerTrait, EvmProvider, EvmSigner},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -95,7 +95,7 @@ impl Relayer for EvmRelayer {
 
     async fn sign_typed_data(
         &self,
-        request: SignDataRequest,
+        request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError> {
         let result = self.signer.sign_typed_data(request).await?;
 
