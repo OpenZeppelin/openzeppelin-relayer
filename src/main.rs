@@ -105,12 +105,13 @@ async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
     Ok(app_state)
 }
 
+// initialise signers and relayers and populate repositories
 async fn process_config_file(config_file: Config, app_state: ThinData<AppState>) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
         let mut signer_repo_model = SignerRepoModel::try_from(signer.clone())
             .wrap_err("Failed to convert signer config")?;
 
-        // TODO explore safe ways to store key in memory
+        // TODO explore safe ways to store keys in memory
         if signer_repo_model.signer_type == SignerType::Local {
             let raw_key = signer.load_keystore().await?;
             signer_repo_model.raw_key = Some(raw_key);

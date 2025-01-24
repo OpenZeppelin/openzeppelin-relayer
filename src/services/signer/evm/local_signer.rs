@@ -64,7 +64,7 @@ impl DataSignerTrait for LocalSigner {
             .local_signer_client
             .sign_message(message)
             .await
-            .unwrap();
+            .map_err(|e| SignerError::SigningError(format!("Failed to sign message: {}", e)))?;
 
         let ste = signature.as_bytes();
 

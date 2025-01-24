@@ -19,18 +19,19 @@ use crate::{
 };
 
 #[derive(Error, Debug, Serialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum SignerError {
     #[error("Failed to sign transaction: {0}")]
-    Signing(String),
+    SigningError(String),
 
     #[error("Invalid key format: {0}")]
-    Key(String),
+    KeyError(String),
 
     #[error("Provider error: {0}")]
-    Provider(String),
+    ProviderError(String),
 
     #[error("Unsupported signer type: {0}")]
-    UnsupportedType(String),
+    UnsupportedTypeError(String),
 }
 
 #[async_trait]
@@ -92,14 +93,14 @@ impl DataSignerTrait for NetworkSigner {
                 let signature = signer
                     .sign_data(request)
                     .await
-                    .map_err(|e| SignerError::UnsupportedType(e.to_string()))?;
+                    .map_err(|e| SignerError::SigningError(e.to_string()))?;
 
                 Ok(signature)
             }
-            Self::Solana(_) => Err(SignerError::UnsupportedType(
+            Self::Solana(_) => Err(SignerError::UnsupportedTypeError(
                 "Solana: sign data not supported".into(),
             )),
-            Self::Stellar(_) => Err(SignerError::UnsupportedType(
+            Self::Stellar(_) => Err(SignerError::UnsupportedTypeError(
                 "Stellar: sign data not supported".into(),
             )),
         }
@@ -113,11 +114,11 @@ impl DataSignerTrait for NetworkSigner {
             Self::Evm(signer) => signer
                 .sign_typed_data(request)
                 .await
-                .map_err(|e| SignerError::UnsupportedType(e.to_string())),
-            Self::Solana(_) => Err(SignerError::UnsupportedType(
+                .map_err(|e| SignerError::SigningError(e.to_string())),
+            Self::Solana(_) => Err(SignerError::UnsupportedTypeError(
                 "Solana: Signing typed data not supported".into(),
             )),
-            Self::Stellar(_) => Err(SignerError::UnsupportedType(
+            Self::Stellar(_) => Err(SignerError::UnsupportedTypeError(
                 "Stellar: Signing typed data not supported".into(),
             )),
         }
