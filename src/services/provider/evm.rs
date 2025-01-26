@@ -19,6 +19,14 @@ impl EvmProvider {
         Ok(Self { provider })
     }
 
+    pub async fn get_balance(&self, address: &str) -> Result<U256> {
+        let address = address.parse()?;
+        self.provider
+            .get_balance(address)
+            .await
+            .map_err(|e| eyre!("Failed to get balance: {}", e))
+    }
+
     pub async fn get_block_number(&self) -> Result<u64> {
         self.provider
             .get_block_number()

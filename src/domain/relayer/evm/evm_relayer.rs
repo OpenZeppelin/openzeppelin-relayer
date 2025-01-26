@@ -73,8 +73,21 @@ impl Relayer for EvmRelayer {
     }
 
     async fn get_balance(&self) -> Result<u128, RelayerError> {
-        println!("EVM get_balance...");
-        Ok(0)
+        let address = self
+            .relayer
+            .address
+            .clone()
+            .expect("Relayer address not found");
+        let balance: u128 = self
+            .provider
+            .get_balance(&address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?
+            .try_into()
+            .map_err(|_| {
+                RelayerError::ProviderError("Failed to convert balance to u128".to_string())
+            })?;
+        Ok(balance)
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {

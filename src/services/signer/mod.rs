@@ -1,4 +1,5 @@
-//! Signer service module for handling cryptographic operations across different blockchain networks.
+//! Signer service module for handling cryptographic operations across different blockchain
+//! networks.
 //!
 //! This module provides:
 //! - Common signer traits for different blockchain networks

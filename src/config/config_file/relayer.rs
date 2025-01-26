@@ -238,4 +238,96 @@ impl RelayersFileConfig {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_valid_evm_relayer() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "policies": {
+                "gas_price_cap": 100,
+                "whitelist_receivers": ["0x1234"],
+                "eip1559_pricing": true
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+        assert_eq!(relayer.id, "test-relayer");
+        assert_eq!(relayer.network_type, ConfigFileNetworkType::Evm);
+    }
+
+    #[test]
+    fn test_valid_solana_relayer() {
+        let config = json!({
+            "id": "solana-relayer",
+            "name": "Solana Mainnet Relayer",
+            "network": "mainnet",
+            "network_type": "solana",
+            "signer_id": "solana-signer",
+            "paused": false,
+            "policies": {
+                "max_retries": 2,
+                "confirmation_blocks": 5,
+                "timeout_seconds": 10
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+        assert_eq!(relayer.id, "solana-relayer");
+        assert_eq!(relayer.network_type, ConfigFileNetworkType::Solana);
+    }
+
+    #[test]
+    fn test_valid_stellar_relayer() {
+        let config = json!({
+            "id": "stellar-relayer",
+            "name": "Stellar Public Relayer",
+            "network": "mainnet",
+            "network_type": "stellar",
+            "signer_id": "stellar_signer",
+            "paused": false,
+            "policies": {
+                "max_fee": 100,
+                "timeout_seconds": 10,
+                "min_account_balance": "1"
+
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+        assert_eq!(relayer.id, "stellar-relayer");
+        assert_eq!(relayer.network_type, ConfigFileNetworkType::Stellar);
+    }
+
+    #[test]
+    fn test_invalid_network_type() {
+        let config = json!({
+            "id": "test-relayer",
+            "network_type": "invalid",
+            "signer_id": "test-signer"
+        });
+
+        let result = serde_json::from_value::<RelayerFileConfig>(config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "missing field `name`")]
+    fn test_missing_required_fields() {
+        let config = json!({
+            "id": "test-relayer"
+        });
+
+        let _relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+    }
+}
