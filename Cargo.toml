@@ -31,3 +31,5 @@ redis = { version = "0.28" }
 rand = "0.9"
 parking_lot = "0.12"
 tower = "0.5"
+actix-governor = "0.8"
+

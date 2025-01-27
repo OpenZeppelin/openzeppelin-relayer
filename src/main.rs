@@ -25,8 +25,12 @@
 
 use std::sync::Arc;
 
+use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::{
-    dev::Service, middleware::{self, Logger}, web::{self, ThinData}, App, HttpResponse, HttpServer
+    dev::Service,
+    middleware::{self, Logger},
+    web::{self, ThinData},
+    App, HttpResponse, HttpServer,
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
@@ -134,6 +138,12 @@ async fn main() -> Result<()> {
 
     process_config_file(config_file, app_state.clone()).await?;
 
+    let rate_limit_config = GovernorConfigBuilder::default()
+        .requests_per_second(config.rate_limit_requests_per_second)
+        .burst_size(config.rate_limit_burst_size)
+        .finish()
+        .unwrap();
+
     let moved_cfg = Arc::clone(&config);
     info!("Starting server on {}:{}", config.host, config.port);
     HttpServer::new(move || {
@@ -152,11 +162,11 @@ async fn main() -> Result<()> {
 
                 Box::pin(async move {
                     Ok(req.into_response(
-                        HttpResponse::Unauthorized()
-                            .body("Invalid or missing x-api-key header"),
+                        HttpResponse::Unauthorized().body("Invalid or missing x-api-key header"),
                     ))
                 })
             })
+            .wrap(Governor::new(&rate_limit_config))
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::DefaultHeaders::new())
