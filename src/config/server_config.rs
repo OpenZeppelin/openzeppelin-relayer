@@ -1,10 +1,11 @@
 use std::env;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub redis_url: String,
+    pub api_key: String,
 }
 
 impl ServerConfig {
@@ -16,6 +17,7 @@ impl ServerConfig {
                 .parse()
                 .unwrap_or(8080),
             redis_url: env::var("REDIS_URL").expect("REDIS_URL must be set"),
+            api_key: env::var("API_KEY").expect("API_KEY must be set"),
         }
     }
 }

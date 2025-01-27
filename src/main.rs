@@ -26,9 +26,7 @@
 use std::sync::Arc;
 
 use actix_web::{
-    middleware::{self, Logger},
-    web::{self, ThinData},
-    App, HttpServer,
+    dev::Service, middleware::{self, Logger}, web::{self, ThinData}, App, HttpResponse, HttpServer
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use config::Config;
@@ -125,7 +123,7 @@ async fn main() -> Result<()> {
 
     let config_file = load_config_file()?;
     info!("Config: {:?}", config_file);
-    let config = config::ServerConfig::from_env();
+    let config = Arc::new(config::ServerConfig::from_env());
 
     let app_state = initialize_app_state().await?;
 
@@ -136,9 +134,29 @@ async fn main() -> Result<()> {
 
     process_config_file(config_file, app_state.clone()).await?;
 
+    let moved_cfg = Arc::clone(&config);
     info!("Starting server on {}:{}", config.host, config.port);
     HttpServer::new(move || {
+        let config = Arc::clone(&moved_cfg);
         App::new()
+            .wrap_fn(move |req, srv| {
+                // Check for x-api-key header
+                let expected_key = config.api_key.clone();
+                if let Some(header_value) = req.headers().get("x-api-key") {
+                    if let Ok(key) = header_value.to_str() {
+                        if key == expected_key {
+                            return srv.call(req);
+                        }
+                    }
+                }
+
+                Box::pin(async move {
+                    Ok(req.into_response(
+                        HttpResponse::Unauthorized()
+                            .body("Invalid or missing x-api-key header"),
+                    ))
+                })
+            })
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::DefaultHeaders::new())
