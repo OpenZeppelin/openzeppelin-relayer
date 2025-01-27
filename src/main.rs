@@ -30,7 +30,6 @@ use actix_web::{
     web::{self, ThinData},
     App, HttpServer,
 };
-
 use color_eyre::{eyre::WrapErr, Report, Result};
 use config::{Config, SignerConfigKeystore};
 use dotenvy::dotenv;
@@ -158,7 +157,6 @@ async fn process_config_file(config_file: Config, app_state: ThinData<AppState>)
     try_join_all(relayer_futures)
         .await
         .wrap_err("Failed to initialize relayer repository")?;
-
     Ok(())
 }
 
