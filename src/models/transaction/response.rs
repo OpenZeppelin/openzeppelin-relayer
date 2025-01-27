@@ -13,7 +13,7 @@ pub enum TransactionResponse {
 #[derive(Debug, Serialize)]
 pub struct EvmTransactionResponse {
     pub id: String,
-    pub hash: String,
+    pub hash: Option<String>,
     pub status: TransactionStatus,
     #[serde(serialize_with = "serialize_timestamp")]
     pub created_at: u64,
@@ -33,7 +33,7 @@ pub struct EvmTransactionResponse {
 #[derive(Debug, Serialize)]
 pub struct SolanaTransactionResponse {
     pub id: String,
-    pub hash: String,
+    pub hash: Option<String>,
     pub status: TransactionStatus,
     #[serde(serialize_with = "serialize_timestamp")]
     pub created_at: u64,
@@ -48,7 +48,7 @@ pub struct SolanaTransactionResponse {
 #[derive(Debug, Serialize)]
 pub struct StellarTransactionResponse {
     pub id: String,
-    pub hash: String,
+    pub hash: Option<String>,
     pub status: TransactionStatus,
     #[serde(serialize_with = "serialize_timestamp")]
     pub created_at: u64,
@@ -78,7 +78,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
             NetworkTransactionData::Evm(evm_data) => {
                 TransactionResponse::Evm(EvmTransactionResponse {
                     id: model.id,
-                    hash: model.hash,
+                    hash: evm_data.hash,
                     status: model.status,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
@@ -95,7 +95,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
             NetworkTransactionData::Solana(solana_data) => {
                 TransactionResponse::Solana(SolanaTransactionResponse {
                     id: model.id,
-                    hash: model.hash,
+                    hash: solana_data.hash,
                     status: model.status,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
@@ -107,7 +107,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
             NetworkTransactionData::Stellar(stellar_data) => {
                 TransactionResponse::Stellar(StellarTransactionResponse {
                     id: model.id,
-                    hash: model.hash,
+                    hash: stellar_data.hash,
                     status: model.status,
                     created_at: model.created_at,
                     sent_at: model.sent_at,

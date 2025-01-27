@@ -211,7 +211,6 @@ mod tests {
         TransactionRepoModel {
             id: id.to_string(),
             relayer_id: "relayer-1".to_string(),
-            hash: format!("0x{}", id),
             status: TransactionStatus::Pending,
             created_at: 1234567890,
             sent_at: 1234567890,
@@ -226,6 +225,8 @@ mod tests {
                 from: "0x".to_string(),
                 to: "0x".to_string(),
                 chain_id: 1,
+                signature: None,
+                hash: Some(format!("0x{}", id)),
             }),
         }
     }
@@ -247,7 +248,11 @@ mod tests {
 
         repo.create(tx.clone()).await.unwrap();
         let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
-        assert_eq!(stored.hash, tx.hash);
+        if let NetworkTransactionData::Evm(stored_data) = &stored.network_data {
+            if let NetworkTransactionData::Evm(tx_data) = &tx.network_data {
+                assert_eq!(stored_data.hash, tx_data.hash);
+            }
+        }
     }
 
     #[actix_web::test]

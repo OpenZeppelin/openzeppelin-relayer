@@ -18,7 +18,6 @@ pub enum TransactionStatus {
 pub struct TransactionRepoModel {
     pub id: String,
     pub relayer_id: String,
-    pub hash: String,
     pub status: TransactionStatus,
     pub created_at: u64,
     pub sent_at: u64,
@@ -36,6 +35,14 @@ pub enum NetworkTransactionData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvmTransactionDataSignature {
+    pub v: u64,
+    pub r: String,
+    pub s: String,
+}
+
+// TODO support legacy and eip1559 transactions models
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionData {
     pub gas_price: u128,
     pub gas_limit: u128,
@@ -45,6 +52,8 @@ pub struct EvmTransactionData {
     pub from: String,
     pub to: String,
     pub chain_id: u64,
+    pub hash: Option<String>,
+    pub signature: Option<EvmTransactionDataSignature>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +61,7 @@ pub struct SolanaTransactionData {
     pub recent_blockhash: String,
     pub fee_payer: String,
     pub instructions: Vec<String>,
+    pub hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +70,7 @@ pub struct StellarTransactionData {
     pub fee: u128,
     pub sequence_number: u64,
     pub operations: Vec<String>,
+    pub hash: Option<String>,
 }
 
 impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRepoModel {
@@ -74,7 +85,6 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
             NetworkTransactionRequest::Evm(evm_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
                 relayer_id: relayer_model.id.clone(),
-                hash: "0x".to_string(),
                 status: TransactionStatus::Pending,
                 created_at: now,
                 sent_at: now,
@@ -89,12 +99,13 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     from: "0x".to_string(), // TODO
                     to: evm_request.to.clone(),
                     chain_id: 1, // TODO
+                    hash: Some("0x".to_string()),
+                    signature: None,
                 }),
             }),
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
                 relayer_id: relayer_model.id.clone(),
-                hash: "0x".to_string(),
                 status: TransactionStatus::Pending,
                 created_at: now,
                 sent_at: now,
@@ -104,12 +115,12 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     recent_blockhash: solana_request.recent_blockhash.clone(),
                     fee_payer: "0x".to_string(), // TODO
                     instructions: vec![],        // TODO
+                    hash: Some("0x".to_string()),
                 }),
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
                 relayer_id: relayer_model.id.clone(),
-                hash: "0x".to_string(),
                 status: TransactionStatus::Pending,
                 created_at: now,
                 sent_at: now,
@@ -120,6 +131,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     fee: stellar_request.fee,
                     sequence_number: 0, // TODO
                     operations: vec![], // TODO
+                    hash: Some("0x".to_string()),
                 }),
             }),
         }
