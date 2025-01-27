@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::{
     jobs::JobProducer,
     repositories::{
-        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionRepository,
+        InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
+        InMemoryTransactionRepository,
     },
 };
 
@@ -12,6 +13,7 @@ pub struct AppState {
     pub relayer_repository: Arc<InMemoryRelayerRepository>,
     pub transaction_repository: Arc<InMemoryTransactionRepository>,
     pub signer_repository: Arc<InMemorySignerRepository>,
+    pub notification_repository: Arc<InMemoryNotificationRepository>,
     pub job_producer: Arc<JobProducer>,
 }
 

@@ -8,6 +8,9 @@ pub use relayer::*;
 mod signer;
 pub use signer::*;
 
+mod notification;
+pub use notification::*;
+
 #[derive(Error, Debug)]
 pub enum ConfigFileError {
     #[error("Invalid ID length: {0}")]
@@ -54,17 +57,19 @@ pub enum ConfigFileNetworkType {
 pub struct Config {
     pub relayers: Vec<RelayerFileConfig>,
     pub signers: Vec<SignerFileConfig>,
+    pub notifications: Vec<NotificationFileConfig>,
     // pub networks: Vec<String>,
     // pub accounts: Vec<String>,
-    // notifications
 }
 
 impl Config {
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         RelayersFileConfig::new(self.relayers.clone()).validate()?;
         SignersFileConfig::new(self.signers.clone()).validate()?;
+        NotificationsFileConfig::new(self.notifications.clone()).validate()?;
 
         self.validate_relayer_signer_refs()?;
+        self.validate_relayer_notification_refs()?;
 
         Ok(())
     }
@@ -78,6 +83,23 @@ impl Config {
                     "Relayer '{}' references non-existent signer '{}'",
                     relayer.id, relayer.signer_id
                 )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_relayer_notification_refs(&self) -> Result<(), ConfigFileError> {
+        let notification_ids: HashSet<_> = self.notifications.iter().map(|s| &s.id).collect();
+
+        for relayer in &self.relayers {
+            if let Some(notification_id) = &relayer.notification_id {
+                if !notification_ids.contains(notification_id) {
+                    return Err(ConfigFileError::InvalidReference(format!(
+                        "Relayer '{}' references non-existent notification '{}'",
+                        relayer.id, notification_id
+                    )));
+                }
             }
         }
 
@@ -106,6 +128,7 @@ mod tests {
                 network_type: ConfigFileNetworkType::Evm,
                 policies: None,
                 signer_id: "test-1".to_string(),
+                notification_id: Some("test-1".to_string()),
             }],
             signers: vec![SignerFileConfig {
                 id: "test-1".to_string(),
@@ -114,6 +137,12 @@ mod tests {
                 passphrase: Some(SignerFileConfigPassphrase::Plain {
                     value: "test".to_string(),
                 }),
+            }],
+            notifications: vec![NotificationFileConfig {
+                id: "test-1".to_string(),
+                r#type: NotificationFileConfigType::Webhook,
+                url: "https://api.example.com/notifications".to_string(),
+                signing_key: None,
             }],
         }
     }
@@ -130,6 +159,8 @@ mod tests {
             relayers: Vec::new(),
 
             signers: Vec::new(),
+
+            notifications: Vec::new(),
         };
         assert!(matches!(
             config.validate(),
@@ -141,8 +172,8 @@ mod tests {
     fn test_empty_signers() {
         let config = Config {
             relayers: Vec::new(),
-
             signers: Vec::new(),
+            notifications: Vec::new(),
         };
         assert!(matches!(
             config.validate(),
@@ -215,6 +246,16 @@ mod tests {
     fn test_invalid_signer_id_reference() {
         let mut config = create_valid_config();
         config.relayers[0].signer_id = "invalid@id".to_string();
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigFileError::InvalidReference(_))
+        ));
+    }
+
+    #[test]
+    fn test_invalid_notification_id_reference() {
+        let mut config = create_valid_config();
+        config.relayers[0].notification_id = Some("invalid@id".to_string());
         assert!(matches!(
             config.validate(),
             Err(ConfigFileError::InvalidReference(_))

@@ -212,9 +212,9 @@ mod tests {
             id: id.to_string(),
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Pending,
-            created_at: 1234567890,
-            sent_at: 1234567890,
-            confirmed_at: 1234567890,
+            created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+            sent_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+            confirmed_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: 1000000000,

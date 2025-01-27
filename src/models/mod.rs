@@ -1,7 +1,6 @@
 //! # Models Module
 //!
 //! Contains core data structures and type definitions for the relayer service.
-
 mod cat_models;
 pub use cat_models::*;
 
@@ -31,3 +30,6 @@ pub use signer::*;
 
 mod address;
 pub use address::*;
+
+mod notification;
+pub use notification::*;

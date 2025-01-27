@@ -15,6 +15,9 @@ pub use transaction::*;
 mod signer;
 pub use signer::*;
 
+mod notification;
+pub use notification::*;
+
 #[derive(Debug)]
 pub struct PaginatedResult<T> {
     pub items: Vec<T>,

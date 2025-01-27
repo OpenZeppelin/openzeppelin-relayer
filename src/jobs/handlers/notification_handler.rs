@@ -11,6 +11,8 @@ use log::info;
 
 use crate::{
     jobs::{handle_result, Job, NotificationSend, DEFAULT_MAXIMUM_RETRIES},
+    repositories::Repository,
+    services::WebhookNotificationService,
     AppState,
 };
 
@@ -25,21 +27,32 @@ use crate::{
 /// ```
 pub async fn notification_handler(
     job: Job<NotificationSend>,
-    _context: Data<ThinData<AppState>>,
+    context: Data<ThinData<AppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
     info!("handling notification: {:?}", job.data);
 
-    let result = handle_request(job.data, _context).await;
+    let result = handle_request(job.data, context).await;
 
     handle_result(result, attempt, "Notification", DEFAULT_MAXIMUM_RETRIES)
 }
 
 pub async fn handle_request(
-    _request: NotificationSend,
-    _state: Data<ThinData<AppState>>,
+    request: NotificationSend,
+    context: Data<ThinData<AppState>>,
 ) -> Result<()> {
-    // handle notification
+    info!("sending notification: {:?}", request);
+    let notification = context
+        .notification_repository
+        .get_by_id(request.notification_id)
+        .await?;
+
+    let notification_service =
+        WebhookNotificationService::new(notification.url, notification.signing_key);
+
+    notification_service
+        .send_notification(request.notification)
+        .await?;
 
     Ok(())
 }

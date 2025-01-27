@@ -10,3 +10,6 @@ pub use provider::*;
 
 mod signer;
 pub use signer::*;
+
+mod notification;
+pub use notification::*;

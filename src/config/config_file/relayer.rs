@@ -55,6 +55,8 @@ pub struct RelayerFileConfig {
     #[serde(default)]
     pub policies: Option<ConfigFileRelayerNetworkPolicy>,
     pub signer_id: String,
+    #[serde(default)]
+    pub notification_id: Option<String>,
 }
 use serde::{de, Deserializer};
 use serde_json::Value;
@@ -106,6 +108,11 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             .ok_or_else(|| de::Error::missing_field("signer_id"))?
             .to_string();
 
+        let notification_id = value
+            .get("notification_id")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+
         // Handle `policies`, using `network_type` to determine how to deserialize
         let policies = if let Some(policy_value) = value.get_mut("policies") {
             match network_type {
@@ -141,6 +148,7 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             network_type,
             policies,
             signer_id,
+            notification_id,
         })
     }
 }

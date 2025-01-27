@@ -50,4 +50,5 @@ pub struct RelayerRepoModel {
     pub signer_id: String,
     pub policies: Option<RelayerNetworkPolicy>,
     pub address: Option<String>,
+    pub notification_id: Option<String>,
 }

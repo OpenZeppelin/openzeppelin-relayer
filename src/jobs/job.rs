@@ -4,8 +4,10 @@
 //! - Transaction processing
 //! - Status monitoring
 //! - Notifications
+use crate::models::WebhookNotification;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use strum::Display;
 use uuid::Uuid;
@@ -154,18 +156,67 @@ impl TransactionStatusCheck {
     }
 }
 
-// Example message data for notifications
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct NotificationSend {
     pub notification_id: String,
-    pub message: String,
+    pub notification: WebhookNotification,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NotificationSend2 {
+    pub notification_id: String,
+    pub notification: Value,
 }
 
 impl NotificationSend {
-    pub fn new(notification_id: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(notification_id: String, notification: WebhookNotification) -> Self {
         Self {
-            notification_id: notification_id.into(),
-            message: message.into(),
+            notification_id,
+            notification,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::models::{
+        EvmTransactionResponse, TaggedTransactionResponse, TransactionStatus, WebhookPayload,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_notification_send_serialization() {
+        let payload =
+            WebhookPayload::Transaction(TaggedTransactionResponse::Evm(EvmTransactionResponse {
+                id: "tx123".to_string(),
+                hash: Some("0x123".to_string()),
+                status: TransactionStatus::Confirmed,
+                created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+                sent_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+                confirmed_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+                gas_price: 1000000000,
+                gas_limit: 21000,
+                nonce: 1,
+                value: 1000000000000000000,
+                from: "0xabc".to_string(),
+                to: "0xdef".to_string(),
+                relayer_id: "relayer-1".to_string(),
+            }));
+
+        let notification = WebhookNotification::new("transaction".to_string(), payload);
+        let notification_send =
+            NotificationSend::new("notification-test".to_string(), notification);
+
+        let serialized = serde_json::to_string(&notification_send).unwrap();
+        match serde_json::from_str::<NotificationSend>(&serialized) {
+            Ok(deserialized) => {
+                assert_eq!(notification_send, deserialized);
+            }
+            Err(e) => {
+                eprintln!("Failed to deserialize NotificationSend: {}", e);
+                panic!("Deserialization error: {}", e);
+            }
         }
     }
 }

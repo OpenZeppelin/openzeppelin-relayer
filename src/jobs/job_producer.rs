@@ -133,7 +133,7 @@ impl JobProducer {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
-        let job = Job::new(JobType::TransactionStatusCheck, notification_send_job);
+        let job = Job::new(JobType::NotificationSend, notification_send_job);
 
         match scheduled_on {
             Some(on) => {
@@ -145,7 +145,6 @@ impl JobProducer {
         }
 
         info!("Notification Send job produced successfully");
-
         Ok(())
     }
 }

@@ -5,8 +5,11 @@ use std::sync::Arc;
 
 use crate::{
     domain::transaction::Transaction,
-    jobs::{JobProducer, NotificationSend, TransactionSend, TransactionStatusCheck},
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus},
+    jobs::{JobProducer, TransactionSend, TransactionStatusCheck},
+    models::{
+        produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
+        TransactionRepoModel, TransactionStatus,
+    },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::EvmProvider,
 };
@@ -55,9 +58,20 @@ impl Transaction for EvmRelayerTransaction {
                 None,
             )
             .await?;
-        self.transaction_repository
+        let updated = self
+            .transaction_repository
             .update_status(tx.id.clone(), TransactionStatus::Sent)
             .await?;
+
+        if let Some(notification_id) = &self.relayer.notification_id {
+            self.job_producer
+                .produce_send_notification_job(
+                    produce_transaction_update_notification_payload(notification_id, &updated),
+                    None,
+                )
+                .await?;
+        }
+
         Ok(tx)
     }
 
@@ -67,7 +81,8 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("submitting transaction");
 
-        self.transaction_repository
+        let updated = self
+            .transaction_repository
             .update_status(tx.id.clone(), TransactionStatus::Submitted)
             .await?;
 
@@ -79,6 +94,14 @@ impl Transaction for EvmRelayerTransaction {
             )
             .await?;
 
+        if let Some(notification_id) = &self.relayer.notification_id {
+            self.job_producer
+                .produce_send_notification_job(
+                    produce_transaction_update_notification_payload(notification_id, &updated),
+                    None,
+                )
+                .await?;
+        }
         Ok(tx)
     }
 
@@ -91,12 +114,14 @@ impl Transaction for EvmRelayerTransaction {
             .update_status(tx.id.clone(), TransactionStatus::Confirmed)
             .await?;
 
-        self.job_producer
-            .produce_send_notification_job(
-                NotificationSend::new(tx.id.clone(), updated.relayer_id.clone()),
-                None,
-            )
-            .await?;
+        if let Some(notification_id) = &self.relayer.notification_id {
+            self.job_producer
+                .produce_send_notification_job(
+                    produce_transaction_update_notification_payload(notification_id, &updated),
+                    None,
+                )
+                .await?;
+        }
         Ok(tx)
     }
 

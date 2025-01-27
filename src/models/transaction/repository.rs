@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Pending,
@@ -19,9 +19,9 @@ pub struct TransactionRepoModel {
     pub id: String,
     pub relayer_id: String,
     pub status: TransactionStatus,
-    pub created_at: u64,
-    pub sent_at: u64,
-    pub confirmed_at: u64,
+    pub created_at: String,
+    pub sent_at: String,
+    pub confirmed_at: String,
     pub network_data: NetworkTransactionData,
     pub network_type: NetworkType,
 }
@@ -79,7 +79,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
     fn try_from(
         (request, relayer_model): (&NetworkTransactionRequest, &RelayerRepoModel),
     ) -> Result<Self, Self::Error> {
-        let now = Utc::now().timestamp() as u64;
+        let now = Utc::now().to_rfc3339();
 
         match request {
             NetworkTransactionRequest::Evm(evm_request) => Ok(Self {
@@ -87,8 +87,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 relayer_id: relayer_model.id.clone(),
                 status: TransactionStatus::Pending,
                 created_at: now,
-                sent_at: now,
-                confirmed_at: 0,
+                sent_at: "".to_string(),
+                confirmed_at: "".to_string(),
                 network_type: NetworkType::Evm,
                 network_data: NetworkTransactionData::Evm(EvmTransactionData {
                     gas_price: evm_request.gas_price,
@@ -108,8 +108,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 relayer_id: relayer_model.id.clone(),
                 status: TransactionStatus::Pending,
                 created_at: now,
-                sent_at: now,
-                confirmed_at: 0,
+                sent_at: "".to_string(),
+                confirmed_at: "".to_string(),
                 network_type: NetworkType::Solana,
                 network_data: NetworkTransactionData::Solana(SolanaTransactionData {
                     recent_blockhash: solana_request.recent_blockhash.clone(),
@@ -123,8 +123,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 relayer_id: relayer_model.id.clone(),
                 status: TransactionStatus::Pending,
                 created_at: now,
-                sent_at: now,
-                confirmed_at: 0,
+                sent_at: "".to_string(),
+                confirmed_at: "".to_string(),
                 network_type: NetworkType::Stellar,
                 network_data: NetworkTransactionData::Stellar(StellarTransactionData {
                     source_account: stellar_request.source_account.clone(),
