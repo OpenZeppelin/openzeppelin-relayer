@@ -34,7 +34,7 @@ async fn get_relayer_status(
 }
 
 // get relayer balance
-#[post("/relayers/{relayer_id}/balance")]
+#[get("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
     data: web::ThinData<AppState>,

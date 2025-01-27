@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::{
     domain::{
         relayer::{Relayer, RelayerError},
-        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
     },
     jobs::{JobProducer, TransactionRequest},
     models::{
@@ -72,7 +73,7 @@ impl Relayer for EvmRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let address = self
             .relayer
             .address
@@ -87,7 +88,11 @@ impl Relayer for EvmRelayer {
             .map_err(|_| {
                 RelayerError::ProviderError("Failed to convert balance to u128".to_string())
             })?;
-        Ok(balance)
+
+        Ok(BalanceResponse {
+            balance,
+            unit: "wei".to_string(),
+        })
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {

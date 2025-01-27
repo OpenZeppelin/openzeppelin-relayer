@@ -44,7 +44,7 @@ pub trait Relayer {
         &self,
         tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError>;
-    async fn get_balance(&self) -> Result<u128, RelayerError>;
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError>;
     async fn sign_typed_data(
@@ -80,7 +80,7 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_balance().await,
             NetworkRelayer::Solana(relayer) => relayer.get_balance().await,
@@ -271,4 +271,10 @@ pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     pub data: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BalanceResponse {
+    pub balance: u128,
+    pub unit: String,
 }

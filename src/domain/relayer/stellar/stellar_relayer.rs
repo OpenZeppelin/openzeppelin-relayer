@@ -1,6 +1,7 @@
 use crate::{
     domain::{
-        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
     },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
@@ -56,9 +57,12 @@ impl Relayer for StellarRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         println!("Stellar get_balance...");
-        Ok(0)
+        Ok(BalanceResponse {
+            balance: 0,
+            unit: "".to_string(),
+        })
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {

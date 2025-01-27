@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::{
     domain::{
         relayer::{Relayer, RelayerError},
-        JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse, SignDataResponseSolana,
-        SignTypedDataRequest,
+        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
+        SignDataResponseSolana, SignTypedDataRequest,
     },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel},
@@ -57,9 +57,12 @@ impl Relayer for SolanaRelayer {
         Ok(transaction)
     }
 
-    async fn get_balance(&self) -> Result<u128, RelayerError> {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         println!("Solana get_balance...");
-        Ok(0)
+        Ok(BalanceResponse {
+            balance: 0,
+            unit: "".to_string(),
+        })
     }
 
     async fn get_status(&self) -> Result<bool, RelayerError> {
