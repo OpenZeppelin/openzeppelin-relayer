@@ -2787,6 +2787,7 @@ dependencies = [
  "dotenvy",
  "eyre",
  "futures",
+ "governor",
  "log",
  "num_enum",
  "once_cell",

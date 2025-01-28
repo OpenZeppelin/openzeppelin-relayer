@@ -33,7 +33,7 @@ use actix_web::{
     App, HttpResponse, HttpServer,
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
-use config::Config;
+use config::{ApiKeyRateLimit, Config};
 use dotenvy::dotenv;
 use futures::future::try_join_all;
 use jobs::{setup_workers, Queue};
@@ -138,8 +138,10 @@ async fn main() -> Result<()> {
 
     process_config_file(config_file, app_state.clone()).await?;
 
+    // Rate limit configuration
     let rate_limit_config = GovernorConfigBuilder::default()
         .requests_per_second(config.rate_limit_requests_per_second)
+        .key_extractor(ApiKeyRateLimit)
         .burst_size(config.rate_limit_burst_size)
         .finish()
         .unwrap();
@@ -162,7 +164,9 @@ async fn main() -> Result<()> {
 
                 Box::pin(async move {
                     Ok(req.into_response(
-                        HttpResponse::Unauthorized().body("Invalid or missing x-api-key header"),
+                        HttpResponse::Unauthorized().body(
+                            r#"{"success": false, "code":401, "error": "Unauthorized", message: "Unauthorized"}"#.to_string(),
+                        ),
                     ))
                 })
             })
