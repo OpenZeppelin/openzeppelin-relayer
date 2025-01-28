@@ -5,10 +5,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use std::{
-    collections::HashMap,
-    sync::{Mutex, MutexGuard},
-};
+use std::collections::HashMap;
+use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemorySignerRepository {
@@ -23,9 +21,8 @@ impl InMemorySignerRepository {
         }
     }
 
-    fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
-        lock.lock()
-            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))
+    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+        Ok(lock.lock().await)
     }
 }
 
@@ -38,7 +35,8 @@ impl Default for InMemorySignerRepository {
 #[async_trait]
 impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
     async fn create(&self, signer: SignerRepoModel) -> Result<SignerRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store: MutexGuard<'_, HashMap<String, SignerRepoModel>> =
+            Self::acquire_lock(&self.store).await?;
         if store.contains_key(&signer.id) {
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Signer with ID {} already exists",
@@ -50,7 +48,8 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
     }
 
     async fn get_by_id(&self, id: String) -> Result<SignerRepoModel, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store: MutexGuard<'_, HashMap<String, SignerRepoModel>> =
+            Self::acquire_lock(&self.store).await?;
         match store.get(&id) {
             Some(signer) => Ok(signer.clone()),
             None => Err(RepositoryError::NotFound(format!(
@@ -74,7 +73,8 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<SignerRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store: MutexGuard<'_, HashMap<String, SignerRepoModel>> =
+            Self::acquire_lock(&self.store).await?;
         let signers: Vec<SignerRepoModel> = store.values().cloned().collect();
         Ok(signers)
     }
@@ -88,7 +88,7 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
         let items: Vec<SignerRepoModel> = self
             .store
             .lock()
-            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))?
+            .await
             .values()
             .skip(start)
             .take(query.per_page as usize)
@@ -104,7 +104,8 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store: MutexGuard<'_, HashMap<String, SignerRepoModel>> =
+            Self::acquire_lock(&self.store).await?;
         let length = store.len();
         Ok(length)
     }
