@@ -4,10 +4,8 @@ use crate::{
     repositories::*,
 };
 use async_trait::async_trait;
-use std::{
-    collections::HashMap,
-    sync::{Mutex, MutexGuard},
-};
+use std::collections::HashMap;
+use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemoryNotificationRepository {
@@ -22,9 +20,8 @@ impl InMemoryNotificationRepository {
         }
     }
 
-    fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
-        lock.lock()
-            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))
+    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+        Ok(lock.lock().await)
     }
 }
 
@@ -40,7 +37,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         &self,
         notification: NotificationRepoModel,
     ) -> Result<NotificationRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store = Self::acquire_lock(&self.store).await?;
         if store.contains_key(&notification.id) {
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Notification with ID {} already exists",
@@ -52,7 +49,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
     }
 
     async fn get_by_id(&self, id: String) -> Result<NotificationRepoModel, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         match store.get(&id) {
             Some(entity) => Ok(entity.clone()),
             None => Err(RepositoryError::NotFound(format!(
@@ -76,7 +73,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
     }
 
     async fn list_all(&self) -> Result<Vec<NotificationRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         let notifications: Vec<NotificationRepoModel> = store.values().cloned().collect();
         Ok(notifications)
     }
@@ -90,7 +87,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         let items: Vec<NotificationRepoModel> = self
             .store
             .lock()
-            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))?
+            .await
             .values()
             .skip(start)
             .take(query.per_page as usize)
@@ -106,7 +103,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         let length = store.len();
         Ok(length)
     }
