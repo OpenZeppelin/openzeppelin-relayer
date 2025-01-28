@@ -26,7 +26,11 @@
     {
       "id": "notification-test",
       "type": "webhook",
-      "url": "https://api.example.com/notifications"
+      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
+      "signing_key": {
+        "type": "env",
+        "name": "WEBHOOK_SIGNING_KEY"
+      }
     }
   ],
   "signers": [
