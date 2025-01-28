@@ -10,6 +10,10 @@ pub enum RelayerError {
     ProviderError(String),
     #[error("Queue error: {0}")]
     QueueError(String),
+    #[error("Relayer is disabled")]
+    RelayerDisabled,
+    #[error("Relayer is paused")]
+    RelayerPaused,
 }
 
 impl From<RelayerError> for ApiError {
@@ -18,6 +22,10 @@ impl From<RelayerError> for ApiError {
             RelayerError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             RelayerError::ProviderError(msg) => ApiError::InternalError(msg),
             RelayerError::QueueError(msg) => ApiError::InternalError(msg),
+            RelayerError::RelayerDisabled => {
+                ApiError::ForbiddenError("Relayer disabled".to_string())
+            }
+            RelayerError::RelayerPaused => ApiError::ForbiddenError("Relayer paused".to_string()),
         }
     }
 }

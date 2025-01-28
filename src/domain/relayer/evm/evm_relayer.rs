@@ -117,11 +117,6 @@ impl Relayer for EvmRelayer {
         })
     }
 
-    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
-        println!("EVM validate relayer...");
-        Ok(true)
-    }
-
     async fn sync_relayer(&self) -> Result<bool, RelayerError> {
         println!("EVM sync relayer...");
         Ok(true)

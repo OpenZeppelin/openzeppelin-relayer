@@ -1,9 +1,9 @@
 use crate::{
     api::controllers::relayer,
-    domain::{JsonRpcRequest, SignDataRequest},
+    domain::{JsonRpcRequest, RelayerUpdateRequest, SignDataRequest},
     models::{AppState, PaginationQuery},
 };
-use actix_web::{delete, get, post, put, web, Responder};
+use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
 
 // list all relayers
@@ -22,6 +22,16 @@ async fn get_relayer(
     data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::get_relayer(relayer_id.into_inner(), data).await
+}
+
+// update relayer
+#[patch("/relayers/{relayer_id}")]
+async fn update_relayer(
+    relayer_id: web::Path<String>,
+    update_req: web::Json<RelayerUpdateRequest>,
+    data: web::ThinData<AppState>,
+) -> impl Responder {
+    relayer::update_relayer(relayer_id.into_inner(), update_req.into_inner(), data).await
 }
 
 // get relayer status
@@ -142,6 +152,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(list_relayers);
     cfg.service(get_relayer);
     cfg.service(get_relayer_balance);
+    cfg.service(update_relayer);
     cfg.service(get_relayer_transaction_by_id);
     cfg.service(get_relayer_transaction_by_nonce);
     cfg.service(send_relayer_transaction);

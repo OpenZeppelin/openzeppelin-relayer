@@ -52,7 +52,6 @@ pub trait Relayer {
     ) -> Result<SignDataResponse, RelayerError>;
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn get_status(&self) -> Result<bool, RelayerError>;
-    async fn validate_relayer(&self) -> Result<bool, RelayerError>;
     async fn sync_relayer(&self) -> Result<bool, RelayerError>;
 }
 
@@ -127,14 +126,6 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(relayer) => relayer.get_status().await,
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
-        }
-    }
-
-    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
-        match self {
-            NetworkRelayer::Evm(relayer) => relayer.validate_relayer().await,
-            NetworkRelayer::Solana(relayer) => relayer.validate_relayer().await,
-            NetworkRelayer::Stellar(relayer) => relayer.validate_relayer().await,
         }
     }
 
@@ -248,4 +239,9 @@ pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     pub data: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RelayerUpdateRequest {
+    pub paused: Option<bool>,
 }

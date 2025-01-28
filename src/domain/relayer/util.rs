@@ -33,3 +33,16 @@ pub async fn get_network_relayer(
     )
     .map_err(|e| e.into())
 }
+
+pub async fn get_network_relayer_by_model(
+    relayer_model: RelayerRepoModel,
+    state: &ThinData<AppState>,
+) -> Result<NetworkRelayer, ApiError> {
+    RelayerFactory::create_relayer(
+        relayer_model,
+        state.relayer_repository(),
+        state.transaction_repository(),
+        state.job_producer(),
+    )
+    .map_err(|e| e.into())
+}

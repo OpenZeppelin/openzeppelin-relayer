@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
+use crate::models::RelayerError;
+
 #[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkType {
@@ -48,4 +50,63 @@ pub struct RelayerRepoModel {
     pub paused: bool,
     pub network_type: NetworkType,
     pub policies: Option<RelayerNetworkPolicy>,
+    pub system_disabled: bool,
+}
+
+impl RelayerRepoModel {
+    pub fn validate_active_state(&self) -> Result<(), RelayerError> {
+        if self.paused {
+            return Err(RelayerError::RelayerPaused);
+        }
+
+        if self.system_disabled {
+            return Err(RelayerError::RelayerDisabled);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_relayer(paused: bool, system_disabled: bool) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: "test_relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            paused,
+            system_disabled,
+            network: "test_network".to_string(),
+            network_type: NetworkType::Evm,
+            policies: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_active_state_active() {
+        let relayer = create_test_relayer(false, false);
+        assert!(relayer.validate_active_state().is_ok());
+    }
+
+    #[test]
+    fn test_validate_active_state_paused() {
+        let relayer = create_test_relayer(true, false);
+        let result = relayer.validate_active_state();
+        assert!(matches!(result, Err(RelayerError::RelayerPaused)));
+    }
+
+    #[test]
+    fn test_validate_active_state_disabled() {
+        let relayer = create_test_relayer(false, true);
+        let result = relayer.validate_active_state();
+        assert!(matches!(result, Err(RelayerError::RelayerDisabled)));
+    }
+
+    #[test]
+    fn test_validate_active_state_paused_and_disabled() {
+        let relayer = create_test_relayer(true, true);
+        let result = relayer.validate_active_state();
+        assert!(matches!(result, Err(RelayerError::RelayerPaused)));
+    }
 }

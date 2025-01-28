@@ -104,11 +104,6 @@ impl Relayer for SolanaRelayer {
         })
     }
 
-    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
-        println!("Solana validate relayer...");
-        Ok(true)
-    }
-
     async fn sync_relayer(&self) -> Result<bool, RelayerError> {
         println!("Stellar sync relayer...");
         Ok(true)

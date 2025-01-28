@@ -102,11 +102,6 @@ impl Relayer for StellarRelayer {
         })
     }
 
-    async fn validate_relayer(&self) -> Result<bool, RelayerError> {
-        println!("Stellar validate relayer...");
-        Ok(true)
-    }
-
     async fn sync_relayer(&self) -> Result<bool, RelayerError> {
         println!("Stellar sync relayer...");
         Ok(true)
