@@ -1,3 +1,5 @@
+//! This module provides rate limiting functionality using API keys.
+
 use actix_governor::{KeyExtractor, SimpleKeyExtractionError};
 use actix_web::{
     dev::ServiceRequest,
