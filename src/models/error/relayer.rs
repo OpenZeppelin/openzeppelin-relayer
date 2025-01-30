@@ -18,6 +18,10 @@ pub enum RelayerError {
     SignerError(#[from] SignerError),
     #[error("Not supported: {0}")]
     NotSupported(String),
+    #[error("Relayer is disabled")]
+    RelayerDisabled,
+    #[error("Relayer is paused")]
+    RelayerPaused,
 }
 
 impl From<RelayerError> for ApiError {
@@ -29,6 +33,10 @@ impl From<RelayerError> for ApiError {
             RelayerError::SignerError(err) => ApiError::InternalError(err.to_string()),
             RelayerError::SignerFactoryError(err) => ApiError::InternalError(err.to_string()),
             RelayerError::NotSupported(msg) => ApiError::BadRequest(msg),
+            RelayerError::RelayerDisabled => {
+                ApiError::ForbiddenError("Relayer disabled".to_string())
+            }
+            RelayerError::RelayerPaused => ApiError::ForbiddenError("Relayer paused".to_string()),
         }
     }
 }

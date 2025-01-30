@@ -23,6 +23,9 @@ pub enum ApiError {
 
     #[error("Not Supported: {0}")]
     NotSupported(String),
+
+    #[error("Forbidden: {0}")]
+    ForbiddenError(String),
 }
 
 impl ResponseError for ApiError {
@@ -43,6 +46,9 @@ impl ResponseError for ApiError {
             }
             ApiError::InternalEyreError(msg) => {
                 HttpResponse::InternalServerError().json(ApiResponse::<()>::error(msg.to_string()))
+            }
+            ApiError::ForbiddenError(msg) => {
+                HttpResponse::Forbidden().json(ApiResponse::<()>::error(msg))
             }
         }
     }
