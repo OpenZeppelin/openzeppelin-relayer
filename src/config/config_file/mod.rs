@@ -67,10 +67,8 @@ impl Config {
         RelayersFileConfig::new(self.relayers.clone()).validate()?;
         SignersFileConfig::new(self.signers.clone()).validate()?;
         NotificationsFileConfig::new(self.notifications.clone()).validate()?;
-
         self.validate_relayer_signer_refs()?;
         self.validate_relayer_notification_refs()?;
-
         Ok(())
     }
 
@@ -174,6 +172,7 @@ mod tests {
             relayers: Vec::new(),
             signers: Vec::new(),
             notifications: Vec::new(),
+            signers: Vec::new(),
         };
         assert!(matches!(
             config.validate(),
