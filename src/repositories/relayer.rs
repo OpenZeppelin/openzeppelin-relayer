@@ -1,5 +1,6 @@
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
+    domain::RelayerUpdateRequest,
     models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
         RelayerStellarPolicy, RepositoryError,
@@ -8,11 +9,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use std::{
-    collections::HashMap,
-    sync::{Mutex, MutexGuard},
-};
+use std::collections::HashMap;
 use thiserror::Error;
+use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemoryRelayerRepository {
@@ -27,19 +26,69 @@ impl InMemoryRelayerRepository {
         }
     }
 
-    fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
-        lock.lock()
-            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))
+    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+        Ok(lock.lock().await)
     }
 
-    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+    pub async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
         let active_relayers: Vec<RelayerRepoModel> = store
             .values()
             .filter(|&relayer| !relayer.paused)
             .cloned()
             .collect();
         Ok(active_relayers)
+    }
+
+    pub async fn partial_update(
+        &self,
+        id: String,
+        update: RelayerUpdateRequest,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        if let Some(relayer) = store.get_mut(&id) {
+            if let Some(paused) = update.paused {
+                relayer.paused = paused;
+            }
+            Ok(relayer.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                id
+            )))
+        }
+    }
+
+    pub async fn disable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = self.store.lock().await;
+        if let Some(relayer) = store.get_mut(&relayer_id) {
+            relayer.system_disabled = true;
+            Ok(relayer.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                relayer_id
+            )))
+        }
+    }
+
+    pub async fn enable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = self.store.lock().await;
+        if let Some(relayer) = store.get_mut(&relayer_id) {
+            relayer.system_disabled = false;
+            Ok(relayer.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                relayer_id
+            )))
+        }
     }
 }
 
@@ -52,7 +101,7 @@ impl Default for InMemoryRelayerRepository {
 #[async_trait]
 impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     async fn create(&self, relayer: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store = Self::acquire_lock(&self.store).await?;
         if store.contains_key(&relayer.id) {
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Relayer with ID {} already exists",
@@ -64,7 +113,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         match store.get(&id) {
             Some(relayer) => Ok(relayer.clone()),
             None => Err(RepositoryError::NotFound(format!(
@@ -80,7 +129,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         id: String,
         relayer: RelayerRepoModel,
     ) -> Result<RelayerRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store = Self::acquire_lock(&self.store).await?;
         if store.contains_key(&id) {
             // Ensure we update the existing entry
             let mut updated_relayer = relayer;
@@ -96,7 +145,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store = Self::acquire_lock(&self.store).await?;
         if store.remove(&id).is_some() {
             Ok(())
         } else {
@@ -108,7 +157,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         let relayers: Vec<RelayerRepoModel> = store.values().cloned().collect();
         Ok(relayers)
     }
@@ -122,7 +171,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         let items: Vec<RelayerRepoModel> = self
             .store
             .lock()
-            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))?
+            .await
             .values()
             .skip(start)
             .take(query.per_page as usize)
@@ -138,7 +187,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         let relayers_length = store.len();
         Ok(relayers_length)
     }
@@ -179,6 +228,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             paused: config.paused,
             network_type,
             policies,
+            system_disabled: false,
         })
     }
 }
@@ -226,6 +276,7 @@ mod tests {
             paused: false,
             network_type: NetworkType::Evm,
             policies: None,
+            system_disabled: false,
         }
     }
 
@@ -308,5 +359,63 @@ mod tests {
 
         let result = repo.get_by_id("test".to_string()).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[actix_web::test]
+    async fn test_partial_update_relayer() {
+        let repo = InMemoryRelayerRepository::new();
+
+        // Add a relayer to the repository
+        let relayer_id = "test_relayer".to_string();
+        let initial_relayer = create_test_relayer(relayer_id.clone());
+
+        repo.create(initial_relayer.clone()).await.unwrap();
+
+        // Perform a partial update on the relayer
+        let update_req = RelayerUpdateRequest { paused: Some(true) };
+
+        let updated_relayer = repo
+            .partial_update(relayer_id.clone(), update_req)
+            .await
+            .unwrap();
+
+        assert_eq!(updated_relayer.id, initial_relayer.id);
+        assert_eq!(updated_relayer.paused, true);
+    }
+
+    #[actix_web::test]
+    async fn test_disable_relayer() {
+        let repo = InMemoryRelayerRepository::new();
+
+        // Add a relayer to the repository
+        let relayer_id = "test_relayer".to_string();
+        let initial_relayer = create_test_relayer(relayer_id.clone());
+
+        repo.create(initial_relayer.clone()).await.unwrap();
+
+        // Disable the relayer
+        let disabled_relayer = repo.disable_relayer(relayer_id.clone()).await.unwrap();
+
+        assert_eq!(disabled_relayer.id, initial_relayer.id);
+        assert_eq!(disabled_relayer.system_disabled, true);
+    }
+
+    #[actix_web::test]
+    async fn test_enable_relayer() {
+        let repo = InMemoryRelayerRepository::new();
+
+        // Add a relayer to the repository
+        let relayer_id = "test_relayer".to_string();
+        let mut initial_relayer = create_test_relayer(relayer_id.clone());
+
+        initial_relayer.system_disabled = true;
+
+        repo.create(initial_relayer.clone()).await.unwrap();
+
+        // Enable the relayer
+        let enabled_relayer = repo.enable_relayer(relayer_id.clone()).await.unwrap();
+
+        assert_eq!(enabled_relayer.id, initial_relayer.id);
+        assert_eq!(enabled_relayer.system_disabled, false);
     }
 }

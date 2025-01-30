@@ -12,6 +12,7 @@ pub struct RelayerResponse {
     pub paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policies: Option<NetworkPolicyResponse>,
+    pub system_disabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +78,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
             network_type: model.network_type,
             paused: model.paused,
             policies,
+            system_disabled: model.system_disabled,
         }
     }
 }
