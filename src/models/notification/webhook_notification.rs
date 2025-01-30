@@ -1,6 +1,6 @@
 use crate::{
     jobs::NotificationSend,
-    models::{TaggedTransactionResponse, TransactionRepoModel},
+    models::{TransactionRepoModel, TransactionResponse},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -27,14 +27,14 @@ impl WebhookNotification {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TransactionFailurePayload {
-    pub transaction: TaggedTransactionResponse,
+    pub transaction: TransactionResponse,
     pub failure_reason: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum WebhookPayload {
-    Transaction(TaggedTransactionResponse),
+    Transaction(TransactionResponse),
     TransactionFailure(TransactionFailurePayload),
 }
 
@@ -48,7 +48,7 @@ pub fn produce_transaction_update_notification_payload(
     notification_id: &str,
     transaction: &TransactionRepoModel,
 ) -> NotificationSend {
-    let tx_payload: TaggedTransactionResponse = transaction.clone().into();
+    let tx_payload: TransactionResponse = transaction.clone().into();
     NotificationSend::new(
         notification_id.to_string(),
         WebhookNotification::new(

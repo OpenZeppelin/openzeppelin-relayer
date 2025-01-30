@@ -172,7 +172,6 @@ mod tests {
             relayers: Vec::new(),
             signers: Vec::new(),
             notifications: Vec::new(),
-            signers: Vec::new(),
         };
         assert!(matches!(
             config.validate(),

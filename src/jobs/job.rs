@@ -180,7 +180,7 @@ impl NotificationSend {
 #[cfg(test)]
 mod tests {
     use crate::models::{
-        EvmTransactionResponse, TaggedTransactionResponse, TransactionStatus, WebhookPayload,
+        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload,
     };
 
     use super::*;
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_notification_send_serialization() {
         let payload =
-            WebhookPayload::Transaction(TaggedTransactionResponse::Evm(EvmTransactionResponse {
+            WebhookPayload::Transaction(TransactionResponse::Evm(EvmTransactionResponse {
                 id: "tx123".to_string(),
                 hash: Some("0x123".to_string()),
                 status: TransactionStatus::Confirmed,
