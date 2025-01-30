@@ -25,13 +25,19 @@
 
 use std::sync::Arc;
 
+use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::{
+    dev::Service,
     middleware::{self, Logger},
     web::{self},
     App, HttpServer,
 };
 use color_eyre::{eyre::WrapErr, Result};
 use config::Config;
+
+use actix_web::HttpResponse;
+
+use config::ApiKeyRateLimit;
 use dotenvy::dotenv;
 use jobs::{setup_workers, Queue};
 use log::info;
@@ -114,8 +120,7 @@ async fn main() -> Result<()> {
 
     setup_logging_and_env()?;
 
-    let config = config::ServerConfig::from_env();
-    // info!("Config: {:?}", config_file);
+    let config = Arc::new(config::ServerConfig::from_env());
     let config_file = load_config_file(&config.config_file_path)?;
 
     let app_state = initialize_app_state().await?;
@@ -126,9 +131,39 @@ async fn main() -> Result<()> {
     info!("Processing config file");
     process_config_file(config_file, app_state.clone()).await?;
 
+    // Rate limit configuration
+    let rate_limit_config = GovernorConfigBuilder::default()
+        .requests_per_second(config.rate_limit_requests_per_second)
+        .key_extractor(ApiKeyRateLimit)
+        .burst_size(config.rate_limit_burst_size)
+        .finish()
+        .unwrap();
+
+    let moved_cfg = Arc::clone(&config);
     info!("Starting server on {}:{}", config.host, config.port);
     HttpServer::new(move || {
+        let config = Arc::clone(&moved_cfg);
         App::new()
+            .wrap_fn(move |req, srv| {
+                // Check for x-api-key header
+                let expected_key = config.api_key.clone();
+                if let Some(header_value) = req.headers().get("x-api-key") {
+                    if let Ok(key) = header_value.to_str() {
+                        if key == expected_key {
+                            return srv.call(req);
+                        }
+                    }
+                }
+
+                Box::pin(async move {
+                    Ok(req.into_response(
+                        HttpResponse::Unauthorized().body(
+                            r#"{"success": false, "code":401, "error": "Unauthorized", message: "Unauthorized"}"#.to_string(),
+                        ),
+                    ))
+                })
+            })
+            .wrap(Governor::new(&rate_limit_config))
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::DefaultHeaders::new())

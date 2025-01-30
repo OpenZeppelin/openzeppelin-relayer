@@ -4,10 +4,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use std::{
-    collections::HashMap,
-    sync::{Mutex, MutexGuard},
-};
+use std::collections::HashMap;
+use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemoryTransactionRepository {
@@ -21,9 +19,8 @@ impl InMemoryTransactionRepository {
         }
     }
 
-    fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
-        lock.lock()
-            .map_err(|_| RepositoryError::LockError("Failed to acquire lock".to_string()))
+    async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
+        Ok(lock.lock().await)
     }
 
     pub async fn find_by_relayer_id(
@@ -31,7 +28,7 @@ impl InMemoryTransactionRepository {
         relayer_id: &str,
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         let filtered: Vec<TransactionRepoModel> = store
             .values()
             .filter(|tx| tx.relayer_id == relayer_id)
@@ -70,7 +67,7 @@ impl InMemoryTransactionRepository {
         &self,
         status: TransactionStatus,
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         Ok(store
             .values()
             .filter(|tx| tx.status == status)
@@ -83,7 +80,7 @@ impl InMemoryTransactionRepository {
         relayer_id: &str,
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         Ok(store
             .values()
             .find(|tx| {
@@ -118,7 +115,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store = Self::acquire_lock(&self.store).await?;
         if store.contains_key(&tx.id) {
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Transaction with ID {} already exists",
@@ -130,7 +127,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
     }
 
     async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         store.get(&id).cloned().ok_or_else(|| {
             RepositoryError::NotFound(format!("Transaction with ID {} not found", id))
         })
@@ -142,7 +139,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
         id: String,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store = Self::acquire_lock(&self.store).await?;
         if store.contains_key(&id) {
             let mut updated_tx = tx;
             updated_tx.id = id.clone();
@@ -157,7 +154,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store)?;
+        let mut store = Self::acquire_lock(&self.store).await?;
         if store.remove(&id).is_some() {
             Ok(())
         } else {
@@ -169,7 +166,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
     }
 
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         Ok(store.values().cloned().collect())
     }
 
@@ -179,7 +176,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let total = self.count().await?;
         let start = ((query.page - 1) * query.per_page) as usize;
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         let items: Vec<TransactionRepoModel> = store
             .values()
             .skip(start)
@@ -196,7 +193,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let store = Self::acquire_lock(&self.store)?;
+        let store = Self::acquire_lock(&self.store).await?;
         Ok(store.len())
     }
 }
