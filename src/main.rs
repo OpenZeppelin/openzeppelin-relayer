@@ -91,7 +91,7 @@ async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
     let signer_repository = Arc::new(InMemorySignerRepository::new());
     let notification_repository = Arc::new(InMemoryNotificationRepository::new());
-
+    let transaction_counter_store = Arc::new(repositories::InMemoryTransactionCounter::new());
     let queue = Queue::setup().await;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
@@ -100,6 +100,7 @@ async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
         transaction_repository,
         signer_repository,
         notification_repository,
+        transaction_counter_store,
         job_producer,
     });
 

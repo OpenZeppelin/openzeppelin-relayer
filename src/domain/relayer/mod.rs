@@ -17,11 +17,13 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerRepoModel, TransactionRepoModel,
     },
-    services::EvmSignerFactory,
+    services::{EvmSignerFactory, TransactionCounterService},
 };
 
 use crate::{
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    repositories::{
+        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+    },
     services::EvmProvider,
 };
 use async_trait::async_trait;
@@ -154,6 +156,7 @@ pub trait RelayerFactoryTrait {
         signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
@@ -165,6 +168,7 @@ impl RelayerFactoryTrait for RelayerFactory {
         signer: SignerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
@@ -182,6 +186,11 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
                 let signer_service = EvmSignerFactory::create_evm_signer(signer)?;
+                let transaction_counter_service = TransactionCounterService::new(
+                    relayer.id.clone(),
+                    relayer.address.clone(),
+                    transaction_counter_store,
+                );
                 let relayer = EvmRelayer::new(
                     relayer,
                     signer_service,
@@ -189,6 +198,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     network,
                     relayer_repository,
                     transaction_repository,
+                    transaction_counter_service,
                     job_producer,
                 )?;
 

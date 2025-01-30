@@ -4,7 +4,7 @@ use crate::{
     jobs::JobProducer,
     repositories::{
         InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-        InMemoryTransactionRepository,
+        InMemoryTransactionCounter, InMemoryTransactionRepository,
     },
 };
 
@@ -14,6 +14,7 @@ pub struct AppState {
     pub transaction_repository: Arc<InMemoryTransactionRepository>,
     pub signer_repository: Arc<InMemorySignerRepository>,
     pub notification_repository: Arc<InMemoryNotificationRepository>,
+    pub transaction_counter_store: Arc<InMemoryTransactionCounter>,
     pub job_producer: Arc<JobProducer>,
 }
 
@@ -28,6 +29,14 @@ impl AppState {
 
     pub fn signer_repository(&self) -> Arc<InMemorySignerRepository> {
         Arc::clone(&self.signer_repository)
+    }
+
+    pub fn notification_repository(&self) -> Arc<InMemoryNotificationRepository> {
+        Arc::clone(&self.notification_repository)
+    }
+
+    pub fn transaction_counter_store(&self) -> Arc<InMemoryTransactionCounter> {
+        Arc::clone(&self.transaction_counter_store)
     }
 
     pub fn job_producer(&self) -> Arc<JobProducer> {

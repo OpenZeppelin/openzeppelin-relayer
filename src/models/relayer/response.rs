@@ -12,8 +12,7 @@ pub struct RelayerResponse {
     pub paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policies: Option<NetworkPolicyResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
+    pub address: String,
 }
 
 #[derive(Debug, Serialize)]

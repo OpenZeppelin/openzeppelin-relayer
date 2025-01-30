@@ -70,7 +70,7 @@ async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) 
             .wrap_err("Failed to create signer service")?;
 
         let address = signer_service.address().await?;
-        repo_model.address = Some(address.to_string());
+        repo_model.address = address.to_string();
 
         app_state
             .relayer_repository

@@ -12,7 +12,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
-    services::{DataSignerTrait, EvmProvider, EvmSigner},
+    services::{DataSignerTrait, EvmProvider, EvmSigner, TransactionCounterService},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -25,6 +25,7 @@ pub struct EvmRelayer {
     provider: EvmProvider,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
+    transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
 }
 
@@ -36,6 +37,7 @@ impl EvmRelayer {
         network: EvmNetwork,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
         Ok(Self {
@@ -45,6 +47,7 @@ impl EvmRelayer {
             provider,
             relayer_repository,
             transaction_repository,
+            transaction_counter_service,
             job_producer,
         })
     }
@@ -74,14 +77,9 @@ impl Relayer for EvmRelayer {
     }
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
-        let address = self
-            .relayer
-            .address
-            .clone()
-            .expect("Relayer address not found");
         let balance: u128 = self
             .provider
-            .get_balance(&address)
+            .get_balance(&self.relayer.address)
             .await
             .map_err(|e| RelayerError::ProviderError(e.to_string()))?
             .try_into()

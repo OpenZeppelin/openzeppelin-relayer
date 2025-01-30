@@ -11,7 +11,7 @@ use crate::{
         TransactionRepoModel, TransactionStatus,
     },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
-    services::EvmProvider,
+    services::{EvmProvider, TransactionCounterService},
 };
 
 #[allow(dead_code)]
@@ -20,6 +20,7 @@ pub struct EvmRelayerTransaction {
     provider: EvmProvider,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
+    transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
 }
 
@@ -30,6 +31,7 @@ impl EvmRelayerTransaction {
         provider: EvmProvider,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
@@ -37,6 +39,7 @@ impl EvmRelayerTransaction {
             provider,
             relayer_repository,
             transaction_repository,
+            transaction_counter_service,
             job_producer,
         })
     }

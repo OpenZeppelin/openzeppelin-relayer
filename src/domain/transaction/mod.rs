@@ -1,8 +1,10 @@
 use crate::{
     jobs::JobProducer,
     models::{EvmNetwork, NetworkType, RelayerRepoModel, TransactionError, TransactionRepoModel},
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
-    services::EvmProvider,
+    repositories::{
+        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+    },
+    services::{EvmProvider, TransactionCounterService},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -160,6 +162,7 @@ impl RelayerTransactionFactory {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
@@ -176,12 +179,18 @@ impl RelayerTransactionFactory {
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
+                let transaction_counter_service = TransactionCounterService::new(
+                    relayer.id.clone(),
+                    "".to_string(),
+                    transaction_counter_store,
+                );
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
                     relayer,
                     evm_provider,
                     relayer_repository,
                     transaction_repository,
+                    transaction_counter_service,
                     job_producer,
                 )?))
             }
