@@ -2,6 +2,18 @@
 name = "openzeppelin-relayer"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.84"         #MSRV
+
+[profile.release]
+opt-level = 0
+overflow-checks = false
+panic = 'unwind'
+
+[profile.test]
+debug = true
+opt-level = 0
+overflow-checks = true
+panic = 'abort'
 
 [dependencies]
 actix-web = "4"
@@ -36,3 +48,7 @@ hex = { version = "0.4"}
 bytes = { version = "1.9" }
 actix-governor = "0.8"
 governor = "0.8.0"
+
+[[bin]]
+path = "src/main.rs"
+name = "openzeppelin-relayer"

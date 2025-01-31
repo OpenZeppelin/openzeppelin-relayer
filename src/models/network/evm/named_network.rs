@@ -807,15 +807,15 @@ mod tests {
 
     #[test]
     fn is_testnet() {
-        assert_eq!(EvmNamedNetwork::Mainnet.is_testnet(), false);
-        assert_eq!(EvmNamedNetwork::Sepolia.is_testnet(), true);
+        assert!(!EvmNamedNetwork::Mainnet.is_testnet());
+        assert!(EvmNamedNetwork::Sepolia.is_testnet());
     }
 
     #[test]
     fn is_ethereum() {
-        assert_eq!(EvmNamedNetwork::Mainnet.is_ethereum(), true);
-        assert_eq!(EvmNamedNetwork::Sepolia.is_ethereum(), true);
-        assert_eq!(EvmNamedNetwork::Arbitrum.is_ethereum(), false);
+        assert!(EvmNamedNetwork::Mainnet.is_ethereum());
+        assert!(EvmNamedNetwork::Sepolia.is_ethereum());
+        assert!(!EvmNamedNetwork::Arbitrum.is_ethereum());
     }
 
     #[test]

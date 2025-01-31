@@ -384,7 +384,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(updated_relayer.id, initial_relayer.id);
-        assert_eq!(updated_relayer.paused, true);
+        assert!(updated_relayer.paused);
     }
 
     #[actix_web::test]
@@ -401,7 +401,7 @@ mod tests {
         let disabled_relayer = repo.disable_relayer(relayer_id.clone()).await.unwrap();
 
         assert_eq!(disabled_relayer.id, initial_relayer.id);
-        assert_eq!(disabled_relayer.system_disabled, true);
+        assert!(disabled_relayer.system_disabled);
     }
 
     #[actix_web::test]
@@ -420,6 +420,6 @@ mod tests {
         let enabled_relayer = repo.enable_relayer(relayer_id.clone()).await.unwrap();
 
         assert_eq!(enabled_relayer.id, initial_relayer.id);
-        assert_eq!(enabled_relayer.system_disabled, false);
+        assert!(!enabled_relayer.system_disabled);
     }
 }

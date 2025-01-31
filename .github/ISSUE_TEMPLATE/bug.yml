@@ -1,0 +1,117 @@
+---
+name: Bug Report
+description: Create a bug report
+labels: [T-bug, S-needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report! Please provide as much detail as possible.
+
+        If you believe you have found a vulnerability, please provide details [here](mailto:security@openzeppelin.com) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Describe the bug
+      description: |
+        A clear and concise description of what the bug is.
+
+        If the bug is in a crate you are using (i.e. you are not running the standard `openzeppelin-relayer` binary) please mention that as well.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Steps to reproduce
+      description: Please provide any steps you think might be relevant to reproduce
+        the bug.
+      placeholder: |
+        Steps to reproduce:
+
+        1. Start '...'
+        2. Then '...'
+        3. Check '...'
+        4. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Application logs
+      description: |
+        Please provide the relevant application logs leading up to the bug.
+      render: text
+    validations:
+      required: false
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform(s)
+      description: What platform(s) did this occur on?
+      multiple: true
+      options:
+        - Linux (x86)
+        - Linux (ARM)
+        - Mac (Intel)
+        - Mac (Apple Silicon)
+        - Windows (x86)
+        - Windows (ARM)
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment Type
+      description: How are you running openzeppelin-relayer?
+      multiple: false
+      options:
+        - Binary from releases
+        - Built from source
+        - Docker container
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: Version Information
+      description: Run `openzeppelin-relayer --version` and paste the output
+    validations:
+      required: true
+  - type: textarea
+    id: relayer-config
+    attributes:
+      label: Monitor Configuration
+      description: |
+        Please provide the relevant relayer configuration file(s) from your config directory.
+        Make sure to remove any sensitive information like private keys or API tokens.
+      render: json
+    validations:
+      required: false
+  - type: dropdown
+    id: network-type
+    attributes:
+      label: Network Type
+      description: Which blockchain network(s) are you relaying transactions on?
+      multiple: true
+      options:
+        - EVM
+        - Stellar
+        - Solana
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: build-command
+    attributes:
+      label: Build Command
+      description: If you built from source, what command did you use?
+      placeholder: cargo build --release
+    validations:
+      required: false
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/openzeppelin/openzeppelin-relayer/blob/main/CONTRIBUTING.md#code-of-conduct)
+      options:
+        - label: I agree to follow the Code of Conduct
+          required: true

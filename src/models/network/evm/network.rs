@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn test_id() {
         assert_eq!(EvmNetwork::from_id(1234).id(), 1234);
-        assert_eq!(EvmNetwork::from_id(1).is_ethereum(), true);
+        assert!(EvmNetwork::from_id(1).is_ethereum());
     }
 
     #[test]
