@@ -1,0 +1,134 @@
+:relayer: https://github.com/OpenZeppelin/openzeppelin-relayer
+
+= OpenZeppelin Relayer
+:description: User guide for setting up and configuring OpenZeppelin Relayer.
+
+OpenZeppelin Relayer is a service that provides infrastructure to relay transactions to the EVM & Non-EVM networks. It is designed to be used as a backend for dApps that need to interact with these networks.
+
+List of supported networks:
+* EVM
+* Stellar
+* Solana
+
+OpenZeppelin Relayer provides:
+* Transaction relaying
+* Transaction batching
+* Transaction signing
+* Transaction fee estimation
+* Transaction gas estimation
+* Transaction nonce management
+* Transaction status monitoring
+* Transaction history
+
+
+== Project Structure
+
+The project follows a standard Rust project layout:
+
+
+* `src/`: Source code
+** Core implementation files
+* `models/`: Data structures and types
+** Type definitions and data models
+* `repositories/`: Configuration storage
+** Storage implementations
+* `services/`: Core business logic
+** Main service implementations
+* `docs/`: Documentation
+** User guides and API docs
+* `scripts/`: Utility scripts
+** Development and deployment helpers
+
+For detailed information about each directory and its contents, see xref:structure.adoc[Project Structure Details].
+
+== Getting Started
+
+=== Prerequisites
+
+* Rust 2021 edition
+* Docker (optional, for containerized deployment)
+
+=== Installation
+
+==== Local Setup
+
+. Clone the repository:
+
+[source,bash]
+----
+git clone https://github.com/openzeppelin/openzeppelin-relayer
+cd openzeppelin-relayer
+----
+
+. Install dependencies:
+
+[source,bash]
+----
+cargo build
+----
+
+== Running the Relayer
+
+=== Local Execution
+
+[source,bash]
+----
+cargo run
+----
+
+=== Docker Deployment
+
+The Relayer can be run as either a development or production container using the corresponding Dockerfile (`Dockerfile.development` or `Dockerfile.production`).
+
+==== Environment Configuration
+
+* Edit `.env` at the root of the repository to adjust environment variables
+* The appropriate .env file will be included during image build
+
+==== Building the Image
+
+You can build using either standard Docker build or buildx:
+
+[source,bash]
+----
+# Standard build
+docker build --tag <your_image_tag> -f Dockerfile.<development | production> --squash-all
+
+# Or using buildx
+docker buildx build -f Dockerfile.<development | production> -t <name_of_image:tag> .
+----
+
+The build process will include:
+
+* The appropriate .env file
+
+==== Running the Container
+
+You can use Docker Compose to run the container:
+
+[source,bash]
+----
+docker-compose up
+----
+
+For production runs, you can use:
+
+[source,bash]
+----
+DOCKERFILE=Dockerfile.production docker-compose up
+----
+
+== Important Considerations
+
+CAUTION: This software is in alpha stage. Use in production environments at your own risk.
+
+
+== Support
+
+For support or inquiries, contact defender-support@openzeppelin.com
+
+== License
+This project is licensed under the GNU Affero General Public License v3.0 - see the LICENSE file for details.
+
+== Security
+For security concerns, please refer to our link:https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/SECURITY.md[Security Policy].

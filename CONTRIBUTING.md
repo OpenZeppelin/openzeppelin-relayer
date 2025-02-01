@@ -341,18 +341,7 @@ Note: if your pull request isn't getting enough attention, you can email us at `
 
 - Use **Rust 2021 edition**.
 - Follow the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/).
-- Format code with `rustfmt`:
-
-  ```sh
-  rustup component add rustfmt --toolchain nightly
-  cargo +nightly fmt
-  ```
-
-- Lint code with `clippy`:
-
-  ```sh
-  cargo clippy --all-targets --all-features
-  ```
+- Run pre-commit hooks on your code to ensure code quality.
 
 ## Testing
 
@@ -373,7 +362,24 @@ Testing is the responsibility of all contributors as such all contributions must
 
 ## Documentation
 
-- TBD
+- Pre-requisites:
+
+  - You need `antora` `site-generator` and `mermaid` extension to generate the documentation.
+
+  - You can directly install these dependencies by running `cd docs && npm i --include dev`. If you want to install them manually, you can follow the steps mentioned below.
+  - Install `antora` locally, you can follow the steps mentioned [here](https://docs.antora.org/antora/latest/install/install-antora/#install-dir), if you already have you can skip this step.
+    > Note: If you want to install globally, you can run: <br/> `npm install -g @antora/cli@3.1 @antora/site-generator@3.1 @sntke/antora-mermaid-extension`
+  - Verify the installation by running `antora --version` or by running `npx antora --version` if you installed it locally.
+
+- To generate documentation locally, run the following command:
+
+  ```sh
+  cargo make rust-antora
+  ```
+
+- Site will be generated in `docs/build/site/openzeppelin_relayer/<version>/` directory.
+
+- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
 
 ## Issue and Pull Request Labeling Guidelines
 

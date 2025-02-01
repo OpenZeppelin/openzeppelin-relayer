@@ -19,3 +19,10 @@ target/
 .DS_Store
 
 config/config.json
+
+# docs
+docs/build/
+rust_docs
+
+# Ignore node_modules
+node_modules
