@@ -55,7 +55,7 @@ pub trait Relayer {
     ) -> Result<SignDataResponse, RelayerError>;
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn get_status(&self) -> Result<bool, RelayerError>;
-    async fn sync_relayer(&self) -> Result<bool, RelayerError>;
+    async fn initialize_relayer(&self) -> Result<(), RelayerError>;
 }
 
 pub enum NetworkRelayer {
@@ -132,11 +132,11 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn sync_relayer(&self) -> Result<bool, RelayerError> {
+    async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         match self {
-            NetworkRelayer::Evm(relayer) => relayer.sync_relayer().await,
-            NetworkRelayer::Solana(relayer) => relayer.sync_relayer().await,
-            NetworkRelayer::Stellar(relayer) => relayer.sync_relayer().await,
+            NetworkRelayer::Evm(relayer) => relayer.initialize_relayer().await,
+            NetworkRelayer::Solana(relayer) => relayer.initialize_relayer().await,
+            NetworkRelayer::Stellar(relayer) => relayer.initialize_relayer().await,
         }
     }
 }

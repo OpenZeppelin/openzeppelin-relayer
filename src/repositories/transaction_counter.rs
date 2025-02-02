@@ -23,13 +23,18 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
             .map(|n| *n))
     }
 
-    fn increment(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError> {
+    fn get_and_increment(
+        &self,
+        relayer_id: &str,
+        address: &str,
+    ) -> Result<u64, TransactionCounterError> {
         let mut entry = self
             .store
             .entry((relayer_id.to_string(), address.to_string()))
             .or_insert(0);
+        let current = *entry;
         *entry += 1;
-        Ok(*entry)
+        Ok(current)
     }
 
     fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError> {
@@ -82,7 +87,7 @@ mod tests {
         assert_eq!(store.get(relayer_id, address).unwrap(), Some(100));
 
         // Increment
-        assert_eq!(store.increment(relayer_id, address).unwrap(), 101);
+        assert_eq!(store.get_and_increment(relayer_id, address).unwrap(), 100);
         assert_eq!(store.get(relayer_id, address).unwrap(), Some(101));
 
         // Decrement
@@ -105,8 +110,10 @@ mod tests {
         assert_eq!(store.get("relayer_2", "0x1234").unwrap(), Some(300));
 
         // Verify independent increments
-        assert_eq!(store.increment("relayer_1", "0x1234").unwrap(), 101);
-        assert_eq!(store.increment("relayer_1", "0x5678").unwrap(), 201);
+        assert_eq!(store.get_and_increment("relayer_1", "0x1234").unwrap(), 100);
+        assert_eq!(store.get_and_increment("relayer_1", "0x1234").unwrap(), 101);
+        assert_eq!(store.get_and_increment("relayer_1", "0x5678").unwrap(), 200);
+        assert_eq!(store.get_and_increment("relayer_1", "0x5678").unwrap(), 201);
         assert_eq!(store.get("relayer_2", "0x1234").unwrap(), Some(300));
     }
 }

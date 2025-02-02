@@ -28,8 +28,9 @@ impl TransactionCounterService {
         self.store.get(&self.relayer_id, &self.address)
     }
 
-    pub fn increment(&self) -> Result<u64, TransactionCounterError> {
-        self.store.increment(&self.relayer_id, &self.address)
+    pub fn get_and_increment(&self) -> Result<u64, TransactionCounterError> {
+        self.store
+            .get_and_increment(&self.relayer_id, &self.address)
     }
 
     pub fn decrement(&self) -> Result<u64, TransactionCounterError> {
@@ -53,8 +54,8 @@ mod tests {
             TransactionCounterService::new("relayer_id".to_string(), "address".to_string(), store);
 
         assert_eq!(service.get().unwrap(), None);
-        assert_eq!(service.increment().unwrap(), 1);
-        assert_eq!(service.increment().unwrap(), 2);
+        assert_eq!(service.get_and_increment().unwrap(), 0);
+        assert_eq!(service.get_and_increment().unwrap(), 1);
         assert_eq!(service.decrement().unwrap(), 1);
         assert_eq!(service.set(10).unwrap(), ());
         assert_eq!(service.get().unwrap(), Some(10));

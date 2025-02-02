@@ -57,6 +57,8 @@ mod services;
 pub use models::{ApiError, AppState};
 mod config_processor;
 use config_processor::process_config_file;
+use sync_relayer::initialize_relayers;
+mod sync_relayer;
 
 /// Sets up logging and environment configuration
 ///
@@ -130,6 +132,8 @@ async fn main() -> Result<()> {
 
     info!("Processing config file");
     process_config_file(config_file, app_state.clone()).await?;
+
+    initialize_relayers(app_state.clone()).await?;
 
     // Rate limit configuration
     let rate_limit_config = GovernorConfigBuilder::default()

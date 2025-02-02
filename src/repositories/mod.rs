@@ -10,6 +10,7 @@ mod relayer;
 pub use relayer::*;
 
 mod transaction;
+use serde::Serialize;
 use thiserror::Error;
 pub use transaction::*;
 
@@ -45,7 +46,7 @@ pub trait Repository<T, ID> {
     async fn count(&self) -> Result<usize, RepositoryError>;
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize)]
 pub enum TransactionCounterError {
     #[error("No sequence found for relayer {relayer_id} and address {address}")]
     SequenceNotFound { relayer_id: String, address: String },
@@ -53,10 +54,15 @@ pub enum TransactionCounterError {
     NotFound(String),
 }
 
+#[allow(dead_code)]
 pub trait TransactionCounterTrait {
     fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, TransactionCounterError>;
 
-    fn increment(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError>;
+    fn get_and_increment(
+        &self,
+        relayer_id: &str,
+        address: &str,
+    ) -> Result<u64, TransactionCounterError>;
 
     fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError>;
 

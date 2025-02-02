@@ -16,6 +16,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
+use log::{info, warn};
 
 #[allow(dead_code)]
 pub struct EvmRelayer {
@@ -50,6 +51,46 @@ impl EvmRelayer {
             transaction_counter_service,
             job_producer,
         })
+    }
+
+    async fn sync_nonce(&self) -> Result<(), RelayerError> {
+        let on_chain_nonce = self
+            .provider
+            .get_transaction_count(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        info!(
+            "Setting nonce: {} for relayer: {}",
+            on_chain_nonce, self.relayer.id
+        );
+
+        self.transaction_counter_service.set(on_chain_nonce)?;
+
+        Ok(())
+    }
+
+    async fn validate_rpc(&self) -> Result<(), RelayerError> {
+        self.provider
+            .health_check()
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        let balance = self
+            .provider
+            .get_balance(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        info!("Balance : {} for relayer: {}", balance, self.relayer.id);
+
+        // TODO: ADD min balance validation
+
+        Ok(())
     }
 }
 
@@ -128,9 +169,23 @@ impl Relayer for EvmRelayer {
         })
     }
 
-    async fn sync_relayer(&self) -> Result<bool, RelayerError> {
-        println!("EVM sync relayer...");
-        Ok(true)
+    async fn initialize_relayer(&self) -> Result<(), RelayerError> {
+        info!("Initializing relayer: {}", self.relayer.id);
+        let nonce_sync_result = self.sync_nonce().await;
+        let validate_rpc_result = self.validate_rpc().await;
+        let validate_min_balance_result = self.validate_min_balance().await;
+
+        // disable relayer if any check fails
+        if nonce_sync_result.is_err()
+            || validate_rpc_result.is_err()
+            || validate_min_balance_result.is_err()
+        {
+            warn!("Disabling relayer: {} due to failed check", self.relayer.id);
+            self.relayer_repository
+                .disable_relayer(self.relayer.id.clone())
+                .await?;
+        }
+        Ok(())
     }
 }
 

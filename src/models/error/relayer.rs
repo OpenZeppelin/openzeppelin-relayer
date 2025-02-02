@@ -1,4 +1,7 @@
-use crate::services::{SignerError, SignerFactoryError};
+use crate::{
+    repositories::TransactionCounterError,
+    services::{SignerError, SignerFactoryError},
+};
 
 use super::{ApiError, RepositoryError};
 use serde::Serialize;
@@ -22,6 +25,8 @@ pub enum RelayerError {
     RelayerDisabled,
     #[error("Relayer is paused")]
     RelayerPaused,
+    #[error("Transaction sequence error: {0}")]
+    TransactionSequenceError(#[from] TransactionCounterError),
 }
 
 impl From<RelayerError> for ApiError {
@@ -37,6 +42,7 @@ impl From<RelayerError> for ApiError {
                 ApiError::ForbiddenError("Relayer disabled".to_string())
             }
             RelayerError::RelayerPaused => ApiError::ForbiddenError("Relayer paused".to_string()),
+            RelayerError::TransactionSequenceError(err) => ApiError::InternalError(err.to_string()),
         }
     }
 }

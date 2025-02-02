@@ -70,4 +70,15 @@ impl EvmProvider {
             .map(|_| true)
             .map_err(|e| eyre!("Health check failed: {}", e))
     }
+
+    pub async fn get_transaction_count(&self, address: &str) -> Result<u64> {
+        let address = address.parse()?;
+        let result = self
+            .provider
+            .get_transaction_count(address)
+            .await
+            .map_err(|e| eyre!("Health check failed: {}", e))?;
+
+        Ok(result)
+    }
 }
