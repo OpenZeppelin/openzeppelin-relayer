@@ -16,7 +16,7 @@ pub trait SignerConfigKeystore {
     async fn get_passphrase(&self) -> Result<String, ConfigFileError>;
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct SignerFileConfig {
     pub id: String,
@@ -181,48 +181,6 @@ impl SignerFileConfig {
             }
         }
         Ok(())
-    }
-}
-
-use serde::{de, Deserializer};
-use serde_json::Value;
-
-impl<'de> Deserialize<'de> for SignerFileConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Deserialize as a generic JSON object
-        let value: Value = Deserialize::deserialize(deserializer)?;
-        // Extract and validate required fields
-        let id = value
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| de::Error::missing_field("id"))?
-            .to_string();
-
-        // Deserialize `signer_type`
-        let r#type: SignerFileConfigType = serde_json::from_value(
-            value
-                .get("type")
-                .cloned()
-                .ok_or_else(|| de::Error::missing_field("type"))?,
-        )
-        .map_err(|_| de::Error::unknown_field("type", &["type"]))?;
-
-        // Construct and return the struct
-        Ok(SignerFileConfig {
-            id,
-            r#type,
-            path: value
-                .get("path")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string()),
-            passphrase: value
-                .get("passphrase")
-                .map(|v| serde_json::from_value(v.clone()).map_err(de::Error::custom))
-                .transpose()?,
-        })
     }
 }
 
