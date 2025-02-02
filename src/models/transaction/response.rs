@@ -1,8 +1,10 @@
-use crate::models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value as JsonValue;
+use crate::{
+    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
+    utils::deserialize_u128,
+};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum TransactionResponse {
     Evm(EvmTransactionResponse),
@@ -18,7 +20,9 @@ pub struct EvmTransactionResponse {
     pub created_at: String,
     pub sent_at: String,
     pub confirmed_at: String,
+    #[serde(deserialize_with = "deserialize_u128")]
     pub gas_price: u128,
+    #[serde(deserialize_with = "deserialize_u128")]
     pub gas_limit: u128,
     pub nonce: u64,
     pub value: u64,
@@ -48,43 +52,9 @@ pub struct StellarTransactionResponse {
     pub sent_at: String,
     pub confirmed_at: String,
     pub source_account: String,
+    #[serde(deserialize_with = "deserialize_u128")]
     pub fee: u128,
     pub sequence_number: u64,
-}
-
-impl<'de> Deserialize<'de> for TransactionResponse {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = JsonValue::deserialize(deserializer)?;
-
-        // If it has "gas_price" or "gas_limit", it's likely an EVM transaction
-        if value.get("gas_price").is_some()
-            || value.get("gas_limit").is_some()
-            || value.get("nonce").is_some()
-        {
-            return serde_json::from_value::<EvmTransactionResponse>(value)
-                .map(TransactionResponse::Evm)
-                .map_err(serde::de::Error::custom);
-        }
-
-        // If it has "recent_blockhash", it's likely a Solana transaction
-        if value.get("recent_blockhash").is_some() {
-            return serde_json::from_value::<SolanaTransactionResponse>(value)
-                .map(TransactionResponse::Solana)
-                .map_err(serde::de::Error::custom);
-        }
-
-        // If it has "fee" and "sequence_number", it's likely a Stellar transaction
-        if value.get("fee").is_some() && value.get("sequence_number").is_some() {
-            return serde_json::from_value::<StellarTransactionResponse>(value)
-                .map(TransactionResponse::Stellar)
-                .map_err(serde::de::Error::custom);
-        }
-
-        Err(serde::de::Error::custom("Unknown transaction type"))
-    }
 }
 
 impl From<TransactionRepoModel> for TransactionResponse {

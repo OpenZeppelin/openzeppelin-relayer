@@ -54,6 +54,7 @@ mod jobs;
 mod models;
 mod repositories;
 mod services;
+mod utils;
 pub use models::{ApiError, AppState};
 mod config_processor;
 use config_processor::process_config_file;

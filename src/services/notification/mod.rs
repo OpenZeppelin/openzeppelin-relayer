@@ -24,13 +24,17 @@ impl WebhookNotificationService {
         }
     }
 
-    fn sign_payload(&self, payload: &str, secret_key: &str) -> String {
+    fn sign_payload(
+        &self,
+        payload: &str,
+        secret_key: &str,
+    ) -> Result<String, WebhookNotificationError> {
         let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
-            .expect("HMAC can take key of any size");
+            .map_err(|e| WebhookNotificationError::SigningError(e.to_string()))?;
         mac.update(payload.as_bytes());
         let result = mac.finalize();
         let code_bytes = result.into_bytes();
-        STANDARD.encode(code_bytes)
+        Ok(STANDARD.encode(code_bytes))
     }
 
     pub async fn send_notification(
@@ -41,7 +45,7 @@ impl WebhookNotificationService {
 
         let response = match self.secret_key.as_ref() {
             Some(key) => {
-                let signature = self.sign_payload(&payload, key);
+                let signature = self.sign_payload(&payload, key)?;
 
                 self.client
                     .post(&self.webhook_url)
@@ -80,4 +84,6 @@ pub enum WebhookNotificationError {
     ResponseError(#[from] serde_json::Error),
     #[error("Webhook error: {0}")]
     WebhookError(String),
+    #[error("Signing error: {0}")]
+    SigningError(String),
 }

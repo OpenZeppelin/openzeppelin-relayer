@@ -7,7 +7,6 @@
 use crate::models::WebhookNotification;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use strum::Display;
 use uuid::Uuid;
@@ -160,12 +159,6 @@ impl TransactionStatusCheck {
 pub struct NotificationSend {
     pub notification_id: String,
     pub notification: WebhookNotification,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct NotificationSend2 {
-    pub notification_id: String,
-    pub notification: Value,
 }
 
 impl NotificationSend {
