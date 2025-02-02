@@ -1,0 +1,18 @@
+---
+name: Cache
+description: Caches cargo dependencies
+outputs:
+  cache-hit:
+    description: Cache Hit
+    value: ${{ steps.cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: setup rust tool chain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+    - name: Restore cargo dependencies from cache
+      uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3  # v2.7.7
+      id: cache

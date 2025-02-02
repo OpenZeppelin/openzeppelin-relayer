@@ -1,12 +1,11 @@
-version: '3.9'
-
+---
 services:
   relayer:
     build:
       context: .
-      dockerfile: Dockerfile.development
+      dockerfile: ${DOCKERFILE:-Dockerfile.development}
     ports:
-      - "8080:8080"
+      - 8080:8080
     environment:
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=debug
@@ -21,10 +20,10 @@ services:
   redis:
     image: redis:latest
     ports:
-      - "6379:6379"
+      - 6379:6379
     volumes:
-      - redis_data:/data 
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+      - redis_data:/data
+    command: [redis-server, --appendonly, yes, --save, '60', '1']
     networks:
       - relayer-network
     restart: always

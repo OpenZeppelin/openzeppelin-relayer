@@ -103,8 +103,8 @@ mod tests {
 
     #[test]
     fn is_testnet() {
-        assert_eq!(SolanaNamedNetwork::MainnetBeta.is_testnet(), false);
-        assert_eq!(SolanaNamedNetwork::Testnet.is_testnet(), true);
+        assert!(!SolanaNamedNetwork::MainnetBeta.is_testnet());
+        assert!(SolanaNamedNetwork::Testnet.is_testnet());
     }
 
     #[test]
