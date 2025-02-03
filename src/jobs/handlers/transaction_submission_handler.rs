@@ -12,7 +12,8 @@ use log::info;
 
 use crate::{
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionCommand, TransactionSend, DEFAULT_MAXIMUM_RETRIES},
+    init::DEFAULT_MAXIMUM_RETRIES,
+    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
     AppState,
 };
 

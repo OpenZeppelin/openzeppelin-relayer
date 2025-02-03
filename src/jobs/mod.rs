@@ -1,9 +1,6 @@
 mod queue;
 pub use queue::*;
 
-mod workers;
-pub use workers::*;
-
 mod handlers;
 pub use handlers::*;
 
@@ -14,3 +11,4 @@ mod job;
 pub use job::*;
 
 mod retry_backoff;
+pub use retry_backoff::*;

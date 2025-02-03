@@ -10,7 +10,8 @@ use eyre::Result;
 use log::info;
 
 use crate::{
-    jobs::{handle_result, Job, NotificationSend, DEFAULT_MAXIMUM_RETRIES},
+    init::DEFAULT_MAXIMUM_RETRIES,
+    jobs::{handle_result, Job, NotificationSend},
     repositories::Repository,
     services::WebhookNotificationService,
     AppState,

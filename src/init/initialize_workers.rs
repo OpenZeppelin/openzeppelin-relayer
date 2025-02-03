@@ -10,8 +10,8 @@ use tokio::signal::unix::SignalKind;
 
 use crate::{
     jobs::{
-        notification_handler, retry_backoff::BackoffRetryPolicy, transaction_request_handler,
-        transaction_status_handler, transaction_submission_handler,
+        notification_handler, transaction_request_handler, transaction_status_handler,
+        transaction_submission_handler, BackoffRetryPolicy,
     },
     AppState,
 };
@@ -27,7 +27,7 @@ const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
 const NOTIFICATION_SENDER: &str = "notification_sender";
 pub const DEFAULT_MAXIMUM_RETRIES: usize = 5;
 
-pub async fn setup_workers(app_state: ThinData<AppState>) -> Result<()> {
+pub async fn initialize_workers(app_state: ThinData<AppState>) -> Result<()> {
     let queue = app_state.job_producer.get_queue().await?;
 
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
