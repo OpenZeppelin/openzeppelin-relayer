@@ -233,7 +233,8 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             network_type,
             signer_id: config.signer_id,
             policies,
-            address: "".to_string(),
+            address: "".to_string(), /* Default to empty address. This is later updated by the
+                                      * relayer */
             notification_id: config.notification_id,
             system_disabled: false,
         })

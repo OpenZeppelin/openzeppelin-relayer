@@ -181,7 +181,7 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
                 let transaction_counter_service = TransactionCounterService::new(
                     relayer.id.clone(),
-                    "".to_string(),
+                    relayer.address.clone(),
                     transaction_counter_store,
                 );
 
