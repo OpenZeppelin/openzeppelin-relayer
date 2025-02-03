@@ -251,12 +251,11 @@ pub async fn sign_data(
 
     let result = network_relayer.sign_data(request).await?;
 
-    let sign_data = match result {
-        SignDataResponse::Evm(sig) => sig,
-        _ => return Err(ApiError::NotSupported("Sign data not supported".into())),
-    };
-
-    Ok(HttpResponse::Ok().json(ApiResponse::success(sign_data)))
+    if let SignDataResponse::Evm(sign) = result {
+        Ok(HttpResponse::Ok().json(ApiResponse::success(sign)))
+    } else {
+        Err(ApiError::NotSupported("Sign data not supported".into()))
+    }
 }
 
 pub async fn sign_typed_data(

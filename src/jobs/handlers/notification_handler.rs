@@ -24,7 +24,6 @@ use crate::{
 ///
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of notification processing
-/// ```
 pub async fn notification_handler(
     job: Job<NotificationSend>,
     context: Data<ThinData<AppState>>,

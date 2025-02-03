@@ -6,7 +6,6 @@
 //!
 //! * `controllers` - Request handling and business logic
 //! * `routes` - API endpoint definitions and routing
-//! ```
 
 pub mod controllers;
 

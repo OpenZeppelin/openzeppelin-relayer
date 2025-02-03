@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
                 Box::pin(async move {
                     Ok(req.into_response(
                         HttpResponse::Unauthorized().body(
-                            r#"{"success": false, "code":401, "error": "Unauthorized", message: "Unauthorized"}"#.to_string(),
+                            r#"{"success": false, "code":401, "error": "Unauthorized", "message": "Unauthorized"}"#.to_string(),
                         ),
                     ))
                 })

@@ -1,0 +1,58 @@
+= Project Structure
+:description: Detailed information about the OpenZeppelin Relayer project structure
+
+This document provides detailed information about each directory in the OpenZeppelin Relayer project.
+
+== Source Code Organization
+
+=== `src/` Directory
+The main source code directory contains the core implementation files organized into several modules:
+
+* `bootstrap/`: Application initialization and setup for `main.rs`
+** Handles service initialization and dependency injection
+
+* `models/`: Core data structures and types
+* `services/`: Core business logic
+
+* `repositories/`: Configuration storage
+** Handles loading and validating configuration files
+** Provides storage interfaces for networks.
+** Implements validation of configuration references
+
+== Documentation
+
+=== `docs/` Directory
+Project documentation:
+
+* User guides
+* API documentation
+* Configuration examples
+* Architecture diagrams
+
+== Development Tools
+
+=== Pre-commit Hooks
+Located in the project root:
+
+* Code formatting checks
+* Linting rules
+* Commit message validation
+
+=== Build Configuration
+Core build files:
+
+* `Cargo.toml`: Project dependencies and metadata
+* `rustfmt.toml`: Code formatting rules
+* `rust-toolchain.toml`: Rust version and components
+
+== Docker Support
+
+The project includes Docker configurations for different environments:
+
+* `Dockerfile.development`: Development container setup
+* `Dockerfile.production`: Production-ready container
+
+[TIP]
+====
+For detailed information about running the relayers in containers, see the Docker deployment section in the main documentation.
+====
