@@ -30,6 +30,7 @@ pub struct EvmRelayer {
     job_producer: Arc<JobProducer>,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl EvmRelayer {
     pub fn new(
         relayer: RelayerRepoModel,

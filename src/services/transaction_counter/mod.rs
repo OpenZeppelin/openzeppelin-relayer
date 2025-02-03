@@ -11,6 +11,7 @@ pub struct TransactionCounterService {
     store: Arc<InMemoryTransactionCounter>,
 }
 
+#[allow(dead_code)]
 impl TransactionCounterService {
     pub fn new(
         relayer_id: String,
