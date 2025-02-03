@@ -10,7 +10,7 @@ use eyre::Result;
 use log::info;
 
 use crate::{
-    init::DEFAULT_MAXIMUM_RETRIES,
+    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     jobs::{handle_result, Job, NotificationSend},
     repositories::Repository,
     services::WebhookNotificationService,
@@ -35,7 +35,12 @@ pub async fn notification_handler(
 
     let result = handle_request(job.data, context).await;
 
-    handle_result(result, attempt, "Notification", DEFAULT_MAXIMUM_RETRIES)
+    handle_result(
+        result,
+        attempt,
+        "Notification",
+        WORKER_DEFAULT_MAXIMUM_RETRIES,
+    )
 }
 
 pub async fn handle_request(

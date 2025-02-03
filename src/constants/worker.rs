@@ -1,0 +1,1 @@
+pub const WORKER_DEFAULT_MAXIMUM_RETRIES: usize = 5;

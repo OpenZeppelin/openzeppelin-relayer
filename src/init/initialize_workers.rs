@@ -25,7 +25,6 @@ const TRANSACTION_REQUEST: &str = "transaction_request";
 const TRANSACTION_SENDER: &str = "transaction_sender";
 const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
 const NOTIFICATION_SENDER: &str = "notification_sender";
-pub const DEFAULT_MAXIMUM_RETRIES: usize = 5;
 
 pub async fn initialize_workers(app_state: ThinData<AppState>) -> Result<()> {
     let queue = app_state.job_producer.get_queue().await?;

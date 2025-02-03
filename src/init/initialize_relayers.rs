@@ -1,3 +1,7 @@
+//! Relayer initialization
+//!
+//! This module contains functions for initializing relayers, ensuring they are
+//! properly configured and ready for operation.
 use crate::{
     domain::{get_network_relayer, Relayer},
     repositories::Repository,

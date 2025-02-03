@@ -1,3 +1,7 @@
+//! Application state initialization
+//!
+//! This module contains functions for initializing the application state,
+//! including setting up repositories, job queues, and other necessary components.
 use crate::{
     jobs::{self, Queue},
     repositories::{
