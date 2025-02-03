@@ -261,7 +261,7 @@ jobs:
           platforms: linux/amd64
 
       - name: Scan image
-        uses: anchore/scan-action@abae793926ec39a78ab18002bc7fc45bbbd94342  # v6.0.0
+        uses: anchore/scan-action@7c05671ae9be166aeb155bad2d7df9121823df32  # v6.1.0
         with:
           image: openzeppelin-relayer-dev:${{ github.sha }}
           fail-build: true
