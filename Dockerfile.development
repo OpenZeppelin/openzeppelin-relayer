@@ -1,25 +1,26 @@
 # Base image
-FROM cgr.dev/chainguard/rust:latest-dev as base
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev AS base
 
 WORKDIR /usr/app
 
 USER root
 RUN apk update && apk add openssl-dev
+
 ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig
 
+# Copy
 COPY . .
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo install --root /usr/app --path . --debug
+    cargo install --root /usr/app --path . --debug --locked
 
 # Setting up build directories
-FROM cgr.dev/chainguard/glibc-dynamic
-
-COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
-COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3 
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest-dev
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
+COPY --chown=nonroot:nonroot config /app/config
 
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]

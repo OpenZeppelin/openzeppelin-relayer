@@ -1,6 +1,6 @@
 use super::ConfigFileError;
 use reqwest::Url;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -16,7 +16,7 @@ pub enum SigningKeyConfig {
     Plain { value: String },
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationFileConfig {
     pub id: String,
@@ -92,39 +92,6 @@ impl NotificationFileConfig {
     }
 }
 
-impl<'de> Deserialize<'de> for NotificationFileConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct NotificationConfigHelper {
-            id: String,
-            r#type: NotificationFileConfigType,
-            url: Option<String>,
-            signing_key: Option<SigningKeyConfig>,
-        }
-
-        let helper = NotificationConfigHelper::deserialize(deserializer)?;
-
-        let signing_key = match helper.signing_key {
-            Some(SigningKeyConfig::Env { name }) => {
-                let signing_key = std::env::var(&name).map_err(de::Error::custom)?;
-                Some(SigningKeyConfig::Plain { value: signing_key })
-            }
-            Some(SigningKeyConfig::Plain { value }) => Some(SigningKeyConfig::Plain { value }),
-            None => None,
-        };
-
-        Ok(NotificationFileConfig {
-            id: helper.id,
-            r#type: helper.r#type,
-            url: helper.url.unwrap_or_default(),
-            signing_key,
-        })
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationsFileConfig {
@@ -172,17 +139,14 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "missing field `url`")]
     fn test_missing_webhook_url() {
         let config = json!({
             "id": "notification-test",
             "type": "webhook"
         });
 
-        let notification: NotificationFileConfig = serde_json::from_value(config).unwrap();
-        assert!(matches!(
-            notification.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
+        let _notification: NotificationFileConfig = serde_json::from_value(config).unwrap();
     }
 
     #[test]

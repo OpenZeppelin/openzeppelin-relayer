@@ -23,7 +23,7 @@ impl KeyExtractor for ApiKeyRateLimit {
             .map(|token| token.trim().to_owned())
             .ok_or_else(|| {
                 Self::KeyExtractionError::new(
-                    r#"{ "success": false, "code": 401, "error": "Unauthorized", "message": "Unauthorized}"#,
+                    r#"{"success": false, "code": 401, "error": "Unauthorized", "message": "Unauthorized"}"#,
                 )
                 .set_content_type(ContentType::json())
                 .set_status_code(StatusCode::UNAUTHORIZED)
@@ -41,7 +41,7 @@ impl KeyExtractor for ApiKeyRateLimit {
         response.content_type(ContentType::json())
             .body(
                 format!(
-                    r#"{{ "success": false, "code":429, "error": "TooManyRequests, "message": "TooManyRequests", "after": {wait_time}}}"#
+                    r#"{{ "success": false, "code":429, "error": "TooManyRequests", "message": "TooManyRequests", "after": {wait_time}}}"#
                 )
             )
     }

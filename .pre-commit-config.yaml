@@ -1,0 +1,62 @@
+---
+minimum_pre_commit_version: 3.5.0
+
+default_install_hook_types: [commit-msg, pre-commit, pre-push]
+
+default_stages:
+  - pre-commit
+  - pre-push
+
+ci:
+  autofix_commit_msg: 'chore(pre-commit): autofix run'
+  autoupdate_commit_msg: 'chore(pre-commit): autoupdate hooks'
+
+repos:
+  - repo: local
+    hooks:
+      - id: pre-commit
+        name: Update pre-commit
+        entry: pre-commit install --install-hooks -t pre-commit -t pre-push
+        pass_filenames: false
+        language: system
+        files: ^\.pre-commit-config.yaml$
+      - id: rustfmt
+        name: rustfmt
+        entry: cargo fmt -- --check
+        pass_filenames: false
+        language: system
+      - id: clippy
+        name: clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        pass_filenames: false
+        language: system
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+  - repo: https://github.com/lyz-code/yamlfix/
+    rev: 0.9.0
+    hooks:
+      - id: yamlfix
+  - repo: https://github.com/crate-ci/committed
+    rev: v1.1.5
+    hooks:
+      - id: committed
+        stages: [commit-msg]
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.29.4
+    hooks:
+      - id: typos
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [--strict, build, chore, ci, docs, feat, fix, perf, refactor, revert,
+          style, test]
