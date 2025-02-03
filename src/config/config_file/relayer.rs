@@ -26,6 +26,7 @@ pub struct ConfigFileRelayerEvmPolicy {
     pub whitelist_receivers: Option<Vec<String>>,
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: Option<bool>,
+    pub min_balance: Option<u128>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -34,6 +35,7 @@ pub struct ConfigFileRelayerSolanaPolicy {
     pub max_retries: Option<u32>,
     pub confirmation_blocks: Option<u64>,
     pub timeout_seconds: Option<u64>,
+    pub min_balance: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -41,7 +43,7 @@ pub struct ConfigFileRelayerSolanaPolicy {
 pub struct ConfigFileRelayerStellarPolicy {
     pub max_fee: Option<u32>,
     pub timeout_seconds: Option<u64>,
-    pub min_account_balance: Option<String>,
+    pub min_balance: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -306,8 +308,7 @@ mod tests {
             "policies": {
                 "max_fee": 100,
                 "timeout_seconds": 10,
-                "min_account_balance": "1"
-
+                "min_balance": 100
             }
         });
 

@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use crate::models::RelayerError;
+use crate::{
+    constants::{DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE},
+    models::RelayerError,
+};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,12 +21,48 @@ pub enum RelayerNetworkPolicy {
     Stellar(RelayerStellarPolicy),
 }
 
+impl RelayerNetworkPolicy {
+    pub fn get_evm_policy(&self) -> RelayerEvmPolicy {
+        match self {
+            Self::Evm(policy) => policy.clone(),
+            _ => RelayerEvmPolicy::default(),
+        }
+    }
+
+    pub fn get_solana_policy(&self) -> RelayerSolanaPolicy {
+        match self {
+            Self::Solana(policy) => policy.clone(),
+            _ => RelayerSolanaPolicy::default(),
+        }
+    }
+
+    pub fn get_stellar_policy(&self) -> RelayerStellarPolicy {
+        match self {
+            Self::Stellar(policy) => policy.clone(),
+            _ => RelayerStellarPolicy::default(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct RelayerEvmPolicy {
     pub gas_price_cap: Option<u64>,
     pub whitelist_receivers: Option<Vec<String>>,
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: Option<bool>,
+    pub min_balance: u128,
+}
+
+impl Default for RelayerEvmPolicy {
+    fn default() -> Self {
+        Self {
+            gas_price_cap: None,
+            whitelist_receivers: None,
+            eip1559_pricing: None,
+            private_transactions: None,
+            min_balance: DEFAULT_EVM_MIN_BALANCE,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -32,6 +71,18 @@ pub struct RelayerSolanaPolicy {
     pub max_retries: Option<u32>,
     pub confirmation_blocks: Option<u64>,
     pub timeout_seconds: Option<u64>,
+    pub min_balance: u64,
+}
+
+impl Default for RelayerSolanaPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: None,
+            confirmation_blocks: None,
+            timeout_seconds: None,
+            min_balance: DEFAULT_SOLANA_MIN_BALANCE,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -39,7 +90,17 @@ pub struct RelayerSolanaPolicy {
 pub struct RelayerStellarPolicy {
     pub max_fee: Option<u32>,
     pub timeout_seconds: Option<u64>,
-    pub min_account_balance: Option<String>,
+    pub min_balance: u64,
+}
+
+impl Default for RelayerStellarPolicy {
+    fn default() -> Self {
+        Self {
+            max_fee: None,
+            timeout_seconds: None,
+            min_balance: DEFAULT_STELLAR_MIN_BALANCE,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,7 +111,7 @@ pub struct RelayerRepoModel {
     pub paused: bool,
     pub network_type: NetworkType,
     pub signer_id: String,
-    pub policies: Option<RelayerNetworkPolicy>,
+    pub policies: RelayerNetworkPolicy,
     pub address: String,
     pub notification_id: Option<String>,
     pub system_disabled: bool,
@@ -82,7 +143,7 @@ mod tests {
             system_disabled,
             network: "test_network".to_string(),
             network_type: NetworkType::Evm,
-            policies: None,
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,

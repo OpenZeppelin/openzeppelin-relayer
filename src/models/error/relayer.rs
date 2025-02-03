@@ -27,6 +27,8 @@ pub enum RelayerError {
     RelayerPaused,
     #[error("Transaction sequence error: {0}")]
     TransactionSequenceError(#[from] TransactionCounterError),
+    #[error("Insufficient balance error: {0}")]
+    InsufficientBalanceError(String),
 }
 
 impl From<RelayerError> for ApiError {
@@ -43,6 +45,7 @@ impl From<RelayerError> for ApiError {
             }
             RelayerError::RelayerPaused => ApiError::ForbiddenError("Relayer paused".to_string()),
             RelayerError::TransactionSequenceError(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::InsufficientBalanceError(msg) => ApiError::BadRequest(msg),
         }
     }
 }

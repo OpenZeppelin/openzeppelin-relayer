@@ -1,5 +1,6 @@
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
+    constants::{DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE},
     domain::RelayerUpdateRequest,
     models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
@@ -210,15 +211,18 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
         };
 
         let policies = if let Some(config_policies) = config.policies {
-            Some(
-                RelayerNetworkPolicy::try_from(config_policies).map_err(|_| {
-                    ConversionError::InvalidNetworkType(
-                        "Failed to convert network policy".to_string(),
-                    )
-                })?,
-            )
+            RelayerNetworkPolicy::try_from(config_policies).map_err(|_| {
+                ConversionError::InvalidNetworkType("Failed to convert network policy".to_string())
+            })?
         } else {
-            None
+            // return default policy based on network type
+            match network_type {
+                NetworkType::Evm => RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+                NetworkType::Stellar => {
+                    RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default())
+                }
+                NetworkType::Solana => RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default()),
+            }
         };
 
         Ok(RelayerRepoModel {
@@ -247,6 +251,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     whitelist_receivers: evm.whitelist_receivers,
                     eip1559_pricing: evm.eip1559_pricing,
                     private_transactions: evm.private_transactions,
+                    min_balance: evm.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Solana(solana) => {
@@ -254,13 +259,14 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     max_retries: solana.max_retries,
                     confirmation_blocks: solana.confirmation_blocks,
                     timeout_seconds: solana.timeout_seconds,
+                    min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {
                 Ok(RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
                     max_fee: stellar.max_fee,
                     timeout_seconds: stellar.timeout_seconds,
-                    min_account_balance: stellar.min_account_balance,
+                    min_balance: stellar.min_balance.unwrap_or(DEFAULT_STELLAR_MIN_BALANCE),
                 }))
             }
         }
@@ -278,7 +284,13 @@ mod tests {
             network: "TestNet".to_string(),
             paused: false,
             network_type: NetworkType::Evm,
-            policies: None,
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                gas_price_cap: None,
+                whitelist_receivers: None,
+                eip1559_pricing: None,
+                private_transactions: None,
+                min_balance: 0,
+            }),
             signer_id: "test".to_string(),
             address: "0x".to_string(),
             notification_id: None,

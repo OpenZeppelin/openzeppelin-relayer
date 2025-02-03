@@ -1,6 +1,6 @@
 use crate::{
     jobs::NotificationSend,
-    models::{TransactionRepoModel, TransactionResponse},
+    models::{RelayerRepoModel, RelayerResponse, TransactionRepoModel, TransactionResponse},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -32,10 +32,20 @@ pub struct TransactionFailurePayload {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RelayerDisabledPayload {
+    pub relayer: RelayerResponse,
+    pub disable_reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[serde(tag = "payload_type")]
 pub enum WebhookPayload {
     Transaction(TransactionResponse),
+    #[serde(rename = "transaction_failure")]
     TransactionFailure(TransactionFailurePayload),
+    #[serde(rename = "relayer_disabled")]
+    RelayerDisabled(RelayerDisabledPayload),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -54,6 +64,25 @@ pub fn produce_transaction_update_notification_payload(
         WebhookNotification::new(
             "transaction_update".to_string(),
             WebhookPayload::Transaction(tx_payload),
+        ),
+    )
+}
+
+pub fn produce_relayer_disabled_payload(
+    notification_id: &str,
+    relayer: &RelayerRepoModel,
+    reason: &str,
+) -> NotificationSend {
+    let relayer_response: RelayerResponse = relayer.clone().into();
+    let payload = RelayerDisabledPayload {
+        relayer: relayer_response,
+        disable_reason: reason.to_string(),
+    };
+    NotificationSend::new(
+        notification_id.to_string(),
+        WebhookNotification::new(
+            "relayer_state_update".to_string(),
+            WebhookPayload::RelayerDisabled(payload),
         ),
     )
 }

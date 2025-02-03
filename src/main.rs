@@ -45,6 +45,7 @@ use simple_logger::SimpleLogger;
 
 mod api;
 mod config;
+mod constants;
 mod domain;
 mod init;
 mod jobs;

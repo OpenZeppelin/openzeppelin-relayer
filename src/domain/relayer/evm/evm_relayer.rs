@@ -8,8 +8,8 @@ use crate::{
     },
     jobs::{JobProducer, TransactionRequest},
     models::{
-        EvmNetwork, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
-        TransactionRepoModel,
+        produce_relayer_disabled_payload, EvmNetwork, NetworkTransactionRequest, RelayerRepoModel,
+        RepositoryError, TransactionRepoModel,
     },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
     services::{DataSignerTrait, EvmProvider, EvmSigner, TransactionCounterService},
@@ -81,15 +81,25 @@ impl EvmRelayer {
     }
 
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
-        let balance = self
+        let balance: u128 = self
             .provider
             .get_balance(&self.relayer.address)
             .await
-            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?
+            .try_into()
+            .map_err(|_| {
+                RelayerError::ProviderError("Failed to convert balance to u128".to_string())
+            })?;
 
         info!("Balance : {} for relayer: {}", balance, self.relayer.id);
 
-        // TODO: ADD min balance validation
+        let policy = self.relayer.policies.get_evm_policy();
+
+        if balance < policy.min_balance {
+            return Err(RelayerError::InsufficientBalanceError(
+                "Insufficient balance".to_string(),
+            ));
+        }
 
         Ok(())
     }
@@ -181,10 +191,39 @@ impl Relayer for EvmRelayer {
             || validate_rpc_result.is_err()
             || validate_min_balance_result.is_err()
         {
-            warn!("Disabling relayer: {} due to failed check", self.relayer.id);
-            self.relayer_repository
+            let reason = vec![
+                nonce_sync_result
+                    .err()
+                    .map(|e| format!("Nonce sync failed: {}", e)),
+                validate_rpc_result
+                    .err()
+                    .map(|e| format!("RPC validation failed: {}", e)),
+                validate_min_balance_result
+                    .err()
+                    .map(|e| format!("Balance check failed: {}", e)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<String>>()
+            .join(", ");
+
+            warn!("Disabling relayer: {} due to: {}", self.relayer.id, reason);
+            let updated_relayer = self
+                .relayer_repository
                 .disable_relayer(self.relayer.id.clone())
                 .await?;
+            if let Some(notification_id) = &self.relayer.notification_id {
+                self.job_producer
+                    .produce_send_notification_job(
+                        produce_relayer_disabled_payload(
+                            notification_id,
+                            &updated_relayer,
+                            &reason,
+                        ),
+                        None,
+                    )
+                    .await?;
+            }
         }
         Ok(())
     }
