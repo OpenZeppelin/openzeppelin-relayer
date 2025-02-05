@@ -105,14 +105,14 @@ mod tests {
     }
 
     #[test]
-    fn is_testnet() {
+    fn test_is_testnet() {
         assert!(!SolanaNamedNetwork::MainnetBeta.is_testnet());
         assert!(SolanaNamedNetwork::Testnet.is_testnet());
         assert!(SolanaNamedNetwork::Devnet.is_testnet());
     }
 
     #[test]
-    fn rpc_url() {
+    fn test_rpc_url() {
         assert_eq!(
             SolanaNamedNetwork::MainnetBeta.public_rpc_urls(),
             &["https://api.mainnet-beta.solana.com"]
@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn explorer_url() {
+    fn test_explorer_url() {
         assert_eq!(
             SolanaNamedNetwork::MainnetBeta.explorer_urls(),
             &["https://explorer.solana.com"]
@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn average_blocktime() {
+    fn test_average_blocktime() {
         assert_eq!(
             SolanaNamedNetwork::MainnetBeta.average_blocktime(),
             Some(Duration::from_millis(400))
@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn from_str() {
+    fn test_from_str() {
         assert_eq!(
             SolanaNamedNetwork::from_str("mainnet-beta").unwrap(),
             SolanaNamedNetwork::MainnetBeta
