@@ -8,7 +8,7 @@ use crate::{
     },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel},
-    repositories::{InMemoryTransactionRepository, RelayerRepository},
+    repositories::{InMemoryTransactionRepository, RelayerRepositoryEnum},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -18,7 +18,7 @@ use log::info;
 pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
     network: SolanaNetwork,
-    relayer_repository: Arc<dyn RelayerRepository>,
+    relayer_repository: Arc<RelayerRepositoryEnum>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 }
@@ -26,7 +26,7 @@ pub struct SolanaRelayer {
 impl SolanaRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<dyn RelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryEnum>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
