@@ -168,43 +168,46 @@ impl RelayerRepository for InMemoryRelayerRepository {
 
 #[async_trait]
 impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
-    async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
+    async fn create(&self, relayer: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
-        if store.contains_key(&entity.id) {
+        if store.contains_key(&relayer.id) {
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Relayer with ID {} already exists",
-                entity.id
+                relayer.id
             )));
         }
-        store.insert(entity.id.clone(), entity.clone());
-        Ok(entity)
+        store.insert(relayer.id.clone(), relayer.clone());
+        Ok(relayer)
     }
 
     async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
-        store
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| RepositoryError::NotFound(format!("Relayer with ID {} not found", id)))
+        match store.get(&id) {
+            Some(relayer) => Ok(relayer.clone()),
+            None => Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                id
+            ))),
+        }
     }
-
+    #[allow(clippy::map_entry)]
     async fn update(
         &self,
         id: String,
-        entity: RelayerRepoModel,
+        relayer: RelayerRepoModel,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
-        let id_clone = id.clone();
-        match store.entry(id) {
-            std::collections::hash_map::Entry::Occupied(mut e) => {
-                let mut updated = entity;
-                updated.id = e.key().clone();
-                e.insert(updated.clone());
-                Ok(updated)
-            }
-            std::collections::hash_map::Entry::Vacant(_) => Err(RepositoryError::NotFound(
-                format!("Relayer with ID {} not found", id_clone),
-            )),
+        if store.contains_key(&id) {
+            // Ensure we update the existing entry
+            let mut updated_relayer = relayer;
+            updated_relayer.id = id.clone(); // Preserve original ID
+            store.insert(id, updated_relayer.clone());
+            Ok(updated_relayer)
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                id
+            )))
         }
     }
 
