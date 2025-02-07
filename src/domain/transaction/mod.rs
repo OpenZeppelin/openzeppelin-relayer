@@ -1,7 +1,9 @@
 use crate::{
     jobs::JobProducer,
     models::{EvmNetwork, NetworkType, RelayerRepoModel, TransactionError, TransactionRepoModel},
-    repositories::{InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepository},
+    repositories::{
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryEnum,
+    },
     services::{EvmProvider, TransactionCounterService},
 };
 use async_trait::async_trait;
@@ -147,7 +149,7 @@ impl Transaction for NetworkTransaction {
 pub trait RelayerTransactionFactoryTrait {
     fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<dyn RelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryEnum>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
@@ -158,7 +160,7 @@ pub struct RelayerTransactionFactory;
 impl RelayerTransactionFactory {
     pub fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<dyn RelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryEnum>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,

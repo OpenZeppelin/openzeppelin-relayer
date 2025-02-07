@@ -11,7 +11,9 @@ use crate::{
         produce_relayer_disabled_payload, EvmNetwork, NetworkTransactionRequest, RelayerRepoModel,
         RepositoryError, TransactionRepoModel,
     },
-    repositories::{InMemoryTransactionRepository, RelayerRepository, Repository},
+    repositories::{
+        InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryEnum, Repository,
+    },
     services::{DataSignerTrait, EvmProvider, EvmSigner, TransactionCounterService},
 };
 use async_trait::async_trait;
@@ -24,7 +26,7 @@ pub struct EvmRelayer {
     signer: EvmSigner,
     network: EvmNetwork,
     provider: EvmProvider,
-    relayer_repository: Arc<dyn RelayerRepository>,
+    relayer_repository: Arc<RelayerRepositoryEnum>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
@@ -37,7 +39,7 @@ impl EvmRelayer {
         signer: EvmSigner,
         provider: EvmProvider,
         network: EvmNetwork,
-        relayer_repository: Arc<dyn RelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryEnum>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
