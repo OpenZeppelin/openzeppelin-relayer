@@ -18,7 +18,8 @@ target/
 #.idea/
 .DS_Store
 
-config/config.json
+config.json
+local-signer.json
 
 # docs
 docs/build/

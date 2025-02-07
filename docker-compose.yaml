@@ -6,6 +6,8 @@ services:
       dockerfile: ${DOCKERFILE:-Dockerfile.development}
     ports:
       - 8080:8080
+    env_file:
+      - .env
     environment:
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=debug
@@ -15,7 +17,7 @@ services:
       - relayer-network
     restart: always
     volumes:
-      - ./config.json:/app/config/config.json
+      - ./config:/app/config/:ro
 
   redis:
     image: redis:latest
