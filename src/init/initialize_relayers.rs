@@ -4,6 +4,7 @@
 //! properly configured and ready for operation.
 use crate::{
     domain::{get_network_relayer, Relayer},
+    repositories::Repository,
     AppState,
 };
 use actix_web::web::ThinData;
