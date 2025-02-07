@@ -4,13 +4,13 @@ use crate::{
     jobs::JobProducer,
     repositories::{
         InMemoryNotificationRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepository,
+        InMemoryTransactionRepository, RelayerRepositoryEnum,
     },
 };
 
 #[derive(Clone, Debug)]
 pub struct AppState {
-    pub relayer_repository: Arc<dyn RelayerRepository>,
+    pub relayer_repository: Arc<RelayerRepositoryEnum>,
     pub transaction_repository: Arc<InMemoryTransactionRepository>,
     pub signer_repository: Arc<InMemorySignerRepository>,
     pub notification_repository: Arc<InMemoryNotificationRepository>,
@@ -19,7 +19,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn relayer_repository(&self) -> Arc<dyn RelayerRepository> {
+    pub fn relayer_repository(&self) -> Arc<RelayerRepositoryEnum> {
         Arc::clone(&self.relayer_repository)
     }
 

@@ -17,7 +17,7 @@ use crate::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
         RelayerResponse, TransactionResponse,
     },
-    repositories::Repository,
+    repositories::{RelayerRepository, Repository},
     ApiError, AppState,
 };
 use actix_web::{web, HttpResponse};
