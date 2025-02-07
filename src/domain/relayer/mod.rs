@@ -17,13 +17,12 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerRepoModel, TransactionRepoModel,
     },
+    repositories::RelayerRepository,
     services::{EvmSignerFactory, TransactionCounterService},
 };
 
 use crate::{
-    repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-    },
+    repositories::{InMemoryTransactionCounter, InMemoryTransactionRepository},
     services::EvmProvider,
 };
 use async_trait::async_trait;
@@ -145,7 +144,7 @@ pub trait RelayerFactoryTrait {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<dyn RelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -157,7 +156,7 @@ impl RelayerFactoryTrait for RelayerFactory {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<dyn RelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -274,7 +273,7 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct BalanceResponse {
     pub balance: u128,
     pub unit: String,

@@ -6,13 +6,44 @@ use crate::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
         RelayerStellarPolicy, RepositoryError,
     },
-    repositories::*,
 };
-use async_trait::async_trait;
 use eyre::Result;
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::{Mutex, MutexGuard};
+
+use crate::models::PaginationQuery;
+use async_trait::async_trait;
+
+use super::PaginatedResult;
+
+#[async_trait]
+pub trait RelayerRepository: Send + Sync + std::fmt::Debug {
+    async fn create(&self, relayer: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn update(
+        &self,
+        id: String,
+        relayer: RelayerRepoModel,
+    ) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
+    async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError>;
+    async fn count(&self) -> Result<usize, RepositoryError>;
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+    async fn partial_update(
+        &self,
+        id: String,
+        update: RelayerUpdateRequest,
+    ) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn disable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError>;
+}
 
 #[derive(Debug)]
 pub struct InMemoryRelayerRepository {
@@ -100,7 +131,7 @@ impl Default for InMemoryRelayerRepository {
 }
 
 #[async_trait]
-impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
+impl RelayerRepository for InMemoryRelayerRepository {
     async fn create(&self, relayer: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
         if store.contains_key(&relayer.id) {
@@ -191,6 +222,51 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
         let store = Self::acquire_lock(&self.store).await?;
         let relayers_length = store.len();
         Ok(relayers_length)
+    }
+
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        let active_relayers: Vec<RelayerRepoModel> = store
+            .values()
+            .filter(|&relayer| !relayer.paused)
+            .cloned()
+            .collect();
+        Ok(active_relayers)
+    }
+
+    async fn partial_update(
+        &self,
+        id: String,
+        update: RelayerUpdateRequest,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        if let Some(relayer) = store.get_mut(&id) {
+            if let Some(paused) = update.paused {
+                relayer.paused = paused;
+            }
+            Ok(relayer.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                id
+            )))
+        }
+    }
+
+    async fn disable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = self.store.lock().await;
+        if let Some(relayer) = store.get_mut(&relayer_id) {
+            relayer.system_disabled = true;
+            Ok(relayer.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                relayer_id
+            )))
+        }
     }
 }
 
