@@ -1,6 +1,7 @@
 ---
 services:
   relayer:
+    container_name: openzeppelin-relayer
     build:
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile.development}
@@ -10,7 +11,16 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379
-      - LOG_LEVEL=debug
+        # Options: trace, debug, info, warn, error
+        # Default: info
+      - LOG_LEVEL=info
+        # Options: stdout, file
+        # Uncomment to write logs to file
+        # Default: stdout
+      #- LOG_MODE=file
+        # Default: logs/relayer.log
+        # Uncomment to specify log file path
+      #- LOG_FILE=logs/relayer.log
     depends_on:
       - redis
     networks:
@@ -18,8 +28,12 @@ services:
     restart: always
     volumes:
       - ./config:/app/config/:ro
+      # Uncomment to persist logs
+      # Default: writes to stdout
+      #- ./logs:/app/logs
 
   redis:
+    container_name: openzeppelin-relayer-redis
     image: redis:latest
     ports:
       - 6379:6379

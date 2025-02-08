@@ -25,5 +25,8 @@ local-signer.json
 docs/build/
 rust_docs
 
+# logs
+logs/
+
 # Ignore node_modules
 node_modules
