@@ -17,7 +17,7 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerRepoModel, TransactionRepoModel,
     },
-    services::{EvmSignerFactory, TransactionCounterService},
+    services::{get_solana_network_provider_from_str, EvmSignerFactory, TransactionCounterService},
 };
 
 use crate::{
@@ -58,6 +58,16 @@ pub trait Relayer {
     async fn initialize_relayer(&self) -> Result<(), RelayerError>;
 }
 
+// Solana Relayer Trait
+// Subset of methods for Solana relayer
+#[async_trait]
+#[allow(dead_code)]
+pub trait SolanaRelayerTrait {
+    async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
+    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
+    async fn initialize_relayer(&self) -> Result<(), RelayerError>;
+}
+
 pub enum NetworkRelayer {
     Evm(EvmRelayer),
     Solana(SolanaRelayer),
@@ -72,9 +82,7 @@ impl Relayer for NetworkRelayer {
     ) -> Result<TransactionRepoModel, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.process_transaction_request(tx_request).await,
-            NetworkRelayer::Solana(relayer) => {
-                relayer.process_transaction_request(tx_request).await
-            }
+            NetworkRelayer::Solana(_) => solana_not_supported(),
             NetworkRelayer::Stellar(relayer) => {
                 relayer.process_transaction_request(tx_request).await
             }
@@ -92,7 +100,7 @@ impl Relayer for NetworkRelayer {
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
-            NetworkRelayer::Solana(relayer) => relayer.delete_pending_transactions().await,
+            NetworkRelayer::Solana(_) => solana_not_supported(),
             NetworkRelayer::Stellar(relayer) => relayer.delete_pending_transactions().await,
         }
     }
@@ -100,7 +108,7 @@ impl Relayer for NetworkRelayer {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.sign_data(request).await,
-            NetworkRelayer::Solana(relayer) => relayer.sign_data(request).await,
+            NetworkRelayer::Solana(_) => solana_not_supported(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_data(request).await,
         }
     }
@@ -111,7 +119,7 @@ impl Relayer for NetworkRelayer {
     ) -> Result<SignDataResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.sign_typed_data(request).await,
-            NetworkRelayer::Solana(relayer) => relayer.sign_typed_data(request).await,
+            NetworkRelayer::Solana(_) => solana_not_supported(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_typed_data(request).await,
         }
     }
@@ -127,7 +135,7 @@ impl Relayer for NetworkRelayer {
     async fn get_status(&self) -> Result<bool, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
-            NetworkRelayer::Solana(relayer) => relayer.get_status().await,
+            NetworkRelayer::Solana(_) => solana_not_supported(),
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
         }
     }
@@ -196,8 +204,12 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
+                let solana_provider =
+                    Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+
                 let relayer = SolanaRelayer::new(
                     relayer,
+                    solana_provider,
                     relayer_repository,
                     transaction_repository,
                     job_producer,

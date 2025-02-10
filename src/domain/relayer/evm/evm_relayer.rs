@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    constants::EVM_SMALLEST_UNIT_NAME,
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
@@ -141,7 +142,7 @@ impl Relayer for EvmRelayer {
 
         Ok(BalanceResponse {
             balance,
-            unit: "wei".to_string(),
+            unit: EVM_SMALLEST_UNIT_NAME.to_string(),
         })
     }
 

@@ -4,7 +4,7 @@ use crate::{
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
     },
-    services::{EvmProvider, TransactionCounterService},
+    services::{get_solana_network_provider_from_str, EvmProvider, TransactionCounterService},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -106,7 +106,7 @@ impl Transaction for NetworkTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
             NetworkTransaction::Evm(relayer) => relayer.cancel_transaction(tx).await,
-            NetworkTransaction::Solana(relayer) => relayer.cancel_transaction(tx).await,
+            NetworkTransaction::Solana(_) => solana_not_supported(),
             NetworkTransaction::Stellar(relayer) => relayer.cancel_transaction(tx).await,
         }
     }
@@ -117,7 +117,7 @@ impl Transaction for NetworkTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
             NetworkTransaction::Evm(relayer) => relayer.replace_transaction(tx).await,
-            NetworkTransaction::Solana(relayer) => relayer.replace_transaction(tx).await,
+            NetworkTransaction::Solana(_) => solana_not_supported(),
             NetworkTransaction::Stellar(relayer) => relayer.replace_transaction(tx).await,
         }
     }
@@ -194,12 +194,18 @@ impl RelayerTransactionFactory {
                     job_producer,
                 )?))
             }
-            NetworkType::Solana => Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
-                relayer,
-                relayer_repository,
-                transaction_repository,
-                job_producer,
-            )?)),
+            NetworkType::Solana => {
+                let solana_provider =
+                    Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+
+                Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
+                    relayer,
+                    solana_provider,
+                    relayer_repository,
+                    transaction_repository,
+                    job_producer,
+                )?))
+            }
             NetworkType::Stellar => {
                 Ok(NetworkTransaction::Stellar(StellarRelayerTransaction::new(
                     relayer,
