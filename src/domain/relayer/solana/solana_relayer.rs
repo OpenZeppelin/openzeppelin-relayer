@@ -15,12 +15,13 @@ use crate::{
         relayer::RelayerError, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SolanaRelayerTrait,
     },
     jobs::JobProducer,
-    models::{RelayerRepoModel, SolanaNetwork},
+    models::{produce_relayer_disabled_payload, RelayerRepoModel, SolanaNetwork},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::{SolanaProvider, SolanaProviderTrait},
 };
 use async_trait::async_trait;
 use eyre::Result;
+use log::{info, warn};
 
 #[allow(dead_code)]
 pub struct SolanaRelayer {
@@ -54,6 +55,15 @@ impl SolanaRelayer {
             job_producer,
         })
     }
+
+    async fn validate_rpc(&self) -> Result<(), RelayerError> {
+        self.provider
+            .get_latest_blockhash()
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -78,7 +88,64 @@ impl SolanaRelayerTrait for SolanaRelayer {
         })
     }
 
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        let balance = self
+            .provider
+            .get_balance(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        info!("Balance : {} for relayer: {}", balance, self.relayer.id);
+
+        let policy = self.relayer.policies.get_solana_policy();
+
+        if balance < policy.min_balance {
+            return Err(RelayerError::InsufficientBalanceError(
+                "Insufficient balance".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
+        info!("Initializing relayer: {}", self.relayer.id);
+        let validate_rpc_result = self.validate_rpc().await;
+        let validate_min_balance_result = self.validate_min_balance().await;
+
+        // disable relayer if any check fails
+        if validate_rpc_result.is_err() || validate_min_balance_result.is_err() {
+            let reason = vec![
+                validate_rpc_result
+                    .err()
+                    .map(|e| format!("RPC validation failed: {}", e)),
+                validate_min_balance_result
+                    .err()
+                    .map(|e| format!("Balance check failed: {}", e)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<String>>()
+            .join(", ");
+
+            warn!("Disabling relayer: {} due to: {}", self.relayer.id, reason);
+            let updated_relayer = self
+                .relayer_repository
+                .disable_relayer(self.relayer.id.clone())
+                .await?;
+            if let Some(notification_id) = &self.relayer.notification_id {
+                self.job_producer
+                    .produce_send_notification_job(
+                        produce_relayer_disabled_payload(
+                            notification_id,
+                            &updated_relayer,
+                            &reason,
+                        ),
+                        None,
+                    )
+                    .await?;
+            }
+        }
         Ok(())
     }
 }

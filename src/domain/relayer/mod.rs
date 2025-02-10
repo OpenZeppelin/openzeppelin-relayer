@@ -56,6 +56,7 @@ pub trait Relayer {
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn get_status(&self) -> Result<bool, RelayerError>;
     async fn initialize_relayer(&self) -> Result<(), RelayerError>;
+    async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
 // Solana Relayer Trait
@@ -66,6 +67,7 @@ pub trait SolanaRelayerTrait {
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
     async fn initialize_relayer(&self) -> Result<(), RelayerError>;
+    async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
 pub enum NetworkRelayer {
@@ -137,6 +139,14 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(_) => solana_not_supported(),
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
+        }
+    }
+
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.validate_min_balance().await,
+            NetworkRelayer::Solana(relayer) => relayer.validate_min_balance().await,
+            NetworkRelayer::Stellar(relayer) => relayer.validate_min_balance().await,
         }
     }
 

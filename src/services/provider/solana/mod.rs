@@ -11,6 +11,8 @@
 //! TODO: add support for using multiple RPCs and retries
 use async_trait::async_trait;
 use eyre::Result;
+#[cfg(test)]
+use mockall::automock;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use solana_client::{
     nonblocking::rpc_client::RpcClient, rpc_response::RpcSimulateTransactionResult,
@@ -21,8 +23,6 @@ use solana_sdk::{
 };
 use std::{str::FromStr, time::Duration};
 use thiserror::Error;
-#[cfg(test)]
-use mockall::automock;
 
 use super::ProviderError;
 
@@ -63,23 +63,32 @@ impl Serialize for SolanaProviderError {
 pub trait SolanaProviderTrait: Send + Sync {
     /// Retrieves the balance (in lamports) for the given address.
     async fn get_balance(&self, address: &str) -> Result<u64, SolanaProviderError>;
-    
+
     /// Retrieves the latest blockhash as a 32-byte array.
     async fn get_latest_blockhash(&self) -> Result<[u8; 32], SolanaProviderError>;
 
     /// Sends a transaction to the Solana network.
-    async fn send_transaction(&self, transaction: &Transaction) -> Result<Signature, SolanaProviderError>;
+    async fn send_transaction(
+        &self,
+        transaction: &Transaction,
+    ) -> Result<Signature, SolanaProviderError>;
 
     /// Confirms a transaction given its signature.
-    async fn confirm_transaction(&self, signature: &Signature) -> Result<bool, SolanaProviderError>;
+    async fn confirm_transaction(&self, signature: &Signature)
+        -> Result<bool, SolanaProviderError>;
 
     /// Retrieves the minimum balance required for rent exemption for the specified data size.
-    async fn get_minimum_balance_for_rent_exemption(&self, data_size: usize) -> Result<u64, SolanaProviderError>;
+    async fn get_minimum_balance_for_rent_exemption(
+        &self,
+        data_size: usize,
+    ) -> Result<u64, SolanaProviderError>;
 
     /// Simulates a transaction and returns the simulation result.
-    async fn simulate_transaction(&self, transaction: &Transaction) -> Result<RpcSimulateTransactionResult, SolanaProviderError>;
+    async fn simulate_transaction(
+        &self,
+        transaction: &Transaction,
+    ) -> Result<RpcSimulateTransactionResult, SolanaProviderError>;
 }
-
 
 pub struct SolanaProvider {
     client: RpcClient,
