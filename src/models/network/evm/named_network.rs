@@ -754,6 +754,38 @@ impl EvmNamedNetwork {
             }
         })
     }
+
+    pub const fn symbol(self) -> &'static str {
+        use EvmNamedNetwork::*;
+        match self {
+            // Ethereum and L2s
+            Mainnet | Sepolia | Ropsten | Rinkeby | Goerli | Kovan | Holesky | Optimism
+            | OptimismKovan | OptimismGoerli | OptimismSepolia | Base | BaseGoerli
+            | BaseSepolia | Arbitrum | ArbitrumTestnet | ArbitrumGoerli | ArbitrumSepolia
+            | ArbitrumNova | Scroll | ScrollSepolia => "ETH",
+
+            // BSC
+            BinanceSmartChain | BinanceSmartChainTestnet => "BNB",
+
+            // Polygon
+            Polygon | PolygonMumbai | PolygonAmoy => "MATIC",
+            PolygonZkEvm | PolygonZkEvmTestnet => "ETH",
+
+            // Other L1s
+            Fantom | FantomTestnet => "FTM",
+            Moonbeam | MoonbeamDev => "GLMR",
+            Moonriver => "MOVR",
+            Moonbase => "DEV",
+            Avalanche | AvalancheFuji => "AVAX",
+            Celo | CeloAlfajores | CeloBaklava => "CELO",
+            Aurora | AuroraTestnet => "ETH",
+            Linea | LineaGoerli | LineaSepolia => "ETH",
+            ZkSync | ZkSyncTestnet => "ETH",
+            Mantle | MantleTestnet | MantleSepolia => "MNT",
+            Gnosis => "xDAI",
+            UnichainSepolia => "ETH",
+        }
+    }
 }
 
 impl fmt::Display for EvmNamedNetwork {
@@ -828,5 +860,13 @@ mod tests {
                 chain
             );
         }
+    }
+
+    #[test]
+    fn symbol() {
+        assert_eq!(EvmNamedNetwork::Mainnet.symbol(), "ETH");
+        assert_eq!(EvmNamedNetwork::Sepolia.symbol(), "ETH");
+        assert_eq!(EvmNamedNetwork::BinanceSmartChain.symbol(), "BNB");
+        assert_eq!(EvmNamedNetwork::Polygon.symbol(), "MATIC");
     }
 }
