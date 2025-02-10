@@ -19,7 +19,6 @@ use super::{PaginatedResult, Repository};
 
 #[async_trait]
 pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync {
-    #[allow(dead_code)]
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
     async fn partial_update(
         &self,
@@ -45,54 +44,8 @@ impl InMemoryRelayerRepository {
             store: Mutex::new(HashMap::new()),
         }
     }
-
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
         Ok(lock.lock().await)
-    }
-
-    pub async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        let active_relayers: Vec<RelayerRepoModel> = store
-            .values()
-            .filter(|&relayer| !relayer.paused)
-            .cloned()
-            .collect();
-        Ok(active_relayers)
-    }
-
-    pub async fn partial_update(
-        &self,
-        id: String,
-        update: RelayerUpdateRequest,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store).await?;
-        if let Some(relayer) = store.get_mut(&id) {
-            if let Some(paused) = update.paused {
-                relayer.paused = paused;
-            }
-            Ok(relayer.clone())
-        } else {
-            Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                id
-            )))
-        }
-    }
-
-    pub async fn disable_relayer(
-        &self,
-        relayer_id: String,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        let mut store = self.store.lock().await;
-        if let Some(relayer) = store.get_mut(&relayer_id) {
-            relayer.system_disabled = true;
-            Ok(relayer.clone())
-        } else {
-            Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                relayer_id
-            )))
-        }
     }
 }
 
@@ -104,7 +57,6 @@ impl Default for InMemoryRelayerRepository {
 
 #[async_trait]
 impl RelayerRepository for InMemoryRelayerRepository {
-    #[allow(dead_code)]
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
         let active_relayers: Vec<RelayerRepoModel> = store
