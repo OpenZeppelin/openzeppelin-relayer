@@ -153,7 +153,7 @@ pub struct SignerFactory;
 impl SignerFactory {
     pub fn create_signer(
         network_type: &NetworkType,
-        signer_model: SignerRepoModel,
+        signer_model: &SignerRepoModel,
     ) -> Result<NetworkSigner, SignerFactoryError> {
         let signer = match network_type {
             NetworkType::Evm => {

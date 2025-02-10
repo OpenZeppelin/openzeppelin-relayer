@@ -69,7 +69,7 @@ pub struct SolanaSignerFactory;
 
 impl SolanaSignerFactory {
     pub fn create_solana_signer(
-        signer_model: SignerRepoModel,
+        signer_model: &SignerRepoModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
         let signer = match signer_model.signer_type {
             SignerType::Local => SolanaSigner::Local(LocalSigner::new(signer_model)),
@@ -82,6 +82,3 @@ impl SolanaSignerFactory {
         Ok(signer)
     }
 }
-
-#[cfg(test)]
-mod tests {}

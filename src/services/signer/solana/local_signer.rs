@@ -21,10 +21,8 @@ pub struct LocalSigner {
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: SignerRepoModel) -> Self {
-        let raw_key = signer_model.raw_key.expect("keystore not found");
-
-        info!("Creating local signer from keystore :{}", raw_key.len());
+    pub fn new(signer_model: &SignerRepoModel) -> Self {
+        let raw_key = signer_model.raw_key.as_ref().expect("keystore not found");
 
         let keypair = Keypair::from_seed(&raw_key).expect("invalid keypair");
 
@@ -81,7 +79,7 @@ mod tests {
             passphrase: None,
             path: None,
         };
-        LocalSigner::new(model)
+        LocalSigner::new(&model)
     }
 
     #[test]
@@ -102,7 +100,7 @@ mod tests {
             passphrase: None,
             path: None,
         };
-        LocalSigner::new(model);
+        LocalSigner::new(&model);
     }
 
     #[test]
@@ -115,7 +113,7 @@ mod tests {
             passphrase: None,
             path: None,
         };
-        let _ = LocalSigner::new(model);
+        let _ = LocalSigner::new(&model);
     }
 
     #[test]
@@ -137,7 +135,6 @@ mod tests {
         let sig1 = local_signer.sign(msg1).unwrap();
         let sig2 = local_signer.sign(msg2).unwrap();
 
-        // It is highly unlikely for two different messages to have the same signature.
         assert_ne!(sig1, sig2);
     }
 }
