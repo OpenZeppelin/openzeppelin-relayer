@@ -28,5 +28,6 @@ rust_docs
 # logs
 logs/
 
+
 # Ignore node_modules
 node_modules

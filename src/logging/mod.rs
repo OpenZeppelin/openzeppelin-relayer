@@ -14,6 +14,17 @@ use std::{
     path::Path,
 };
 
+/// Computes the path of the rolled log file given the base file path and the date string.
+pub fn compute_rolled_file_path(base_file_path: &str, date_str: &str) -> String {
+    if base_file_path.ends_with(".log") {
+        let trimmed = base_file_path.strip_suffix(".log").unwrap();
+        format!("{}-{}.log", trimmed, date_str)
+    } else {
+        format!("{}-{}.log", base_file_path, date_str)
+    }
+}
+
+/// Sets up logging by reading configuration from environment variables.
 pub fn setup_logging() {
     let log_mode = env::var("LOG_MODE").unwrap_or_else(|_| "stdout".to_string());
     let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
@@ -29,21 +40,16 @@ pub fn setup_logging() {
 
     if log_mode.to_lowercase() == "file" {
         info!("Logging to file: {}", log_level);
-        // Get log file path from environment, or default if not provided
+
+        // Get log file path from environment or use default
         let base_file_path =
             env::var("LOG_FILE_PATH").unwrap_or_else(|_| "logs/relayer.log".to_string());
 
-        // Compute the current UTC date string
         let now = Utc::now();
         let date_str = now.format("%Y-%m-%d").to_string();
-        // Build the rolled file path by appending the UTC date
-        // If the base_file_path ends with ".log", remove and replace with rolled date
-        let rolled_file_path = if base_file_path.ends_with(".log") {
-            let trimmed = &base_file_path[..base_file_path.len() - 4];
-            format!("{}-{}.log", trimmed, date_str)
-        } else {
-            format!("{}-{}.log", base_file_path, date_str)
-        };
+
+        // Compute the current UTC date string
+        let rolled_file_path = compute_rolled_file_path(&base_file_path, &date_str);
 
         // Ensure parent directory exists
         if let Some(parent) = Path::new(&rolled_file_path).parent() {
@@ -62,6 +68,5 @@ pub fn setup_logging() {
             .expect("Failed to initialize simple logger");
     }
 
-    // Log that setup is complete (this requires the logger to be initialized)
     info!("Logging is successfully configured (mode: {})", log_mode);
 }

@@ -3,7 +3,7 @@
 //! Provides configuration structures and validation for different signer types:
 //! - Local keystore (encrypted JSON files)
 //! - AWS KMS integration [NOT IMPLEMENTED]
-//! - HashiCorp Vault integration [NOT IMPLEMENTED]
+//! - HashCorp Vault integration [NOT IMPLEMENTED]
 use super::ConfigFileError;
 use async_trait::async_trait;
 use oz_keystore::LocalClient;
