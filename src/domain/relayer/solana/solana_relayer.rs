@@ -17,7 +17,7 @@ use crate::{
     jobs::JobProducer,
     models::{RelayerRepoModel, SolanaNetwork},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
-    services::SolanaProvider,
+    services::{SolanaProvider, SolanaProviderTrait},
 };
 use async_trait::async_trait;
 use eyre::Result;

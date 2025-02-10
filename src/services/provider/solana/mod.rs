@@ -9,6 +9,7 @@
 //! and integrates detailed error handling through the `ProviderError` type.
 //!
 //! TODO: add support for using multiple RPCs and retries
+use async_trait::async_trait;
 use eyre::Result;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use solana_client::{
@@ -20,6 +21,8 @@ use solana_sdk::{
 };
 use std::{str::FromStr, time::Duration};
 use thiserror::Error;
+#[cfg(test)]
+use mockall::automock;
 
 use super::ProviderError;
 
@@ -53,6 +56,31 @@ impl Serialize for SolanaProviderError {
     }
 }
 
+/// A trait that abstracts common Solana provider operations.
+#[async_trait]
+#[cfg_attr(test, automock)]
+#[allow(dead_code)]
+pub trait SolanaProviderTrait: Send + Sync {
+    /// Retrieves the balance (in lamports) for the given address.
+    async fn get_balance(&self, address: &str) -> Result<u64, SolanaProviderError>;
+    
+    /// Retrieves the latest blockhash as a 32-byte array.
+    async fn get_latest_blockhash(&self) -> Result<[u8; 32], SolanaProviderError>;
+
+    /// Sends a transaction to the Solana network.
+    async fn send_transaction(&self, transaction: &Transaction) -> Result<Signature, SolanaProviderError>;
+
+    /// Confirms a transaction given its signature.
+    async fn confirm_transaction(&self, signature: &Signature) -> Result<bool, SolanaProviderError>;
+
+    /// Retrieves the minimum balance required for rent exemption for the specified data size.
+    async fn get_minimum_balance_for_rent_exemption(&self, data_size: usize) -> Result<u64, SolanaProviderError>;
+
+    /// Simulates a transaction and returns the simulation result.
+    async fn simulate_transaction(&self, transaction: &Transaction) -> Result<RpcSimulateTransactionResult, SolanaProviderError>;
+}
+
+
 pub struct SolanaProvider {
     client: RpcClient,
 }
@@ -79,13 +107,17 @@ impl SolanaProvider {
             RpcClient::new_with_timeout_and_commitment(url.to_string(), timeout, commitment);
         Ok(Self { client })
     }
+}
 
+#[async_trait]
+#[allow(dead_code)]
+impl SolanaProviderTrait for SolanaProvider {
     /// Retrieves the balance (in lamports) for the given address.
     /// # Errors
     ///
     /// Returns `ProviderError::InvalidAddress` if address parsing fails,
     /// and `ProviderError::RpcError` if the RPC call fails.
-    pub async fn get_balance(&self, address: &str) -> Result<u64, SolanaProviderError> {
+    async fn get_balance(&self, address: &str) -> Result<u64, SolanaProviderError> {
         let pubkey = Pubkey::from_str(address)
             .map_err(|e| SolanaProviderError::InvalidAddress(e.to_string()))?;
 
@@ -96,7 +128,7 @@ impl SolanaProvider {
     }
 
     /// Gets the latest blockhash.
-    pub async fn get_latest_blockhash(&self) -> Result<[u8; 32], SolanaProviderError> {
+    async fn get_latest_blockhash(&self) -> Result<[u8; 32], SolanaProviderError> {
         self.client
             .get_latest_blockhash()
             .await
@@ -105,7 +137,7 @@ impl SolanaProvider {
     }
 
     /// Sends a transaction to the network.
-    pub async fn send_transaction(
+    async fn send_transaction(
         &self,
         transaction: &Transaction,
     ) -> Result<Signature, SolanaProviderError> {
@@ -116,7 +148,7 @@ impl SolanaProvider {
     }
 
     /// Confirms the given transaction signature.
-    pub async fn confirm_transaction(
+    async fn confirm_transaction(
         &self,
         signature: &Signature,
     ) -> Result<bool, SolanaProviderError> {
@@ -128,7 +160,7 @@ impl SolanaProvider {
     }
 
     /// Retrieves the minimum balance for rent exemption for the given data size.
-    pub async fn get_minimum_balance_for_rent_exemption(
+    async fn get_minimum_balance_for_rent_exemption(
         &self,
         data_size: usize,
     ) -> Result<u64, SolanaProviderError> {
@@ -139,7 +171,7 @@ impl SolanaProvider {
     }
 
     /// Simulate transaction.
-    pub async fn simulate_transaction(
+    async fn simulate_transaction(
         &self,
         transaction: &Transaction,
     ) -> Result<RpcSimulateTransactionResult, SolanaProviderError> {
