@@ -30,7 +30,7 @@ services:
       - ./config:/app/config/:ro
       # Uncomment to persist logs
       # Default: writes to stdout
-      - ./logs:/app/logs
+      #- ./logs:/app/logs
 
   redis:
     container_name: openzeppelin-relayer-redis
