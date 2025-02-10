@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use eyre::Result;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -26,6 +26,8 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
         id: String,
         update: RelayerUpdateRequest,
     ) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn enable_relayer(&self, relayer_id: String)
+        -> Result<RelayerRepoModel, RepositoryError>;
     async fn disable_relayer(
         &self,
         relayer_id: String,
@@ -37,7 +39,6 @@ pub struct InMemoryRelayerRepository {
     store: Mutex<HashMap<String, RelayerRepoModel>>,
 }
 
-#[allow(dead_code)]
 impl InMemoryRelayerRepository {
     pub fn new() -> Self {
         Self {
@@ -93,22 +94,6 @@ impl InMemoryRelayerRepository {
             )))
         }
     }
-
-    pub async fn enable_relayer(
-        &self,
-        relayer_id: String,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        let mut store = self.store.lock().await;
-        if let Some(relayer) = store.get_mut(&relayer_id) {
-            relayer.system_disabled = false;
-            Ok(relayer.clone())
-        } else {
-            Err(RepositoryError::NotFound(format!(
-                "Relayer with ID {} not found",
-                relayer_id
-            )))
-        }
-    }
 }
 
 impl Default for InMemoryRelayerRepository {
@@ -156,6 +141,22 @@ impl RelayerRepository for InMemoryRelayerRepository {
         let mut store = self.store.lock().await;
         if let Some(relayer) = store.get_mut(&relayer_id) {
             relayer.system_disabled = true;
+            Ok(relayer.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                relayer_id
+            )))
+        }
+    }
+
+    async fn enable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = self.store.lock().await;
+        if let Some(relayer) = store.get_mut(&relayer_id) {
+            relayer.system_disabled = false;
             Ok(relayer.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
@@ -332,17 +333,17 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum RelayerRepositoryEnum {
-    InMemory(Arc<InMemoryRelayerRepository>),
+#[derive(Debug)]
+pub enum RelayerRepositoryStorage {
+    InMemory(InMemoryRelayerRepository),
 }
 
 #[async_trait]
-impl RelayerRepository for RelayerRepositoryEnum {
+impl RelayerRepository for RelayerRepositoryStorage {
     #[allow(dead_code)]
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.list_active().await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_active().await,
         }
     }
 
@@ -352,7 +353,7 @@ impl RelayerRepository for RelayerRepositoryEnum {
         update: RelayerUpdateRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.partial_update(id, update).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.partial_update(id, update).await,
         }
     }
 
@@ -361,22 +362,31 @@ impl RelayerRepository for RelayerRepositoryEnum {
         relayer_id: String,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.disable_relayer(relayer_id).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.disable_relayer(relayer_id).await,
+        }
+    }
+
+    async fn enable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.enable_relayer(relayer_id).await,
         }
     }
 }
 
 #[async_trait]
-impl Repository<RelayerRepoModel, String> for RelayerRepositoryEnum {
+impl Repository<RelayerRepoModel, String> for RelayerRepositoryStorage {
     async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.create(entity).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.create(entity).await,
         }
     }
 
     async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.get_by_id(id).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
         }
     }
 
@@ -386,19 +396,19 @@ impl Repository<RelayerRepoModel, String> for RelayerRepositoryEnum {
         entity: RelayerRepoModel,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.update(id, entity).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.update(id, entity).await,
         }
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.delete_by_id(id).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.delete_by_id(id).await,
         }
     }
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.list_all().await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_all().await,
         }
     }
 
@@ -407,13 +417,13 @@ impl Repository<RelayerRepoModel, String> for RelayerRepositoryEnum {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.list_paginated(query).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
         }
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         match self {
-            RelayerRepositoryEnum::InMemory(repo) => repo.count().await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.count().await,
         }
     }
 }

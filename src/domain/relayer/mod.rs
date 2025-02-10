@@ -17,7 +17,7 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerRepoModel, TransactionRepoModel,
     },
-    repositories::RelayerRepositoryEnum,
+    repositories::RelayerRepositoryStorage,
     services::{EvmSignerFactory, TransactionCounterService},
 };
 
@@ -144,7 +144,7 @@ pub trait RelayerFactoryTrait {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryEnum>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -156,7 +156,7 @@ impl RelayerFactoryTrait for RelayerFactory {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryEnum>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,

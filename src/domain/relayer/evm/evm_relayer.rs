@@ -12,7 +12,7 @@ use crate::{
         RepositoryError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryEnum, Repository,
+        InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
     },
     services::{DataSignerTrait, EvmProvider, EvmSigner, TransactionCounterService},
 };
@@ -26,7 +26,7 @@ pub struct EvmRelayer {
     signer: EvmSigner,
     network: EvmNetwork,
     provider: EvmProvider,
-    relayer_repository: Arc<RelayerRepositoryEnum>,
+    relayer_repository: Arc<RelayerRepositoryStorage>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
@@ -39,7 +39,7 @@ impl EvmRelayer {
         signer: EvmSigner,
         provider: EvmProvider,
         network: EvmNetwork,
-        relayer_repository: Arc<RelayerRepositoryEnum>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
