@@ -166,10 +166,14 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
-        store
-            .remove(&id)
-            .map(|_| ())
-            .ok_or_else(|| RepositoryError::NotFound(format!("Relayer with ID {} not found", id)))
+        if store.remove(&id).is_some() {
+            Ok(())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Relayer with ID {} not found",
+                id
+            )))
+        }
     }
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
