@@ -854,6 +854,6 @@ mod tests {
             EvmNamedNetwork::BinanceSmartChain.native_currency_symbol(),
             "BNB"
         );
-        assert_eq!(EvmNamedNetwork::Polygon.native_currency_symbol(), "MATIC");
+        assert_eq!(EvmNamedNetwork::Polygon.native_currency_symbol(), "POL");
     }
 }
