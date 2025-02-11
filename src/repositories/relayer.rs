@@ -257,10 +257,12 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
             }
             ConfigFileRelayerNetworkPolicy::Solana(solana) => {
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                    max_retries: solana.max_retries,
-                    confirmation_blocks: solana.confirmation_blocks,
-                    timeout_seconds: solana.timeout_seconds,
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
+                    allowed_accounts: solana.allowed_accounts,
+                    allowed_programs: solana.allowed_programs,
+                    allowed_tokens: solana.allowed_tokens,
+                    disallowed_accounts: solana.disallowed_accounts,
+                    max_supported_token_fee: solana.max_supported_token_fee,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {

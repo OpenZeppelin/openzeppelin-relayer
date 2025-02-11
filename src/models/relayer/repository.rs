@@ -68,19 +68,23 @@ impl Default for RelayerEvmPolicy {
 #[derive(Debug, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerSolanaPolicy {
-    pub max_retries: Option<u32>,
-    pub confirmation_blocks: Option<u64>,
-    pub timeout_seconds: Option<u64>,
     pub min_balance: u64,
+    pub allowed_tokens: Option<Vec<String>>,
+    pub allowed_programs: Option<Vec<String>>,
+    pub allowed_accounts: Option<Vec<String>>,
+    pub disallowed_accounts: Option<Vec<String>>,
+    pub max_supported_token_fee: Option<u64>,
 }
 
 impl Default for RelayerSolanaPolicy {
     fn default() -> Self {
         Self {
-            max_retries: None,
-            confirmation_blocks: None,
-            timeout_seconds: None,
             min_balance: DEFAULT_SOLANA_MIN_BALANCE,
+            allowed_tokens: None,
+            allowed_programs: None,
+            allowed_accounts: None,
+            disallowed_accounts: None,
+            max_supported_token_fee: None,
         }
     }
 }

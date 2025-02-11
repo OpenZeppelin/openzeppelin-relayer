@@ -37,9 +37,15 @@ pub struct EvmPolicyResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_retries: Option<u32>,
+    pub allowed_tokens: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub confirmation_blocks: Option<u64>,
+    pub allowed_programs: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_accounts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disallowed_accounts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_supported_token_fee: Option<u64>,
     pub min_balance: u64,
 }
 
@@ -62,9 +68,12 @@ impl From<RelayerRepoModel> for RelayerResponse {
             }),
             RelayerNetworkPolicy::Solana(solana) => {
                 NetworkPolicyResponse::Solana(SolanaPolicyResponse {
-                    max_retries: solana.max_retries,
-                    confirmation_blocks: solana.confirmation_blocks,
                     min_balance: solana.min_balance,
+                    allowed_tokens: solana.allowed_tokens,
+                    allowed_programs: solana.allowed_programs,
+                    allowed_accounts: solana.allowed_accounts,
+                    disallowed_accounts: solana.disallowed_accounts,
+                    max_supported_token_fee: solana.max_supported_token_fee,
                 })
             }
             RelayerNetworkPolicy::Stellar(stellar) => {
