@@ -22,9 +22,8 @@ pub struct EvmTransactionRequest {
 
 #[derive(Deserialize, Serialize)]
 pub struct SolanaTransactionRequest {
-    pub to: String,
-    pub lamports: u64,
-    pub recent_blockhash: String,
+    pub fee_payer: String,
+    pub instructions: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]

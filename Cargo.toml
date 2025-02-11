@@ -53,6 +53,8 @@ sha2 = { version = "0.10" }
 dashmap = { version = "6.1" }
 actix-governor = "0.8"
 governor = "0.8.0"
+solana-sdk = { version = "2.1" }
+solana-client = { version = "2.1" }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"

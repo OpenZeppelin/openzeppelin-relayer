@@ -33,7 +33,9 @@ pub use stellar::*;
 
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTypedDataRequest},
-    models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
+    models::{
+        Address, NetworkType, SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
+    },
 };
 
 #[derive(Error, Debug, Serialize)]
@@ -50,6 +52,9 @@ pub enum SignerError {
 
     #[error("Unsupported signer type: {0}")]
     UnsupportedTypeError(String),
+
+    #[error("Invalid transaction: {0}")]
+    InvalidTransaction(#[from] TransactionError),
 }
 
 #[async_trait]
@@ -77,7 +82,7 @@ pub enum SignerFactoryError {
 #[allow(dead_code)]
 pub enum NetworkSigner {
     Evm(EvmSigner),
-    Solana(EvmSigner),  // TODO replace with SolanaSigner
+    Solana(SolanaSigner),
     Stellar(EvmSigner), // TODO replace with StellarSigner
 }
 
@@ -147,17 +152,21 @@ pub struct SignerFactory;
 
 impl SignerFactory {
     pub fn create_signer(
-        signer_model: SignerRepoModel,
+        network_type: &NetworkType,
+        signer_model: &SignerRepoModel,
     ) -> Result<NetworkSigner, SignerFactoryError> {
-        let signer = match signer_model.signer_type {
-            SignerType::Local => {
+        let signer = match network_type {
+            NetworkType::Evm => {
                 let evm_signer = EvmSignerFactory::create_evm_signer(signer_model)?;
                 NetworkSigner::Evm(evm_signer)
             }
-            SignerType::AwsKms => {
-                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
+            NetworkType::Solana => {
+                let solana_signer = SolanaSignerFactory::create_solana_signer(signer_model)?;
+                NetworkSigner::Solana(solana_signer)
             }
-            SignerType::Vault => return Err(SignerFactoryError::UnsupportedType("Vault".into())),
+            NetworkType::Stellar => {
+                return Err(SignerFactoryError::UnsupportedType("Vault".into()))
+            }
         };
 
         Ok(signer)
