@@ -12,9 +12,14 @@ services:
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=debug
       - LOCAL_SIGNER_KEY_PASSPHRASE=test  # todo
+      # Logging options
+      - LOG_MODE=file
+      - LOG_FILE_PATH=logs/
+      - LOG_MAX_SIZE=1073741824
     volumes:
       - ./config.json:/app/config/config.json
       - ./keys:/app/keys:ro
+      - ./logs:/app/logs
     depends_on:
       - redis
     networks:

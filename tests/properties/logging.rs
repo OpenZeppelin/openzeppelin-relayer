@@ -23,8 +23,8 @@ proptest! {
     date in "[0-9]{4}-[0-9]{2}-[0-9]{2}"
   ) {
       let base_with_log = format!("{}{}.log", base, "");
-      let result = compute_rolled_file_path(&base_with_log, &date);
-      let expected = format!("{}-{}.log", base_with_log.strip_suffix(".log").unwrap(), date);
+      let result = compute_rolled_file_path(&base_with_log, &date, 1);
+      let expected = format!("{}-{}.{}.log", base_with_log.strip_suffix(".log").unwrap(), date, 1);
       prop_assert_eq!(result, expected);
     }
 
@@ -41,8 +41,8 @@ proptest! {
       } else {
         base
       };
-      let result = compute_rolled_file_path(&base_non_log, &date);
-      let expected = format!("{}-{}.log", base_non_log, date);
+      let result = compute_rolled_file_path(&base_non_log, &date,1);
+      let expected = format!("{}-{}.{}.log", base_non_log, date, 1);
       prop_assert_eq!(result, expected);
   }
 }
