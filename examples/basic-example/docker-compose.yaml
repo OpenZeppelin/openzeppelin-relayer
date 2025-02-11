@@ -13,12 +13,17 @@ services:
       - LOG_LEVEL=debug
       - LOCAL_SIGNER_KEY_PASSPHRASE=test  # todo
       # Logging options
+      # LOG_MODE=file
+      # comment this line to disable file logging
       - LOG_MODE=file
+      # LOG FILE PATH, BY DEFAULT ./logs/
       - LOG_FILE_PATH=logs/
+      # LOG FILE SIZE IN BYTES, BY DEFAULT 1GB (1073741824 BYTES)
       - LOG_MAX_SIZE=1073741824
     volumes:
       - ./config.json:/app/config/config.json
       - ./keys:/app/keys:ro
+      # Mount logs folder to persist logs
       - ./logs:/app/logs
     depends_on:
       - redis
