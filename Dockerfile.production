@@ -18,7 +18,6 @@ FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
-COPY --chown=nonroot:nonroot config /app/config
 
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]

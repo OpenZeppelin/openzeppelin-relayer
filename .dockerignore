@@ -1,2 +1,5 @@
 # ignore all .git files and directories
 .git*
+target/
+logs/
+docs/

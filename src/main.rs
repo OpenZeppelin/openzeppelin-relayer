@@ -34,6 +34,7 @@ use actix_web::{
 };
 use color_eyre::{eyre::WrapErr, Result};
 use config::Config;
+use logging::setup_logging;
 
 use actix_web::HttpResponse;
 
@@ -41,7 +42,6 @@ use config::ApiKeyRateLimit;
 use dotenvy::dotenv;
 use init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file};
 use log::info;
-use simple_logger::SimpleLogger;
 
 mod api;
 mod config;
@@ -49,30 +49,12 @@ mod constants;
 mod domain;
 mod init;
 mod jobs;
+mod logging;
 mod models;
 mod repositories;
 mod services;
 mod utils;
 pub use models::{ApiError, AppState};
-
-/// Sets up logging and environment configuration
-///
-/// # Returns
-///
-/// * `Result<()>` - Setup result
-///
-/// # Errors
-///
-/// Returns error if:
-/// - Environment file cannot be loaded
-/// - Logger initialization fails
-fn setup_logging_and_env() -> Result<()> {
-    dotenv().ok();
-    SimpleLogger::new()
-        .env()
-        .init()
-        .wrap_err("Failed to initialize logger")
-}
 
 fn load_config_file(config_file_path: &str) -> Result<Config> {
     config::load_config(config_file_path).wrap_err("Failed to load config file")
@@ -83,7 +65,8 @@ async fn main() -> Result<()> {
     // Initialize error reporting with eyre
     color_eyre::install().wrap_err("Failed to initialize error reporting")?;
 
-    setup_logging_and_env()?;
+    dotenv().ok();
+    setup_logging();
 
     let config = Arc::new(config::ServerConfig::from_env());
     let config_file = load_config_file(&config.config_file_path)?;

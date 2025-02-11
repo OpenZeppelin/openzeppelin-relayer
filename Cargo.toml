@@ -7,18 +7,18 @@ rust-version = "1.84"         #MSRV
 [profile.release]
 opt-level = 0
 overflow-checks = false
-panic = 'unwind'
+panic = "unwind"
 
 [profile.test]
 debug = true
 opt-level = 0
 overflow-checks = true
-panic = 'abort'
+panic = "unwind"
 
 [dependencies]
 actix-web = "4"
 log = "0.4"
-simple_logger = "5.0.0"
+simplelog = "0.12"
 dotenvy = "0.15"
 thiserror = "2"
 async-trait = "0.1"
@@ -63,7 +63,11 @@ mockito = "1.6.1"
 proptest = "1.6.0"
 rand = "0.9.0"
 tempfile = "3.2"
+serial_test = "3.2"
 
 [[bin]]
 path = "src/main.rs"
 name = "openzeppelin-relayer"
+
+[lib]
+path = "src/lib.rs"

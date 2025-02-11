@@ -67,7 +67,7 @@ async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) 
             .find(|s| s.id == repo_model.signer_id)
             .ok_or_else(|| eyre::eyre!("Signer not found"))?;
         let network_type = repo_model.network_type;
-        let signer_service = SignerFactory::create_signer(&network_type, &signer_model)
+        let signer_service = SignerFactory::create_signer(&network_type, signer_model)
             .wrap_err("Failed to create signer service")?;
 
         let address = signer_service.address().await?;
