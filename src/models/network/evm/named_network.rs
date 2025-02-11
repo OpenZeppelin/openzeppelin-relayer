@@ -355,22 +355,6 @@ impl EvmNamedNetwork {
         }
     }
 
-    /// Returns the symbol of the chain's native currency.
-    pub const fn native_currency_symbol(self) -> Option<&'static str> {
-        use EvmNamedNetwork::*;
-
-        Some(match self {
-            Mainnet | Goerli | Holesky | Kovan | Sepolia | Ropsten | Rinkeby | Scroll
-            | ScrollSepolia | UnichainSepolia => "ETH",
-
-            Mantle | MantleSepolia => "MNT",
-
-            BinanceSmartChain | BinanceSmartChainTestnet => "BNB",
-
-            _ => return None,
-        })
-    }
-
     pub const fn explorer_urls(self) -> Option<&'static [&'static str]> {
         use EvmNamedNetwork::*;
 
@@ -755,7 +739,7 @@ impl EvmNamedNetwork {
         })
     }
 
-    pub const fn symbol(self) -> &'static str {
+    pub const fn native_currency_symbol(self) -> &'static str {
         use EvmNamedNetwork::*;
         match self {
             // Ethereum and L2s
@@ -763,27 +747,27 @@ impl EvmNamedNetwork {
             | OptimismKovan | OptimismGoerli | OptimismSepolia | Base | BaseGoerli
             | BaseSepolia | Arbitrum | ArbitrumTestnet | ArbitrumGoerli | ArbitrumSepolia
             | ArbitrumNova | Scroll | ScrollSepolia => "ETH",
+            Celo | CeloAlfajores | CeloBaklava => "CELO",
+            ZkSync | ZkSyncTestnet => "ETH",
+            Mantle | MantleTestnet | MantleSepolia => "MNT",
+            Linea | LineaGoerli | LineaSepolia => "ETH",
 
             // BSC
             BinanceSmartChain | BinanceSmartChainTestnet => "BNB",
 
             // Polygon
-            Polygon | PolygonMumbai | PolygonAmoy => "MATIC",
+            Polygon | PolygonMumbai | PolygonAmoy => "POL",
             PolygonZkEvm | PolygonZkEvmTestnet => "ETH",
 
-            // Other L1s
+            // L1s
             Fantom | FantomTestnet => "FTM",
             Moonbeam | MoonbeamDev => "GLMR",
             Moonriver => "MOVR",
             Moonbase => "DEV",
             Avalanche | AvalancheFuji => "AVAX",
-            Celo | CeloAlfajores | CeloBaklava => "CELO",
-            Aurora | AuroraTestnet => "ETH",
-            Linea | LineaGoerli | LineaSepolia => "ETH",
-            ZkSync | ZkSyncTestnet => "ETH",
-            Mantle | MantleTestnet | MantleSepolia => "MNT",
             Gnosis => "xDAI",
             UnichainSepolia => "ETH",
+            Aurora | AuroraTestnet => "ETH",
         }
     }
 }
@@ -864,9 +848,12 @@ mod tests {
 
     #[test]
     fn symbol() {
-        assert_eq!(EvmNamedNetwork::Mainnet.symbol(), "ETH");
-        assert_eq!(EvmNamedNetwork::Sepolia.symbol(), "ETH");
-        assert_eq!(EvmNamedNetwork::BinanceSmartChain.symbol(), "BNB");
-        assert_eq!(EvmNamedNetwork::Polygon.symbol(), "MATIC");
+        assert_eq!(EvmNamedNetwork::Mainnet.native_currency_symbol(), "ETH");
+        assert_eq!(EvmNamedNetwork::Sepolia.native_currency_symbol(), "ETH");
+        assert_eq!(
+            EvmNamedNetwork::BinanceSmartChain.native_currency_symbol(),
+            "BNB"
+        );
+        assert_eq!(EvmNamedNetwork::Polygon.native_currency_symbol(), "MATIC");
     }
 }
