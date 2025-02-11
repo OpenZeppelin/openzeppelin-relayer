@@ -1,9 +1,10 @@
 use crate::jobs::JobProducerError;
 
 use super::{ApiError, RepositoryError};
+use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize)]
 pub enum TransactionError {
     #[error("Transaction validation error: {0}")]
     ValidationError(String),
@@ -13,6 +14,9 @@ pub enum TransactionError {
 
     #[error("Job producer error: {0}")]
     JobProducerError(#[from] JobProducerError),
+
+    #[error("Invalid transaction type: {0}")]
+    InvalidType(String),
 }
 
 impl From<TransactionError> for ApiError {
@@ -21,6 +25,7 @@ impl From<TransactionError> for ApiError {
             TransactionError::ValidationError(msg) => ApiError::BadRequest(msg),
             TransactionError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             TransactionError::JobProducerError(msg) => ApiError::InternalError(msg.to_string()),
+            TransactionError::InvalidType(msg) => ApiError::InternalError(msg),
         }
     }
 }
