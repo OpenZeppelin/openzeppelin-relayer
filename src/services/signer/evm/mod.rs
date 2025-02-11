@@ -79,7 +79,7 @@ pub struct EvmSignerFactory;
 
 impl EvmSignerFactory {
     pub fn create_evm_signer(
-        signer_model: SignerRepoModel,
+        signer_model: &SignerRepoModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match signer_model.signer_type {
             SignerType::Local => EvmSigner::Local(LocalSigner::new(signer_model)),

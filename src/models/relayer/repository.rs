@@ -6,7 +6,7 @@ use crate::{
     models::RelayerError,
 };
 
-#[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkType {
     Evm,

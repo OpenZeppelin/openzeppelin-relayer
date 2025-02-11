@@ -20,8 +20,8 @@ pub struct LocalSigner {
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: SignerRepoModel) -> Self {
-        let raw_key = signer_model.raw_key.expect("keystore not found");
+    pub fn new(signer_model: &SignerRepoModel) -> Self {
+        let raw_key = signer_model.raw_key.as_ref().expect("keystore not found");
 
         // transforms the key into alloy wallet
         let key_bytes = FixedBytes::from_slice(&raw_key);
