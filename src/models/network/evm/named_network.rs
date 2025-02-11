@@ -24,23 +24,16 @@ use core::{fmt, time::Duration};
 #[repr(u64)]
 pub enum EvmNamedNetwork {
     Mainnet = 1,
-    Ropsten = 3,
     Holesky = 17000,
     Sepolia = 11155111,
 
     Optimism = 10,
-    #[serde(alias = "optimism-kovan")]
-    OptimismKovan = 69,
-    #[serde(alias = "optimism-goerli")]
-    OptimismGoerli = 420,
     #[serde(alias = "optimism-sepolia")]
     OptimismSepolia = 11155420,
 
     #[serde(alias = "arbitrum-one")]
     Arbitrum = 42161,
     ArbitrumTestnet = 421611,
-    #[serde(alias = "arbitrum-goerli")]
-    ArbitrumGoerli = 421613,
     #[serde(alias = "arbitrum-sepolia")]
     ArbitrumSepolia = 421614,
     #[serde(alias = "arbitrum-nova")]
@@ -114,13 +107,9 @@ pub enum EvmNamedNetwork {
     AuroraTestnet = 1313161555,
 
     Base = 8453,
-    #[serde(alias = "base-goerli")]
-    BaseGoerli = 84531,
     #[serde(alias = "base-sepolia")]
     BaseSepolia = 84532,
     Linea = 59144,
-    #[serde(alias = "linea-goerli")]
-    LineaGoerli = 59140,
     #[serde(alias = "linea-sepolia")]
     LineaSepolia = 59141,
 
@@ -171,14 +160,7 @@ impl EvmNamedNetwork {
 
         matches!(
             self,
-            Optimism
-                | OptimismGoerli
-                | OptimismKovan
-                | OptimismSepolia
-                | Base
-                | BaseGoerli
-                | BaseSepolia
-                | UnichainSepolia
+            Optimism | OptimismSepolia | Base | BaseSepolia | UnichainSepolia
         )
     }
 
@@ -188,7 +170,7 @@ impl EvmNamedNetwork {
 
         matches!(
             self,
-            Arbitrum | ArbitrumTestnet | ArbitrumGoerli | ArbitrumSepolia | ArbitrumNova
+            Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova
         )
     }
 
@@ -198,10 +180,9 @@ impl EvmNamedNetwork {
         Some(Duration::from_millis(match self {
             Mainnet => 12_000,
 
-            Arbitrum | ArbitrumTestnet | ArbitrumGoerli | ArbitrumSepolia | ArbitrumNova => 260,
+            Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova => 260,
 
-            Optimism | OptimismGoerli | OptimismSepolia | Base | BaseGoerli | BaseSepolia
-            | Mantle | MantleSepolia => 2_000,
+            Optimism | OptimismSepolia | Base | BaseSepolia | Mantle | MantleSepolia => 2_000,
 
             Polygon | PolygonAmoy => 2_100,
 
@@ -223,9 +204,8 @@ impl EvmNamedNetwork {
 
             UnichainSepolia => 1_000,
 
-            Ropsten | Sepolia | Holesky | MantleTestnet | Moonbase | MoonbeamDev
-            | OptimismKovan | ZkSync | ZkSyncTestnet | PolygonZkEvm | PolygonZkEvmTestnet
-            | Linea | LineaGoerli | LineaSepolia => return None,
+            Linea | Sepolia | Holesky | MantleTestnet | Moonbase | MoonbeamDev | ZkSync
+            | ZkSyncTestnet | PolygonZkEvm | PolygonZkEvmTestnet | LineaSepolia => return None,
         }))
     }
 
@@ -245,21 +225,17 @@ impl EvmNamedNetwork {
             | MantleTestnet
             | PolygonZkEvm
             | PolygonZkEvmTestnet
-            | OptimismKovan
             | ZkSync
             | ZkSyncTestnet => true,
 
             // Known EIP-1559 chains.
-            Mainnet | Sepolia | Holesky | Base | BaseGoerli | BaseSepolia | Optimism
-            | OptimismGoerli | OptimismSepolia | Polygon | PolygonAmoy | Avalanche
-            | AvalancheFuji | Arbitrum | ArbitrumGoerli | ArbitrumSepolia | ArbitrumNova
-            | Linea | LineaGoerli | LineaSepolia | Gnosis | Mantle | MantleSepolia | Scroll
+            Mainnet | Sepolia | Holesky | Base | BaseSepolia | Optimism | OptimismSepolia
+            | Polygon | PolygonAmoy | Avalanche | AvalancheFuji | Arbitrum | ArbitrumSepolia
+            | ArbitrumNova | Linea | LineaSepolia | Gnosis | Mantle | MantleSepolia | Scroll
             | ScrollSepolia | UnichainSepolia => false,
 
             // Unknown / not applicable, default to false for backwards compatibility.
-            Ropsten | Moonbeam | MoonbeamDev | Moonriver | Moonbase | Aurora | AuroraTestnet => {
-                false
-            }
+            Moonbeam | MoonbeamDev | Moonriver | Moonbase | Aurora | AuroraTestnet => false,
         }
     }
 
@@ -268,26 +244,20 @@ impl EvmNamedNetwork {
 
         match self {
             Holesky
-            | Ropsten
             | Sepolia
-            | ArbitrumGoerli
             | ArbitrumSepolia
             | ArbitrumTestnet
             | AuroraTestnet
             | AvalancheFuji
-            | BaseGoerli
             | BaseSepolia
             | BinanceSmartChainTestnet
             | CeloAlfajores
             | CeloBaklava
             | FantomTestnet
-            | LineaGoerli
             | LineaSepolia
             | MantleTestnet
             | MantleSepolia
             | MoonbeamDev
-            | OptimismGoerli
-            | OptimismKovan
             | OptimismSepolia
             | PolygonAmoy
             | PolygonZkEvmTestnet
@@ -309,25 +279,19 @@ impl EvmNamedNetwork {
         match self {
             Holesky
             | Sepolia
-            | Ropsten
-            | ArbitrumGoerli
             | ArbitrumSepolia
             | ArbitrumTestnet
             | AuroraTestnet
             | AvalancheFuji
-            | BaseGoerli
             | BaseSepolia
             | BinanceSmartChainTestnet
             | CeloAlfajores
             | CeloBaklava
             | FantomTestnet
-            | LineaGoerli
             | LineaSepolia
             | MantleTestnet
             | MantleSepolia
             | MoonbeamDev
-            | OptimismGoerli
-            | OptimismKovan
             | OptimismSepolia
             | PolygonAmoy
             | PolygonZkEvmTestnet
@@ -347,10 +311,6 @@ impl EvmNamedNetwork {
 
         Some(match self {
             Mainnet => &["https://api.etherscan.io/api", "https://etherscan.io"],
-            Ropsten => &[
-                "https://api-ropsten.etherscan.io/api",
-                "https://ropsten.etherscan.io",
-            ],
             Sepolia => &[
                 "https://api-sepolia.etherscan.io/api",
                 "https://sepolia.etherscan.io",
@@ -385,14 +345,6 @@ impl EvmNamedNetwork {
                 "https://api-optimistic.etherscan.io/api",
                 "https://optimistic.etherscan.io",
             ],
-            OptimismGoerli => &[
-                "https://api-goerli-optimistic.etherscan.io/api",
-                "https://goerli-optimism.etherscan.io",
-            ],
-            OptimismKovan => &[
-                "https://api-kovan-optimistic.etherscan.io/api",
-                "https://kovan-optimistic.etherscan.io",
-            ],
             OptimismSepolia => &[
                 "https://api-sepolia-optimistic.etherscan.io/api",
                 "https://sepolia-optimism.etherscan.io",
@@ -414,10 +366,6 @@ impl EvmNamedNetwork {
             ArbitrumTestnet => &[
                 "https://api-testnet.arbiscan.io/api",
                 "https://testnet.arbiscan.io",
-            ],
-            ArbitrumGoerli => &[
-                "https://api-goerli.arbiscan.io/api",
-                "https://goerli.arbiscan.io",
             ],
             ArbitrumSepolia => &[
                 "https://api-sepolia.arbiscan.io/api",
@@ -466,10 +414,6 @@ impl EvmNamedNetwork {
             ],
 
             Base => &["https://api.basescan.org/api", "https://basescan.org"],
-            BaseGoerli => &[
-                "https://api-goerli.basescan.org/api",
-                "https://goerli.basescan.org",
-            ],
             BaseSepolia => &[
                 "https://api-sepolia.basescan.org/api",
                 "https://sepolia.basescan.org",
@@ -485,10 +429,6 @@ impl EvmNamedNetwork {
             ],
 
             Linea => &["https://api.lineascan.build/api", "https://lineascan.build"],
-            LineaGoerli => &[
-                "https://explorer.goerli.linea.build/api",
-                "https://explorer.goerli.linea.build",
-            ],
             LineaSepolia => &[
                 "https://api-sepolia.lineascan.build/api",
                 "https://sepolia.lineascan.build",
@@ -523,10 +463,6 @@ impl EvmNamedNetwork {
 
         Some(match self {
             Mainnet => &["https://api.etherscan.io/api", "https://etherscan.io"],
-            Ropsten => &[
-                "https://api-ropsten.etherscan.io/api",
-                "https://ropsten.etherscan.io",
-            ],
             Sepolia => &[
                 "https://eth-sepolia.api.onfinality.io/public",
                 "https://sepolia.etherscan.io",
@@ -562,14 +498,6 @@ impl EvmNamedNetwork {
                 "https://api-optimistic.etherscan.io/api",
                 "https://optimistic.etherscan.io",
             ],
-            OptimismGoerli => &[
-                "https://api-goerli-optimistic.etherscan.io/api",
-                "https://goerli-optimism.etherscan.io",
-            ],
-            OptimismKovan => &[
-                "https://api-kovan-optimistic.etherscan.io/api",
-                "https://kovan-optimistic.etherscan.io",
-            ],
             OptimismSepolia => &[
                 "https://api-sepolia-optimistic.etherscan.io/api",
                 "https://sepolia-optimism.etherscan.io",
@@ -591,10 +519,6 @@ impl EvmNamedNetwork {
             ArbitrumTestnet => &[
                 "https://api-testnet.arbiscan.io/api",
                 "https://testnet.arbiscan.io",
-            ],
-            ArbitrumGoerli => &[
-                "https://api-goerli.arbiscan.io/api",
-                "https://goerli.arbiscan.io",
             ],
             ArbitrumSepolia => &[
                 "https://api-sepolia.arbiscan.io/api",
@@ -643,10 +567,6 @@ impl EvmNamedNetwork {
             ],
 
             Base => &["https://api.basescan.org/api", "https://basescan.org"],
-            BaseGoerli => &[
-                "https://api-goerli.basescan.org/api",
-                "https://goerli.basescan.org",
-            ],
             BaseSepolia => &[
                 "https://api-sepolia.basescan.org/api",
                 "https://sepolia.basescan.org",
@@ -662,10 +582,6 @@ impl EvmNamedNetwork {
             ],
 
             Linea => &["https://api.lineascan.build/api", "https://lineascan.build"],
-            LineaGoerli => &[
-                "https://explorer.goerli.linea.build/api",
-                "https://explorer.goerli.linea.build",
-            ],
             LineaSepolia => &[
                 "https://api-sepolia.lineascan.build/api",
                 "https://sepolia.lineascan.build",
@@ -698,13 +614,12 @@ impl EvmNamedNetwork {
         use EvmNamedNetwork::*;
         match self {
             // Ethereum and L2s
-            Mainnet | Sepolia | Ropsten | Holesky | Optimism | OptimismKovan | OptimismGoerli
-            | OptimismSepolia | Base | BaseGoerli | BaseSepolia | Arbitrum | ArbitrumTestnet
-            | ArbitrumGoerli | ArbitrumSepolia | ArbitrumNova | Scroll | ScrollSepolia => "ETH",
+            Mainnet | Sepolia | Holesky | Optimism | OptimismSepolia | Base | BaseSepolia
+            | Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova | Scroll
+            | ScrollSepolia | ZkSync | ZkSyncTestnet => "ETH",
             Celo | CeloAlfajores | CeloBaklava => "CELO",
-            ZkSync | ZkSyncTestnet => "ETH",
             Mantle | MantleTestnet | MantleSepolia => "MNT",
-            Linea | LineaGoerli | LineaSepolia => "ETH",
+            Linea | LineaSepolia => "ETH",
 
             // BSC
             BinanceSmartChain | BinanceSmartChainTestnet => "BNB",
