@@ -15,13 +15,18 @@ use crate::{
         relayer::RelayerError, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SolanaRelayerTrait,
     },
     jobs::JobProducer,
-    models::{produce_relayer_disabled_payload, RelayerRepoModel, SolanaNetwork},
+    models::{
+        produce_relayer_disabled_payload, RelayerNetworkPolicy, RelayerRepoModel,
+        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaNetwork,
+    },
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
     services::{SolanaProvider, SolanaProviderTrait},
 };
 use async_trait::async_trait;
 use eyre::Result;
+use futures::future::try_join_all;
 use log::{info, warn};
+use solana_sdk::account::Account;
 
 #[allow(dead_code)]
 pub struct SolanaRelayer {
@@ -56,11 +61,106 @@ impl SolanaRelayer {
         })
     }
 
+    /// Validates the RPC connection by fetching the latest blockhash.
+    ///
+    /// This method sends a request to the Solana RPC to obtain the latest blockhash.
+    /// If the call fails, it returns a `RelayerError::ProviderError` containing the error message.
     async fn validate_rpc(&self) -> Result<(), RelayerError> {
         self.provider
             .get_latest_blockhash()
             .await
             .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Populates the allowed tokens metadata for the Solana relayer policy.
+    ///
+    /// This method checks whether allowed tokens have been configured in the relayer's policy.
+    /// If allowed tokens are provided, it concurrently fetches token metadata from the Solana
+    /// provider for each token using its mint address, maps the metadata into instances of
+    /// `SolanaAllowedTokensPolicy`, and then updates the relayer policy with the new metadata.
+    ///
+    /// If no allowed tokens are specified, it logs an informational message and returns the policy
+    /// unchanged.
+    ///
+    /// Finally, the updated policy is stored in the repository.
+    async fn populate_allowed_tokens_metadata(&self) -> Result<RelayerSolanaPolicy, RelayerError> {
+        let mut policy = self.relayer.policies.get_solana_policy();
+        // Check if allowed_tokens is specified; if not, return the policy unchanged.
+        let allowed_tokens = match policy.allowed_tokens.as_ref() {
+            Some(tokens) if !tokens.is_empty() => tokens,
+            _ => {
+                info!("No allowed tokens specified; skipping token metadata population.");
+                return Ok(policy);
+            }
+        };
+
+        let token_metadata_futures = allowed_tokens.iter().map(|token| async {
+            // Propagate errors from get_token_metadata_from_pubkey instead of panicking.
+            let token_metadata = self
+                .provider
+                .get_token_metadata_from_pubkey(&token.mint)
+                .await
+                .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+            Ok::<SolanaAllowedTokensPolicy, RelayerError>(SolanaAllowedTokensPolicy::new(
+                token_metadata.mint,
+                Some(token_metadata.decimals),
+                Some(token_metadata.symbol.to_string()),
+            ))
+        });
+
+        let updated_allowed_tokens = try_join_all(token_metadata_futures).await?;
+
+        policy.allowed_tokens = Some(updated_allowed_tokens);
+
+        self.relayer_repository
+            .update_policy(
+                self.relayer.id.clone(),
+                RelayerNetworkPolicy::Solana(policy.clone()),
+            )
+            .await?;
+
+        Ok(policy)
+    }
+
+    /// Validates the allowed programs policy.
+    ///
+    /// This method retrieves the allowed programs specified in the Solana relayer policy.
+    /// For each allowed program, it fetches the associated account data from the provider and
+    /// verifies that the program is executable.
+    /// If any of the programs are not executable, it returns a
+    /// `RelayerError::PolicyConfigurationError`.
+    async fn validate_program_policy(&self) -> Result<(), RelayerError> {
+        let policy = self.relayer.policies.get_solana_policy();
+        let allowed_programs = match policy.allowed_programs.as_ref() {
+            Some(programs) if !programs.is_empty() => programs,
+            _ => {
+                info!("No allowed programs specified; skipping program validation.");
+                return Ok(());
+            }
+        };
+        let account_info_futures = allowed_programs.iter().map(|program| {
+            let program = program.clone();
+            async move {
+                let account = self
+                    .provider
+                    .get_account_from_str(&program)
+                    .await
+                    .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+                Ok::<Account, RelayerError>(account)
+            }
+        });
+
+        let accounts = try_join_all(account_info_futures).await?;
+
+        for account in accounts {
+            if !account.executable {
+                return Err(RelayerError::PolicyConfigurationError(
+                    "Policy Program is not executable".to_string(),
+                ));
+            }
+        }
 
         Ok(())
     }
@@ -110,6 +210,23 @@ impl SolanaRelayerTrait for SolanaRelayer {
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         info!("Initializing relayer: {}", self.relayer.id);
+
+        // Populate model with allowed token metadata and update DB entry
+        // Error will be thrown if any of the tokens are not found
+        self.populate_allowed_tokens_metadata().await.map_err(|_| {
+            RelayerError::PolicyConfigurationError(
+                "Error while processing allowed tokens policy".into(),
+            )
+        })?;
+
+        // Validate relayer allowed programs policy
+        // Error will be thrown if any of the programs are not executable
+        self.validate_program_policy().await.map_err(|_| {
+            RelayerError::PolicyConfigurationError(
+                "Error while validating allowed programs policy".into(),
+            )
+        })?;
+
         let validate_rpc_result = self.validate_rpc().await;
         let validate_min_balance_result = self.validate_min_balance().await;
 

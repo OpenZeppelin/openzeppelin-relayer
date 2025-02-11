@@ -1,7 +1,7 @@
 use crate::models::NetworkType;
 use serde::{Deserialize, Serialize};
 
-use super::{RelayerNetworkPolicy, RelayerRepoModel};
+use super::{RelayerNetworkPolicy, RelayerRepoModel, SolanaAllowedTokensPolicy};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RelayerResponse {
@@ -37,7 +37,7 @@ pub struct EvmPolicyResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_tokens: Option<Vec<String>>,
+    pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_programs: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

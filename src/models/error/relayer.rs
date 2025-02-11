@@ -33,6 +33,8 @@ pub enum RelayerError {
     TransactionSequenceError(#[from] TransactionCounterError),
     #[error("Insufficient balance error: {0}")]
     InsufficientBalanceError(String),
+    #[error("Relayer Policy configuration error: {0}")]
+    PolicyConfigurationError(String),
 }
 
 impl From<RelayerError> for ApiError {
@@ -52,6 +54,7 @@ impl From<RelayerError> for ApiError {
             RelayerError::InsufficientBalanceError(msg) => ApiError::BadRequest(msg),
             RelayerError::UnderlyingProvider(err) => ApiError::InternalError(err.to_string()),
             RelayerError::UnderlyingSolanaProvider(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::PolicyConfigurationError(msg) => ApiError::InternalError(msg),
         }
     }
 }

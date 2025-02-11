@@ -32,11 +32,25 @@ pub struct ConfigFileRelayerEvmPolicy {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaPolicy {
+    /// Minimum balance required for the relayer (in lamports). Optional.
     pub min_balance: Option<u64>,
+
+    /// List of allowed tokens by their identifiers. Only these tokens are supported if provided.
     pub allowed_tokens: Option<Vec<String>>,
+
+    /// List of allowed programs by their identifiers. Only these programs are supported if
+    /// provided.
     pub allowed_programs: Option<Vec<String>>,
+
+    /// List of allowed accounts by their public keys. The relayer will only operate with these
+    /// accounts if provided.
     pub allowed_accounts: Option<Vec<String>>,
+
+    /// List of disallowed accounts by their public keys. These accounts will be explicitly
+    /// blocked.
     pub disallowed_accounts: Option<Vec<String>>,
+
+    /// Maximum supported token fee (in lamports) for a transaction. Optional.
     pub max_supported_token_fee: Option<u64>,
 }
 

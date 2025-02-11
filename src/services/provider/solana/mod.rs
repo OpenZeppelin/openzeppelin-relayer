@@ -13,47 +13,27 @@ use async_trait::async_trait;
 use eyre::Result;
 #[cfg(test)]
 use mockall::automock;
-use serde::ser::{Serialize, SerializeStruct, Serializer};
+use mpl_token_metadata::accounts::Metadata;
+use serde::Serialize;
 use solana_client::{
     nonblocking::rpc_client::RpcClient, rpc_response::RpcSimulateTransactionResult,
 };
 use solana_sdk::{
-    commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
-    transaction::Transaction,
+    account::Account, commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey,
+    signature::Signature, transaction::Transaction,
 };
+use spl_token::state::Mint;
 use std::{str::FromStr, time::Duration};
 use thiserror::Error;
 
 use super::ProviderError;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Serialize)]
 pub enum SolanaProviderError {
     #[error("RPC client error: {0}")]
-    RpcError(#[from] solana_client::client_error::ClientError),
+    RpcError(String),
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
-}
-
-// Implement the Serialize trait for SolanaProviderError to allow serialization
-// due to missing Serialize implementation in the solana_client::client_error::ClientError.
-impl Serialize for SolanaProviderError {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut state = serializer.serialize_struct("ProviderError", 2)?;
-        match self {
-            SolanaProviderError::RpcError(err) => {
-                state.serialize_field("type", "RpcError")?;
-                state.serialize_field("message", &format!("{}", err))?;
-            }
-            SolanaProviderError::InvalidAddress(address) => {
-                state.serialize_field("type", "InvalidAddress")?;
-                state.serialize_field("message", address)?;
-            }
-        }
-        state.end()
-    }
 }
 
 /// A trait that abstracts common Solana provider operations.
@@ -88,10 +68,42 @@ pub trait SolanaProviderTrait: Send + Sync {
         &self,
         transaction: &Transaction,
     ) -> Result<RpcSimulateTransactionResult, SolanaProviderError>;
+
+    /// Retrieve an account given its string representation.
+    async fn get_account_from_str(&self, account: &str) -> Result<Account, SolanaProviderError>;
+
+    /// Retrieve an account given its Pubkey.
+    async fn get_account_from_pubkey(
+        &self,
+        pubkey: &Pubkey,
+    ) -> Result<Account, SolanaProviderError>;
+
+    /// Retrieve token metadata from the provided pubkey.
+    async fn get_token_metadata_from_pubkey(
+        &self,
+        pubkey: &str,
+    ) -> Result<TokenMetadata, SolanaProviderError>;
 }
 
 pub struct SolanaProvider {
     client: RpcClient,
+}
+
+#[derive(Error, Debug, PartialEq)]
+pub struct TokenMetadata {
+    pub decimals: u8,
+    pub symbol: String,
+    pub mint: String,
+}
+
+impl std::fmt::Display for TokenMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "TokenMetadata {{ decimals: {}, symbol: {}, mint: {} }}",
+            self.decimals, self.symbol, self.mint
+        )
+    }
 }
 
 #[allow(dead_code)]
@@ -133,7 +145,7 @@ impl SolanaProviderTrait for SolanaProvider {
         self.client
             .get_balance(&pubkey)
             .await
-            .map_err(SolanaProviderError::RpcError)
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 
     /// Gets the latest blockhash.
@@ -142,7 +154,7 @@ impl SolanaProviderTrait for SolanaProvider {
             .get_latest_blockhash()
             .await
             .map(|blockhash| blockhash.to_bytes())
-            .map_err(SolanaProviderError::RpcError)
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 
     /// Sends a transaction to the network.
@@ -153,7 +165,7 @@ impl SolanaProviderTrait for SolanaProvider {
         self.client
             .send_transaction(transaction)
             .await
-            .map_err(SolanaProviderError::RpcError)
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 
     /// Confirms the given transaction signature.
@@ -164,7 +176,7 @@ impl SolanaProviderTrait for SolanaProvider {
         self.client
             .confirm_transaction(signature)
             .await
-            .map_err(SolanaProviderError::RpcError)
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
             .and_then(|confirmed| if confirmed { Ok(true) } else { Ok(false) })
     }
 
@@ -176,7 +188,7 @@ impl SolanaProviderTrait for SolanaProvider {
         self.client
             .get_minimum_balance_for_rent_exemption(data_size)
             .await
-            .map_err(SolanaProviderError::RpcError)
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 
     /// Simulate transaction.
@@ -187,8 +199,80 @@ impl SolanaProviderTrait for SolanaProvider {
         self.client
             .simulate_transaction(transaction)
             .await
-            .map_err(SolanaProviderError::RpcError)
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
             .map(|response| response.value)
+    }
+
+    /// Retrieves account data for the given account string.
+    async fn get_account_from_str(&self, account: &str) -> Result<Account, SolanaProviderError> {
+        let address = Pubkey::from_str(account).map_err(|e| {
+            SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", account, e))
+        })?;
+        self.client
+            .get_account(&address)
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+    }
+
+    /// Retrieves account data for the given pubkey.
+    async fn get_account_from_pubkey(
+        &self,
+        pubkey: &Pubkey,
+    ) -> Result<Account, SolanaProviderError> {
+        self.client
+            .get_account(pubkey)
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+    }
+
+    /// Retrieves token metadata from a provided mint address.
+    async fn get_token_metadata_from_pubkey(
+        &self,
+        pubkey: &str,
+    ) -> Result<TokenMetadata, SolanaProviderError> {
+        // Retrieve account associated with the given pubkey
+        let account = self.get_account_from_str(pubkey).await.map_err(|e| {
+            SolanaProviderError::RpcError(format!("Failed to fetch account for {}: {}", pubkey, e))
+        })?;
+
+        // Unpack the mint info from the account's data
+        let mint_info = Mint::unpack(&account.data).map_err(|e| {
+            SolanaProviderError::RpcError(format!("Failed to unpack mint info: {}", e))
+        })?;
+        let decimals = mint_info.decimals;
+
+        // Convert provided string into a Pubkey
+        let mint_pubkey = Pubkey::try_from(pubkey).map_err(|e| {
+            SolanaProviderError::RpcError(format!("Invalid pubkey {}: {}", pubkey, e))
+        })?;
+
+        // Derive the PDA for the token metadata
+        let metadata_pda = Metadata::find_pda(&mint_pubkey).0;
+
+        // Get the metadata account data from the provider
+        let metadata_account = self
+            .get_account_from_pubkey(&metadata_pda)
+            .await
+            .map_err(|e| {
+                SolanaProviderError::RpcError(format!(
+                    "Failed to fetch metadata account {}: {}",
+                    metadata_pda, e
+                ))
+            })?;
+
+        // Deserialize the metadata from the account data
+        let metadata = Metadata::from_bytes(&metadata_account.data).map_err(|e| {
+            SolanaProviderError::RpcError(format!("Failed to deserialize metadata: {}", e))
+        })?;
+
+        // Remove trailing null bytes (padding) from the symbol
+        let normalized_symbol = metadata.symbol.trim_end_matches('\u{0}').to_string();
+
+        Ok(TokenMetadata {
+            decimals,
+            symbol: normalized_symbol,
+            mint: pubkey.to_string(),
+        })
     }
 }
 
@@ -201,7 +285,6 @@ mod tests {
         signer::{keypair::Keypair, Signer},
         transaction::Transaction,
     };
-
     fn get_funded_keypair() -> Keypair {
         // address HCKHoE2jyk1qfAwpHQghvYH3cEfT8euCygBzF9AV6bhY
         let funded_keypair = Keypair::from_bytes(&[
@@ -287,6 +370,38 @@ mod tests {
             result.err.is_none(),
             "Simulation encountered an error: {:?}",
             result.err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_token_metadata_from_pubkey() {
+        let provider = SolanaProvider::new("https://api.mainnet-beta.solana.com").unwrap();
+        let usdc_token_metadata = provider
+            .get_token_metadata_from_pubkey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            usdc_token_metadata,
+            TokenMetadata {
+                decimals: 6,
+                symbol: "USDC".to_string(),
+                mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            }
+        );
+
+        let usdt_token_metadata = provider
+            .get_token_metadata_from_pubkey("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            usdt_token_metadata,
+            TokenMetadata {
+                decimals: 6,
+                symbol: "USDT".to_string(),
+                mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(),
+            }
         );
     }
 }
