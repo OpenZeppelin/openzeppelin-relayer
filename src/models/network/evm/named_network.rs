@@ -25,9 +25,6 @@ use core::{fmt, time::Duration};
 pub enum EvmNamedNetwork {
     Mainnet = 1,
     Ropsten = 3,
-    Rinkeby = 4,
-    Goerli = 5,
-    Kovan = 42,
     Holesky = 17000,
     Sepolia = 11155111,
 
@@ -80,9 +77,6 @@ pub enum EvmNamedNetwork {
     Gnosis = 100,
 
     Polygon = 137,
-    #[strum(to_string = "mumbai", serialize = "polygon-mumbai")]
-    #[serde(alias = "mumbai", alias = "polygon-mumbai")]
-    PolygonMumbai = 80001,
     #[strum(to_string = "amoy", serialize = "polygon-amoy")]
     #[serde(alias = "amoy", alias = "polygon-amoy")]
     PolygonAmoy = 80002,
@@ -209,7 +203,7 @@ impl EvmNamedNetwork {
             Optimism | OptimismGoerli | OptimismSepolia | Base | BaseGoerli | BaseSepolia
             | Mantle | MantleSepolia => 2_000,
 
-            Polygon | PolygonMumbai | PolygonAmoy => 2_100,
+            Polygon | PolygonAmoy => 2_100,
 
             Moonbeam | Moonriver => 12_500,
 
@@ -229,9 +223,9 @@ impl EvmNamedNetwork {
 
             UnichainSepolia => 1_000,
 
-            Rinkeby | Ropsten | Goerli | Kovan | Sepolia | Holesky | MantleTestnet | Moonbase
-            | MoonbeamDev | OptimismKovan | ZkSync | ZkSyncTestnet | PolygonZkEvm
-            | PolygonZkEvmTestnet | Linea | LineaGoerli | LineaSepolia => return None,
+            Ropsten | Sepolia | Holesky | MantleTestnet | Moonbase | MoonbeamDev
+            | OptimismKovan | ZkSync | ZkSyncTestnet | PolygonZkEvm | PolygonZkEvmTestnet
+            | Linea | LineaGoerli | LineaSepolia => return None,
         }))
     }
 
@@ -256,15 +250,16 @@ impl EvmNamedNetwork {
             | ZkSyncTestnet => true,
 
             // Known EIP-1559 chains.
-            Mainnet | Sepolia | Holesky | Goerli | Base | BaseGoerli | BaseSepolia | Optimism
-            | OptimismGoerli | OptimismSepolia | Polygon | PolygonMumbai | PolygonAmoy
-            | Avalanche | AvalancheFuji | Arbitrum | ArbitrumGoerli | ArbitrumSepolia
-            | ArbitrumNova | Linea | LineaGoerli | LineaSepolia | Gnosis | Mantle
-            | MantleSepolia | Scroll | ScrollSepolia | UnichainSepolia => false,
+            Mainnet | Sepolia | Holesky | Base | BaseGoerli | BaseSepolia | Optimism
+            | OptimismGoerli | OptimismSepolia | Polygon | PolygonAmoy | Avalanche
+            | AvalancheFuji | Arbitrum | ArbitrumGoerli | ArbitrumSepolia | ArbitrumNova
+            | Linea | LineaGoerli | LineaSepolia | Gnosis | Mantle | MantleSepolia | Scroll
+            | ScrollSepolia | UnichainSepolia => false,
 
             // Unknown / not applicable, default to false for backwards compatibility.
-            Ropsten | Rinkeby | Kovan | Moonbeam | MoonbeamDev | Moonriver | Moonbase | Aurora
-            | AuroraTestnet => false,
+            Ropsten | Moonbeam | MoonbeamDev | Moonriver | Moonbase | Aurora | AuroraTestnet => {
+                false
+            }
         }
     }
 
@@ -272,12 +267,9 @@ impl EvmNamedNetwork {
         use EvmNamedNetwork::*;
 
         match self {
-            Goerli
-            | Holesky
-            | Kovan
-            | Rinkeby
-            | Sepolia
+            Holesky
             | Ropsten
+            | Sepolia
             | ArbitrumGoerli
             | ArbitrumSepolia
             | ArbitrumTestnet
@@ -297,7 +289,6 @@ impl EvmNamedNetwork {
             | OptimismGoerli
             | OptimismKovan
             | OptimismSepolia
-            | PolygonMumbai
             | PolygonAmoy
             | PolygonZkEvmTestnet
             | ScrollSepolia
@@ -316,10 +307,7 @@ impl EvmNamedNetwork {
         use EvmNamedNetwork::*;
 
         match self {
-            Goerli
-            | Holesky
-            | Kovan
-            | Rinkeby
+            Holesky
             | Sepolia
             | Ropsten
             | ArbitrumGoerli
@@ -341,7 +329,6 @@ impl EvmNamedNetwork {
             | OptimismGoerli
             | OptimismKovan
             | OptimismSepolia
-            | PolygonMumbai
             | PolygonAmoy
             | PolygonZkEvmTestnet
             | ScrollSepolia
@@ -364,18 +351,6 @@ impl EvmNamedNetwork {
                 "https://api-ropsten.etherscan.io/api",
                 "https://ropsten.etherscan.io",
             ],
-            Kovan => &[
-                "https://api-kovan.etherscan.io/api",
-                "https://kovan.etherscan.io",
-            ],
-            Rinkeby => &[
-                "https://api-rinkeby.etherscan.io/api",
-                "https://rinkeby.etherscan.io",
-            ],
-            Goerli => &[
-                "https://api-goerli.etherscan.io/api",
-                "https://goerli.etherscan.io",
-            ],
             Sepolia => &[
                 "https://api-sepolia.etherscan.io/api",
                 "https://sepolia.etherscan.io",
@@ -386,10 +361,6 @@ impl EvmNamedNetwork {
             ],
 
             Polygon => &["https://api.polygonscan.com/api", "https://polygonscan.com"],
-            PolygonMumbai => &[
-                "https://api-testnet.polygonscan.com/api",
-                "https://mumbai.polygonscan.com",
-            ],
             PolygonAmoy => &[
                 "https://api-amoy.polygonscan.com/api",
                 "https://amoy.polygonscan.com",
@@ -556,18 +527,6 @@ impl EvmNamedNetwork {
                 "https://api-ropsten.etherscan.io/api",
                 "https://ropsten.etherscan.io",
             ],
-            Kovan => &[
-                "https://api-kovan.etherscan.io/api",
-                "https://kovan.etherscan.io",
-            ],
-            Rinkeby => &[
-                "https://api-rinkeby.etherscan.io/api",
-                "https://rinkeby.etherscan.io",
-            ],
-            Goerli => &[
-                "https://api-goerli.etherscan.io/api",
-                "https://goerli.etherscan.io",
-            ],
             Sepolia => &[
                 "https://eth-sepolia.api.onfinality.io/public",
                 "https://sepolia.etherscan.io",
@@ -579,10 +538,6 @@ impl EvmNamedNetwork {
             ],
 
             Polygon => &["https://api.polygonscan.com/api", "https://polygonscan.com"],
-            PolygonMumbai => &[
-                "https://api-testnet.polygonscan.com/api",
-                "https://mumbai.polygonscan.com",
-            ],
             PolygonAmoy => &[
                 "https://api-amoy.polygonscan.com/api",
                 "https://amoy.polygonscan.com",
@@ -743,10 +698,9 @@ impl EvmNamedNetwork {
         use EvmNamedNetwork::*;
         match self {
             // Ethereum and L2s
-            Mainnet | Sepolia | Ropsten | Rinkeby | Goerli | Kovan | Holesky | Optimism
-            | OptimismKovan | OptimismGoerli | OptimismSepolia | Base | BaseGoerli
-            | BaseSepolia | Arbitrum | ArbitrumTestnet | ArbitrumGoerli | ArbitrumSepolia
-            | ArbitrumNova | Scroll | ScrollSepolia => "ETH",
+            Mainnet | Sepolia | Ropsten | Holesky | Optimism | OptimismKovan | OptimismGoerli
+            | OptimismSepolia | Base | BaseGoerli | BaseSepolia | Arbitrum | ArbitrumTestnet
+            | ArbitrumGoerli | ArbitrumSepolia | ArbitrumNova | Scroll | ScrollSepolia => "ETH",
             Celo | CeloAlfajores | CeloBaklava => "CELO",
             ZkSync | ZkSyncTestnet => "ETH",
             Mantle | MantleTestnet | MantleSepolia => "MNT",
@@ -756,7 +710,7 @@ impl EvmNamedNetwork {
             BinanceSmartChain | BinanceSmartChainTestnet => "BNB",
 
             // Polygon
-            Polygon | PolygonMumbai | PolygonAmoy => "POL",
+            Polygon | PolygonAmoy => "POL",
             PolygonZkEvm | PolygonZkEvmTestnet => "ETH",
 
             // L1s
