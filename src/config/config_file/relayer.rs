@@ -372,7 +372,7 @@ mod tests {
         let config = json!({
             "id": "solana-relayer",
             "name": "Solana Mainnet Relayer",
-            "network": "mainnet",
+            "network": "mainnet-beta",
             "network_type": "solana",
             "signer_id": "solana-signer",
             "paused": false,

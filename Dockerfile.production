@@ -5,6 +5,7 @@ WORKDIR /usr/app
 
 USER root
 RUN apk update && apk add openssl-dev
+RUN apk add --no-cache perl
 
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
