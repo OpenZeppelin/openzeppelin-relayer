@@ -2,6 +2,8 @@ use core::{fmt, time::Duration};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+use crate::models::NetworkError;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SolanaNamedNetwork {
@@ -75,16 +77,17 @@ impl AsRef<str> for SolanaNamedNetwork {
 }
 
 impl FromStr for SolanaNamedNetwork {
-    type Err = (); // Define an appropriate error type
+    type Err = NetworkError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            // Add your specific string-to-network mappings here
-            "mainnet" => Ok(SolanaNamedNetwork::MainnetBeta),
+        match s.to_lowercase().as_str() {
+            "mainnet-beta" => Ok(SolanaNamedNetwork::MainnetBeta),
             "testnet" => Ok(SolanaNamedNetwork::Testnet),
             "devnet" => Ok(SolanaNamedNetwork::Devnet),
-            // Add other network mappings as needed
-            _ => Err(()), // Return an error for unrecognized strings
+            _ => Err(NetworkError::InvalidNetwork(format!(
+                "Invalid Solana network: {}",
+                s
+            ))),
         }
     }
 }
@@ -102,16 +105,90 @@ mod tests {
     }
 
     #[test]
-    fn is_testnet() {
+    fn test_is_testnet() {
         assert!(!SolanaNamedNetwork::MainnetBeta.is_testnet());
         assert!(SolanaNamedNetwork::Testnet.is_testnet());
+        assert!(SolanaNamedNetwork::Devnet.is_testnet());
     }
 
     #[test]
-    fn rpc_url() {
+    fn test_rpc_url() {
         assert_eq!(
             SolanaNamedNetwork::MainnetBeta.public_rpc_urls(),
             &["https://api.mainnet-beta.solana.com"]
         );
+        assert_eq!(
+            SolanaNamedNetwork::Devnet.public_rpc_urls(),
+            &["https://api.devnet.solana.com"]
+        );
+        assert_eq!(
+            SolanaNamedNetwork::Testnet.public_rpc_urls(),
+            &["https://api.testnet.solana.com"]
+        );
+    }
+
+    #[test]
+    fn test_explorer_url() {
+        assert_eq!(
+            SolanaNamedNetwork::MainnetBeta.explorer_urls(),
+            &["https://explorer.solana.com"]
+        );
+        assert_eq!(
+            SolanaNamedNetwork::Devnet.explorer_urls(),
+            &["https://explorer.solana.com?cluster=devnet"]
+        );
+        assert_eq!(
+            SolanaNamedNetwork::Testnet.explorer_urls(),
+            &["https://explorer.solana.com?cluster=testnet"]
+        );
+    }
+
+    #[test]
+    fn test_average_blocktime() {
+        assert_eq!(
+            SolanaNamedNetwork::MainnetBeta.average_blocktime(),
+            Some(Duration::from_millis(400))
+        );
+        assert_eq!(
+            SolanaNamedNetwork::Devnet.average_blocktime(),
+            Some(Duration::from_millis(400))
+        );
+        assert_eq!(
+            SolanaNamedNetwork::Testnet.average_blocktime(),
+            Some(Duration::from_millis(400))
+        );
+    }
+
+    #[test]
+    fn test_from_str() {
+        assert_eq!(
+            SolanaNamedNetwork::from_str("mainnet-beta").unwrap(),
+            SolanaNamedNetwork::MainnetBeta
+        );
+        assert_eq!(
+            SolanaNamedNetwork::from_str("testnet").unwrap(),
+            SolanaNamedNetwork::Testnet
+        );
+        assert_eq!(
+            SolanaNamedNetwork::from_str("devnet").unwrap(),
+            SolanaNamedNetwork::Devnet
+        );
+
+        assert!(matches!(
+            "invalid".parse::<SolanaNamedNetwork>(),
+            Err(NetworkError::InvalidNetwork(_))
+        ));
+    }
+
+    #[test]
+    fn test_solana_named_network_display() {
+        let network = SolanaNamedNetwork::MainnetBeta;
+        assert_eq!(network.to_string(), "mainnet-beta");
+
+        let network = SolanaNamedNetwork::Testnet;
+        assert_eq!(network.to_string(), "testnet");
+
+        let network = SolanaNamedNetwork::Devnet;
+        assert_eq!(network.to_string(), "devnet");
     }
 }

@@ -105,3 +105,93 @@ impl SolanaNetwork {
         self.0.explorer_urls()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_network_from_named() {
+        let network = SolanaNetwork::from_named(SolanaNamedNetwork::MainnetBeta);
+        assert_eq!(network.kind(), &SolanaNamedNetwork::MainnetBeta);
+    }
+
+    #[test]
+    fn test_network_default() {
+        let network = SolanaNetwork::default();
+        assert_eq!(network.kind(), &SolanaNamedNetwork::default());
+    }
+
+    #[test]
+    fn test_network_from_str() {
+        assert!(matches!(
+            "mainnet-beta".parse::<SolanaNetwork>().unwrap().kind(),
+            &SolanaNamedNetwork::MainnetBeta
+        ));
+        assert!(matches!(
+            "testnet".parse::<SolanaNetwork>().unwrap().kind(),
+            &SolanaNamedNetwork::Testnet
+        ));
+        assert!("invalid".parse::<SolanaNetwork>().is_err());
+    }
+
+    #[test]
+    fn test_network_display() {
+        let network = SolanaNetwork::from_named(SolanaNamedNetwork::MainnetBeta);
+        assert_eq!(network.to_string(), "mainnet-beta");
+    }
+
+    #[test]
+    fn test_network_debug() {
+        let network = SolanaNetwork::from_named(SolanaNamedNetwork::MainnetBeta);
+        assert_eq!(format!("{:?}", network), "Network::MainnetBeta");
+    }
+
+    #[test]
+    fn test_network_serialize() {
+        let network = SolanaNetwork::from_named(SolanaNamedNetwork::MainnetBeta);
+        let serialized = serde_json::to_string(&network).unwrap();
+        assert_eq!(serialized, "\"mainnet_beta\"");
+    }
+
+    #[test]
+    fn test_network_deserialize() {
+        let network: SolanaNetwork = serde_json::from_str("\"mainnet-beta\"").unwrap();
+        assert_eq!(network.kind(), &SolanaNamedNetwork::MainnetBeta);
+
+        assert!(serde_json::from_str::<SolanaNetwork>("\"invalid\"").is_err());
+    }
+
+    #[test]
+    fn test_network_from_network_str() {
+        assert!(matches!(
+            SolanaNetwork::from_network_str("mainnet-beta")
+                .unwrap()
+                .kind(),
+            &SolanaNamedNetwork::MainnetBeta
+        ));
+        assert!(SolanaNetwork::from_network_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_network_average_blocktime() {
+        let network = SolanaNetwork::from_named(SolanaNamedNetwork::MainnetBeta);
+        assert_eq!(
+            network.average_blocktime(),
+            Some(Duration::from_millis(400))
+        );
+    }
+
+    #[test]
+    fn test_network_public_rpc_urls() {
+        let network = SolanaNetwork::from_named(SolanaNamedNetwork::MainnetBeta);
+        assert!(!network.public_rpc_urls().is_empty());
+    }
+
+    #[test]
+    fn test_network_explorer_urls() {
+        let network = SolanaNetwork::from_named(SolanaNamedNetwork::MainnetBeta);
+        assert!(!network.explorer_urls().is_empty());
+    }
+}
