@@ -13,7 +13,7 @@ This guide provides step-by-step instructions for setting up OpenZeppelin Relaye
 
 === Configuration Instructions
 
-Clone the repository:
+. Clone the repository:
 +
 [source,bash]
 ----
@@ -21,64 +21,57 @@ git clone https://github.com/openzeppelin/openzeppelin-relayer
 cd openzeppelin-relayer
 ----
 
-Modify the environment configuration file with your preferred verbosity level:
-
+. Modify the environment configuration file (`.env`) with your preferred verbosity level:
++
 1. Error
 2. Warn
 3. Info
 4. Debug
 5. Trace
 
++
 [source,bash]
 ----
 RUST_LOG=info
 ----
 
-Create a signer configuration and save it under `config/keys`.
-
+. Create a signer configuration and save it under `config/keys`.
++
 You can find a sample signer config in `config/keys/local-signer.json`
 
++
 [source,bash]
 ----
 cp config/keys/local-signer.example.json config/keys/local-signer.json
 ----
 
-Create a configuration file for your relayer and save it in `config/config.json`.
-
+. Create a configuration file for your relayer and save it in `config/config.json`.
++
 You can find a sample config file in `config/config.example.json`
 
++
 [source,bash]
 ----
 cp config/config.example.json config/config.json
 ----
 
-Make sure that, each of the `signers` definitions points to the right signer config file (the `path` property).
-
-==== Local Configuration
-
-Copy the example environment file:
-
-[source,bash]
-----
-cp .env.example .env
-----
-
-==== Docker Configuration
-
-Modify the `env_dev` or `env_prod` files.
++
+NOTE: Make sure that, each of the `signers` definitions points to the right signer config file (the `path` property).
 
 == Building and Deploying
 
 === Local Installation
 
-Install dependencies and build application:
+. Install dependencies and build application:
+
 +
 [source,bash]
 ----
 cargo build
 ----
 
-Run the build application:
+. Run the built application:
+
 +
 [source,bash]
 ----
@@ -87,27 +80,34 @@ cargo run
 
 === Docker Installation
 
-Build the docker image:
+. Build the docker image:
+
 +
 [source,bash]
 ----
 docker-compose build
 ----
 
++
 By default docker compose command uses `Dockerfile.development` to build the image. If you want to use `Dockerfile.production`, you can use the following command: 
+
++
 [source,bash]
 ----
 DOCKERFILE=Dockerfile.production docker-compose build
 ----
 
-Run the containers:
+. Run the containers:
 +
 [source,bash]
 ----
 docker-compose up
 ----
 
++
 or
+
++
 [source,bash]
 ----
 DOCKERFILE=Dockerfile.production docker-compose up
