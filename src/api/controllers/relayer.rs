@@ -104,6 +104,8 @@ pub async fn send_transaction(
     let tx_request: NetworkTransactionRequest =
         NetworkTransactionRequest::from_json(&relayer_repo_model.network_type, request.clone())?;
 
+    tx_request.validate()?;
+
     let transaction = relayer.process_transaction_request(tx_request).await?;
 
     let transaction_response: TransactionResponse = transaction.into();
