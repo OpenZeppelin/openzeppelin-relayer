@@ -58,7 +58,7 @@ mod tests {
         assert_eq!(service.get_and_increment().unwrap(), 0);
         assert_eq!(service.get_and_increment().unwrap(), 1);
         assert_eq!(service.decrement().unwrap(), 1);
-        assert_eq!(service.set(10).unwrap(), ());
+        assert!(service.set(10).is_ok());
         assert_eq!(service.get().unwrap(), Some(10));
     }
 }

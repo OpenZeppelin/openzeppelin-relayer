@@ -85,7 +85,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
-                    recent_blockhash: solana_data.recent_blockhash,
+                    recent_blockhash: solana_data.recent_blockhash.unwrap_or_default(),
                     fee_payer: solana_data.fee_payer,
                 })
             }

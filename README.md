@@ -71,6 +71,8 @@ Create `config/config.json` file. You can use `config/config.example.json` as a 
   cp config/config.example.json config/config.json
   ```
 
+Create `config/keys/local-signer.json` and make sure to update this file with the correct values. Check the sample file `config/keys/local-signer.example.json`.
+
 Update `.env` file with the correct values
 
 ### Starting Redis manually (without docker compose)
@@ -101,13 +103,12 @@ Run relayer:
 Run the following command to start the services:
 
   ```sh
-  docker-compose up
+  docker-compose up -d
   ```
 
  > Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can use the following command: `DOCKERFILE=Dockerfile.production docker-compose up`.
 
 Make sure the containers are running without any restarts/issues:
-
   ```sh
   docker ps -a
   ```
@@ -128,4 +129,3 @@ To check the logs of the services/containers, run the following command:
   # for individual container
   docker logs -f <container_name>
   ```
-
