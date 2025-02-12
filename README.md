@@ -1,48 +1,79 @@
 # OpenZeppelin Relayer
 
-## Development
+> :warning: This software is in alpha. Use in production environments at your own risk.
+This relayer service offers multi-chain support and an extensible architecture for adding new chains.
+
+## Features
+
+- TBD
+
+## Supported networks
+
+- Solana
+- EVM
+
+## For users
+
+### Installation
+View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/quickstart) guide. (TBD - fix links)
+
+### Usage
+
+View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#running_the_relayer) documentation for more information.
+
+## For Developers
+
+### Technical Overview
+
+TBD
+
+### Project Structure
+
+TBD
 
 ### Prerequisites
 
 - Docker
-- Rust
+- Rust 
 - Redis
 
-## Installation
+### Setup
 
-### Local Setup
-
-- Clone the repository:
+To get started, clone the repository:
 
   ```sh
   git clone https://github.com/openzeppelin/openzeppelin-relayer
   cd openzeppelin-relayer
   ```
 
-- Install dependencies:
+Run the following commands to install pre-commit hooks:
 
-  ```sh
-  cargo build
-  ```
-
-### Developer setup
-
-- Run the following commands to install pre-commit hooks:
+- Install pre-commit hooks:
 
   ```bash
-   # Use <pipx install pre-commit> if you prefer to install it globally.
-   pip install pre-commit
-   pre-commit install --install-hooks -t commit-msg -t pre-commit -t pre-push
+  pip install pre-commit
+  pre-commit install --install-hooks -t commit-msg -t pre-commit -t pre-push
   ```
 
-  > Note: If you run into issues with pip install, you may need [pipx](https://pipx.pypa.io/stable/installation/) to install pre-commit globally.
+  > :warning: If you encounter issues with pip, consider using [pipx](https://pipx.pypa.io/stable/installation/) for a global installation.
 
-- Run `rustup toolchain install nightly` to install the nightly toolchain.
-- Run `rustup component add rustfmt --toolchain nightly` to install rustfmt for the nightly toolchain.
+- Install the nightly toolchain:
+  ```bash
+  rustup toolchain install nightly
+  rustup component add rustfmt --toolchain nightly
+  ```
 
-### Config file
+### Config files
 
-Create `config/config.json` file before starting service in dev mode `cargo run`.
+Create `config/config.json` file. You can use `config/config.example.json` as a starting point:
+
+  ```sh
+  cp config/config.example.json config/config.json
+  ```
+
+Create `config/keys/local-signer.json` and make sure to update this file with the correct values. Check the sample file `config/keys/local-signer.example.json`.
+
+Update `.env` file with the correct values
 
 ### Starting Redis manually (without docker compose)
 
@@ -54,15 +85,22 @@ Run Redis container:
     -d redis:latest
   ```
 
+## Running the relayer locally:
+
+Install dependencies:
+
+  ```sh
+  cargo build
+  ```
+
+Run relayer:
+  ```sh
+  cargo run
+  ```
+
 ### Running services with docker compose
 
-- Make sure to update `.env` file with the correct values.
-
-- Create `config/config.json` and make sure to update `config/config.json` file with the correct values. Check the sample example `config/config.example.json`.
-
-- Create `config/keys/local-signer.json` and make sure to update `config/keys/local-signer.json` file with the correct values. Check the sample example `config/keys/local-signer.example.json`.
-
-- Run the following command to start the services:
+Run the following command to start the services:
 
   ```sh
   docker-compose up -d
@@ -70,19 +108,18 @@ Run Redis container:
 
  > Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can use the following command: `DOCKERFILE=Dockerfile.production docker-compose up`.
 
-- Make sure the containers are running without any restarts/issues:
-
+Make sure the containers are running without any restarts/issues:
   ```sh
   docker ps -a
   ```
 
-- To stop the services, run the following command:
+To stop the services, run the following command:
 
   ```sh
   docker-compose down
   ```
 
-- To check the logs of the services/containers, run the following command:
+To check the logs of the services/containers, run the following command:
 
   ```sh
   docker compose logs -f
@@ -92,24 +129,3 @@ Run Redis container:
   # for individual container
   docker logs -f <container_name>
   ```
-
-## Documentation
-
-- Pre-requisites:
-
-  - You need `antora` `site-generator` and `mermaid` extension to generate the documentation.
-
-  - You can directly install these dependencies by running `cd docs && npm i --include dev`. If you want to install them manually, you can follow the steps mentioned below.
-  - Install `antora` locally, you can follow the steps mentioned [here](https://docs.antora.org/antora/latest/install/install-antora/#install-dir), if you already have you can skip this step.
-    > Note: If you want to install globally, you can run: <br/> `npm install -g @antora/cli@3.1 @antora/site-generator@3.1 @sntke/antora-mermaid-extension`
-  - Verify the installation by running `antora --version` or by running `npx antora --version` if you installed it locally.
-
-- To generate documentation locally, run the following command:
-
-  ```sh
-  cargo make rust-antora
-  ```
-
-- Site will be generated in `docs/build/site/openZeppelin_relayer/<version>/` directory.
-
-- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
