@@ -89,7 +89,7 @@ docker-compose build
 ----
 
 +
-By default docker compose command uses `Dockerfile.development` to build the image. If you want to use `Dockerfile.production`, you can use the following command: 
+By default docker compose command uses `Dockerfile.development` to build the image. If you want to use `Dockerfile.production`, you can use the following command:
 
 +
 [source,bash]
@@ -116,4 +116,3 @@ DOCKERFILE=Dockerfile.production docker-compose up
 == Examples
 
 TBD
-
