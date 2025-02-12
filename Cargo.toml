@@ -19,6 +19,8 @@ panic = "unwind"
 actix-web = "4"
 log = "0.4"
 simplelog = "0.12"
+prometheus = "0.13"
+lazy_static = "1.5"
 dotenvy = "0.15"
 thiserror = "2"
 async-trait = "0.1"
@@ -67,9 +69,7 @@ rand = "0.9.0"
 tempfile = "3.2"
 serial_test = "3.2"
 
+
 [[bin]]
 path = "src/main.rs"
 name = "openzeppelin-relayer"
-
-[lib]
-path = "src/lib.rs"

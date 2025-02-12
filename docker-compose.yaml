@@ -1,8 +1,15 @@
 ---
+# Default UID: 1000
+# Default GID: 1000
+# Ports `8080` for relayer server and `6379`for redis server.
+
 services:
   relayer:
     container_name: openzeppelin-relayer
     build:
+      args:
+        UID: ${DOCKER_UID:-1000}
+        GID: ${DOCKER_GID:-1000}
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile.development}
     ports:
@@ -29,16 +36,19 @@ services:
       - redis
     networks:
       - relayer-network
-    restart: always
+    restart: unless-stopped
+    mem_swappiness: 0
+    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}
     volumes:
       - ./config:/app/config/:ro
       # Uncomment to persist logs
       # Default: writes to stdout
-      - ./logs:/app/logs
+      #- ${LOGS_DATA_DIR:-./logs}:/app/logs
 
   redis:
     container_name: openzeppelin-relayer-redis
-    image: redis:latest
+    image: redis:bookworm
+    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  # uses the same user as the relayer
     ports:
       - 6379:6379
     volumes:
@@ -46,7 +56,28 @@ services:
     command: [redis-server, --appendonly, yes, --save, '60', '1']
     networks:
       - relayer-network
-    restart: always
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  # Uses defender user from Dockerfile
+    command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
+      --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries
+      --web.console.templates=/usr/share/prometheus/consoles
+    ports: [9090:9090]
+    volumes:
+      - ${RELAYER_PROMETHEUS_CONFIG:-./cmd/prometheus/prometheus.yml}:/etc/prometheus/prometheus.yml
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  # Uses defender user from Dockerfile
+    ports: [3000:3000]
+    volumes:
+      - ${RELAYER_GRAFANA_CONFIG:-./cmd/prometheus/grafana.ini}:/etc/grafana/grafana.ini
+      - ./cmd/prometheus/datasources:/etc/grafana/provisioning/datasources
+      - ./cmd/prometheus/dashboards:/etc/grafana/provisioning/dashboards
+    restart: unless-stopped
 
 networks:
   relayer-network:

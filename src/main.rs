@@ -50,6 +50,7 @@ mod domain;
 mod init;
 mod jobs;
 mod logging;
+mod metrics;
 mod models;
 mod repositories;
 mod services;
