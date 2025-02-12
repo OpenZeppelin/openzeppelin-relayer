@@ -1,4 +1,6 @@
-use crate::models::{NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel};
+use crate::models::{
+    NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, TransactionError,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
@@ -34,6 +36,35 @@ pub enum NetworkTransactionData {
     Stellar(StellarTransactionData),
 }
 
+impl NetworkTransactionData {
+    pub fn get_evm_transaction_data(&self) -> Result<EvmTransactionData, TransactionError> {
+        match self {
+            NetworkTransactionData::Evm(data) => Ok(data.clone()),
+            _ => Err(TransactionError::InvalidType(
+                "Expected EVM transaction".to_string(),
+            )),
+        }
+    }
+
+    pub fn get_solana_transaction_data(&self) -> Result<SolanaTransactionData, TransactionError> {
+        match self {
+            NetworkTransactionData::Solana(data) => Ok(data.clone()),
+            _ => Err(TransactionError::InvalidType(
+                "Expected Solana transaction".to_string(),
+            )),
+        }
+    }
+
+    pub fn get_stellar_transaction_data(&self) -> Result<StellarTransactionData, TransactionError> {
+        match self {
+            NetworkTransactionData::Stellar(data) => Ok(data.clone()),
+            _ => Err(TransactionError::InvalidType(
+                "Expected Stellar transaction".to_string(),
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionDataSignature {
     pub v: u64,
@@ -58,7 +89,7 @@ pub struct EvmTransactionData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaTransactionData {
-    pub recent_blockhash: String,
+    pub recent_blockhash: Option<String>,
     pub fee_payer: String,
     pub instructions: Vec<String>,
     pub hash: Option<String>,
@@ -112,10 +143,10 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 confirmed_at: "".to_string(),
                 network_type: NetworkType::Solana,
                 network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                    recent_blockhash: solana_request.recent_blockhash.clone(),
-                    fee_payer: "0x".to_string(), // TODO
-                    instructions: vec![],        // TODO
-                    hash: Some("0x".to_string()),
+                    recent_blockhash: None,
+                    fee_payer: solana_request.fee_payer.clone(),
+                    instructions: solana_request.instructions.clone(),
+                    hash: None,
                 }),
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => Ok(Self {

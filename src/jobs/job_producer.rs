@@ -15,12 +15,13 @@ use crate::{
 use apalis::prelude::Storage;
 use apalis_redis::RedisError;
 use log::{error, info};
+use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
 use super::JobType;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Serialize)]
 pub enum JobProducerError {
     #[error("Queue error: {0}")]
     QueueError(String),

@@ -245,7 +245,10 @@ mod tests {
 
     #[test]
     fn test_named_id() {
-        assert_eq!(EvmNetwork::from_named(EvmNamedNetwork::Goerli).id(), 5);
+        assert_eq!(
+            EvmNetwork::from_named(EvmNamedNetwork::Sepolia).id(),
+            11155111
+        );
     }
 
     #[test]
@@ -290,11 +293,11 @@ mod tests {
 
     #[test]
     fn test_serde() {
-        let re = r#"["mumbai","amoy","mumbai"]"#;
+        let re = r#"["arbitrum","amoy","gnosis"]"#;
         let expected = [
-            EvmNetwork::from_named(EvmNamedNetwork::PolygonMumbai),
+            EvmNetwork::from_named(EvmNamedNetwork::Arbitrum),
             EvmNetwork::from_id(80002),
-            EvmNetwork::from_named(EvmNamedNetwork::PolygonMumbai),
+            EvmNetwork::from_named(EvmNamedNetwork::Gnosis),
         ];
         assert_eq!(serde_json::to_string(&expected).unwrap(), re);
     }
