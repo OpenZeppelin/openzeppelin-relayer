@@ -33,3 +33,6 @@ pub use address::*;
 
 mod notification;
 pub use notification::*;
+
+mod rpc;
+pub use rpc::*;

@@ -216,10 +216,15 @@ impl RelayerFactoryTrait for RelayerFactory {
             NetworkType::Solana => {
                 let solana_provider =
                     Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+                let solana_rpc_handler = Arc::new(DefaultSolanaRpcHandler::new(
+                    relayer.clone(),
+                    solana_provider.clone(),
+                ));
 
                 let relayer = SolanaRelayer::new(
                     relayer,
                     solana_provider,
+                    solana_rpc_handler,
                     relayer_repository,
                     transaction_repository,
                     job_producer,
@@ -280,16 +285,42 @@ pub struct JsonRpcRequest {
 }
 
 // JSON-RPC Response struct
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
     pub id: u64,
 }
 
+impl JsonRpcResponse {
+    pub fn result<T: Serialize>(id: u64, result: T) -> Self {
+        let result_seriliazed = serde_json::to_value(result).unwrap();
+        Self {
+            jsonrpc: "2.0".to_string(),
+            result: Some(result_seriliazed),
+            error: None,
+            id,
+        }
+    }
+
+    pub fn error(id: u64, code: i32, message: String, data: Option<serde_json::Value>) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            result: None,
+            error: Some(JsonRpcError {
+                code,
+                message,
+                data,
+            }),
+            id,
+        }
+    }
+}
+
 // JSON-RPC Error struct
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JsonRpcError {
     pub code: i32,
     pub message: String,

@@ -273,5 +273,5 @@ pub async fn relayer_rpc(
 
     let result = network_relayer.rpc(request).await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+    Ok(HttpResponse::Ok().json(result))
 }

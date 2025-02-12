@@ -28,11 +28,14 @@ use futures::future::try_join_all;
 use log::{info, warn};
 use solana_sdk::account::Account;
 
+use super::{DefaultSolanaRpcHandler, SolanaRpcHandler};
+
 #[allow(dead_code)]
 pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
     network: SolanaNetwork,
     provider: Arc<SolanaProvider>,
+    rpc_handler: Arc<DefaultSolanaRpcHandler>,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
@@ -42,6 +45,7 @@ impl SolanaRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
         provider: Arc<SolanaProvider>,
+        rpc_handler: Arc<DefaultSolanaRpcHandler>,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
@@ -55,6 +59,7 @@ impl SolanaRelayer {
             relayer,
             network,
             provider,
+            rpc_handler,
             relayer_repository,
             transaction_repository,
             job_producer,
@@ -178,14 +183,11 @@ impl SolanaRelayerTrait for SolanaRelayer {
         })
     }
 
-    async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
-        println!("Solana rpc...");
-        Ok(JsonRpcResponse {
-            id: 1,
-            jsonrpc: "2.0".to_string(),
-            result: Some(serde_json::Value::Null),
-            error: None,
-        })
+    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+        self.rpc_handler
+            .handle_request(request)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))
     }
 
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
