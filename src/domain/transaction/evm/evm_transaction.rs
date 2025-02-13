@@ -52,6 +52,7 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
+        // validate the transaction
         // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
