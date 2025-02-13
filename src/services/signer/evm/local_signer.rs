@@ -24,7 +24,7 @@ impl LocalSigner {
         let raw_key = signer_model.raw_key.as_ref().expect("keystore not found");
 
         // transforms the key into alloy wallet
-        let key_bytes = FixedBytes::from_slice(&raw_key);
+        let key_bytes = FixedBytes::from_slice(raw_key);
         let local_signer_client =
             AlloyLocalSignerClient::from_bytes(&key_bytes).expect("failed to create signer");
 
