@@ -25,7 +25,7 @@ async-trait = "0.1"
 actix-rt = "2.0.0"
 alloy = { version = "0.9", features = ["full"] }
 serde_json = "1"
-strum = { version = "0.26", default-features = false, features = ["derive"] }
+strum = { version = "0.27", default-features = false, features = ["derive"] }
 strum_macros = "0.26"
 serde = { version = "1.0", features = ["derive", "alloc"] }
 num_enum = { version = "0.7", default-features = false }
