@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    constants::EVM_SMALLEST_UNIT_NAME,
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
@@ -81,30 +82,6 @@ impl EvmRelayer {
 
         Ok(())
     }
-
-    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
-        let balance: u128 = self
-            .provider
-            .get_balance(&self.relayer.address)
-            .await
-            .map_err(|e| RelayerError::ProviderError(e.to_string()))?
-            .try_into()
-            .map_err(|_| {
-                RelayerError::ProviderError("Failed to convert balance to u128".to_string())
-            })?;
-
-        info!("Balance : {} for relayer: {}", balance, self.relayer.id);
-
-        let policy = self.relayer.policies.get_evm_policy();
-
-        if balance < policy.min_balance {
-            return Err(RelayerError::InsufficientBalanceError(
-                "Insufficient balance".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -143,7 +120,7 @@ impl Relayer for EvmRelayer {
 
         Ok(BalanceResponse {
             balance,
-            unit: "wei".to_string(),
+            unit: EVM_SMALLEST_UNIT_NAME.to_string(),
         })
     }
 
@@ -180,6 +157,30 @@ impl Relayer for EvmRelayer {
             result: Some(serde_json::Value::Null),
             error: None,
         })
+    }
+
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        let balance: u128 = self
+            .provider
+            .get_balance(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?
+            .try_into()
+            .map_err(|_| {
+                RelayerError::ProviderError("Failed to convert balance to u128".to_string())
+            })?;
+
+        info!("Balance : {} for relayer: {}", balance, self.relayer.id);
+
+        let policy = self.relayer.policies.get_evm_policy();
+
+        if balance < policy.min_balance {
+            return Err(RelayerError::InsufficientBalanceError(
+                "Insufficient balance".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {

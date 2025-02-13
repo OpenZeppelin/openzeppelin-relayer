@@ -100,6 +100,10 @@ impl Relayer for StellarRelayer {
         })
     }
 
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        Ok(())
+    }
+
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         println!("Stellar sync relayer...");
         Ok(())

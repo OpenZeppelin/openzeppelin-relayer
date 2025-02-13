@@ -4,7 +4,7 @@ use crate::{
     domain::RelayerUpdateRequest,
     models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        RelayerStellarPolicy, RepositoryError,
+        RelayerStellarPolicy, RepositoryError, SolanaAllowedTokensPolicy,
     },
 };
 use eyre::Result;
@@ -30,6 +30,11 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
     async fn disable_relayer(
         &self,
         relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
     ) -> Result<RelayerRepoModel, RepositoryError>;
 }
 
@@ -84,6 +89,19 @@ impl RelayerRepository for InMemoryRelayerRepository {
                 id
             )))
         }
+    }
+
+    async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        let relayer = store.get_mut(&id).ok_or_else(|| {
+            RepositoryError::NotFound(format!("Relayer with ID {} not found", id))
+        })?;
+        relayer.policies = policy;
+        Ok(relayer.clone())
     }
 
     async fn disable_relayer(
@@ -271,11 +289,26 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Solana(solana) => {
+                // Create a new variable for solana.allowed_tokens.
+                // If solana.allowed_tokens is None, the resulting variable will be None;
+                // otherwise, each entry will be mapped using
+                // SolanaAllowedTokensPolicy::new_partial.
+                let mapped_allowed_tokens = solana
+                    .allowed_tokens
+                    .filter(|tokens| !tokens.is_empty())
+                    .map(|tokens| {
+                        tokens
+                            .into_iter()
+                            .map(SolanaAllowedTokensPolicy::new_partial)
+                            .collect::<Vec<_>>()
+                    });
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                    max_retries: solana.max_retries,
-                    confirmation_blocks: solana.confirmation_blocks,
-                    timeout_seconds: solana.timeout_seconds,
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
+                    allowed_accounts: solana.allowed_accounts,
+                    allowed_programs: solana.allowed_programs,
+                    allowed_tokens: mapped_allowed_tokens,
+                    disallowed_accounts: solana.disallowed_accounts,
+                    max_supported_token_fee: solana.max_supported_token_fee,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {
@@ -310,6 +343,16 @@ impl RelayerRepository for RelayerRepositoryStorage {
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
             RelayerRepositoryStorage::InMemory(repo) => repo.partial_update(id, update).await,
+        }
+    }
+
+    async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.update_policy(id, policy).await,
         }
     }
 
@@ -546,5 +589,13 @@ mod tests {
 
         assert_eq!(enabled_relayer.id, initial_relayer.id);
         assert!(!enabled_relayer.system_disabled);
+    }
+
+    #[actix_web::test]
+    async fn test_update_policy() {
+        let repo = InMemoryRelayerRepository::new();
+        let relayer = create_test_relayer("test".to_string());
+
+        repo.create(relayer.clone()).await.unwrap();
     }
 }

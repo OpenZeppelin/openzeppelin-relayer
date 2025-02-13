@@ -1,23 +1,38 @@
+//! # Solana Relayer Module
+//!
+//! This module implements a relayer for the Solana network. It defines a trait
+//! `SolanaRelayerTrait` for common operations such as sending JSON RPC requests,
+//! fetching balance information, signing transactions, etc. The module uses a
+//! [`SolanaProvider`](crate::services::SolanaProvider) for making RPC calls.
+//!
+//! It integrates with other parts of the system including the job queue ([`JobProducer`]),
+//! in-memory repositories, and the application's domain models.
 use std::sync::Arc;
 
 use crate::{
+    constants::SOLANA_SMALLEST_UNIT_NAME,
     domain::{
-        relayer::{Relayer, RelayerError},
-        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
-        SignDataResponseSolana, SignTypedDataRequest,
+        relayer::RelayerError, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SolanaRelayerTrait,
     },
     jobs::JobProducer,
-    models::{NetworkTransactionRequest, RelayerRepoModel, SolanaNetwork, TransactionRepoModel},
-    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
+    models::{
+        produce_relayer_disabled_payload, RelayerNetworkPolicy, RelayerRepoModel,
+        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaNetwork,
+    },
+    repositories::{InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage},
+    services::{SolanaProvider, SolanaProviderTrait},
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
+use futures::future::try_join_all;
+use log::{info, warn};
+use solana_sdk::account::Account;
 
 #[allow(dead_code)]
 pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
     network: SolanaNetwork,
+    provider: Arc<SolanaProvider>,
     relayer_repository: Arc<RelayerRepositoryStorage>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
@@ -27,6 +42,7 @@ impl SolanaRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage>,
+        provider: Arc<SolanaProvider>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
@@ -39,60 +55,127 @@ impl SolanaRelayer {
             relayer,
             network,
             relayer_repository,
+            provider,
             transaction_repository,
             job_producer,
         })
     }
+
+    /// Validates the RPC connection by fetching the latest blockhash.
+    ///
+    /// This method sends a request to the Solana RPC to obtain the latest blockhash.
+    /// If the call fails, it returns a `RelayerError::ProviderError` containing the error message.
+    async fn validate_rpc(&self) -> Result<(), RelayerError> {
+        self.provider
+            .get_latest_blockhash()
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Populates the allowed tokens metadata for the Solana relayer policy.
+    ///
+    /// This method checks whether allowed tokens have been configured in the relayer's policy.
+    /// If allowed tokens are provided, it concurrently fetches token metadata from the Solana
+    /// provider for each token using its mint address, maps the metadata into instances of
+    /// `SolanaAllowedTokensPolicy`, and then updates the relayer policy with the new metadata.
+    ///
+    /// If no allowed tokens are specified, it logs an informational message and returns the policy
+    /// unchanged.
+    ///
+    /// Finally, the updated policy is stored in the repository.
+    async fn populate_allowed_tokens_metadata(&self) -> Result<RelayerSolanaPolicy, RelayerError> {
+        let mut policy = self.relayer.policies.get_solana_policy();
+        // Check if allowed_tokens is specified; if not, return the policy unchanged.
+        let allowed_tokens = match policy.allowed_tokens.as_ref() {
+            Some(tokens) if !tokens.is_empty() => tokens,
+            _ => {
+                info!("No allowed tokens specified; skipping token metadata population.");
+                return Ok(policy);
+            }
+        };
+
+        let token_metadata_futures = allowed_tokens.iter().map(|token| async {
+            // Propagate errors from get_token_metadata_from_pubkey instead of panicking.
+            let token_metadata = self
+                .provider
+                .get_token_metadata_from_pubkey(&token.mint)
+                .await
+                .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+            Ok::<SolanaAllowedTokensPolicy, RelayerError>(SolanaAllowedTokensPolicy::new(
+                token_metadata.mint,
+                Some(token_metadata.decimals),
+                Some(token_metadata.symbol.to_string()),
+            ))
+        });
+
+        let updated_allowed_tokens = try_join_all(token_metadata_futures).await?;
+
+        policy.allowed_tokens = Some(updated_allowed_tokens);
+
+        self.relayer_repository
+            .update_policy(
+                self.relayer.id.clone(),
+                RelayerNetworkPolicy::Solana(policy.clone()),
+            )
+            .await?;
+
+        Ok(policy)
+    }
+
+    /// Validates the allowed programs policy.
+    ///
+    /// This method retrieves the allowed programs specified in the Solana relayer policy.
+    /// For each allowed program, it fetches the associated account data from the provider and
+    /// verifies that the program is executable.
+    /// If any of the programs are not executable, it returns a
+    /// `RelayerError::PolicyConfigurationError`.
+    async fn validate_program_policy(&self) -> Result<(), RelayerError> {
+        let policy = self.relayer.policies.get_solana_policy();
+        let allowed_programs = match policy.allowed_programs.as_ref() {
+            Some(programs) if !programs.is_empty() => programs,
+            _ => {
+                info!("No allowed programs specified; skipping program validation.");
+                return Ok(());
+            }
+        };
+        let account_info_futures = allowed_programs.iter().map(|program| {
+            let program = program.clone();
+            async move {
+                let account = self
+                    .provider
+                    .get_account_from_str(&program)
+                    .await
+                    .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+                Ok::<Account, RelayerError>(account)
+            }
+        });
+
+        let accounts = try_join_all(account_info_futures).await?;
+
+        for account in accounts {
+            if !account.executable {
+                return Err(RelayerError::PolicyConfigurationError(
+                    "Policy Program is not executable".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
-impl Relayer for SolanaRelayer {
-    async fn process_transaction_request(
-        &self,
-        network_transaction: NetworkTransactionRequest,
-    ) -> Result<TransactionRepoModel, RelayerError> {
-        let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
-
-        info!("Solana Sending transaction...");
-        Ok(transaction)
-    }
-
+impl SolanaRelayerTrait for SolanaRelayer {
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
-        println!("Solana get_balance...");
+        let address = &self.relayer.address;
+        let balance = self.provider.get_balance(address).await?;
+
         Ok(BalanceResponse {
-            balance: 0,
-            unit: "".to_string(),
+            balance: balance as u128,
+            unit: SOLANA_SMALLEST_UNIT_NAME.to_string(),
         })
-    }
-
-    async fn get_status(&self) -> Result<bool, RelayerError> {
-        println!("Solana get_status...");
-        Ok(true)
-    }
-
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
-        println!("Solana delete_pending_transactions...");
-        Ok(true)
-    }
-
-    async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
-        println!("Solana sign_data...");
-
-        let signature = SignDataResponseSolana {
-            signature: "".to_string(),
-            public_key: "".to_string(),
-        };
-
-        Ok(SignDataResponse::Solana(signature))
-    }
-
-    async fn sign_typed_data(
-        &self,
-        _request: SignTypedDataRequest,
-    ) -> Result<SignDataResponse, RelayerError> {
-        Err(RelayerError::NotSupported(
-            "Signing typed data not supported for Solana".to_string(),
-        ))
     }
 
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
@@ -105,8 +188,81 @@ impl Relayer for SolanaRelayer {
         })
     }
 
+    async fn validate_min_balance(&self) -> Result<(), RelayerError> {
+        let balance = self
+            .provider
+            .get_balance(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        info!("Balance : {} for relayer: {}", balance, self.relayer.id);
+
+        let policy = self.relayer.policies.get_solana_policy();
+
+        if balance < policy.min_balance {
+            return Err(RelayerError::InsufficientBalanceError(
+                "Insufficient balance".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        println!("Stellar sync relayer...");
+        info!("Initializing relayer: {}", self.relayer.id);
+
+        // Populate model with allowed token metadata and update DB entry
+        // Error will be thrown if any of the tokens are not found
+        self.populate_allowed_tokens_metadata().await.map_err(|_| {
+            RelayerError::PolicyConfigurationError(
+                "Error while processing allowed tokens policy".into(),
+            )
+        })?;
+
+        // Validate relayer allowed programs policy
+        // Error will be thrown if any of the programs are not executable
+        self.validate_program_policy().await.map_err(|_| {
+            RelayerError::PolicyConfigurationError(
+                "Error while validating allowed programs policy".into(),
+            )
+        })?;
+
+        let validate_rpc_result = self.validate_rpc().await;
+        let validate_min_balance_result = self.validate_min_balance().await;
+
+        // disable relayer if any check fails
+        if validate_rpc_result.is_err() || validate_min_balance_result.is_err() {
+            let reason = vec![
+                validate_rpc_result
+                    .err()
+                    .map(|e| format!("RPC validation failed: {}", e)),
+                validate_min_balance_result
+                    .err()
+                    .map(|e| format!("Balance check failed: {}", e)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<String>>()
+            .join(", ");
+
+            warn!("Disabling relayer: {} due to: {}", self.relayer.id, reason);
+            let updated_relayer = self
+                .relayer_repository
+                .disable_relayer(self.relayer.id.clone())
+                .await?;
+            if let Some(notification_id) = &self.relayer.notification_id {
+                self.job_producer
+                    .produce_send_notification_job(
+                        produce_relayer_disabled_payload(
+                            notification_id,
+                            &updated_relayer,
+                            &reason,
+                        ),
+                        None,
+                    )
+                    .await?;
+            }
+        }
         Ok(())
     }
 }
