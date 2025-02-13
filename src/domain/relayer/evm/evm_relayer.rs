@@ -112,6 +112,9 @@ impl Relayer for EvmRelayer {
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
+        transaction
+            .validate(&self.relayer)
+            .map_err(|e| RepositoryError::TransactionValidationFailed(e.to_string()))?;
 
         self.transaction_repository
             .create(transaction.clone())

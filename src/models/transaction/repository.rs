@@ -91,6 +91,27 @@ pub struct EvmTransactionData {
     pub signature: Option<EvmTransactionDataSignature>,
 }
 
+impl EvmTransactionData {
+    pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), TransactionError> {
+        if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
+            if let Some(whitelist) = &evm_policy.whitelist_receivers {
+                let target_address = self.to.to_lowercase();
+                let mut allowed_addresses: Vec<String> =
+                    whitelist.iter().map(|addr| addr.to_lowercase()).collect();
+                allowed_addresses.push(ZERO_ADDRESS.to_string());
+                allowed_addresses.push(relayer.address.to_lowercase());
+
+                if !allowed_addresses.contains(&target_address) {
+                    return Err(TransactionError::ValidationError(
+                        "Transaction target address is not whitelisted".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaTransactionData {
     pub recent_blockhash: Option<String>,
@@ -175,27 +196,9 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
 
 impl TransactionRepoModel {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), TransactionError> {
-        // we could start doing this initial validation here?
-        //
         match &self.network_data {
             NetworkTransactionData::Evm(evm_data) => {
-                if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
-                    if let Some(whitelist) = &evm_policy.whitelist_receivers {
-                        let target_address = evm_data.to.to_lowercase();
-
-                        let mut allowed_addresses: Vec<String> =
-                            whitelist.iter().map(|addr| addr.to_lowercase()).collect();
-
-                        allowed_addresses.push(ZERO_ADDRESS.to_string());
-                        allowed_addresses.push(relayer.address.to_lowercase());
-
-                        if !allowed_addresses.contains(&target_address) {
-                            return Err(TransactionError::ValidationError(
-                                "Transaction target address is not whitelisted".to_string(),
-                            ));
-                        }
-                    }
-                }
+                evm_data.validate(relayer)?;
             }
             NetworkTransactionData::Solana(_) => {}
             NetworkTransactionData::Stellar(_) => {}

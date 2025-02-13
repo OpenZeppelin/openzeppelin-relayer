@@ -22,6 +22,9 @@ pub enum RepositoryError {
     #[error("Transaction failure: {0}")]
     TransactionFailure(String),
 
+    #[error("Transaction validation failed: {0}")]
+    TransactionValidationFailed(String),
+
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
 
