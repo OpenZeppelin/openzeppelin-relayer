@@ -214,17 +214,15 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let solana_provider =
-                    Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
-                let solana_rpc_handler = Arc::new(DefaultSolanaRpcHandler::new(
-                    relayer.clone(),
-                    solana_provider.clone(),
-                ));
+                let provider = Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+                let rpc_handler = Arc::new(SolanaRpcHandler::new(Arc::new(
+                    SolanaRpcMethodsImpl::new(relayer.clone(), provider.clone()),
+                )));
 
                 let relayer = SolanaRelayer::new(
                     relayer,
-                    solana_provider,
-                    solana_rpc_handler,
+                    provider,
+                    rpc_handler,
                     relayer_repository,
                     transaction_repository,
                     job_producer,
@@ -291,7 +289,8 @@ pub struct JsonRpcResponse {
     pub result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
-    pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
 }
 
 impl JsonRpcResponse {
@@ -301,20 +300,20 @@ impl JsonRpcResponse {
             jsonrpc: "2.0".to_string(),
             result: Some(result_seriliazed),
             error: None,
-            id,
+            id: Some(id),
         }
     }
 
-    pub fn error(id: u64, code: i32, message: String, data: Option<serde_json::Value>) -> Self {
+    pub fn error(code: i32, message: &str, description: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
             result: None,
             error: Some(JsonRpcError {
                 code,
-                message,
-                data,
+                message: message.to_string(),
+                description: description.to_string(),
             }),
-            id,
+            id: None,
         }
     }
 }
@@ -324,7 +323,7 @@ impl JsonRpcResponse {
 pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
-    pub data: Option<serde_json::Value>,
+    pub description: String,
 }
 
 #[derive(Serialize, Deserialize)]

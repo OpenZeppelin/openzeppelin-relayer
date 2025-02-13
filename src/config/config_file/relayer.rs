@@ -319,8 +319,8 @@ mod tests {
             "signer_id": "solana-signer",
             "paused": false,
             "policies": {
-                "allowed_accounts": ["account1", "account2"],
-                "disallowed_accounts": ["account3", "account4"],
+                "allowed_accounts": ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
+                "disallowed_accounts": ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
             }
         });
 

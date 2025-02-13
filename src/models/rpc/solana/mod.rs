@@ -95,3 +95,40 @@ pub struct GetFeaturesEnabledRequestParams {}
 pub struct GetFeaturesEnabledResult {
     pub features: Vec<String>,
 }
+
+pub enum SolanaRpcMethod {
+    FeeEstimate,
+    TransferTransaction,
+    PrepareTransaction,
+    SignTransaction,
+    SignAndSendTransaction,
+    GetSupportedTokens,
+    GetFeaturesEnabled,
+}
+
+impl SolanaRpcMethod {
+    pub fn from_str(method: &str) -> Option<Self> {
+        match method {
+            "feeEstimate" => Some(SolanaRpcMethod::FeeEstimate),
+            "transferTransaction" => Some(SolanaRpcMethod::TransferTransaction),
+            "prepareTransaction" => Some(SolanaRpcMethod::PrepareTransaction),
+            "signTransaction" => Some(SolanaRpcMethod::SignTransaction),
+            "signAndSendTransaction" => Some(SolanaRpcMethod::SignAndSendTransaction),
+            "getSupportedTokens" => Some(SolanaRpcMethod::GetSupportedTokens),
+            "getFeaturesEnabled" => Some(SolanaRpcMethod::GetFeaturesEnabled),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum SolanaRpcResult {
+    FeeEstimate(FeeEstimateResult),
+    TransferTransaction(TransferTransactionResult),
+    PrepareTransaction(PrepareTransactionResult),
+    SignTransaction(SignTransactionResult),
+    SignAndSendTransaction(SignAndSendTransactionResult),
+    GetSupportedTokens(GetSupportedTokensResult),
+    GetFeaturesEnabled(GetFeaturesEnabledResult),
+}
