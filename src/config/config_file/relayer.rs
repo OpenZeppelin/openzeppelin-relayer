@@ -32,10 +32,26 @@ pub struct ConfigFileRelayerEvmPolicy {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaPolicy {
-    pub max_retries: Option<u32>,
-    pub confirmation_blocks: Option<u64>,
-    pub timeout_seconds: Option<u64>,
+    /// Minimum balance required for the relayer (in lamports). Optional.
     pub min_balance: Option<u64>,
+
+    /// List of allowed tokens by their identifiers. Only these tokens are supported if provided.
+    pub allowed_tokens: Option<Vec<String>>,
+
+    /// List of allowed programs by their identifiers. Only these programs are supported if
+    /// provided.
+    pub allowed_programs: Option<Vec<String>>,
+
+    /// List of allowed accounts by their public keys. The relayer will only operate with these
+    /// accounts if provided.
+    pub allowed_accounts: Option<Vec<String>>,
+
+    /// List of disallowed accounts by their public keys. These accounts will be explicitly
+    /// blocked.
+    pub disallowed_accounts: Option<Vec<String>>,
+
+    /// Maximum supported token fee (in lamports) for a transaction. Optional.
+    pub max_supported_token_fee: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -141,7 +157,6 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             Ok(None) // `policies` is optional
         }?;
 
-        // Construct and return the struct
         Ok(RelayerFileConfig {
             id,
             name,
@@ -188,6 +203,46 @@ impl RelayerFileConfig {
         Ok(())
     }
 
+    fn validate_solana_pub_keys(&self, keys: &Option<Vec<String>>) -> Result<(), ConfigFileError> {
+        if let Some(keys) = keys {
+            let solana_pub_key_regex =
+                Regex::new(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$").map_err(|e| {
+                    ConfigFileError::InternalError(format!("Regex compilation error: {}", e))
+                })?;
+            for key in keys {
+                if !solana_pub_key_regex.is_match(key) {
+                    return Err(ConfigFileError::InvalidPolicy(
+                        "Value must contain only letters, numbers, dashes and underscores".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_policies(&self) -> Result<(), ConfigFileError> {
+        match self.network_type {
+            ConfigFileNetworkType::Solana => {
+                if let Some(ConfigFileRelayerNetworkPolicy::Solana(policy)) = &self.policies {
+                    self.validate_solana_pub_keys(&policy.allowed_accounts)?;
+                    self.validate_solana_pub_keys(&policy.disallowed_accounts)?;
+                    self.validate_solana_pub_keys(&policy.allowed_tokens)?;
+                    self.validate_solana_pub_keys(&policy.allowed_programs)?;
+                    // check if both allowed_accounts and disallowed_accounts are present
+                    if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
+                        return Err(ConfigFileError::InvalidPolicy(
+                            "allowed_accounts and disallowed_accounts cannot be both present"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+            ConfigFileNetworkType::Evm => {}
+            ConfigFileNetworkType::Stellar => {}
+        }
+        Ok(())
+    }
+
     // TODO add validation that multiple relayers on same network cannot use same signer
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         if self.id.is_empty() {
@@ -216,6 +271,8 @@ impl RelayerFileConfig {
         }
 
         self.validate_network()?;
+
+        self.validate_policies()?;
         Ok(())
     }
 }
@@ -253,6 +310,56 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn test_solana_policy_duplicate_entries() {
+        let config = json!({
+            "id": "solana-relayer",
+            "name": "Solana Mainnet Relayer",
+            "network": "mainnet",
+            "network_type": "solana",
+            "signer_id": "solana-signer",
+            "paused": false,
+            "policies": {
+                "allowed_accounts": ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
+                "disallowed_accounts": ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+
+        let err = relayer.validate_policies().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: allowed_accounts and disallowed_accounts cannot be both present"
+        );
+    }
+
+    #[test]
+    fn test_solana_policy_format() {
+        let config = json!({
+            "id": "solana-relayer",
+            "name": "Solana Mainnet Relayer",
+            "network": "mainnet",
+            "network_type": "solana",
+            "signer_id": "solana-signer",
+            "paused": false,
+            "policies": {
+                "min_balance": 100,
+                "allowed_tokens": ["token1", "token2"],
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+
+        let err = relayer.validate_policies().unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: Value must contain only letters, numbers, dashes and underscores"
+        );
+    }
+
+    #[test]
     fn test_valid_evm_relayer() {
         let config = json!({
             "id": "test-relayer",
@@ -284,9 +391,8 @@ mod tests {
             "signer_id": "solana-signer",
             "paused": false,
             "policies": {
-                "max_retries": 2,
-                "confirmation_blocks": 5,
-                "timeout_seconds": 10
+                "min_balance": 100,
+                "disallowed_accounts": ["HCKHoE2jyk1qfAwpHQghvYH3cEfT8euCygBzF9AV6bhY"],
             }
         });
 

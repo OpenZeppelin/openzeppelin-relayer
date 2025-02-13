@@ -8,11 +8,13 @@ use crate::{
     jobs::JobProducer,
     models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    services::SolanaProvider,
 };
 
 #[allow(dead_code)]
 pub struct SolanaRelayerTransaction {
     relayer: RelayerRepoModel,
+    provider: Arc<SolanaProvider>,
     relayer_repository: Arc<InMemoryRelayerRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
@@ -22,12 +24,14 @@ pub struct SolanaRelayerTransaction {
 impl SolanaRelayerTransaction {
     pub fn new(
         relayer: RelayerRepoModel,
+        provider: Arc<SolanaProvider>,
         relayer_repository: Arc<InMemoryRelayerRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer_repository,
+            provider,
             transaction_repository,
             relayer,
             job_producer,

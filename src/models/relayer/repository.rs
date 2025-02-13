@@ -65,22 +65,54 @@ impl Default for RelayerEvmPolicy {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SolanaAllowedTokensPolicy {
+    pub mint: String,
+    pub decimals: Option<u8>,
+    pub symbol: Option<String>,
+}
+
+impl SolanaAllowedTokensPolicy {
+    pub fn new(mint: String, decimals: Option<u8>, symbol: Option<String>) -> Self {
+        Self {
+            mint,
+            decimals,
+            symbol,
+        }
+    }
+
+    // Create a new SolanaAllowedTokensPolicy with only the mint field
+    // We are creating partial entry while processing config file and later
+    // we will fill the rest of the fields
+    pub fn new_partial(mint: String) -> Self {
+        Self {
+            mint,
+            decimals: None,
+            symbol: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerSolanaPolicy {
-    pub max_retries: Option<u32>,
-    pub confirmation_blocks: Option<u64>,
-    pub timeout_seconds: Option<u64>,
     pub min_balance: u64,
+    pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
+    pub allowed_programs: Option<Vec<String>>,
+    pub allowed_accounts: Option<Vec<String>>,
+    pub disallowed_accounts: Option<Vec<String>>,
+    pub max_supported_token_fee: Option<u64>,
 }
 
 impl Default for RelayerSolanaPolicy {
     fn default() -> Self {
         Self {
-            max_retries: None,
-            confirmation_blocks: None,
-            timeout_seconds: None,
             min_balance: DEFAULT_SOLANA_MIN_BALANCE,
+            allowed_tokens: None,
+            allowed_programs: None,
+            allowed_accounts: None,
+            disallowed_accounts: None,
+            max_supported_token_fee: None,
         }
     }
 }

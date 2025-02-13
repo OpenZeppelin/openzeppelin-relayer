@@ -2,7 +2,7 @@ use actix_web::web::ThinData;
 
 use crate::{
     domain::get_relayer_by_id,
-    models::{RelayerRepoModel, TransactionRepoModel},
+    models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::Repository,
     ApiError, AppState,
 };
@@ -48,4 +48,10 @@ pub async fn get_relayer_transaction_by_model(
         state.job_producer(),
     )
     .map_err(|e| e.into())
+}
+
+pub fn solana_not_supported<T>() -> Result<T, TransactionError> {
+    Err(TransactionError::NotSupported(
+        "Endpoint is not supported for Solana relayers".to_string(),
+    ))
 }

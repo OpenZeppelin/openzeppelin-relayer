@@ -1,4 +1,7 @@
-use crate::jobs::JobProducerError;
+use crate::{
+    jobs::JobProducerError,
+    services::{ProviderError, SolanaProviderError},
+};
 
 use super::{ApiError, RepositoryError};
 use serde::Serialize;
@@ -17,6 +20,15 @@ pub enum TransactionError {
 
     #[error("Invalid transaction type: {0}")]
     InvalidType(String),
+
+    #[error("Underlying provider error: {0}")]
+    UnderlyingProvider(#[from] ProviderError),
+
+    #[error("Underlying Solana provider error: {0}")]
+    UnderlyingSolanaProvider(#[from] SolanaProviderError),
+
+    #[error("Not supported: {0}")]
+    NotSupported(String),
 }
 
 impl From<TransactionError> for ApiError {
@@ -26,6 +38,11 @@ impl From<TransactionError> for ApiError {
             TransactionError::NetworkConfiguration(msg) => ApiError::InternalError(msg),
             TransactionError::JobProducerError(msg) => ApiError::InternalError(msg.to_string()),
             TransactionError::InvalidType(msg) => ApiError::InternalError(msg),
+            TransactionError::UnderlyingProvider(err) => ApiError::InternalError(err.to_string()),
+            TransactionError::UnderlyingSolanaProvider(err) => {
+                ApiError::InternalError(err.to_string())
+            }
+            TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
         }
     }
 }

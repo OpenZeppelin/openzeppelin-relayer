@@ -1,6 +1,6 @@
 use crate::{
     repositories::TransactionCounterError,
-    services::{SignerError, SignerFactoryError},
+    services::{ProviderError, SignerError, SignerFactoryError, SolanaProviderError},
 };
 
 use super::{ApiError, RepositoryError};
@@ -13,6 +13,10 @@ pub enum RelayerError {
     NetworkConfiguration(String),
     #[error("Provider error: {0}")]
     ProviderError(String),
+    #[error("Underlying provider error: {0}")]
+    UnderlyingProvider(#[from] ProviderError),
+    #[error("Underlying Solana provider error: {0}")]
+    UnderlyingSolanaProvider(#[from] SolanaProviderError),
     #[error("Queue error: {0}")]
     QueueError(String),
     #[error("Signer factory error: {0}")]
@@ -29,6 +33,8 @@ pub enum RelayerError {
     TransactionSequenceError(#[from] TransactionCounterError),
     #[error("Insufficient balance error: {0}")]
     InsufficientBalanceError(String),
+    #[error("Relayer Policy configuration error: {0}")]
+    PolicyConfigurationError(String),
 }
 
 impl From<RelayerError> for ApiError {
@@ -46,6 +52,9 @@ impl From<RelayerError> for ApiError {
             RelayerError::RelayerPaused => ApiError::ForbiddenError("Relayer paused".to_string()),
             RelayerError::TransactionSequenceError(err) => ApiError::InternalError(err.to_string()),
             RelayerError::InsufficientBalanceError(msg) => ApiError::BadRequest(msg),
+            RelayerError::UnderlyingProvider(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::UnderlyingSolanaProvider(err) => ApiError::InternalError(err.to_string()),
+            RelayerError::PolicyConfigurationError(msg) => ApiError::InternalError(msg),
         }
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     domain::RelayerUpdateRequest,
     models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        RelayerStellarPolicy, RepositoryError,
+        RelayerStellarPolicy, RepositoryError, SolanaAllowedTokensPolicy,
     },
     repositories::*,
 };
@@ -58,6 +58,19 @@ impl InMemoryRelayerRepository {
                 id
             )))
         }
+    }
+
+    pub async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        let relayer = store.get_mut(&id).ok_or_else(|| {
+            RepositoryError::NotFound(format!("Relayer with ID {} not found", id))
+        })?;
+        relayer.policies = policy;
+        Ok(relayer.clone())
     }
 
     pub async fn disable_relayer(
@@ -256,11 +269,26 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Solana(solana) => {
+                // Create a new variable for solana.allowed_tokens.
+                // If solana.allowed_tokens is None, the resulting variable will be None;
+                // otherwise, each entry will be mapped using
+                // SolanaAllowedTokensPolicy::new_partial.
+                let mapped_allowed_tokens = solana
+                    .allowed_tokens
+                    .filter(|tokens| !tokens.is_empty())
+                    .map(|tokens| {
+                        tokens
+                            .into_iter()
+                            .map(SolanaAllowedTokensPolicy::new_partial)
+                            .collect::<Vec<_>>()
+                    });
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                    max_retries: solana.max_retries,
-                    confirmation_blocks: solana.confirmation_blocks,
-                    timeout_seconds: solana.timeout_seconds,
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
+                    allowed_accounts: solana.allowed_accounts,
+                    allowed_programs: solana.allowed_programs,
+                    allowed_tokens: mapped_allowed_tokens,
+                    disallowed_accounts: solana.disallowed_accounts,
+                    max_supported_token_fee: solana.max_supported_token_fee,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {
