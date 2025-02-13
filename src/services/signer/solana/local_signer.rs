@@ -24,7 +24,7 @@ impl LocalSigner {
     pub fn new(signer_model: &SignerRepoModel) -> Self {
         let raw_key = signer_model.raw_key.as_ref().expect("keystore not found");
 
-        let keypair = Keypair::from_seed(&raw_key).expect("invalid keypair");
+        let keypair = Keypair::from_seed(raw_key).expect("invalid keypair");
 
         Self {
             local_signer_client: keypair,

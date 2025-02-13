@@ -287,15 +287,13 @@ mod tests {
     };
     fn get_funded_keypair() -> Keypair {
         // address HCKHoE2jyk1qfAwpHQghvYH3cEfT8euCygBzF9AV6bhY
-        let funded_keypair = Keypair::from_bytes(&[
+        Keypair::from_bytes(&[
             120, 248, 160, 20, 225, 60, 226, 195, 68, 137, 176, 87, 21, 129, 0, 76, 144, 129, 122,
             250, 80, 4, 247, 50, 248, 82, 146, 77, 139, 156, 40, 41, 240, 161, 15, 81, 198, 198,
             86, 167, 90, 148, 131, 13, 184, 222, 251, 71, 229, 212, 169, 2, 72, 202, 150, 184, 176,
             148, 75, 160, 255, 233, 73, 31,
         ])
-        .unwrap();
-
-        funded_keypair
+        .unwrap()
     }
 
     // Helper function to obtain a recent blockhash from the provider.

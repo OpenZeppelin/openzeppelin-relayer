@@ -1,3 +1,4 @@
+---
 version: '3.9'
 
 services:
@@ -6,14 +7,24 @@ services:
       context: ../../
       dockerfile: Dockerfile.development
     ports:
-      - "8080:8080"
+      - 8080:8080
     environment:
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=debug
-      - LOCAL_SIGNER_KEY_PASSPHRASE=test #todo
+      - LOCAL_SIGNER_KEY_PASSPHRASE=test  # todo
+      # Logging options
+      # LOG_MODE=file
+      # comment this line to disable file logging
+      - LOG_MODE=file
+      # LOG FILE PATH, BY DEFAULT ./logs/
+      - LOG_FILE_PATH=logs/
+      # LOG FILE SIZE IN BYTES, BY DEFAULT 1GB (1073741824 BYTES)
+      - LOG_MAX_SIZE=1073741824
     volumes:
       - ./config.json:/app/config/config.json
       - ./keys:/app/keys:ro
+      # Mount logs folder to persist logs
+      - ./logs:/app/logs
     depends_on:
       - redis
     networks:
@@ -23,10 +34,10 @@ services:
   redis:
     image: redis:latest
     ports:
-      - "6379:6379"
+      - 6379:6379
     volumes:
       - redis_data:/data
-    command: ["redis-server", "--appendonly", "yes"]
+    command: [redis-server, --appendonly, yes]
     networks:
       - relayer-network
     restart: always
