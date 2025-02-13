@@ -12,9 +12,9 @@ pub enum Speed {
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct EvmTransactionRequest {
-    pub to: String,
+    pub to: Option<String>,
     pub value: u64,
-    pub data: String,
+    pub data: Option<String>,
     pub gas_limit: u128,
     pub gas_price: u128,
     pub speed: Option<Speed>,
@@ -65,54 +65,51 @@ impl NetworkTransactionRequest {
             )),
         }
     }
-}
-
-impl NetworkTransactionRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
-            NetworkTransactionRequest::Evm(request) => {
-                if request.to.is_empty() && request.data.is_empty() {
-                    return Err(ApiError::BadRequest(
-                        "Both txs `to` and `data` fields are missing. At least one of them has to \
-                         be set."
-                            .to_string(),
-                    ));
-                }
-
-                if let (Some(max_fee), Some(max_priority_fee)) =
-                    (request.max_fee_per_gas, request.max_priority_fee_per_gas)
-                {
-                    if max_fee < max_priority_fee {
-                        return Err(ApiError::BadRequest(
-                            "maxFeePerGas should be greater or equal to maxPriorityFeePerGas"
-                                .to_string(),
-                        ));
-                    }
-                }
-
-                if let Some(valid_until) = &request.valid_until {
-                    match chrono::DateTime::parse_from_rfc3339(valid_until) {
-                        Ok(valid_until_dt) => {
-                            let now = chrono::Utc::now();
-                            if valid_until_dt < now {
-                                return Err(ApiError::BadRequest(
-                                    "The validUntil time cannot be in the past".to_string(),
-                                ));
-                            }
-                        }
-                        Err(_) => {
-                            return Err(ApiError::BadRequest(
-                                "Invalid validUntil datetime format".to_string(),
-                            ));
-                        }
-                    }
-                }
-
-                Ok(())
-            }
+            NetworkTransactionRequest::Evm(request) => validate_evm_transaction_request(request),
             _ => Ok(()),
         }
     }
+}
+
+fn validate_evm_transaction_request(request: &EvmTransactionRequest) -> Result<(), ApiError> {
+    if request.to.is_none() && request.data.is_none() {
+        return Err(ApiError::BadRequest(
+            "Both txs `to` and `data` fields are missing. At least one of them has to be set."
+                .to_string(),
+        ));
+    }
+
+    if let (Some(max_fee), Some(max_priority_fee)) =
+        (request.max_fee_per_gas, request.max_priority_fee_per_gas)
+    {
+        if max_fee < max_priority_fee {
+            return Err(ApiError::BadRequest(
+                "maxFeePerGas should be greater or equal to maxPriorityFeePerGas".to_string(),
+            ));
+        }
+    }
+
+    if let Some(valid_until) = &request.valid_until {
+        match chrono::DateTime::parse_from_rfc3339(valid_until) {
+            Ok(valid_until_dt) => {
+                let now = chrono::Utc::now();
+                if valid_until_dt < now {
+                    return Err(ApiError::BadRequest(
+                        "The validUntil time cannot be in the past".to_string(),
+                    ));
+                }
+            }
+            Err(_) => {
+                return Err(ApiError::BadRequest(
+                    "Invalid validUntil datetime format".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -122,8 +119,8 @@ mod tests {
     #[test]
     fn test_validate_evm_eip1559_fees() {
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "0x123".to_string(),
-            data: "0x".to_string(),
+            to: Some("0x123".to_string()),
+            data: Some("0x".to_string()),
             max_fee_per_gas: Some(100),
             max_priority_fee_per_gas: Some(50),
             ..Default::default()
@@ -131,8 +128,8 @@ mod tests {
         assert!(request.validate().is_ok());
 
         let invalid_request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "0x123".to_string(),
-            data: "0x".to_string(),
+            to: Some("0x123".to_string()),
+            data: Some("0x".to_string()),
             max_fee_per_gas: Some(50),
             max_priority_fee_per_gas: Some(100),
             ..Default::default()
@@ -153,8 +150,8 @@ mod tests {
     fn test_validate_evm_empty_fields() {
         // Test both empty to and data fields
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "".to_string(),
-            data: "".to_string(),
+            to: Some("".to_string()),
+            data: Some("".to_string()),
             ..Default::default()
         });
         let err = request.validate().unwrap_err();
@@ -170,15 +167,15 @@ mod tests {
         }
 
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "0x123".to_string(),
-            data: "".to_string(),
+            to: Some("0x123".to_string()),
+            data: Some("".to_string()),
             ..Default::default()
         });
         assert!(request.validate().is_ok());
 
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "".to_string(),
-            data: "0x123".to_string(),
+            to: Some("".to_string()),
+            data: Some("0x123".to_string()),
             ..Default::default()
         });
         assert!(request.validate().is_ok());
@@ -190,7 +187,7 @@ mod tests {
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "0x123".to_string(),
+            to: Some("0x123".to_string()),
             valid_until: Some(future_time),
             ..Default::default()
         });
@@ -201,7 +198,7 @@ mod tests {
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "0x123".to_string(),
+            to: Some("0x123".to_string()),
             valid_until: Some(past_time),
             ..Default::default()
         });
@@ -215,7 +212,7 @@ mod tests {
 
         // Test invalid datetime format
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "0x123".to_string(),
+            to: Some("0x123".to_string()),
             valid_until: Some("invalid-datetime".to_string()),
             ..Default::default()
         });
@@ -231,7 +228,7 @@ mod tests {
     #[test]
     fn test_validate_evm_valid_until_iso8601() {
         let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
-            to: "0x123".to_string(),
+            to: Some("0x123".to_string()),
             valid_until: Some("2024-07-19T23:49:28.754Z".to_string()),
             ..Default::default()
         });

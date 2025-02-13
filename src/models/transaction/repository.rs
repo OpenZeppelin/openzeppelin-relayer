@@ -126,9 +126,9 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     gas_limit: evm_request.gas_limit,
                     nonce: 0, // TODO
                     value: evm_request.value,
-                    data: evm_request.data.clone(),
+                    data: evm_request.data.clone().unwrap(),
                     from: "0x".to_string(), // TODO
-                    to: evm_request.to.clone(),
+                    to: evm_request.to.clone().unwrap(),
                     chain_id: 1, // TODO
                     hash: Some("0x".to_string()),
                     signature: None,
