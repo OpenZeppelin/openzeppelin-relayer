@@ -101,6 +101,13 @@ impl InMemoryTransactionRepository {
         tx.status = status;
         self.update(tx_id, tx).await
     }
+
+    pub async fn get_tx_by_id(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.get_by_id(tx_id.clone()).await
+    }
 }
 
 impl Default for InMemoryTransactionRepository {

@@ -10,8 +10,9 @@ pub enum Speed {
     Slow,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EvmTransactionRequest {
+    pub from: String,
     pub to: String,
     pub value: u64,
     pub data: String,
@@ -20,13 +21,13 @@ pub struct EvmTransactionRequest {
     pub speed: Option<Speed>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SolanaTransactionRequest {
     pub fee_payer: String,
     pub instructions: Vec<String>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StellarTransactionRequest {
     pub source_account: String,
     pub destination_account: String,
@@ -38,7 +39,7 @@ pub struct StellarTransactionRequest {
     pub sequence_number: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum NetworkTransactionRequest {
     Evm(EvmTransactionRequest),
     Solana(SolanaTransactionRequest),

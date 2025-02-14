@@ -54,7 +54,19 @@ impl Transaction for EvmRelayerTransaction {
         info!("Preparing transaction");
         // validate the transaction
 
-        // after preparing the transaction, we need to submit it to the job queue
+        let transaction_request = self
+            .transaction_repository
+            .get_tx_by_id(tx.id.clone())
+            .await?;
+        let transaction_request = transaction_request.to_transaction_request();
+        let gas_estimation = self
+            .provider
+            .estimate_gas(&transaction_request)
+            .await
+            .unwrap();
+        println!(" test gas_estimation: {:?}", gas_estimation);
+
+        // After preparing the transaction, submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
                 TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),

@@ -1,9 +1,13 @@
 use crate::models::{
     NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, TransactionError,
 };
+use alloy::{
+    primitives::{TxKind, Uint},
+    rpc::types::{TransactionInput, TransactionRequest},
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -87,6 +91,39 @@ pub struct EvmTransactionData {
     pub signature: Option<EvmTransactionDataSignature>,
 }
 
+impl EvmTransactionData {
+    pub fn to_transaction_request(&self) -> Result<TransactionRequest, TransactionError> {
+        println!("self.from: {:?}", self.from);
+        Ok(TransactionRequest {
+            from: Some(self.from.clone().parse().map_err(|_| {
+                TransactionError::InvalidType("Invalid address format".to_string())
+            })?),
+            to: Some(TxKind::Call(self.to.parse().map_err(|_| {
+                TransactionError::InvalidType("Invalid address format".to_string())
+            })?)),
+            gas_price: Some(
+                Uint::<256, 4>::from(self.gas_price)
+                    .try_into()
+                    .map_err(|_| TransactionError::InvalidType("Invalid gas price".to_string()))?,
+            ),
+            gas: Some(
+                Uint::<256, 4>::from(self.gas_limit)
+                    .try_into()
+                    .map_err(|_| TransactionError::InvalidType("Invalid gas limit".to_string()))?,
+            ),
+            value: Some(Uint::<256, 4>::from(self.value)),
+            input: TransactionInput::from(self.data.clone().into_bytes()),
+            nonce: Some(
+                Uint::<256, 4>::from(self.nonce)
+                    .try_into()
+                    .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))?,
+            ),
+            chain_id: Some(11155111),
+            ..Default::default()
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaTransactionData {
     pub recent_blockhash: Option<String>,
@@ -127,7 +164,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     nonce: 0, // TODO
                     value: evm_request.value,
                     data: evm_request.data.clone(),
-                    from: "0x".to_string(), // TODO
+                    from: evm_request.from.clone(),
                     to: evm_request.to.clone(),
                     chain_id: 1, // TODO
                     hash: Some("0x".to_string()),
@@ -165,6 +202,15 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     hash: Some("0x".to_string()),
                 }),
             }),
+        }
+    }
+}
+
+impl TransactionRepoModel {
+    pub fn to_transaction_request(&self) -> TransactionRequest {
+        match &self.network_data {
+            NetworkTransactionData::Evm(data) => data.to_transaction_request().unwrap(),
+            _ => panic!("Invalid network type"),
         }
     }
 }
