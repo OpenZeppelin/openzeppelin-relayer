@@ -6,32 +6,63 @@ use crate::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
         RelayerStellarPolicy, RepositoryError, SolanaAllowedTokensPolicy,
     },
-    repositories::*,
 };
-use async_trait::async_trait;
 use eyre::Result;
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::{Mutex, MutexGuard};
+
+use crate::models::PaginationQuery;
+use async_trait::async_trait;
+
+use super::{PaginatedResult, Repository};
+
+#[async_trait]
+pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync {
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+    async fn partial_update(
+        &self,
+        id: String,
+        update: RelayerUpdateRequest,
+    ) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn enable_relayer(&self, relayer_id: String)
+        -> Result<RelayerRepoModel, RepositoryError>;
+    async fn disable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError>;
+    async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
+    ) -> Result<RelayerRepoModel, RepositoryError>;
+}
 
 #[derive(Debug)]
 pub struct InMemoryRelayerRepository {
     store: Mutex<HashMap<String, RelayerRepoModel>>,
 }
 
-#[allow(dead_code)]
 impl InMemoryRelayerRepository {
     pub fn new() -> Self {
         Self {
             store: Mutex::new(HashMap::new()),
         }
     }
-
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
         Ok(lock.lock().await)
     }
+}
 
-    pub async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+impl Default for InMemoryRelayerRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl RelayerRepository for InMemoryRelayerRepository {
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
         let active_relayers: Vec<RelayerRepoModel> = store
             .values()
@@ -41,7 +72,7 @@ impl InMemoryRelayerRepository {
         Ok(active_relayers)
     }
 
-    pub async fn partial_update(
+    async fn partial_update(
         &self,
         id: String,
         update: RelayerUpdateRequest,
@@ -60,7 +91,7 @@ impl InMemoryRelayerRepository {
         }
     }
 
-    pub async fn update_policy(
+    async fn update_policy(
         &self,
         id: String,
         policy: RelayerNetworkPolicy,
@@ -73,7 +104,7 @@ impl InMemoryRelayerRepository {
         Ok(relayer.clone())
     }
 
-    pub async fn disable_relayer(
+    async fn disable_relayer(
         &self,
         relayer_id: String,
     ) -> Result<RelayerRepoModel, RepositoryError> {
@@ -89,7 +120,7 @@ impl InMemoryRelayerRepository {
         }
     }
 
-    pub async fn enable_relayer(
+    async fn enable_relayer(
         &self,
         relayer_id: String,
     ) -> Result<RelayerRepoModel, RepositoryError> {
@@ -103,12 +134,6 @@ impl InMemoryRelayerRepository {
                 relayer_id
             )))
         }
-    }
-}
-
-impl Default for InMemoryRelayerRepository {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -136,7 +161,6 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
             ))),
         }
     }
-
     #[allow(clippy::map_entry)]
     async fn update(
         &self,
@@ -172,8 +196,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
-        let relayers: Vec<RelayerRepoModel> = store.values().cloned().collect();
-        Ok(relayers)
+        Ok(store.values().cloned().collect())
     }
 
     async fn list_paginated(
@@ -182,7 +205,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
         let total = self.count().await?;
         let start = ((query.page - 1) * query.per_page) as usize;
-        let items: Vec<RelayerRepoModel> = self
+        let items = self
             .store
             .lock()
             .await
@@ -191,7 +214,6 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
             .take(query.per_page as usize)
             .cloned()
             .collect();
-
         Ok(PaginatedResult {
             items,
             total: total as u64,
@@ -201,9 +223,7 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        let relayers_length = store.len();
-        Ok(relayers_length)
+        Ok(self.store.lock().await.len())
     }
 }
 
@@ -298,6 +318,111 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     min_balance: stellar.min_balance.unwrap_or(DEFAULT_STELLAR_MIN_BALANCE),
                 }))
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RelayerRepositoryStorage {
+    InMemory(InMemoryRelayerRepository),
+}
+
+#[async_trait]
+impl RelayerRepository for RelayerRepositoryStorage {
+    #[allow(dead_code)]
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_active().await,
+        }
+    }
+
+    async fn partial_update(
+        &self,
+        id: String,
+        update: RelayerUpdateRequest,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.partial_update(id, update).await,
+        }
+    }
+
+    async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.update_policy(id, policy).await,
+        }
+    }
+
+    async fn disable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.disable_relayer(relayer_id).await,
+        }
+    }
+
+    async fn enable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.enable_relayer(relayer_id).await,
+        }
+    }
+}
+
+#[async_trait]
+impl Repository<RelayerRepoModel, String> for RelayerRepositoryStorage {
+    async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.create(entity).await,
+        }
+    }
+
+    async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
+        }
+    }
+
+    async fn update(
+        &self,
+        id: String,
+        entity: RelayerRepoModel,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.update(id, entity).await,
+        }
+    }
+
+    async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.delete_by_id(id).await,
+        }
+    }
+
+    async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_all().await,
+        }
+    }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
+        }
+    }
+
+    async fn count(&self) -> Result<usize, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.count().await,
         }
     }
 }
@@ -464,5 +589,13 @@ mod tests {
 
         assert_eq!(enabled_relayer.id, initial_relayer.id);
         assert!(!enabled_relayer.system_disabled);
+    }
+
+    #[actix_web::test]
+    async fn test_update_policy() {
+        let repo = InMemoryRelayerRepository::new();
+        let relayer = create_test_relayer("test".to_string());
+
+        repo.create(relayer.clone()).await.unwrap();
     }
 }

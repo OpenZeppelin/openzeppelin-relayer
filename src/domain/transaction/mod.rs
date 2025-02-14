@@ -2,7 +2,7 @@ use crate::{
     jobs::JobProducer,
     models::{EvmNetwork, NetworkType, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{get_solana_network_provider_from_str, EvmProvider, TransactionCounterService},
 };
@@ -149,7 +149,7 @@ impl Transaction for NetworkTransaction {
 pub trait RelayerTransactionFactoryTrait {
     fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
@@ -160,7 +160,7 @@ pub struct RelayerTransactionFactory;
 impl RelayerTransactionFactory {
     pub fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -200,8 +200,8 @@ impl RelayerTransactionFactory {
 
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                     relayer,
-                    solana_provider,
                     relayer_repository,
+                    solana_provider,
                     transaction_repository,
                     job_producer,
                 )?))

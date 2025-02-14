@@ -6,7 +6,7 @@ use crate::{
     jobs::{self, Queue},
     repositories::{
         InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-        InMemoryTransactionCounter, InMemoryTransactionRepository,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     AppState,
 };
@@ -26,7 +26,9 @@ use std::sync::Arc;
 /// - Repository initialization fails
 /// - Configuration loading fails
 pub async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
-    let relayer_repository = Arc::new(InMemoryRelayerRepository::new());
+    let relayer_repository = Arc::new(RelayerRepositoryStorage::InMemory(
+        InMemoryRelayerRepository::new(),
+    ));
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
     let signer_repository = Arc::new(InMemorySignerRepository::new());
     let notification_repository = Arc::new(InMemoryNotificationRepository::new());

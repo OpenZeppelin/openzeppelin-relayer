@@ -123,7 +123,7 @@ impl SolanaProvider {
         commitment: Option<CommitmentConfig>,
     ) -> Result<Self, ProviderError> {
         let timeout = timeout.unwrap_or_else(|| Duration::from_secs(30));
-        let commitment = commitment.unwrap_or_else(|| CommitmentConfig::processed());
+        let commitment = commitment.unwrap_or_else(CommitmentConfig::processed);
         let client =
             RpcClient::new_with_timeout_and_commitment(url.to_string(), timeout, commitment);
         Ok(Self { client })
@@ -177,7 +177,6 @@ impl SolanaProviderTrait for SolanaProvider {
             .confirm_transaction(signature)
             .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
-            .and_then(|confirmed| if confirmed { Ok(true) } else { Ok(false) })
     }
 
     /// Retrieves the minimum balance for rent exemption for the given data size.
