@@ -60,7 +60,8 @@ Run the following commands to install pre-commit hooks:
   > :warning: If you encounter issues with pip, consider using [pipx](https://pipx.pypa.io/stable/installation/) for a global installation.
 
 - Install the nightly toolchain:
-  ```bash
+
+  ```sh
   rustup toolchain install nightly
   rustup component add rustfmt --toolchain nightly
   ```
@@ -87,7 +88,7 @@ docker run --name openzeppelin-redis \
   -d redis:latest
 ```
 
-## Running the relayer locally:
+## Running the relayer locally
 
 Install dependencies:
 
@@ -106,27 +107,21 @@ cargo run
 Run the following command to start the services:
 
 ```sh
-docker-compose up -d
+docker compose up -d
 ```
 
 > Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can use the following command: `DOCKERFILE=Dockerfile.production docker-compose up`.
 
 Make sure the containers are running without any restarts/issues:
 
-<<<<<<< HEAD
 ```sh
 docker ps -a
 ```
-=======
-  ```sh
-  docker compose up -d
-  ```
->>>>>>> 1bd8cd1 (feat: Add prometheus and grafana support)
 
 To stop the services, run the following command:
 
 ```sh
-docker-compose down
+docker compose down
 ```
 
 To check the logs of the services/containers, run the following command:
@@ -134,27 +129,6 @@ To check the logs of the services/containers, run the following command:
 ```sh
 docker compose logs -f
 ```
-
-<<<<<<< HEAD
-```sh
-# for individual container
-docker logs -f <container_name>
-```
-=======
-  ```sh
-  docker compose down
-  ```
-
-- To check the logs of the services/containers, run the following command:
-
-  ```sh
-  docker compose logs -f
-  ```
-
-  ```sh
-  # for individual container
-  docker logs -f <container_name>
-  ```
 
 ## Documentation
 
@@ -164,7 +138,9 @@ docker logs -f <container_name>
 
   - You can directly install these dependencies by running `cd docs && npm i --include dev`. If you want to install them manually, you can follow the steps mentioned below.
   - Install `antora` locally, you can follow the steps mentioned [here](https://docs.antora.org/antora/latest/install/install-antora/#install-dir), if you already have you can skip this step.
-    > Note: If you want to install globally, you can run: <br/> `npm install -g @antora/cli@3.1 @antora/site-generator@3.1 @sntke/antora-mermaid-extension`
+    > Note: If you want to install globally, you can run:
+    >
+    > `npm install -g @antora/cli@3.1 @antora/site-generator@3.1 @sntke/antora-mermaid-extension`
   - Verify the installation by running `antora --version` or by running `npx antora --version` if you installed it locally.
 
 - To generate documentation locally, run the following command:
@@ -176,7 +152,6 @@ docker logs -f <container_name>
 - Site will be generated in `docs/build/site/openZeppelin_relayer/<version>/` directory.
 
 - To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
-
 
 ### Observability
 
@@ -195,4 +170,3 @@ docker logs -f <container_name>
 - To view prometheus metrics in a UI, you can use `http://localhost:9090` on your browser.
 
 - To view grafana dashboard, you can use `http://localhost:3000` on your browser.
->>>>>>> 1bd8cd1 (feat: Add prometheus and grafana support)
