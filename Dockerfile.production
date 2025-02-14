@@ -23,7 +23,7 @@ USER defender
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 
-EXPOSE 8080
+EXPOSE 8080 8081 8081/udp
 
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]

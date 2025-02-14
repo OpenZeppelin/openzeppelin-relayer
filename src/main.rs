@@ -35,6 +35,7 @@ use actix_web::{
 use color_eyre::{eyre::WrapErr, Result};
 use config::Config;
 use logging::setup_logging;
+use metrics::metrics_middleware::MetricsMiddleware;
 
 use actix_web::HttpResponse;
 
@@ -70,6 +71,7 @@ async fn main() -> Result<()> {
     setup_logging();
 
     let config = Arc::new(config::ServerConfig::from_env());
+    let server_config = Arc::clone(&config); // clone for use in binding below
     let config_file = load_config_file(&config.config_file_path)?;
 
     let app_state = initialize_app_state().await?;
@@ -91,11 +93,14 @@ async fn main() -> Result<()> {
         .finish()
         .unwrap();
 
-    let moved_cfg = Arc::clone(&config);
     info!("Starting server on {}:{}", config.host, config.port);
-    HttpServer::new(move || {
-        let config = Arc::clone(&moved_cfg);
-        App::new()
+    let app_server = HttpServer::new({
+      // Clone the config for use within the closure.
+      let server_config = Arc::clone(&server_config);
+      let app_state = app_state.clone();
+        move || {
+          let config = Arc::clone(&server_config);
+            App::new()
             .wrap_fn(move |req, srv| {
                 // Check for x-api-key header
                 let expected_key = config.api_key.clone();
@@ -106,7 +111,6 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-
                 Box::pin(async move {
                     Ok(req.into_response(
                         HttpResponse::Unauthorized().body(
@@ -119,14 +123,30 @@ async fn main() -> Result<()> {
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::DefaultHeaders::new())
+            .wrap(MetricsMiddleware)
             .wrap(Logger::default())
             .app_data(app_state.clone())
             .service(web::scope("/api/v1").configure(api::routes::configure_routes))
+        }
     })
     .bind((config.host.as_str(), config.port))
     .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
     .shutdown_timeout(5)
-    .run()
-    .await
-    .wrap_err("Server runtime error")
+    .run();
+
+    let metrics_server = HttpServer::new(|| App::new().configure(api::routes::metrics::init))
+        .bind((server_config.host.as_str(), server_config.metrics_port))
+        .wrap_err_with(|| {
+            format!(
+                "Failed to bind server to {}:{}",
+                server_config.host, server_config.metrics_port
+            )
+        })?
+        .shutdown_timeout(5)
+        .run();
+
+    // Run both servers concurrently
+    futures::try_join!(app_server, metrics_server)?;
+
+    Ok(())
 }

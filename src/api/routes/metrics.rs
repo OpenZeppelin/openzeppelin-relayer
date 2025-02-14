@@ -33,7 +33,18 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
     HttpResponse::NotFound().body("Metric not found")
 }
 
+#[get("/debug/metrics/scrape")]
+async fn scrape_metrics() -> impl Responder {
+    match crate::metrics::gather_metrics() {
+        Ok(body) => HttpResponse::Ok()
+            .content_type("text/plain; version=0.0.4")
+            .body(body),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+    }
+}
+
 pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(list_metrics);
     cfg.service(metric_detail);
+    cfg.service(scrape_metrics);
 }

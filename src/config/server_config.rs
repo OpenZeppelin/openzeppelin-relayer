@@ -9,6 +9,7 @@ pub struct ServerConfig {
     pub api_key: String,
     pub rate_limit_requests_per_second: u64,
     pub rate_limit_burst_size: u32,
+    pub metrics_port: u16,
 }
 
 impl ServerConfig {
@@ -31,6 +32,10 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
                 .unwrap_or(300),
+            metrics_port: env::var("METRICS_PORT")
+                .unwrap_or_else(|_| "8081".to_string())
+                .parse()
+                .unwrap_or(8081),
         }
     }
 }

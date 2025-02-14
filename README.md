@@ -113,9 +113,15 @@ docker-compose up -d
 
 Make sure the containers are running without any restarts/issues:
 
+<<<<<<< HEAD
 ```sh
 docker ps -a
 ```
+=======
+  ```sh
+  docker compose up -d
+  ```
+>>>>>>> 1bd8cd1 (feat: Add prometheus and grafana support)
 
 To stop the services, run the following command:
 
@@ -129,7 +135,64 @@ To check the logs of the services/containers, run the following command:
 docker compose logs -f
 ```
 
+<<<<<<< HEAD
 ```sh
 # for individual container
 docker logs -f <container_name>
 ```
+=======
+  ```sh
+  docker compose down
+  ```
+
+- To check the logs of the services/containers, run the following command:
+
+  ```sh
+  docker compose logs -f
+  ```
+
+  ```sh
+  # for individual container
+  docker logs -f <container_name>
+  ```
+
+## Documentation
+
+- Pre-requisites:
+
+  - You need `antora` `site-generator` and `mermaid` extension to generate the documentation.
+
+  - You can directly install these dependencies by running `cd docs && npm i --include dev`. If you want to install them manually, you can follow the steps mentioned below.
+  - Install `antora` locally, you can follow the steps mentioned [here](https://docs.antora.org/antora/latest/install/install-antora/#install-dir), if you already have you can skip this step.
+    > Note: If you want to install globally, you can run: <br/> `npm install -g @antora/cli@3.1 @antora/site-generator@3.1 @sntke/antora-mermaid-extension`
+  - Verify the installation by running `antora --version` or by running `npx antora --version` if you installed it locally.
+
+- To generate documentation locally, run the following command:
+
+  ```sh
+  cargo make rust-antora
+  ```
+
+- Site will be generated in `docs/build/site/openZeppelin_relayer/<version>/` directory.
+
+- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
+
+
+### Observability
+
+- Currently we support logs and metrics ( uses prometheus and grafana) for the relayer server.
+
+## Logs
+
+- For logs, our app defaults to writing logs to stdout/console. You can also configure it to write logs to a file pathn by setting `LOG_MODE` to `file`. See [docker compose file](./docker-compose.yaml) for more details.
+
+## Metrics
+
+- Metrics server is started on port `8081` by default, which collects the metrics from the relayer server.
+  - Exposes list of metrics on the `/metrics` endpoint.
+  - Exposes `/debug/metrics/scrape` endpoint for prometheus to scrape metrics.
+
+- To view prometheus metrics in a UI, you can use `http://localhost:9090` on your browser.
+
+- To view grafana dashboard, you can use `http://localhost:3000` on your browser.
+>>>>>>> 1bd8cd1 (feat: Add prometheus and grafana support)

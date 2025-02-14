@@ -1,7 +1,7 @@
 ---
 # Default UID: 1000
 # Default GID: 1000
-# Ports `8080` for relayer server and `6379`for redis server.
+# Ports `8080` for relayer server, `8081` for metrics server and `6379`for redis server.
 
 services:
   relayer:
@@ -14,6 +14,7 @@ services:
       dockerfile: ${DOCKERFILE:-Dockerfile.development}
     ports:
       - 8080:8080
+      - 8081:8081
     env_file:
       - .env
     environment:
@@ -42,13 +43,13 @@ services:
     volumes:
       - ./config:/app/config/:ro
       # Uncomment to persist logs
-      # Default: writes to stdout
+      # Default: writes to stdout/console
       #- ${LOGS_DATA_DIR:-./logs}:/app/logs
 
   redis:
     container_name: openzeppelin-relayer-redis
     image: redis:bookworm
-    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  # uses the same user as the relayer
+    # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  uses the same user as the relayer
     ports:
       - 6379:6379
     volumes:
@@ -59,20 +60,26 @@ services:
     restart: unless-stopped
 
   prometheus:
+    container_name: oz-relayer-prometheus
     image: prom/prometheus:v3.1.0
-    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  # Uses defender user from Dockerfile
+    # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  Uses defender user from Dockerfile
     command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
       --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries
       --web.console.templates=/usr/share/prometheus/consoles
     ports: [9090:9090]
+    networks:
+      - relayer-network
     volumes:
       - ${RELAYER_PROMETHEUS_CONFIG:-./cmd/prometheus/prometheus.yml}:/etc/prometheus/prometheus.yml
     restart: unless-stopped
 
   grafana:
+    container_name: oz-relayer-grafana
     image: grafana/grafana:11.5.1
-    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  # Uses defender user from Dockerfile
+    # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  Uses defender user from Dockerfile
     ports: [3000:3000]
+    networks:
+      - relayer-network
     volumes:
       - ${RELAYER_GRAFANA_CONFIG:-./cmd/prometheus/grafana.ini}:/etc/grafana/grafana.ini
       - ./cmd/prometheus/datasources:/etc/grafana/provisioning/datasources
