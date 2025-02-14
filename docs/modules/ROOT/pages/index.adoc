@@ -5,21 +5,26 @@
 
 OpenZeppelin Relayer is a service that provides infrastructure to relay transactions to the EVM & Non-EVM networks. It is designed to be used as a backend for dApps that need to interact with these networks.
 
-List of supported networks:
-* EVM
-* Stellar
-* Solana
+**Features**
 
-OpenZeppelin Relayer provides:
-* Transaction relaying
-* Transaction batching
-* Transaction signing
-* Transaction fee estimation
-* Transaction gas estimation
-* Transaction nonce management
-* Transaction status monitoring
-* Transaction history
+- Transaction relaying
+- Transaction batching
+- Transaction signing
+- Transaction fee estimation
+- Transaction gas estimation
+- Transaction nonce management
+- Transaction status monitoring
+- Transaction history
 
+**Supported Networks**
+
+- EVM
+- Solana
+
+[NOTE]
+====
+To get started immediately, see xref:quickstart.adoc[Quickstart].
+====
 
 == Project Structure
 
@@ -118,10 +123,240 @@ For production runs, you can use:
 DOCKERFILE=Dockerfile.production docker-compose up
 ----
 
+== Configuration References
+
+All configuration files should live under `./config`, including the signer configurations, under `./config/keys`.
+Please ensure appropriate access permissions on all configuration files (for `./config/keys/*`, we recommend `0500`.
+
+=== Main configuration file (config.json)
+
+This file should exist in `config/config.json`
+
+There are 3 important sections in this file:
+
+* `signers` array, which must contain, at least, one valid signer configuration:
+[source,json]
+----
+"signers": [
+  {
+    "id": "my_id",
+    "type": "local",
+    "path": "config/keys/local-signer.json",
+    "passphrase": {
+      "type": "plain",
+      "value": "test"
+    }
+  }
+]
+----
+
+Available configuration fields
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+|id
+|String
+|Unique id for the signer
+
+|type
+|String
+|Type of signer (see `supported signer types`)
+
+|path
+|String 
+|path to the signer json file. Should be under the `./config` directory
+
+|passphrase.type
+|String
+|Type of passphrase (`env` or `plain`)
+
+|passphrase.value
+|String
+|Passphrase value, env variable name, ...
+|===
+
+
+* `notifications` array, which should contain, at least, one valid configuration:
+[source,json]
+----
+"notifications": [
+  {
+    "id": "notification-test",
+    "type": "webhook",
+    "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
+    "signing_key": {
+      "type": "env",
+      "name": "WEBHOOK_SIGNING_KEY"
+    }
+  }
+]
+----
+Available configuration fields
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+|id
+|String
+|Unique id for the notification
+
+|type
+|String
+|Type of notification (only `webhook` available, for now)
+
+|url
+|String
+|Notification URL
+
+|signing_key.type
+|String
+|Type of key used in signing the notification (`env` or `plain`)
+
+|signing_key.name
+|String
+|Signing key value, env variable name, ...
+|===
+
+* `relayers` array, containing at least one valid relayer configuration:
+[source,json]
+----
+"relayers": [
+  {
+    "id": "test-mainnet",
+    "name": "Test Mainnet",
+    "paused": false,
+    "notification_id": "notification-test",
+    "signer_id": "local-signer",
+    "network_type": "solana",
+    "network": "testnet",
+    "policies": {
+      "confirmation_blocks": 5
+    }
+  },
+]
+----
+
+Available configuration fields
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+|id
+|String
+|Unique id for the relayer
+
+|name
+|String
+|Human readable name for the relayer
+
+|paused
+|Boolean
+|Wether or not the relayer is paused (`true`, `false`)
+
+|notification_id
+|String
+|ID of a configured notification object
+
+|signer_id
+|String
+|ID of a configured signer
+
+|network_type
+|String
+|Type of network the relayer will connect to (`evm`, `solana`)
+
+|network
+|String
+|Network the relayer will connect to. Please refer to xref:supported_networks[`Supported networks`].
+
+|policies
+|list
+|Overrides default policies. Please refer to the xref:network_policies[`Policies`] table
+|===
+
+[#supported_networks]
+Supported networks
+[cols="1,1, 2"]
+|===
+|Network type |Network |Description
+
+|solana
+|mainnet-beta
+|Solana's mainnet
+
+|solana
+|devnet
+|Solana's devnet
+
+|solana
+|testnet
+|Solana's testnet
+|===
+
+[#network_policies]
+Policies
+[cols="1,1,1,2"]
+|===
+|Network type |Policy |Type |Description
+
+|solana
+|min_balance
+|unsigned 64
+|Minimum operating ballance for the relayer
+
+|solana
+|max_supported_token_fee
+|unsigned 64
+|Max accepted fee
+
+|solana
+|allowed_tokens
+|Vector
+|Definition of allowed token policy (see xref:solana_allowed_tokens_table[`Solana - Allowed Tokens Policy`] table)
+
+|solana
+|allowed_programs
+|
+|TBD
+
+|solana
+|allowed_accounts
+|
+|TBD
+
+|solana
+|disallowed_accounts
+|
+|TBD
+|===
+
+[#solana_allowed_tokens_table]
+Solana - Allowed Tokens Policy
+[cols="1,1,2"]
+|===
+|Policy |Type |Description
+
+|mint
+|String
+|Name of the token
+
+|decimals
+|Unsigned 8
+|Decimals on the token
+
+|symbol
+|String
+|Token symbol
+|===
+
+=== Key signers
+
+These files should exist in `config/keys/`
+
 == Important Considerations
 
 CAUTION: This software is in alpha stage. Use in production environments at your own risk.
-
 
 == Support
 
