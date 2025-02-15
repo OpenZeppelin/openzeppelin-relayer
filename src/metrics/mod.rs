@@ -22,6 +22,14 @@ lazy_static! {
         counter_vec
     };
 
+    // Counter: Total HTTP requests by raw URI.
+    pub static ref RAW_REQUEST_COUNTER: CounterVec = {
+      let opts = Opts::new("raw_requests_total", "Total number of HTTP requests by raw URI");
+      let counter_vec = CounterVec::new(opts, &["raw_uri", "method", "status"]).unwrap();
+      REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+      counter_vec
+    };
+
     // Histogram for request latency in seconds.
     pub static ref REQUEST_LATENCY: HistogramVec = {
       let histogram_opts = HistogramOpts::new("request_latency_seconds", "Request latency in seconds")
@@ -83,19 +91,19 @@ pub fn update_system_metrics() {
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    // Get overall CPU usage.
+    // Overall CPU usage.
     let cpu_usage = sys.global_cpu_usage();
     CPU_USAGE.set(cpu_usage as f64);
 
-    // Get total memory (in bytes).
-    let total_memory = sys.total_memory() * 1024; // sysinfo returns kilobytes
+    // Total memory (in bytes).
+    let total_memory = sys.total_memory();
     TOTAL_MEMORY.set(total_memory as f64);
 
-    // Get available memory (in bytes).
-    let available_memory = sys.available_memory() * 1024; // sysinfo returns kilobytes
+    // Available memory (in bytes).
+    let available_memory = sys.available_memory();
     AVAILABLE_MEMORY.set(available_memory as f64);
 
-    // Get used memory (in bytes).
-    let memory_usage = sys.used_memory() * 1024; // sysinfo returns kilobytes
+    // Used memory (in bytes).
+    let memory_usage = sys.used_memory();
     MEMORY_USAGE.set(memory_usage as f64);
 }

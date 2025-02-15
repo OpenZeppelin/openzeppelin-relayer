@@ -1,7 +1,7 @@
 //! This defines the Middleware to collect metrics for the application.
 //! This middleware will increment the request counter for each request for each endpoint.
 
-use crate::metrics::{ERROR_COUNTER, REQUEST_COUNTER, REQUEST_LATENCY};
+use crate::metrics::{ERROR_COUNTER, RAW_REQUEST_COUNTER, REQUEST_COUNTER, REQUEST_LATENCY};
 use actix_web::{
     dev::{Service, ServiceRequest, ServiceResponse, Transform},
     Error,
@@ -59,10 +59,13 @@ where
             .match_pattern()
             .unwrap_or_else(|| req.path().to_string());
 
-        // Get the HTTP method (GET, POST, etc.).
+        // Get the HTTP method.
         let method = req.method().to_string();
 
-        // Start timer for latency measurement.
+        // Capture the raw URI.
+        let raw_uri = req.path().to_string();
+
+        // Start timer for latency.
         let start_time = Instant::now();
 
         let fut = self.service.call(req);
@@ -71,13 +74,13 @@ where
             // Compute elapsed time in seconds.
             let elapsed = start_time.elapsed().as_secs_f64();
 
-            // Compute the status code once, whether the call succeeded or errored.
+            // Status code for success and error.
             let status = match &res {
                 Ok(response) => response.response().status().to_string(),
                 Err(e) => e.as_response_error().status_code().to_string(),
             };
 
-            // Record the latency in the histogram.
+            // Add latency in histogram
             REQUEST_LATENCY
                 .with_label_values(&[&endpoint, &method, &status])
                 .observe(elapsed);
@@ -95,6 +98,10 @@ where
                         .inc();
                 }
             }
+            // May be cardinality explosion here, but it's useful for debugging.
+            RAW_REQUEST_COUNTER
+                .with_label_values(&[&raw_uri, &method, &status])
+                .inc();
             res
         })
     }
