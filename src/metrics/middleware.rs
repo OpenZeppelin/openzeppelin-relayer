@@ -1,13 +1,16 @@
 //! This defines the Middleware to collect metrics for the application.
 //! This middleware will increment the request counter for each request for each endpoint.
 
-use crate::metrics::REQUEST_COUNTER;
+use crate::metrics::{ERROR_COUNTER, REQUEST_COUNTER, REQUEST_LATENCY};
 use actix_web::{
     dev::{Service, ServiceRequest, ServiceResponse, Transform},
     Error,
 };
-use futures::future::{ok, LocalBoxFuture, Ready};
-use std::task::{Context, Poll};
+use futures::future::{LocalBoxFuture, Ready};
+use std::{
+    task::{Context, Poll},
+    time::Instant,
+};
 
 pub struct MetricsMiddleware;
 
@@ -24,7 +27,7 @@ where
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(MetricsMiddlewareService { service })
+        futures::future::ready(Ok(MetricsMiddlewareService { service }))
     }
 }
 
@@ -50,18 +53,49 @@ where
     // Call function to increment the request counter.
     fn call(&self, req: ServiceRequest) -> Self::Future {
         // Get the registered routes for the request.
+
         // If not available, fall back to the raw path.
         let endpoint = req
             .match_pattern()
             .unwrap_or_else(|| req.path().to_string());
 
-        // Increment the metric with the endpoint as a label.
-        REQUEST_COUNTER.with_label_values(&[&endpoint]).inc();
+        // Get the HTTP method (GET, POST, etc.).
+        let method = req.method().to_string();
+
+        // Start timer for latency measurement.
+        let start_time = Instant::now();
 
         let fut = self.service.call(req);
         Box::pin(async move {
-            let res = fut.await?;
-            Ok(res)
+            let res = fut.await;
+            // Compute elapsed time in seconds.
+            let elapsed = start_time.elapsed().as_secs_f64();
+
+            // Compute the status code once, whether the call succeeded or errored.
+            let status = match &res {
+                Ok(response) => response.response().status().to_string(),
+                Err(e) => e.as_response_error().status_code().to_string(),
+            };
+
+            // Record the latency in the histogram.
+            REQUEST_LATENCY
+                .with_label_values(&[&endpoint, &method, &status])
+                .observe(elapsed);
+
+            match &res {
+                Ok(_) => {
+                    REQUEST_COUNTER
+                        .with_label_values(&[&endpoint, &method, &status])
+                        .inc();
+                }
+                Err(_) => {
+                    // Increment the error counter.
+                    ERROR_COUNTER
+                        .with_label_values(&[&endpoint, &method, &status])
+                        .inc();
+                }
+            }
+            res
         })
     }
 }

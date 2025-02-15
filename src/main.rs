@@ -35,7 +35,7 @@ use actix_web::{
 use color_eyre::{eyre::WrapErr, Result};
 use config::Config;
 use logging::setup_logging;
-use metrics::metrics_middleware::MetricsMiddleware;
+use metrics::middleware::MetricsMiddleware;
 
 use actix_web::HttpResponse;
 

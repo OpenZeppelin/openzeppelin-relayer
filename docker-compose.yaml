@@ -60,7 +60,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    container_name: oz-relayer-prometheus
+    container_name: openzeppelin-relayer-prometheus
     image: prom/prometheus:v3.1.0
     # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  Uses defender user from Dockerfile
     command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
@@ -74,7 +74,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    container_name: oz-relayer-grafana
+    container_name: openzeppelin-relayer-grafana
     image: grafana/grafana:11.5.1
     # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  Uses defender user from Dockerfile
     ports: [3000:3000]

@@ -13,4 +13,3 @@ scrape_configs:
     static_configs:
       - targets:
           - openzeppelin-relayer:8081
-          - host.docker.internal:8081  # optional for some os's looks like docker desktop on mac needs this.

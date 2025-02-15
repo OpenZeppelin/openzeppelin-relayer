@@ -1,4 +1,4 @@
-use crate::metrics::REGISTRY;
+use crate::metrics::{update_system_metrics, REGISTRY};
 use actix_web::{get, web, HttpResponse, Responder};
 use prometheus::{Encoder, TextEncoder};
 
@@ -35,10 +35,9 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
 
 #[get("/debug/metrics/scrape")]
 async fn scrape_metrics() -> impl Responder {
+    update_system_metrics();
     match crate::metrics::gather_metrics() {
-        Ok(body) => HttpResponse::Ok()
-            .content_type("text/plain; version=0.0.4")
-            .body(body),
+        Ok(body) => HttpResponse::Ok().content_type("text/plain;").body(body),
         Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
     }
 }
