@@ -17,6 +17,10 @@ pub enum SolanaEncodingError {
 pub struct EncodedSerializedTransaction(String);
 
 impl EncodedSerializedTransaction {
+    pub fn new(encoded: String) -> Self {
+        Self(encoded)
+    }
+
     pub fn into_inner(self) -> String {
         self.0
     }
@@ -51,7 +55,7 @@ impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transact
 // feeEstimate
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct FeeEstimateRequestParams {
-    pub transaction: String,
+    pub transaction: EncodedSerializedTransaction,
     pub fee_token: Option<String>,
 }
 
@@ -72,7 +76,7 @@ pub struct TransferTransactionRequestParams {
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct TransferTransactionResult {
-    pub transaction: String,
+    pub transaction: EncodedSerializedTransaction,
     pub fee_in_spl: String,
     pub fee_in_lamports: String,
     pub fee_token: String,
@@ -82,13 +86,13 @@ pub struct TransferTransactionResult {
 // prepareTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct PrepareTransactionRequestParams {
-    pub transaction: usize,
+    pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct PrepareTransactionResult {
-    pub transaction: String,
+    pub transaction: EncodedSerializedTransaction,
     pub fee_in_spl: String,
     pub fee_in_lamports: String,
     pub fee_token: String,

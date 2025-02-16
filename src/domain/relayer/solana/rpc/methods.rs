@@ -123,7 +123,7 @@ impl SolanaRpcMethods for SolanaRpcMethodsImpl {
     ) -> Result<TransferTransactionResult, SolanaRpcError> {
         // Implementation
         Ok(TransferTransactionResult {
-            transaction: "".to_string(),
+            transaction: EncodedSerializedTransaction::new("".to_string()),
             fee_in_spl: "0".to_string(),
             fee_in_lamports: "0".to_string(),
             fee_token: "".to_string(),
@@ -137,7 +137,7 @@ impl SolanaRpcMethods for SolanaRpcMethodsImpl {
     ) -> Result<PrepareTransactionResult, SolanaRpcError> {
         // Implementation
         Ok(PrepareTransactionResult {
-            transaction: "".to_string(),
+            transaction: EncodedSerializedTransaction::new("".to_string()),
             fee_in_spl: "0".to_string(),
             fee_in_lamports: "0".to_string(),
             fee_token: "".to_string(),
@@ -213,3 +213,121 @@ impl SolanaRpcMethods for SolanaRpcMethodsImpl {
         })
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use mockall::predicate::*;
+//     use solana_sdk::{
+//         message::Message,
+//         pubkey::Pubkey,
+//         signature::{Keypair, Signature, Signer},
+//         system_instruction,
+//     };
+
+//     fn setup_test_context() -> (
+//         RelayerRepoModel,
+//         Arc<MockSolanaProvider>,
+//         Arc<MockSolanaSigner>,
+//         EncodedSerializedTransaction,
+//     ) {
+//         // Create test transaction
+//         let payer = Keypair::new();
+//         let recipient = Pubkey::new_unique();
+//         let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+//         let message = Message::new(&[ix], Some(&payer.pubkey()));
+//         let transaction = Transaction::new_unsigned(message);
+
+//         // Create test relayer
+//         let relayer = RelayerRepoModel {
+//             id: "test".to_string(),
+//             address: payer.pubkey().to_string(),
+//             policies: Default::default(),
+//             ..Default::default()
+//         };
+
+//         // Setup mock provider
+//         let mut mock_provider = MockSolanaProvider::new();
+//         mock_provider
+//             .expect_simulate_transaction()
+//             .returning(|_|
+// Ok(solana_client::rpc_response::RpcSimulateTransactionResult::default()));
+
+//         // Setup mock signer
+//         let mut mock_signer = MockSolanaSigner::new();
+//         let test_signature = Signature::new(&[1u8; 64]);
+//         mock_signer
+//             .expect_sign()
+//             .returning(move |_| Ok(test_signature));
+
+//         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)
+//             .expect("Failed to encode transaction");
+
+//         (
+//             relayer,
+//             Arc::new(mock_provider),
+//             Arc::new(mock_signer),
+//             encoded_tx,
+//         )
+//     }
+
+//     #[tokio::test]
+//     async fn test_sign_transaction_success() {
+//         let (relayer, provider, signer, encoded_tx) = setup_test_context();
+
+//         let rpc = SolanaRpcMethodsImpl::new(relayer, provider, signer);
+
+//         let params = SignTransactionRequestParams {
+//             transaction: encoded_tx,
+//         };
+
+//         let result = rpc.sign_transaction(params).await;
+
+//         assert!(result.is_ok());
+//         let sign_result = result.unwrap();
+
+//         // Verify signature format (base58 encoded, 64 bytes)
+//         let decoded_sig = bs58::decode(&sign_result.signature)
+//             .into_vec()
+//             .expect("Failed to decode signature");
+//         assert_eq!(decoded_sig.len(), 64);
+//     }
+
+//     #[tokio::test]
+//     async fn test_sign_transaction_validation_failure() {
+//         let (relayer, mut provider, signer, encoded_tx) = setup_test_context();
+
+//         // Mock validation failure
+//         provider
+//             .expect_simulate_transaction()
+//             .returning(|_| Err("Validation failed".to_string()));
+
+//         let rpc = SolanaRpcMethodsImpl::new(relayer, Arc::new(provider), signer);
+
+//         let params = SignTransactionRequestParams {
+//             transaction: encoded_tx,
+//         };
+
+//         let result = rpc.sign_transaction(params).await;
+//         assert!(matches!(result, Err(SolanaRpcError::ValidationError(_))));
+//     }
+
+//     #[tokio::test]
+//     async fn test_sign_transaction_signing_failure() {
+//         let (relayer, provider, mut signer, encoded_tx) = setup_test_context();
+
+//         // Mock signing failure
+//         signer
+//             .expect_sign()
+//             .returning(|_| Err("Signing failed".to_string()));
+
+//         let rpc = SolanaRpcMethodsImpl::new(relayer, provider, Arc::new(signer));
+
+//         let params = SignTransactionRequestParams {
+//             transaction: encoded_tx,
+//         };
+
+//         let result = rpc.sign_transaction(params).await;
+//         assert!(matches!(result, Err(SolanaRpcError::SigningError(_))));
+//     }
+// }
