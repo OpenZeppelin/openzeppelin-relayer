@@ -1,4 +1,55 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
+use solana_sdk::transaction::Transaction;
+use thiserror::Error;
+
+#[derive(Debug, Error, Deserialize, Serialize)]
+pub enum SolanaEncodingError {
+    #[error("Failed to serialize transaction: {0}")]
+    SerializationError(String),
+    #[error("Failed to decode base64: {0}")]
+    DecodeError(String),
+    #[error("Failed to deserialize transaction: {0}")]
+    DeserializeError(String),
+}
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub struct EncodedSerializedTransaction(String);
+
+impl EncodedSerializedTransaction {
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+
+    pub fn validate_sign_request(&self) -> Result<(), SolanaEncodingError> {
+        Ok(())
+    }
+}
+
+impl TryFrom<&solana_sdk::transaction::Transaction> for EncodedSerializedTransaction {
+    type Error = SolanaEncodingError;
+
+    fn try_from(transaction: &Transaction) -> Result<Self, Self::Error> {
+        let serialized = bincode::serialize(transaction)
+            .map_err(|e| SolanaEncodingError::SerializationError(e.to_string()))?;
+
+        Ok(Self(STANDARD.encode(serialized)))
+    }
+}
+
+impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transaction {
+    type Error = SolanaEncodingError;
+
+    fn try_from(encoded: EncodedSerializedTransaction) -> Result<Self, Self::Error> {
+        // Decode base64
+        let tx_bytes = STANDARD
+            .decode(encoded.0)
+            .map_err(|e| SolanaEncodingError::DecodeError(e.to_string()))?;
+
+        // Deserialize into Transaction
+        bincode::deserialize(&tx_bytes)
+            .map_err(|e| SolanaEncodingError::DeserializeError(e.to_string()))?
+    }
+}
 
 // feeEstimate
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -50,24 +101,24 @@ pub struct PrepareTransactionResult {
 // signTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct SignTransactionRequestParams {
-    pub transaction: usize,
+    pub transaction: EncodedSerializedTransaction,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct SignTransactionResult {
-    pub transaction: String,
+    pub transaction: EncodedSerializedTransaction,
     pub signature: String,
 }
 
 // signAndSendTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct SignAndSendTransactionRequestParams {
-    pub transaction: usize,
+    pub transaction: EncodedSerializedTransaction,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct SignAndSendTransactionResult {
-    pub transaction: String,
+    pub transaction: EncodedSerializedTransaction,
     pub signature: String,
 }
 

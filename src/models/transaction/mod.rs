@@ -6,3 +6,6 @@ pub use response::*;
 
 mod repository;
 pub use repository::*;
+
+mod solana;
+pub use solana::*;

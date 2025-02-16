@@ -52,6 +52,12 @@ pub struct ConfigFileRelayerSolanaPolicy {
 
     /// Maximum supported token fee (in lamports) for a transaction. Optional.
     pub max_supported_token_fee: Option<u64>,
+
+    /// Maximum transaction size. Optional.
+    pub max_tx_data_size: Option<u16>,
+
+    /// Maximum supported signatures
+    pub max_signatures: Option<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

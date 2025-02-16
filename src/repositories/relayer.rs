@@ -1,6 +1,9 @@
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
-    constants::{DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE},
+    constants::{
+        DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
+        MAX_SOLANA_TX_DATA_SIZE,
+    },
     domain::RelayerUpdateRequest,
     models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
@@ -309,6 +312,8 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     allowed_tokens: mapped_allowed_tokens,
                     disallowed_accounts: solana.disallowed_accounts,
                     max_supported_token_fee: solana.max_supported_token_fee,
+                    max_signatures: solana.max_signatures,
+                    max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {

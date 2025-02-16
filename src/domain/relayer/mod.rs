@@ -18,7 +18,10 @@ use crate::{
         SignerRepoModel, TransactionRepoModel,
     },
     repositories::RelayerRepositoryStorage,
-    services::{get_solana_network_provider_from_str, EvmSignerFactory, TransactionCounterService},
+    services::{
+        get_solana_network_provider_from_str, EvmSignerFactory, SolanaSignerFactory,
+        TransactionCounterService,
+    },
 };
 
 use crate::{
@@ -214,12 +217,18 @@ impl RelayerFactoryTrait for RelayerFactory {
             }
             NetworkType::Solana => {
                 let provider = Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
-                let rpc_handler = Arc::new(SolanaRpcHandler::new(Arc::new(
-                    SolanaRpcMethodsImpl::new(relayer.clone(), provider.clone()),
-                )));
+                let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
+                let rpc_handler =
+                    Arc::new(SolanaRpcHandler::new(Arc::new(SolanaRpcMethodsImpl::new(
+                        relayer.clone(),
+                        provider.clone(),
+                        signer_service.clone(),
+                    ))));
+                let signer_service = SolanaSignerFactory::create_solana_signer(&signer)?;
 
                 let relayer = SolanaRelayer::new(
                     relayer,
+                    signer_service,
                     relayer_repository,
                     provider,
                     rpc_handler,

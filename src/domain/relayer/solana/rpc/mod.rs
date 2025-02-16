@@ -9,6 +9,14 @@ pub use handler::*;
 use log::error;
 use thiserror::Error;
 
+mod validator;
+pub use validator::*;
+
+use crate::{
+    models::SolanaEncodingError,
+    services::{SignerError, SolanaProviderError},
+};
+
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub enum SolanaRpcError {
@@ -36,4 +44,12 @@ pub enum SolanaRpcError {
     TokenFetch(String),
     #[error("Send error: {0}")]
     Send(String),
+    #[error("Transaction validation error: {0}")]
+    SolanaTransactionValidation(#[from] SolanaTransactionValidationError),
+    #[error("Signing error: {0}")]
+    SigningError(#[from] SignerError),
+    #[error("Encoding error: {0}")]
+    EncodingError(#[from] SolanaEncodingError),
+    #[error("Provider error: {0}")]
+    ProviderError(#[from] SolanaProviderError),
 }

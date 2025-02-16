@@ -4335,6 +4335,7 @@ dependencies = [
  "apalis-redis",
  "async-trait",
  "base64 0.22.1",
+ "bincode",
  "bytes",
  "cargo-llvm-cov",
  "chrono",

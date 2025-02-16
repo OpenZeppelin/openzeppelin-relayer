@@ -7,21 +7,22 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use solana_sdk::transaction::Transaction;
 
-use super::SolanaRpcError;
+use super::{SolanaRpcError, SolanaTransactionValidator};
 #[cfg(test)]
 use mockall::automock;
 
 use crate::{
     models::{
-        FeeEstimateRequestParams, FeeEstimateResult, GetFeaturesEnabledRequestParams,
-        GetFeaturesEnabledResult, GetSupportedTokensItem, GetSupportedTokensRequestParams,
-        GetSupportedTokensResult, PrepareTransactionRequestParams, PrepareTransactionResult,
-        RelayerRepoModel, SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
-        SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
-        TransferTransactionResult,
+        EncodedSerializedTransaction, FeeEstimateRequestParams, FeeEstimateResult,
+        GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult, GetSupportedTokensItem,
+        GetSupportedTokensRequestParams, GetSupportedTokensResult, PrepareTransactionRequestParams,
+        PrepareTransactionResult, RelayerRepoModel, SignAndSendTransactionRequestParams,
+        SignAndSendTransactionResult, SignTransactionRequestParams, SignTransactionResult,
+        TransferTransactionRequestParams, TransferTransactionResult,
     },
-    services::SolanaProvider,
+    services::{SolanaProvider, SolanaProviderTrait, SolanaSignTrait, SolanaSigner},
 };
 
 #[cfg_attr(test, automock)]
@@ -61,11 +62,20 @@ pub trait SolanaRpcMethods: Send + Sync {
 pub struct SolanaRpcMethodsImpl {
     relayer: RelayerRepoModel,
     provider: Arc<SolanaProvider>,
+    signer: Arc<SolanaSigner>,
 }
 
 impl SolanaRpcMethodsImpl {
-    pub fn new(relayer: RelayerRepoModel, provider: Arc<SolanaProvider>) -> Self {
-        Self { relayer, provider }
+    pub fn new(
+        relayer: RelayerRepoModel,
+        provider: Arc<SolanaProvider>,
+        signer: Arc<SolanaSigner>,
+    ) -> Self {
+        Self {
+            relayer,
+            provider,
+            signer,
+        }
     }
 }
 
@@ -135,25 +145,61 @@ impl SolanaRpcMethods for SolanaRpcMethodsImpl {
         })
     }
 
+    /// Signs a Solana transaction using the relayer's signer.
     async fn sign_transaction(
         &self,
-        _params: SignTransactionRequestParams,
+        params: SignTransactionRequestParams,
     ) -> Result<SignTransactionResult, SolanaRpcError> {
-        // Implementation
+        let transaction_request = Transaction::try_from(params.transaction)?;
+
+        SolanaTransactionValidator::validate_sign_transaction(
+            &transaction_request,
+            &self.relayer,
+            &self.provider,
+        )
+        .await?;
+
+        let mut transaction = transaction_request.clone();
+
+        let signature = self.signer.sign(&transaction.message_data())?;
+
+        transaction.signatures[0] = signature;
+
+        let serialized_transaction = EncodedSerializedTransaction::try_from(&transaction)?;
+
         Ok(SignTransactionResult {
-            transaction: "".to_string(),
-            signature: "".to_string(),
+            transaction: serialized_transaction,
+            signature: signature.to_string(),
         })
     }
 
+    /// Signs a Solana transaction using the relayer's signer and sends it to network.
     async fn sign_and_send_transaction(
         &self,
-        _params: SignAndSendTransactionRequestParams,
+        params: SignAndSendTransactionRequestParams,
     ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
-        // Implementation
+        let transaction_request = Transaction::try_from(params.transaction)?;
+
+        SolanaTransactionValidator::validate_sign_transaction(
+            &transaction_request,
+            &self.relayer,
+            &self.provider,
+        )
+        .await?;
+
+        let mut transaction = transaction_request.clone();
+
+        let signature = self.signer.sign(&transaction.message_data())?;
+
+        transaction.signatures[0] = signature;
+
+        let send_signature = self.provider.send_transaction(&transaction).await?;
+
+        let serialized_transaction = EncodedSerializedTransaction::try_from(&transaction)?;
+
         Ok(SignAndSendTransactionResult {
-            transaction: "".to_string(),
-            signature: "".to_string(),
+            transaction: serialized_transaction,
+            signature: send_signature.to_string(),
         })
     }
 

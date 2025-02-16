@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use crate::{
-    constants::{DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE},
+    constants::{
+        DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
+        MAX_SOLANA_TX_DATA_SIZE,
+    },
     models::RelayerError,
 };
 
@@ -102,6 +105,8 @@ pub struct RelayerSolanaPolicy {
     pub allowed_accounts: Option<Vec<String>>,
     pub disallowed_accounts: Option<Vec<String>>,
     pub max_supported_token_fee: Option<u64>,
+    pub max_signatures: Option<u8>,
+    pub max_tx_data_size: u16,
 }
 
 impl Default for RelayerSolanaPolicy {
@@ -113,6 +118,8 @@ impl Default for RelayerSolanaPolicy {
             allowed_accounts: None,
             disallowed_accounts: None,
             max_supported_token_fee: None,
+            max_signatures: None,
+            max_tx_data_size: MAX_SOLANA_TX_DATA_SIZE,
         }
     }
 }
