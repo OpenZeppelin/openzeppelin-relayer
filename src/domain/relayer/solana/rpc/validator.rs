@@ -96,10 +96,11 @@ impl SolanaTransactionValidator {
         SolanaTransactionValidator::validate_allowed_accounts(tx, policy)?;
         SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
         SolanaTransactionValidator::validate_disallowed_accounts(tx, policy)?;
-        SolanaTransactionValidator::validate_num_signatures(tx, policy)?;
+        SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
         SolanaTransactionValidator::validate_fee_payer(tx, &relayer.address)?;
         SolanaTransactionValidator::validate_blockhash(tx, provider).await?;
         SolanaTransactionValidator::validate_data_size(tx, policy)?;
+        SolanaTransactionValidator::simulate_transaction(tx, provider).await?;
         // SolanaTransactionValidationError::validate_transaction_fee(tx, policy);
 
         Ok(())
@@ -132,7 +133,7 @@ impl SolanaTransactionValidator {
         }
 
         // Verify fee payer is a signer
-        if !tx.message.header.num_required_signatures > 0 {
+        if tx.message.header.num_required_signatures < 1 {
             return Err(SolanaTransactionValidationError::FeePayer(
                 "Fee payer must be a signer".to_string(),
             ));
@@ -142,9 +143,9 @@ impl SolanaTransactionValidator {
     }
 
     /// Validates that the transaction's blockhash is still valid.
-    pub async fn validate_blockhash(
+    pub async fn validate_blockhash<T: SolanaProviderTrait>(
         tx: &Transaction,
-        provider: &SolanaProvider,
+        provider: &T,
     ) -> Result<(), SolanaTransactionValidationError> {
         let blockhash = tx.message.recent_blockhash;
 
@@ -170,7 +171,7 @@ impl SolanaTransactionValidator {
     }
 
     /// Validates the number of required signatures against policy limits.
-    pub fn validate_num_signatures(
+    pub fn validate_max_signatures(
         tx: &Transaction,
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
@@ -352,13 +353,510 @@ impl SolanaTransactionValidator {
     // }
 
     /// Simulates transaction
-    pub async fn simulate_transaction(
+    pub async fn simulate_transaction<T: SolanaProviderTrait>(
         tx: &Transaction,
-        provider: &SolanaProvider,
+        provider: &T,
     ) -> Result<RpcSimulateTransactionResult, SolanaTransactionValidationError> {
         provider
             .simulate_transaction(tx)
             .await
             .map_err(|e| SolanaTransactionValidationError::SimulationError(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::services::{MockSolanaProviderTrait, SolanaProviderError};
+
+    use super::*;
+    use mockall::predicate::*;
+    use solana_sdk::{
+        message::Message,
+        signature::{Keypair, Signer},
+        system_instruction, system_program,
+    };
+
+    fn create_test_transaction(fee_payer: &Pubkey) -> Transaction {
+        let recipient = Pubkey::new_unique();
+        let instruction = system_instruction::transfer(fee_payer, &recipient, 1000);
+        let message = Message::new(&[instruction], Some(fee_payer));
+        Transaction::new_unsigned(message)
+    }
+
+    #[test]
+    fn test_validate_fee_payer_success() {
+        let relayer_keypair = Keypair::new();
+        let relayer_address = relayer_keypair.pubkey().to_string();
+        let tx = create_test_transaction(&relayer_keypair.pubkey());
+
+        let result = SolanaTransactionValidator::validate_fee_payer(&tx, &relayer_address);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_fee_payer_mismatch() {
+        let wrong_keypair = Keypair::new();
+        let relayer_address = Keypair::new().pubkey().to_string();
+
+        let tx = create_test_transaction(&wrong_keypair.pubkey());
+
+        let result = SolanaTransactionValidator::validate_fee_payer(&tx, &relayer_address);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_fee_payer_invalid_address() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let result = SolanaTransactionValidator::validate_fee_payer(&tx, "invalid-address");
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::ValidationError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_blockhash_valid() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        mock_provider
+            .expect_is_blockhash_valid()
+            .with(
+                eq(transaction.message.recent_blockhash),
+                eq(CommitmentConfig::confirmed()),
+            )
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        let result =
+            SolanaTransactionValidator::validate_blockhash(&transaction, &mock_provider).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_blockhash_expired() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        mock_provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+
+        let result =
+            SolanaTransactionValidator::validate_blockhash(&transaction, &mock_provider).await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::ExpiredBlockhash(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_blockhash_provider_error() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        mock_provider.expect_is_blockhash_valid().returning(|_, _| {
+            Box::pin(async { Err(SolanaProviderError::RpcError("RPC error".to_string())) })
+        });
+
+        let result =
+            SolanaTransactionValidator::validate_blockhash(&transaction, &mock_provider).await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::ValidationError(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_max_signatures_within_limit() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let policy = RelayerSolanaPolicy {
+            max_signatures: Some(2),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_max_signatures(&transaction, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_signatures_exceeds_limit() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let policy = RelayerSolanaPolicy {
+            max_signatures: Some(0),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_max_signatures(&transaction, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_max_signatures_no_limit() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let policy = RelayerSolanaPolicy {
+            max_signatures: None,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_max_signatures(&transaction, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_signatures_exact_limit() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let policy = RelayerSolanaPolicy {
+            max_signatures: Some(1),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_max_signatures(&transaction, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_programs_success() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+        let policy = RelayerSolanaPolicy {
+            allowed_programs: Some(vec![system_program::id().to_string()]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_programs(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_programs_disallowed() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            allowed_programs: Some(vec![Pubkey::new_unique().to_string()]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_programs(&tx, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_allowed_programs_no_restrictions() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            allowed_programs: None,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_programs(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_programs_multiple_instructions() {
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        let ix1 = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix2 = system_instruction::transfer(&payer.pubkey(), &recipient, 2000);
+        let message = Message::new(&[ix1, ix2], Some(&payer.pubkey()));
+        let tx = Transaction::new_unsigned(message);
+
+        let policy = RelayerSolanaPolicy {
+            allowed_programs: Some(vec![system_program::id().to_string()]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_programs(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_accounts_success() {
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let message = Message::new(&[ix], Some(&payer.pubkey()));
+        let tx = Transaction::new_unsigned(message);
+
+        let policy = RelayerSolanaPolicy {
+            allowed_accounts: Some(vec![
+                payer.pubkey().to_string(),
+                recipient.to_string(),
+                system_program::id().to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_accounts(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_accounts_disallowed() {
+        let payer = Keypair::new();
+
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            allowed_accounts: Some(vec![payer.pubkey().to_string()]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_accounts(&tx, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_allowed_accounts_no_restrictions() {
+        let tx = create_test_transaction(&Keypair::new().pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            allowed_accounts: None,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_accounts(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_accounts_system_program() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            allowed_accounts: Some(vec![
+                payer.pubkey().to_string(),
+                system_program::id().to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_accounts(&tx, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_disallowed_accounts_success() {
+        let payer = Keypair::new();
+
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            disallowed_accounts: Some(vec![Pubkey::new_unique().to_string()]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_disallowed_accounts_blocked() {
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let message = Message::new(&[ix], Some(&payer.pubkey()));
+        let tx = Transaction::new_unsigned(message);
+
+        let policy = RelayerSolanaPolicy {
+            disallowed_accounts: Some(vec![recipient.to_string()]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_disallowed_accounts_no_restrictions() {
+        let tx = create_test_transaction(&Keypair::new().pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            disallowed_accounts: None,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_disallowed_accounts_system_program() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            disallowed_accounts: Some(vec![system_program::id().to_string()]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_data_size_within_limit() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            max_tx_data_size: 1500,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_data_size(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_data_size_exceeds_limit() {
+        let payer = Keypair::new();
+        let tx = create_test_transaction(&payer.pubkey());
+
+        let policy = RelayerSolanaPolicy {
+            max_tx_data_size: 10,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_data_size(&tx, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_data_size_large_instruction() {
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        let large_data = vec![0u8; 1000];
+        let ix = Instruction::new_with_bytes(
+            system_program::id(),
+            &large_data,
+            vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(recipient, false),
+            ],
+        );
+
+        let message = Message::new(&[ix], Some(&payer.pubkey()));
+        let tx = Transaction::new_unsigned(message);
+
+        let policy = RelayerSolanaPolicy {
+            max_tx_data_size: 500,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_data_size(&tx, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_data_size_multiple_instructions() {
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        let ix1 = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix2 = system_instruction::transfer(&payer.pubkey(), &recipient, 2000);
+        let message = Message::new(&[ix1, ix2], Some(&payer.pubkey()));
+        let tx = Transaction::new_unsigned(message);
+
+        let policy = RelayerSolanaPolicy {
+            max_tx_data_size: 1500,
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_data_size(&tx, &policy);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_simulate_transaction_success() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        mock_provider
+            .expect_simulate_transaction()
+            .with(eq(transaction.clone()))
+            .returning(move |_| {
+                let simulation_result = RpcSimulateTransactionResult {
+                    err: None,
+                    logs: Some(vec!["Program log: success".to_string()]),
+                    accounts: None,
+                    units_consumed: Some(100000),
+                    return_data: None,
+                    inner_instructions: None,
+                    replacement_blockhash: None,
+                };
+                Box::pin(async { Ok(simulation_result) })
+            });
+
+        let result =
+            SolanaTransactionValidator::simulate_transaction(&transaction, &mock_provider).await;
+
+        assert!(result.is_ok());
+        let simulation = result.unwrap();
+        assert!(simulation.err.is_none());
+        assert_eq!(simulation.units_consumed, Some(100000));
+    }
+
+    #[tokio::test]
+    async fn test_simulate_transaction_failure() {
+        let transaction = create_test_transaction(&Keypair::new().pubkey());
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        mock_provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Err(SolanaProviderError::RpcError(
+                    "Simulation failed".to_string(),
+                ))
+            })
+        });
+
+        let result =
+            SolanaTransactionValidator::simulate_transaction(&transaction, &mock_provider).await;
+
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::SimulationError(_)
+        ));
     }
 }

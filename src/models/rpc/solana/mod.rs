@@ -12,16 +12,13 @@ pub enum SolanaEncodingError {
     #[error("Failed to deserialize transaction: {0}")]
     DeserializeError(String),
 }
+
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct EncodedSerializedTransaction(String);
 
 impl EncodedSerializedTransaction {
     pub fn into_inner(self) -> String {
         self.0
-    }
-
-    pub fn validate_sign_request(&self) -> Result<(), SolanaEncodingError> {
-        Ok(())
     }
 }
 
@@ -40,14 +37,14 @@ impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transact
     type Error = SolanaEncodingError;
 
     fn try_from(encoded: EncodedSerializedTransaction) -> Result<Self, Self::Error> {
-        // Decode base64
         let tx_bytes = STANDARD
             .decode(encoded.0)
             .map_err(|e| SolanaEncodingError::DecodeError(e.to_string()))?;
 
-        // Deserialize into Transaction
-        bincode::deserialize(&tx_bytes)
-            .map_err(|e| SolanaEncodingError::DeserializeError(e.to_string()))?
+        let decoded_tx: Transaction = bincode::deserialize(&tx_bytes)
+            .map_err(|e| SolanaEncodingError::DeserializeError(e.to_string()))?;
+
+        Ok(decoded_tx)
     }
 }
 
@@ -182,4 +179,85 @@ pub enum SolanaRpcResult {
     SignAndSendTransaction(SignAndSendTransactionResult),
     GetSupportedTokens(GetSupportedTokensResult),
     GetFeaturesEnabled(GetFeaturesEnabledResult),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_sdk::{
+        hash::Hash,
+        message::Message,
+        pubkey::Pubkey,
+        signature::{Keypair, Signer},
+        system_instruction,
+    };
+
+    fn create_test_transaction() -> Transaction {
+        let payer = Keypair::new();
+
+        let recipient = Pubkey::new_unique();
+        let instruction = system_instruction::transfer(
+            &payer.pubkey(),
+            &recipient,
+            1000, // lamports
+        );
+        let message = Message::new(&[instruction], Some(&payer.pubkey()));
+        Transaction::new(&[&payer], message, Hash::default())
+    }
+
+    #[test]
+    fn test_transaction_to_encoded() {
+        let transaction = create_test_transaction();
+
+        let result = EncodedSerializedTransaction::try_from(&transaction);
+        assert!(result.is_ok(), "Failed to encode transaction");
+
+        let encoded = result.unwrap();
+        assert!(
+            !encoded.into_inner().is_empty(),
+            "Encoded string should not be empty"
+        );
+    }
+
+    #[test]
+    fn test_encoded_to_transaction() {
+        let original_tx = create_test_transaction();
+        let encoded = EncodedSerializedTransaction::try_from(&original_tx).unwrap();
+
+        let result = solana_sdk::transaction::Transaction::try_from(encoded);
+
+        assert!(result.is_ok(), "Failed to decode transaction");
+        let decoded_tx = result.unwrap();
+        assert_eq!(
+            original_tx.message.account_keys, decoded_tx.message.account_keys,
+            "Account keys should match"
+        );
+        assert_eq!(
+            original_tx.message.instructions, decoded_tx.message.instructions,
+            "Instructions should match"
+        );
+    }
+
+    #[test]
+    fn test_invalid_base64_decode() {
+        let invalid_encoded = EncodedSerializedTransaction("invalid base64".to_string());
+        let result = Transaction::try_from(invalid_encoded);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaEncodingError::DecodeError(_)
+        ));
+    }
+
+    #[test]
+    fn test_invalid_transaction_deserialize() {
+        // Create valid base64 but invalid transaction data
+        let invalid_data = STANDARD.encode("not a transaction");
+        let invalid_encoded = EncodedSerializedTransaction(invalid_data);
+
+        let result = Transaction::try_from(invalid_encoded);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaEncodingError::DeserializeError(_)
+        ));
+    }
 }
