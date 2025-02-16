@@ -224,7 +224,6 @@ impl RelayerFactoryTrait for RelayerFactory {
                         provider.clone(),
                         signer_service.clone(),
                     ))));
-                let signer_service = SolanaSignerFactory::create_solana_signer(&signer)?;
 
                 let relayer = SolanaRelayer::new(
                     relayer,

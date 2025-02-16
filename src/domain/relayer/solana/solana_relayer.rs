@@ -33,7 +33,7 @@ use super::{SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl};
 #[allow(dead_code)]
 pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
-    signer: SolanaSigner,
+    signer: Arc<SolanaSigner>,
     network: SolanaNetwork,
     provider: Arc<SolanaProvider>,
     rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
@@ -45,7 +45,7 @@ pub struct SolanaRelayer {
 impl SolanaRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
-        signer: SolanaSigner,
+        signer: Arc<SolanaSigner>,
         relayer_repository: Arc<RelayerRepositoryStorage>,
         provider: Arc<SolanaProvider>,
         rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,

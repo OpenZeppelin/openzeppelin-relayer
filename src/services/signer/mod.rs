@@ -19,6 +19,8 @@
 #![allow(unused_imports)]
 use async_trait::async_trait;
 use eyre::Result;
+#[cfg(test)]
+use mockall::automock;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -58,6 +60,7 @@ pub enum SignerError {
 }
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait Signer: Send + Sync {
     /// Returns the signer's ethereum address
     async fn address(&self) -> Result<Address, SignerError>;
