@@ -37,9 +37,12 @@ services:
       - redis
     networks:
       - relayer-network
-    restart: unless-stopped
+    restart: on-failure:5
     mem_swappiness: 0
     user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}
+    security_opt:
+      - no-new-privileges
+    read_only: true
     volumes:
       - ./config:/app/config/:ro
       # Uncomment to persist logs
@@ -57,7 +60,7 @@ services:
     command: [redis-server, --appendonly, yes, --save, '60', '1']
     networks:
       - relayer-network
-    restart: unless-stopped
+    restart: on-failure:5
 
   prometheus:
     container_name: openzeppelin-relayer-prometheus
@@ -71,7 +74,7 @@ services:
       - relayer-network
     volumes:
       - ${RELAYER_PROMETHEUS_CONFIG:-./cmd/prometheus/prometheus.yml}:/etc/prometheus/prometheus.yml
-    restart: unless-stopped
+    restart: on-failure:5
 
   grafana:
     container_name: openzeppelin-relayer-grafana
@@ -84,7 +87,7 @@ services:
       - ${RELAYER_GRAFANA_CONFIG:-./cmd/prometheus/grafana.ini}:/etc/grafana/grafana.ini
       - ./cmd/prometheus/datasources:/etc/grafana/provisioning/datasources
       - ./cmd/prometheus/dashboards:/etc/grafana/provisioning/dashboards
-    restart: unless-stopped
+    restart: on-failure:5
 
 networks:
   relayer-network:
