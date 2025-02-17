@@ -21,7 +21,7 @@ use eyre::Result;
 use log::{error, info};
 use std::sync::Arc;
 
-pub struct SolanaRpcHandler<T: SolanaRpcMethods> {
+pub struct SolanaRpcHandler<T> {
     rpc_methods: Arc<T>,
 }
 
