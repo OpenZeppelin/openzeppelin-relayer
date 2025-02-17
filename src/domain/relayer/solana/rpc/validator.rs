@@ -15,9 +15,11 @@ use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     instruction::{AccountMeta, CompiledInstruction, Instruction},
+    program_pack::Pack,
     pubkey::Pubkey,
     transaction::Transaction,
 };
+use spl_token::{instruction::TokenInstruction, state::Account};
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -101,6 +103,7 @@ impl SolanaTransactionValidator {
         SolanaTransactionValidator::validate_blockhash(tx, provider).await?;
         SolanaTransactionValidator::validate_data_size(tx, policy)?;
         SolanaTransactionValidator::simulate_transaction(tx, provider).await?;
+        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider).await?;
         // SolanaTransactionValidationError::validate_transaction_fee(tx, policy);
 
         Ok(())
@@ -316,41 +319,143 @@ impl SolanaTransactionValidator {
     //     Ok(())
     // }
 
-    //   pub fn validate_token_transfers(&self, tx: &Transaction, policy: &RelayerSolanaPolicy) ->
-    // Result<(), TransactionValidationError> {     // Check if we have token transfer
-    // restrictions     let allowed_tokens = match &policy.allowed_tokens {
-    //         Some(tokens) if !tokens.is_empty() => tokens,
-    //         _ => return Ok(()) // No token restrictions
-    //     };
+    pub async fn validate_token_transfers(
+        tx: &Transaction,
+        policy: &RelayerSolanaPolicy,
+        provider: &impl SolanaProviderTrait,
+    ) -> Result<(), SolanaTransactionValidationError> {
+        let allowed_tokens = match &policy.allowed_tokens {
+            Some(tokens) if !tokens.is_empty() => tokens,
+            _ => return Ok(()), // No token restrictions
+        };
 
-    //     for ix in &tx.message.instructions {
-    //         let program_id = tx.message.account_keys[ix.program_id_index as usize];
+        for ix in &tx.message.instructions {
+            let program_id = tx.message.account_keys[ix.program_id_index as usize];
 
-    //         // Check if instruction is a token transfer (SPL Token Program)
-    //         if program_id == spl_token::id() {
-    //             // Decode token instruction
-    //             if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data)
-    // {                 match token_ix {
-    //                     spl_token::instruction::TokenInstruction::Transfer { .. } |
-    //                     spl_token::instruction::TokenInstruction::TransferChecked { .. } => {
-    //                         // Get mint address from token account
-    //                         let token_account = &tx.message.account_keys[ix.accounts[0] as
-    // usize];                         let mint = self.get_token_mint(token_account)?;
+            // Check if instruction is a token transfer (SPL Token Program)
+            if program_id == spl_token::id() {
+                // Decode token instruction
+                if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
+                    match token_ix {
+                        TokenInstruction::Transfer { amount }
+                        | TokenInstruction::TransferChecked { amount, .. } => {
+                            // Get source account info
+                            let source_index = ix.accounts[0] as usize;
+                            let source_pubkey = &tx.message.account_keys[source_index];
 
-    //                         if !allowed_tokens.iter().any(|t| t.mint == mint.to_string()) {
-    //                             return Err(TransactionValidationError::PolicyViolation(
-    //                                 format!("Token {} not allowed for transfers", mint)
-    //                             ));
-    //                         }
-    //                     },
-    //                     _ => continue // Not a transfer instruction
-    //                 }
-    //             }
-    //         }
-    //     }
+                            // Validate source account is writable but not signer
+                            if !tx.message.is_maybe_writable(source_index, None) {
+                                return Err(SolanaTransactionValidationError::ValidationError(
+                                    "Source account must be writable".to_string(),
+                                ));
+                            }
+                            if tx.message.is_signer(source_index) {
+                                return Err(SolanaTransactionValidationError::ValidationError(
+                                    "Source account must not be signer".to_string(),
+                                ));
+                            }
 
-    //     Ok(())
-    // }
+                            let dest_index = ix.accounts[1] as usize;
+
+                            // Validate destination account is writable but not signer
+                            if !tx.message.is_maybe_writable(dest_index, None) {
+                                return Err(SolanaTransactionValidationError::ValidationError(
+                                    "Destination account must be writable".to_string(),
+                                ));
+                            }
+                            if tx.message.is_signer(dest_index) {
+                                return Err(SolanaTransactionValidationError::ValidationError(
+                                    "Destination account must not be signer".to_string(),
+                                ));
+                            }
+
+                            let owner_index = ix.accounts[2] as usize;
+                            // Validate owner is signer but not writable
+                            if !tx.message.is_signer(owner_index) {
+                                return Err(SolanaTransactionValidationError::ValidationError(
+                                    "Owner must be signer".to_string(),
+                                ));
+                            }
+                            if tx.message.is_maybe_writable(owner_index, None) {
+                                return Err(SolanaTransactionValidationError::ValidationError(
+                                    "Owner must not be writable".to_string(),
+                                ));
+                            }
+
+                            // Get mint address from token account
+                            let source_account = provider
+                                .get_account_from_pubkey(source_pubkey)
+                                .await
+                                .map_err(|e| {
+                                    SolanaTransactionValidationError::ValidationError(e.to_string())
+                                })?;
+
+                            let token_account =
+                                Account::unpack(&source_account.data).map_err(|e| {
+                                    SolanaTransactionValidationError::ValidationError(format!(
+                                        "Invalid token account: {}",
+                                        e
+                                    ))
+                                })?;
+
+                            if token_account.is_frozen() {
+                                return Err(SolanaTransactionValidationError::PolicyViolation(
+                                    "Token account is frozen".to_string(),
+                                ));
+                            }
+
+                            // check if token is allowed by policy
+                            if !allowed_tokens
+                                .iter()
+                                .any(|t| t.mint == token_account.mint.to_string())
+                            {
+                                return Err(SolanaTransactionValidationError::PolicyViolation(
+                                    format!(
+                                        "Token {} not allowed for transfers",
+                                        token_account.mint.to_string()
+                                    ),
+                                ));
+                            }
+
+                            if token_account.amount < amount {
+                                return Err(SolanaTransactionValidationError::ValidationError(
+                                    format!(
+                                        "Insufficient balance for transfer: {} < {}",
+                                        token_account.amount, amount
+                                    ),
+                                ));
+                            }
+
+                            if let TokenInstruction::TransferChecked { decimals, .. } = token_ix {
+                                // Validate decimals match token config
+                                if let Some(token_config) =
+                                    policy.allowed_tokens.as_ref().and_then(|tokens| {
+                                        tokens
+                                            .iter()
+                                            .find(|t| t.mint == token_account.mint.to_string())
+                                    })
+                                {
+                                    if Some(decimals) != token_config.decimals {
+                                        return Err(
+                                            SolanaTransactionValidationError::ValidationError(
+                                                format!(
+                                                    "Invalid decimals: expected {:?}, got {}",
+                                                    token_config.decimals, decimals
+                                                ),
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        _ => continue, // Not a transfer instruction
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 
     /// Simulates transaction
     pub async fn simulate_transaction<T: SolanaProviderTrait>(
@@ -366,7 +471,10 @@ impl SolanaTransactionValidator {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::{MockSolanaProviderTrait, SolanaProviderError};
+    use crate::{
+        models::SolanaAllowedTokensPolicy,
+        services::{MockSolanaProviderTrait, SolanaProviderError},
+    };
 
     use super::*;
     use mockall::predicate::*;
@@ -375,6 +483,95 @@ mod tests {
         signature::{Keypair, Signer},
         system_instruction, system_program,
     };
+    use spl_token::instruction as token_instruction;
+
+    fn setup_token_transfer_test(
+        transfer_amount: Option<u64>,
+    ) -> (
+        Transaction,
+        RelayerSolanaPolicy,
+        MockSolanaProviderTrait,
+        Keypair, // source owner
+        Pubkey,  // token mint
+        Pubkey,  // source token account
+        Pubkey,  // destination token account
+    ) {
+        let owner = Keypair::new();
+        let mint = Pubkey::new_unique();
+        let source = Pubkey::new_unique();
+        let destination = Pubkey::new_unique();
+
+        // Create token transfer instruction
+        let transfer_ix = token_instruction::transfer(
+            &spl_token::id(),
+            &source,
+            &destination,
+            &owner.pubkey(),
+            &[],
+            transfer_amount.unwrap_or(100),
+        )
+        .unwrap();
+
+        let message = Message::new(&[transfer_ix], Some(&owner.pubkey()));
+        let mut transaction = Transaction::new_unsigned(message);
+
+        // Ensure owner is marked as signer but not writable
+        if let Some(owner_index) = transaction
+            .message
+            .account_keys
+            .iter()
+            .position(|&pubkey| pubkey == owner.pubkey())
+        {
+            transaction.message.header.num_required_signatures = (owner_index + 1) as u8;
+            transaction.message.header.num_readonly_signed_accounts = 1;
+        }
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: mint.to_string(),
+                decimals: Some(9),
+                symbol: Some("USDC".to_string()),
+            }]),
+            ..Default::default()
+        };
+
+        let mut mock_provider = MockSolanaProviderTrait::new();
+
+        // Setup default mock responses
+        let mut token_account = Account::default();
+        token_account.mint = mint;
+        token_account.owner = owner.pubkey();
+        token_account.amount = 999;
+        token_account.state = spl_token::state::AccountState::Initialized;
+
+        let mut account_data = vec![0; Account::LEN];
+        Account::pack(token_account, &mut account_data).unwrap();
+
+        mock_provider
+            .expect_get_account_from_pubkey()
+            .returning(move |_| {
+                let local_account_data = account_data.clone();
+                Box::pin(async move {
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1000000,
+                        data: local_account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        (
+            transaction,
+            policy,
+            mock_provider,
+            owner,
+            mint,
+            source,
+            destination,
+        )
+    }
 
     fn create_test_transaction(fee_payer: &Pubkey) -> Transaction {
         let recipient = Pubkey::new_unique();
@@ -858,5 +1055,62 @@ mod tests {
             result.unwrap_err(),
             SolanaTransactionValidationError::SimulationError(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_transfers_success() {
+        let (tx, policy, provider, ..) = setup_token_transfer_test(Some(100));
+
+        let result =
+            SolanaTransactionValidator::validate_token_transfers(&tx, &policy, &provider).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_transfers_insufficient_balance() {
+        let (tx, policy, provider, ..) = setup_token_transfer_test(Some(2000));
+
+        let result =
+            SolanaTransactionValidator::validate_token_transfers(&tx, &policy, &provider).await;
+
+        match result {
+            Err(SolanaTransactionValidationError::ValidationError(msg)) => {
+                assert!(
+                    msg.contains("Insufficient balance for transfer: 999 < 2000"),
+                    "Unexpected error message: {}",
+                    msg
+                );
+            }
+            other => panic!(
+                "Expected ValidationError for insufficient balance, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_transfers_disallowed_token() {
+        let (tx, mut policy, provider, ..) = setup_token_transfer_test(Some(100));
+
+        policy.allowed_tokens = Some(vec![SolanaAllowedTokensPolicy {
+            mint: Pubkey::new_unique().to_string(), // Different mint
+            decimals: Some(9),
+            symbol: Some("USDT".to_string()),
+        }]);
+
+        let result =
+            SolanaTransactionValidator::validate_token_transfers(&tx, &policy, &provider).await;
+
+        match result {
+            Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
+                assert!(
+                    msg.contains("not allowed for transfers"),
+                    "Error message '{}' should contain 'not allowed for transfers'",
+                    msg
+                );
+            }
+            other => panic!("Expected PolicyViolation error, got {:?}", other),
+        }
     }
 }
