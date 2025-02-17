@@ -110,7 +110,7 @@ Run the following command to start the services:
 docker compose up -d
 ```
 
-> Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can use the following command: `DOCKERFILE=Dockerfile.production docker-compose up`.
+> Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can use the following command: `DOCKERFILE=Dockerfile.production docker compose up -d`.
 
 Make sure the containers are running without any restarts/issues:
 

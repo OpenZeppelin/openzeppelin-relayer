@@ -80,40 +80,23 @@ cargo run
 
 === Docker Installation
 
-. Build the docker image:
+. Building and Running the docker image:
 
 +
 [source,bash]
 ----
-docker-compose build
+docker compose up -d
 ----
 
 +
-By default docker compose command uses `Dockerfile.development` to build the image. If you want to use `Dockerfile.production`, you can use the following command: 
-
-+
-[source,bash]
-----
-DOCKERFILE=Dockerfile.production docker-compose build
-----
-
-. Run the containers:
-+
-[source,bash]
-----
-docker-compose up
-----
-
-+
-or
+By default docker compose command uses `Dockerfile.development` to build the image. If you want to use `Dockerfile.production`, you can use the following command:
 
 +
 [source,bash]
 ----
-DOCKERFILE=Dockerfile.production docker-compose up
+DOCKERFILE=Dockerfile.production docker compose up -d
 ----
 
 == Examples
 
 TBD
-
