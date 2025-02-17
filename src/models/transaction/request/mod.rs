@@ -37,7 +37,7 @@ impl NetworkTransactionRequest {
     pub fn validate(&self) -> Result<(), ApiError> {
         match self {
             NetworkTransactionRequest::Evm(request) => {
-                evm::validate_evm_transaction_request(request)
+                evm::EvmTransactionRequest::validate_evm_transaction_request(request)
             }
             _ => Ok(()),
         }
