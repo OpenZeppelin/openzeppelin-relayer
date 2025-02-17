@@ -8,7 +8,6 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 **Features**
 
 - Transaction relaying
-- Transaction batching
 - Transaction signing
 - Transaction fee estimation
 - Transaction gas estimation
@@ -223,8 +222,8 @@ Available configuration fields
 ----
 "relayers": [
   {
-    "id": "test-mainnet",
-    "name": "Test Mainnet",
+    "id": "solana-testnet",
+    "name": "Solana Testnet",
     "paused": false,
     "notification_id": "notification-test",
     "signer_id": "local-signer",
@@ -303,51 +302,32 @@ Policies
 |solana
 |min_balance
 |unsigned 64
-|Minimum operating ballance for the relayer
+|Minimum balance required for the relayer (in lamports).
 
 |solana
 |max_supported_token_fee
 |unsigned 64
-|Max accepted fee
+|Maximum supported token fee (in lamports) for a transaction. Optional.
 
 |solana
 |allowed_tokens
-|Vector
-|Definition of allowed token policy (see xref:solana_allowed_tokens_table[`Solana - Allowed Tokens Policy`] table)
+|Vector<String>
+|List of allowed tokens by their identifiers. Only these tokens are supported if provided.
 
 |solana
 |allowed_programs
-|
-|TBD
+|Vector<String>
+|List of allowed programs by their identifiers. Only these programs are supported if provided.
 
 |solana
 |allowed_accounts
-|
-|TBD
+|Vector<String>
+|List of allowed accounts by their public keys. The relayer will only operate with these accounts if provided.
 
 |solana
 |disallowed_accounts
-|
-|TBD
-|===
-
-[#solana_allowed_tokens_table]
-Solana - Allowed Tokens Policy
-[cols="1,1,2"]
-|===
-|Policy |Type |Description
-
-|mint
-|String
-|Name of the token
-
-|decimals
-|Unsigned 8
-|Decimals on the token
-
-|symbol
-|String
-|Token symbol
+|Vector<String>
+|List of disallowed accounts by their public keys. These accounts will be explicitly blocked.
 |===
 
 === Key signers
