@@ -1,11 +1,13 @@
 // TODO improve and add missing methods
 use alloy::{
-    primitives::U256,
+    primitives::{TxKind, Uint, U256},
     providers::{Provider, ProviderBuilder, RootProvider},
-    rpc::types::TransactionRequest,
+    rpc::types::{TransactionInput, TransactionRequest},
     transports::http::{Client, Http},
 };
 use eyre::{eyre, Result};
+
+use crate::models::{EvmTransactionData, TransactionError};
 
 pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,
@@ -34,9 +36,11 @@ impl EvmProvider {
             .map_err(|e| eyre!("Failed to get block number: {}", e))
     }
 
-    pub async fn estimate_gas(&self, tx: &TransactionRequest) -> Result<U256> {
+    pub async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<U256> {
+        // transform the tx to a transaction request
+        let transaction_request = self.to_transaction_request(tx)?;
         self.provider
-            .estimate_gas(tx)
+            .estimate_gas(&transaction_request)
             .await
             .map(|gas| U256::from(gas))
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
@@ -80,5 +84,39 @@ impl EvmProvider {
             .map_err(|e| eyre!("Health check failed: {}", e))?;
 
         Ok(result)
+    }
+
+    pub fn to_transaction_request(
+        &self,
+        tx: &EvmTransactionData,
+    ) -> Result<TransactionRequest, TransactionError> {
+        println!("self.from: {:?}", tx.from);
+        Ok(TransactionRequest {
+            from: Some(tx.from.clone().parse().map_err(|_| {
+                TransactionError::InvalidType("Invalid address format".to_string())
+            })?),
+            to: Some(TxKind::Call(tx.to.parse().map_err(|_| {
+                TransactionError::InvalidType("Invalid address format".to_string())
+            })?)),
+            gas_price: Some(
+                Uint::<256, 4>::from(tx.gas_price)
+                    .try_into()
+                    .map_err(|_| TransactionError::InvalidType("Invalid gas price".to_string()))?,
+            ),
+            gas: Some(
+                Uint::<256, 4>::from(tx.gas_limit)
+                    .try_into()
+                    .map_err(|_| TransactionError::InvalidType("Invalid gas limit".to_string()))?,
+            ),
+            value: Some(Uint::<256, 4>::from(tx.value)),
+            input: TransactionInput::from(tx.data.clone().into_bytes()),
+            nonce: Some(
+                Uint::<256, 4>::from(tx.nonce)
+                    .try_into()
+                    .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))?,
+            ),
+            chain_id: Some(11155111),
+            ..Default::default()
+        })
     }
 }

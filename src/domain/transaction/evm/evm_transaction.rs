@@ -54,14 +54,15 @@ impl Transaction for EvmRelayerTransaction {
         info!("Preparing transaction");
         // validate the transaction
 
-        let transaction_request = self
-            .transaction_repository
-            .get_tx_by_id(tx.id.clone())
-            .await?;
-        let transaction_request = transaction_request.to_transaction_request();
+        // gas estimation
+        let transaction_request = self.transaction_repository.get_tx_by_id(&tx.id).await?;
         let gas_estimation = self
             .provider
-            .estimate_gas(&transaction_request)
+            .estimate_gas(
+                &transaction_request
+                    .network_data
+                    .get_evm_transaction_data()?,
+            )
             .await
             .unwrap();
         println!(" test gas_estimation: {:?}", gas_estimation);
