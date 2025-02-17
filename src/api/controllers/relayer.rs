@@ -15,7 +15,7 @@ use crate::{
     },
     models::{
         ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
-        RelayerResponse, TransactionResponse,
+        RelayerResponse, RepositoryError, TransactionResponse,
     },
     repositories::Repository,
     ApiError, AppState,
@@ -105,6 +105,9 @@ pub async fn send_transaction(
         NetworkTransactionRequest::from_json(&relayer_repo_model.network_type, request.clone())?;
 
     let transaction = relayer.process_transaction_request(tx_request).await?;
+    transaction
+        .validate(&relayer_repo_model)
+        .map_err(|e| RepositoryError::TransactionValidationFailed(e.to_string()))?;
 
     let transaction_response: TransactionResponse = transaction.into();
 
