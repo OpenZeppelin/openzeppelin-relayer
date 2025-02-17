@@ -6,5 +6,4 @@
 //!
 //! * `relayer` - Transaction and relayer management endpoints
 
-pub mod cat;
 pub mod relayer;
