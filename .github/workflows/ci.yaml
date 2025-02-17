@@ -186,8 +186,8 @@ jobs:
       #     --locked
 
   test:
-    if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
-      == 'true' }}
+    # if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
+    #   == 'true' }}
     permissions:
       contents: read
     needs: changed_files
