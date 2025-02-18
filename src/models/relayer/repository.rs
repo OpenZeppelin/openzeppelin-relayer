@@ -114,6 +114,7 @@ pub struct RelayerSolanaPolicy {
     pub disallowed_accounts: Option<Vec<String>>,
     pub max_signatures: Option<u8>,
     pub max_tx_data_size: u16,
+    pub max_allowed_transfer_amount_lamports: Option<u64>,
 }
 
 impl Default for RelayerSolanaPolicy {
@@ -126,6 +127,7 @@ impl Default for RelayerSolanaPolicy {
             disallowed_accounts: None,
             max_signatures: None,
             max_tx_data_size: MAX_SOLANA_TX_DATA_SIZE,
+            max_allowed_transfer_amount_lamports: None,
         }
     }
 }

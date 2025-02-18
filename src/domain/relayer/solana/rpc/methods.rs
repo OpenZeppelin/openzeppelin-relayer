@@ -98,6 +98,7 @@ impl SolanaRpcMethods for SolanaRpcMethodsImpl {
                         mint: token.mint.clone(),
                         symbol: token.symbol.as_deref().unwrap_or("").to_string(),
                         decimals: token.decimals.unwrap_or(0),
+                        max_allowed_fee: token.max_allowed_fee,
                     })
                     .collect()
             })

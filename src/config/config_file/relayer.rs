@@ -62,6 +62,9 @@ pub struct ConfigFileRelayerSolanaPolicy {
 
     /// Maximum supported signatures
     pub max_signatures: Option<u8>,
+
+    /// Maximum allowed transfer amount (in lamports) for a transaction. Optional.
+    pub max_allowed_transfer_amount_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

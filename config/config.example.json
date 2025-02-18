@@ -8,9 +8,7 @@
       "notification_id": "notification-test",
       "signer_id": "local-signer",
       "network_type": "solana",
-      "policies": {
-        "confirmation_blocks": 5
-      }
+      "policies": {}
     },
     {
       "id": "test-sepolia",
@@ -48,5 +46,6 @@
     {
       "id": "private-network",
       "name": "Mainnet"
-    }]
+    }
+  ]
 }

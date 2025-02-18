@@ -13,11 +13,7 @@ use crate::{
 };
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
-    commitment_config::CommitmentConfig,
-    instruction::{AccountMeta, CompiledInstruction, Instruction},
-    program_pack::Pack,
-    pubkey::Pubkey,
-    transaction::Transaction,
+    commitment_config::CommitmentConfig, instruction::{AccountMeta, CompiledInstruction, Instruction}, program_pack::Pack, pubkey::Pubkey, system_instruction::SystemInstruction, system_program, transaction::Transaction
 };
 use spl_token::{instruction::TokenInstruction, state::Account};
 use std::str::FromStr;
@@ -109,10 +105,9 @@ impl SolanaTransactionValidator {
         SolanaTransactionValidator::validate_blockhash(tx, provider).await?;
         SolanaTransactionValidator::validate_data_size(tx, policy)?;
         SolanaTransactionValidator::simulate_transaction(tx, provider).await?;
+        SolanaTransactionValidator::validate_lamports_transfers(tx, policy, &relayer_pubkey).await?;
         SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey)
             .await?;
-        // SolanaTransactionValidationError::validate_transaction_fee(tx, policy);
-
         Ok(())
     }
 
@@ -281,50 +276,47 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
-    // pub async fn validate_transaction_fee(
-    //     &self,
-    //     tx: &Transaction,
-    //     policy: &RelayerSolanaPolicy,
-    // ) -> Result<(), TransactionValidationError> {
-    //     // Simulate transaction to get fee
-    //     let simulation_result = self.provider
-    //         .simulate_transaction(tx)
-    //         .await
-    //         .map_err(|e| TransactionValidationError::ValidationError(
-    //             format!("Failed to simulate transaction: {}", e)
-    //         ))?;
-
-    //     let fee = simulation_result.value.units_consumed
-    //         .ok_or_else(|| TransactionValidationError::ValidationError(
-    //             "Failed to get fee from simulation".to_string()
-    //         ))?;
-
-    //     // Check against maximum allowed fee
-    //     if let Some(max_fee) = policy.max_fee_in_lamports {
-    //         if fee > max_fee {
-    //             return Err(TransactionValidationError::PolicyViolation(
-    //                 format!(
-    //                     "Transaction fee {} lamports exceeds maximum allowed {} lamports",
-    //                     fee, max_fee
-    //                 )
-    //             ));
-    //         }
-    //     }
-
-    //     // Check against minimum required fee
-    //     if let Some(min_fee) = policy.min_fee_in_lamports {
-    //         if fee < min_fee {
-    //             return Err(TransactionValidationError::PolicyViolation(
-    //                 format!(
-    //                     "Transaction fee {} lamports is below minimum required {} lamports",
-    //                     fee, min_fee
-    //                 )
-    //             ));
-    //         }
-    //     }
-
-    //     Ok(())
-    // }
+    pub async fn validate_lamports_transfers(
+        tx: &Transaction,
+        policy: &RelayerSolanaPolicy,
+        relayer_account: &Pubkey,
+    ) -> Result<(), SolanaTransactionValidationError> {
+        // Iterate over each instruction in the transaction
+        for (ix_index, ix) in tx.message.instructions.iter().enumerate() {
+            let program_id = tx.message.account_keys[ix.program_id_index as usize];
+    
+            // Check if the instruction comes from the System Program (native SOL transfers)
+            if program_id == system_program::id() {
+                if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
+                    if let SystemInstruction::Transfer { lamports } = system_ix {
+                        // In a system transfer instruction, the first account is the source and the second is the destination.
+                        let source_index = ix.accounts.get(0).ok_or_else(|| {
+                            SolanaTransactionValidationError::ValidationError(format!(
+                                "Missing source account in instruction {}",
+                                ix_index
+                            ))
+                        })?;
+                        let source_pubkey = &tx.message.account_keys[*source_index as usize];
+    
+                        // Only validate transfers where the source is the relayer fee account.
+                        if source_pubkey == relayer_account {
+                            if let Some(max_allowed) = policy.max_allowed_transfer_amount_lamports {
+                                if lamports > max_allowed {
+                                    return Err(SolanaTransactionValidationError::PolicyViolation(
+                                        format!(
+                                            "Lamports transfer amount {} exceeds max allowed fee {} in instruction {}",
+                                            lamports, max_allowed, ix_index
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     pub async fn validate_token_transfers(
         tx: &Transaction,
@@ -604,6 +596,31 @@ mod tests {
         let message = Message::new(&[instruction], Some(fee_payer));
         Transaction::new_unsigned(message)
     }
+
+    fn setup_lamports_transfer_test(
+        transfer_amount: u64,
+        max_allowed: Option<u64>,
+    ) -> (Transaction, RelayerSolanaPolicy, Pubkey) {
+        let relayer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        // Create SOL transfer instruction
+        let transfer_ix = system_instruction::transfer(
+            &relayer.pubkey(),
+            &recipient,
+            transfer_amount,
+        );
+        let message = Message::new(&[transfer_ix], Some(&relayer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let policy = RelayerSolanaPolicy {
+            max_allowed_transfer_amount_lamports: max_allowed,
+            ..Default::default()
+        };
+
+        (transaction, policy, relayer.pubkey())
+    }
+
 
     #[test]
     fn test_validate_fee_payer_success() {
@@ -1197,4 +1214,94 @@ mod tests {
             other => panic!("Expected PolicyViolation error, got {:?}", other),
         }
     }
+
+    #[tokio::test]
+    async fn test_validate_lamports_transfers_success() {
+        let (transaction, policy, relayer_pubkey) = setup_lamports_transfer_test(1000, Some(2000));
+
+        let result = SolanaTransactionValidator::validate_lamports_transfers(
+            &transaction,
+            &policy,
+            &relayer_pubkey
+        ).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_lamports_transfers_exceeds_max() {
+        let (transaction, policy, relayer_pubkey) = setup_lamports_transfer_test(2000, Some(1000));
+
+        let result = SolanaTransactionValidator::validate_lamports_transfers(
+            &transaction,
+            &policy,
+            &relayer_pubkey
+        ).await;
+
+        match result {
+            Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
+                assert!(
+                    msg.contains("Lamports transfer amount 2000 exceeds max allowed fee 1000"),
+                    "Unexpected error message: {}", 
+                    msg
+                );
+            }
+            other => panic!("Expected PolicyViolation error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_lamports_transfers_no_max_limit() {
+        let (transaction, policy, relayer_pubkey) = setup_lamports_transfer_test(1000000, None);
+
+        let result = SolanaTransactionValidator::validate_lamports_transfers(
+            &transaction,
+            &policy,
+            &relayer_pubkey
+        ).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_lamports_transfers_non_relayer_source() {
+        let (transaction, policy, _) = setup_lamports_transfer_test(1000000, Some(1000));
+        let different_account = Pubkey::new_unique();
+
+        let result = SolanaTransactionValidator::validate_lamports_transfers(
+            &transaction,
+            &policy,
+            &different_account
+        ).await;
+
+        // Should pass because transfer is not from relayer account
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_lamports_transfers_multiple_instructions() {
+        let relayer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        // Create multiple transfer instructions
+        let transfer_ix1 = system_instruction::transfer(&relayer.pubkey(), &recipient, 500);
+        let transfer_ix2 = system_instruction::transfer(&relayer.pubkey(), &recipient, 400);
+        
+        let message = Message::new(&[transfer_ix1, transfer_ix2], Some(&relayer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let policy = RelayerSolanaPolicy {
+            max_allowed_transfer_amount_lamports: Some(1000),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_lamports_transfers(
+            &transaction,
+            &policy,
+            &relayer.pubkey()
+        ).await;
+
+        assert!(result.is_ok());
+    }
+
 }

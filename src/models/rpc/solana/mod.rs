@@ -132,6 +132,7 @@ pub struct GetSupportedTokensItem {
     pub mint: String,
     pub symbol: String,
     pub decimals: u8,
+    pub max_allowed_fee: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]

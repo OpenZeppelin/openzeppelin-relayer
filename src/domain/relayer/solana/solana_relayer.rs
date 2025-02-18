@@ -115,7 +115,7 @@ impl SolanaRelayer {
                 token_metadata.mint,
                 Some(token_metadata.decimals),
                 Some(token_metadata.symbol.to_string()),
-                None,
+                token.max_allowed_fee,
             ))
         });
 
