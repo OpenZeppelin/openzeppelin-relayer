@@ -83,9 +83,9 @@ pub struct EvmTransactionData {
     pub gas_limit: u128,
     pub nonce: u64,
     pub value: u64,
-    pub data: String,
+    pub data: Option<String>,
     pub from: String,
-    pub to: String,
+    pub to: Option<String>,
     pub chain_id: u64,
     pub hash: Option<String>,
     pub signature: Option<EvmTransactionDataSignature>,
@@ -95,7 +95,7 @@ impl EvmTransactionData {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), TransactionError> {
         if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
             if let Some(whitelist) = &evm_policy.whitelist_receivers {
-                let target_address = self.to.to_lowercase();
+                let target_address = self.to.clone().unwrap_or_default().to_lowercase();
                 let mut allowed_addresses: Vec<String> =
                     whitelist.iter().map(|addr| addr.to_lowercase()).collect();
                 allowed_addresses.push(ZERO_ADDRESS.to_string());
@@ -227,9 +227,9 @@ mod tests {
                 gas_limit: 21000,
                 nonce: 0,
                 value: 0,
-                data: "0x".to_string(),
+                data: Some("0x".to_string()),
                 from: "0x123".to_string(),
-                to: to.to_string(),
+                to: Some(to.to_string()),
                 chain_id: 1,
                 hash: None,
                 signature: None,

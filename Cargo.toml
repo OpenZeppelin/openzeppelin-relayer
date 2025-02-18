@@ -60,7 +60,7 @@ mpl-token-metadata = { version = "5.1" }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
-mockall = "0.13.1"
+mockall = { version = "0.13" }
 mockito = "1.6.1"
 proptest = "1.6.0"
 rand = "0.9.0"

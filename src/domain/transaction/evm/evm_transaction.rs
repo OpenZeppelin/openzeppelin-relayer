@@ -10,7 +10,7 @@ use crate::{
         produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
         TransactionRepoModel, TransactionStatus,
     },
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
     services::{EvmProvider, TransactionCounterService},
 };
 
@@ -18,7 +18,7 @@ use crate::{
 pub struct EvmRelayerTransaction {
     relayer: RelayerRepoModel,
     provider: EvmProvider,
-    relayer_repository: Arc<InMemoryRelayerRepository>,
+    relayer_repository: Arc<RelayerRepositoryStorage>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
@@ -29,7 +29,7 @@ impl EvmRelayerTransaction {
     pub fn new(
         relayer: RelayerRepoModel,
         provider: EvmProvider,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,

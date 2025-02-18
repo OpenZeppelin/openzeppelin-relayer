@@ -5,7 +5,7 @@ use crate::{
     },
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository},
+    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -18,7 +18,7 @@ use crate::domain::relayer::{Relayer, RelayerError};
 pub struct StellarRelayer {
     relayer: RelayerRepoModel,
     network: StellarNetwork,
-    relayer_repository: Arc<InMemoryRelayerRepository>,
+    relayer_repository: Arc<RelayerRepositoryStorage>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 }
@@ -26,7 +26,7 @@ pub struct StellarRelayer {
 impl StellarRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
@@ -93,7 +93,7 @@ impl Relayer for StellarRelayer {
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
         println!("Stellar rpc...");
         Ok(JsonRpcResponse {
-            id: 1,
+            id: Some(1),
             jsonrpc: "2.0".to_string(),
             result: Some(serde_json::Value::Null),
             error: None,

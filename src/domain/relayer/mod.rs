@@ -17,13 +17,12 @@ use crate::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerRepoModel, TransactionRepoModel,
     },
+    repositories::RelayerRepositoryStorage,
     services::{get_solana_network_provider_from_str, EvmSignerFactory, TransactionCounterService},
 };
 
 use crate::{
-    repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-    },
+    repositories::{InMemoryTransactionCounter, InMemoryTransactionRepository},
     services::EvmProvider,
 };
 use async_trait::async_trait;
@@ -163,7 +162,7 @@ pub trait RelayerFactoryTrait {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -175,7 +174,7 @@ impl RelayerFactoryTrait for RelayerFactory {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -214,13 +213,16 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let solana_provider =
-                    Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+                let provider = Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+                let rpc_handler = Arc::new(SolanaRpcHandler::new(Arc::new(
+                    SolanaRpcMethodsImpl::new(relayer.clone(), provider.clone()),
+                )));
 
                 let relayer = SolanaRelayer::new(
                     relayer,
-                    solana_provider,
                     relayer_repository,
+                    provider,
+                    rpc_handler,
                     transaction_repository,
                     job_producer,
                 )?;
@@ -280,23 +282,50 @@ pub struct JsonRpcRequest {
 }
 
 // JSON-RPC Response struct
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
-    pub id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+}
+
+impl JsonRpcResponse {
+    pub fn result<T: Serialize>(id: u64, result: T) -> Self {
+        let result_seriliazed = serde_json::to_value(result).unwrap();
+        Self {
+            jsonrpc: "2.0".to_string(),
+            result: Some(result_seriliazed),
+            error: None,
+            id: Some(id),
+        }
+    }
+
+    pub fn error(code: i32, message: &str, description: &str) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            result: None,
+            error: Some(JsonRpcError {
+                code,
+                message: message.to_string(),
+                description: description.to_string(),
+            }),
+            id: None,
+        }
+    }
 }
 
 // JSON-RPC Error struct
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
-    pub data: Option<serde_json::Value>,
+    pub description: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct BalanceResponse {
     pub balance: u128,
     pub unit: String,

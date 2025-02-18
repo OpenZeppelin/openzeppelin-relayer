@@ -37,7 +37,7 @@ RUST_LOG=info
 
 . Create a signer configuration and save it under `config/keys`.
 +
-You can find a sample signer config in `config/keys/local-signer.json`
+You can find a sample signer config in `config/keys/local-signer.example.json`
 
 +
 [source,bash]

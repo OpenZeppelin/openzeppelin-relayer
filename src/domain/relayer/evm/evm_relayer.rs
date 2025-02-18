@@ -12,7 +12,9 @@ use crate::{
         produce_relayer_disabled_payload, EvmNetwork, NetworkTransactionRequest, RelayerRepoModel,
         RepositoryError, TransactionRepoModel,
     },
-    repositories::{InMemoryRelayerRepository, InMemoryTransactionRepository, Repository},
+    repositories::{
+        InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
+    },
     services::{DataSignerTrait, EvmProvider, EvmSigner, TransactionCounterService},
 };
 use async_trait::async_trait;
@@ -25,7 +27,7 @@ pub struct EvmRelayer {
     signer: EvmSigner,
     network: EvmNetwork,
     provider: EvmProvider,
-    relayer_repository: Arc<InMemoryRelayerRepository>,
+    relayer_repository: Arc<RelayerRepositoryStorage>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
@@ -38,7 +40,7 @@ impl EvmRelayer {
         signer: EvmSigner,
         provider: EvmProvider,
         network: EvmNetwork,
-        relayer_repository: Arc<InMemoryRelayerRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
@@ -150,7 +152,7 @@ impl Relayer for EvmRelayer {
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
         println!("EVM rpc...");
         Ok(JsonRpcResponse {
-            id: 1,
+            id: Some(1),
             jsonrpc: "2.0".to_string(),
             result: Some(serde_json::Value::Null),
             error: None,

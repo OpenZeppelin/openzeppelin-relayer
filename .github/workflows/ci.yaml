@@ -185,58 +185,58 @@ jobs:
       #   run: cargo clippy --all-features --all-targets -- -D warnings --allow deprecated
       #     --locked
 
-  # test:
-  #   if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
-  #     == 'true' }}
-  #   permissions:
-  #     contents: read
-  #   needs: changed_files
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     # Checkout the repository
-  #     - name: Checkout Code
-  #       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+  test:
+    if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
+      == 'true' }}
+    permissions:
+      contents: read
+    needs: changed_files
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the repository
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-  #     - name: Prepare
-  #       id: init
-  #       uses: ./.github/actions/prepare
+      - name: Prepare
+        id: init
+        uses: ./.github/actions/prepare
 
-  #     # Get the output of the prepare composite action
-  #     - name: Get cache-hit output
-  #       run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
+      # Get the output of the prepare composite action
+      - name: Get cache-hit output
+        run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
 
-  #     - name: Setup Rust
-  #       uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8  # v1.10.1
-  #       with:
-  #         toolchain: stable
-  #         components: llvm-tools-preview
-  #         rustflags: ''
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@11df97af8e8102fd60b60a77dfbf58d40cd843b8  # v1.10.1
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+          rustflags: ''
 
-  #     - name: Install cargo hack
-  #       uses: taiki-e/install-action@cargo-hack
+      - name: Install cargo hack
+        uses: taiki-e/install-action@cargo-hack
 
-  #     - name: Install cargo-llvm-cov
-  #       uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
-  #     - name: Build
-  #       run: cargo test --no-run --locked
+      - name: Build
+        run: cargo test --no-run --locked
 
-  #     - name: Run Tests
-  #       env:
-  #         LLVM_PROFILE_FILE: llvm-cov-%p-%m.profraw
-  #         RUSTFLAGS: -Cinstrument-coverage
-  #       run: cargo hack llvm-cov --no-report --feature-powerset --locked --all-targets
+      - name: Run Tests
+        env:
+          LLVM_PROFILE_FILE: llvm-cov-%p-%m.profraw
+          RUSTFLAGS: -Cinstrument-coverage
+        run: cargo hack llvm-cov --no-report --feature-powerset --locked --all-targets
 
-  #     - name: Cargo llvm-cov
-  #       run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path lcov.info
+      - name: Cargo llvm-cov
+        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path lcov.info
 
-  #     - name: Upload to CodeCov
-  #       uses: codecov/codecov-action@13ce06bfc6bbe3ecf90edbbf1bc32fe5978ca1d3  # v5.3.1
-  #       with:
-  #         token: ${{ secrets.CODECOV_TOKEN }}
-  #         name: coverage
-  #         files: lcov.info
-  #         fail_ci_if_error: true
+      - name: Upload to CodeCov
+        uses: codecov/codecov-action@13ce06bfc6bbe3ecf90edbbf1bc32fe5978ca1d3  # v5.3.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: coverage
+          files: lcov.info
+          fail_ci_if_error: true
 
   docker-scan:
     runs-on: ubuntu-latest
