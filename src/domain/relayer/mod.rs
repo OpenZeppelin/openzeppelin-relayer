@@ -218,13 +218,12 @@ impl RelayerFactoryTrait for RelayerFactory {
             NetworkType::Solana => {
                 let provider = Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
                 let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
-                let rpc_handler =
-                    Arc::new(SolanaRpcHandler::new(Arc::new(SolanaRpcMethodsImpl::new(
-                        relayer.clone(),
-                        provider.clone(),
-                        signer_service.clone(),
-                    ))));
-
+                let rpc_methods = SolanaRpcMethodsImpl::new(
+                    relayer.clone(),
+                    provider.clone(),
+                    signer_service.clone(),
+                );
+                let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
                 let relayer = SolanaRelayer::new(
                     relayer,
                     signer_service,

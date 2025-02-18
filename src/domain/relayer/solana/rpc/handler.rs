@@ -19,14 +19,13 @@ use crate::{
 };
 use eyre::Result;
 use log::{error, info};
-use std::sync::Arc;
 
-pub struct SolanaRpcHandler<T: SolanaRpcMethods> {
-    rpc_methods: Arc<T>,
+pub struct SolanaRpcHandler<T> {
+    rpc_methods: T,
 }
 
 impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
-    pub fn new(rpc_methods: Arc<T>) -> Self {
+    pub fn new(rpc_methods: T) -> Self {
         Self { rpc_methods }
     }
 
@@ -102,6 +101,8 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         domain::MockSolanaRpcMethods,
         models::{
@@ -130,7 +131,7 @@ mod tests {
                 })
             })
             .times(1);
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -166,7 +167,7 @@ mod tests {
                 })
             })
             .times(1);
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -189,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_method() {
         let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -219,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_params() {
         let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -266,7 +267,7 @@ mod tests {
             })
             .times(1);
 
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -296,7 +297,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_sign_transaction_invalid_params() {
         let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -342,7 +343,7 @@ mod tests {
             })
             .times(1);
 
-        let handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -371,7 +372,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_sign_and_send_transaction_invalid_params() {
         let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
