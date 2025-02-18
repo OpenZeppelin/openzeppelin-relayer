@@ -33,7 +33,7 @@ pub struct ConfigFileRelayerEvmPolicy {
 pub struct AllowedToken {
     pub mint: String,
     /// Maximum supported token fee (in lamports) for a transaction. Optional.
-    pub max_fee: Option<u64>,
+    pub max_allowed_fee: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

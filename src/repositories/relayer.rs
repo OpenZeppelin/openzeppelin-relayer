@@ -303,7 +303,10 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                         tokens
                             .into_iter()
                             .map(|token| {
-                                SolanaAllowedTokensPolicy::new_partial(token.mint, token.max_fee)
+                                SolanaAllowedTokensPolicy::new_partial(
+                                    token.mint,
+                                    token.max_allowed_fee,
+                                )
                             })
                             .collect::<Vec<_>>()
                     });
