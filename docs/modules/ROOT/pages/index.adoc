@@ -163,7 +163,7 @@ Available configuration fields
 |Type of signer (see `supported signer types`)
 
 |path
-|String 
+|String
 |path to the signer json file. Should be under the `./config` directory
 
 |passphrase.type
@@ -251,7 +251,7 @@ Available configuration fields
 
 |paused
 |Boolean
-|Wether or not the relayer is paused (`true`, `false`)
+|Whether or not the relayer is paused (`true`, `false`)
 
 |notification_id
 |String
