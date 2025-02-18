@@ -13,13 +13,8 @@ use crate::{
 };
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
-    commitment_config::CommitmentConfig,
-    instruction::{AccountMeta, CompiledInstruction, Instruction},
-    program_pack::Pack,
-    pubkey::Pubkey,
-    system_instruction::SystemInstruction,
-    system_program,
-    transaction::Transaction,
+    commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey,
+    system_instruction::SystemInstruction, system_program, transaction::Transaction,
 };
 use spl_token::{instruction::TokenInstruction, state::Account};
 use std::str::FromStr;
@@ -52,45 +47,7 @@ pub struct SolanaTransactionValidator {}
 
 #[allow(dead_code)]
 impl SolanaTransactionValidator {
-    fn decompile_instruction(
-        &self,
-        tx: &Transaction,
-        ix: &CompiledInstruction,
-        account_keys: &[Pubkey],
-    ) -> Instruction {
-        let program_id = account_keys[ix.program_id_index as usize];
-        let accounts = ix
-            .accounts
-            .iter()
-            .map(|&i| AccountMeta {
-                pubkey: account_keys[i as usize],
-                is_signer: tx.message.header.num_required_signatures > i,
-                is_writable: tx.message.is_maybe_writable(i as usize, None),
-            })
-            .collect();
-
-        Instruction {
-            program_id,
-            accounts,
-            data: ix.data.clone(),
-        }
-    }
-
-    pub fn decompile_instructions(&self, tx: &Transaction) -> Vec<Instruction> {
-        tx.message
-            .instructions
-            .iter()
-            .map(|ix| self.decompile_instruction(tx, ix, &tx.message.account_keys))
-            .collect()
-    }
-
     /// Validates a transaction against all relayer policies and constraints before signing.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - The Solana transaction to validate
-    /// * `relayer` - The relayer model containing policies
-    /// * `provider` - The Solana provider for blockchain interaction
     pub async fn validate_sign_transaction(
         tx: &Transaction,
         relayer: &RelayerRepoModel,
@@ -289,6 +246,7 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
+    /// Validates that the transaction's lamports transfers are within policy limits.
     pub async fn validate_lamports_transfers(
         tx: &Transaction,
         policy: &RelayerSolanaPolicy,
@@ -333,6 +291,7 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
+    /// Validates transaction base fee against policy limits.
     pub async fn validate_tx_fee(
         tx: &Transaction,
         policy: &RelayerSolanaPolicy,
@@ -359,6 +318,7 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
+    /// Validates token transfers against policy restrictions.
     pub async fn validate_token_transfers(
         tx: &Transaction,
         policy: &RelayerSolanaPolicy,
@@ -538,6 +498,7 @@ mod tests {
     use super::*;
     use mockall::predicate::*;
     use solana_sdk::{
+        instruction::{AccountMeta, Instruction},
         message::Message,
         signature::{Keypair, Signer},
         system_instruction, system_program,
