@@ -2,7 +2,7 @@ pub mod evm;
 pub mod solana;
 pub mod stellar;
 
-use crate::models::{ApiError, NetworkType};
+use crate::models::{ApiError, NetworkType, RelayerRepoModel};
 use serde::Serialize;
 
 pub use evm::EvmTransactionRequest;
@@ -34,11 +34,9 @@ impl NetworkTransactionRequest {
         }
     }
 
-    pub fn validate(&self) -> Result<(), ApiError> {
+    pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
         match self {
-            NetworkTransactionRequest::Evm(request) => {
-                evm::EvmTransactionRequest::validate_evm_transaction_request(request)
-            }
+            NetworkTransactionRequest::Evm(request) => request.validate(relayer),
             _ => Ok(()),
         }
     }

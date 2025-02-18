@@ -1,9 +1,5 @@
-use crate::{
-    constants::ZERO_ADDRESS,
-    models::{
-        NetworkTransactionRequest, NetworkType, RelayerError, RelayerNetworkPolicy,
-        RelayerRepoModel, TransactionError,
-    },
+use crate::models::{
+    NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, TransactionError,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -91,27 +87,6 @@ pub struct EvmTransactionData {
     pub signature: Option<EvmTransactionDataSignature>,
 }
 
-impl EvmTransactionData {
-    pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), TransactionError> {
-        if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
-            if let Some(whitelist) = &evm_policy.whitelist_receivers {
-                let target_address = self.to.clone().unwrap_or_default().to_lowercase();
-                let mut allowed_addresses: Vec<String> =
-                    whitelist.iter().map(|addr| addr.to_lowercase()).collect();
-                allowed_addresses.push(ZERO_ADDRESS.to_string());
-                allowed_addresses.push(relayer.address.to_lowercase());
-
-                if !allowed_addresses.contains(&target_address) {
-                    return Err(TransactionError::ValidationError(
-                        "Transaction target address is not whitelisted".to_string(),
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaTransactionData {
     pub recent_blockhash: Option<String>,
@@ -195,108 +170,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
 }
 
 impl TransactionRepoModel {
-    pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), TransactionError> {
-        match &self.network_data {
-            NetworkTransactionData::Evm(evm_data) => {
-                evm_data.validate(relayer)?;
-            }
-            NetworkTransactionData::Solana(_) => {}
-            NetworkTransactionData::Stellar(_) => {}
-        }
+    pub fn validate(&self) -> Result<(), TransactionError> {
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::models::RelayerEvmPolicy;
-
-    use super::*;
-
-    fn create_test_evm_transaction(to: &str) -> TransactionRepoModel {
-        TransactionRepoModel {
-            id: "test_id".to_string(),
-            relayer_id: "test_relayer".to_string(),
-            status: TransactionStatus::Pending,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            sent_at: "".to_string(),
-            confirmed_at: "".to_string(),
-            network_type: NetworkType::Evm,
-            network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                gas_price: 1000,
-                gas_limit: 21000,
-                nonce: 0,
-                value: 0,
-                data: Some("0x".to_string()),
-                from: "0x123".to_string(),
-                to: Some(to.to_string()),
-                chain_id: 1,
-                hash: None,
-                signature: None,
-            }),
-        }
-    }
-
-    fn create_test_relayer(whitelist: Option<Vec<String>>) -> RelayerRepoModel {
-        RelayerRepoModel {
-            id: "test_relayer".to_string(),
-            name: "Test Relayer".to_string(),
-            network: "test_network".to_string(),
-            paused: false,
-            network_type: NetworkType::Evm,
-            signer_id: "test_signer".to_string(),
-            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
-                whitelist_receivers: whitelist,
-                ..RelayerEvmPolicy::default()
-            }),
-            address: "0xrelayer".to_string(),
-            notification_id: None,
-            system_disabled: false,
-        }
-    }
-
-    #[test]
-    fn test_validate_whitelisted_address() {
-        let whitelist = vec!["0xwhitelisted".to_string()];
-        let relayer = create_test_relayer(Some(whitelist));
-        let tx = create_test_evm_transaction("0xwhitelisted");
-
-        assert!(tx.validate(&relayer).is_ok());
-    }
-
-    #[test]
-    fn test_validate_zero_address() {
-        let relayer = create_test_relayer(Some(vec![]));
-        let tx = create_test_evm_transaction(ZERO_ADDRESS);
-
-        assert!(tx.validate(&relayer).is_ok());
-    }
-
-    #[test]
-    fn test_validate_relayer_address() {
-        let relayer = create_test_relayer(Some(vec![]));
-        let tx = create_test_evm_transaction(&relayer.address);
-
-        assert!(tx.validate(&relayer).is_ok());
-    }
-
-    #[test]
-    fn test_validate_non_whitelisted_address() {
-        let whitelist = vec!["0xwhitelisted".to_string()];
-        let relayer = create_test_relayer(Some(whitelist));
-        let tx = create_test_evm_transaction("0xnonwhitelisted");
-
-        assert!(matches!(
-            tx.validate(&relayer),
-            Err(TransactionError::ValidationError(_))
-        ));
-    }
-
-    #[test]
-    fn test_validate_no_whitelist_policy() {
-        let relayer = create_test_relayer(None);
-        let tx = create_test_evm_transaction("0xany");
-
-        assert!(tx.validate(&relayer).is_ok());
     }
 }
