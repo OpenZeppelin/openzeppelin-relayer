@@ -155,6 +155,7 @@ impl SolanaProviderTrait for SolanaProvider {
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 
+    /// Check if a blockhash is valid
     async fn is_blockhash_valid(
         &self,
         hash: &Hash,

@@ -531,6 +531,7 @@ mod tests {
                 mint: mint.to_string(),
                 decimals: Some(9),
                 symbol: Some("USDC".to_string()),
+                max_fee: None,
             }]),
             ..Default::default()
         };
@@ -1097,6 +1098,7 @@ mod tests {
             mint: Pubkey::new_unique().to_string(), // Different mint
             decimals: Some(9),
             symbol: Some("USDT".to_string()),
+            max_fee: None,
         }]);
 
         let result =
