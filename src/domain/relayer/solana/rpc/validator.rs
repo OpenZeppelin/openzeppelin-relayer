@@ -9,7 +9,7 @@
 /// * Comply with relayer policies
 use crate::{
     models::{RelayerRepoModel, RelayerSolanaPolicy},
-    services::{SolanaProvider, SolanaProviderTrait},
+    services::SolanaProviderTrait,
 };
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
@@ -48,10 +48,10 @@ pub struct SolanaTransactionValidator {}
 #[allow(dead_code)]
 impl SolanaTransactionValidator {
     /// Validates a transaction against all relayer policies and constraints before signing.
-    pub async fn validate_sign_transaction(
+    pub async fn validate_sign_transaction<P: SolanaProviderTrait + Send + Sync>(
         tx: &Transaction,
         relayer: &RelayerRepoModel,
-        provider: &SolanaProvider,
+        provider: &P,
     ) -> Result<(), SolanaTransactionValidationError> {
         let policy = &relayer.policies.get_solana_policy();
         let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {

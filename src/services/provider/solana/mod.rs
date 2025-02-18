@@ -16,7 +16,7 @@ use mockall::automock;
 use mpl_token_metadata::accounts::Metadata;
 use serde::Serialize;
 use solana_client::{
-    nonblocking::rpc_client::RpcClient, rpc_client::SerializableMessage,
+    nonblocking::rpc_client::RpcClient,
     rpc_response::RpcSimulateTransactionResult,
 };
 use solana_sdk::{
