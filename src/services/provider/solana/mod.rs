@@ -16,11 +16,12 @@ use mockall::automock;
 use mpl_token_metadata::accounts::Metadata;
 use serde::Serialize;
 use solana_client::{
-    nonblocking::rpc_client::RpcClient, rpc_response::RpcSimulateTransactionResult,
+    nonblocking::rpc_client::RpcClient, rpc_client::SerializableMessage,
+    rpc_response::RpcSimulateTransactionResult,
 };
 use solana_sdk::{
-    account::Account, commitment_config::CommitmentConfig, hash::Hash, program_pack::Pack,
-    pubkey::Pubkey, signature::Signature, transaction::Transaction,
+    account::Account, commitment_config::CommitmentConfig, hash::Hash, message::Message,
+    program_pack::Pack, pubkey::Pubkey, signature::Signature, transaction::Transaction,
 };
 use spl_token::state::Mint;
 use std::{str::FromStr, time::Duration};
@@ -90,6 +91,9 @@ pub trait SolanaProviderTrait: Send + Sync {
         hash: &Hash,
         commitment: CommitmentConfig,
     ) -> Result<bool, SolanaProviderError>;
+
+    /// get fee for message
+    async fn get_fee_for_message(&self, message: &Message) -> Result<u64, SolanaProviderError>;
 }
 
 pub struct SolanaProvider {
@@ -291,6 +295,14 @@ impl SolanaProviderTrait for SolanaProvider {
             symbol: normalized_symbol,
             mint: pubkey.to_string(),
         })
+    }
+
+    /// Get the fee for a message
+    async fn get_fee_for_message(&self, message: &Message) -> Result<u64, SolanaProviderError> {
+        self.client
+            .get_fee_for_message(message)
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 }
 
