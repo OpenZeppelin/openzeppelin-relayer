@@ -60,7 +60,7 @@ pub struct ConfigFileRelayerSolanaPolicy {
     /// Maximum transaction size. Optional.
     pub max_tx_data_size: Option<u16>,
 
-    /// Maximum supported signatures
+    /// Maximum supported signatures. Optional.
     pub max_signatures: Option<u8>,
 
     /// Maximum allowed transfer amount (in lamports) for a transaction. Optional.

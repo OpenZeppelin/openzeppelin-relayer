@@ -230,7 +230,11 @@ Available configuration fields
     "network_type": "solana",
     "network": "testnet",
     "policies": {
-      "confirmation_blocks": 5
+      "allowed_programs": [
+          "11111111111111111111111111111111",
+          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "BPFLoaderUpgradeab1e11111111111111111111111"
+        ]
     }
   },
 ]
@@ -302,17 +306,17 @@ Policies
 |solana
 |min_balance
 |unsigned 64
-|Minimum balance required for the relayer (in lamports).
+|Minimum balance required for the relayer (in lamports). Optional.
 
 |solana
-|max_supported_token_fee
+|max_allowed_transfer_amount_lamports
 |unsigned 64
-|Maximum supported token fee (in lamports) for a transaction. Optional.
+|Maximum allowed transfer amount (in lamports) for a transaction. Optional.
 
 |solana
 |allowed_tokens
-|Vector<String>
-|List of allowed tokens by their identifiers. Only these tokens are supported if provided.
+|Vector<AllowedToken>
+|List of allowed tokens. Only these tokens are supported if provided. Optional.
 
 |solana
 |allowed_programs
@@ -328,7 +332,28 @@ Policies
 |disallowed_accounts
 |Vector<String>
 |List of disallowed accounts by their public keys. These accounts will be explicitly blocked.
+
+|solana
+|max_tx_data_size
+|unsigned 16
+|Maximum transaction size. Optional.
+
+|solana
+|max_signatures
+|unsigned 8
+|Maximum supported signatures. Optional.
 |===
+
+Example for allowed_tokens:
+[source,json]
+----
+"allowed_tokens": [
+  {
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "max_allowed_fee": 1000000
+  }
+]
+----
 
 === Key signers
 
