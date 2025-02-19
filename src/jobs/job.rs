@@ -193,7 +193,7 @@ mod tests {
                 nonce: 1,
                 value: 1000000000000000000,
                 from: "0xabc".to_string(),
-                to: "0xdef".to_string(),
+                to: Some("0xdef".to_string()),
                 relayer_id: "relayer-1".to_string(),
             }));
 

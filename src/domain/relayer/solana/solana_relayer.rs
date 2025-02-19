@@ -28,11 +28,14 @@ use futures::future::try_join_all;
 use log::{info, warn};
 use solana_sdk::account::Account;
 
+use super::{SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl};
+
 #[allow(dead_code)]
 pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
     network: SolanaNetwork,
     provider: Arc<SolanaProvider>,
+    rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
     relayer_repository: Arc<RelayerRepositoryStorage>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
@@ -43,6 +46,7 @@ impl SolanaRelayer {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage>,
         provider: Arc<SolanaProvider>,
+        rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
@@ -54,8 +58,9 @@ impl SolanaRelayer {
         Ok(Self {
             relayer,
             network,
-            relayer_repository,
             provider,
+            rpc_handler,
+            relayer_repository,
             transaction_repository,
             job_producer,
         })
@@ -178,14 +183,73 @@ impl SolanaRelayerTrait for SolanaRelayer {
         })
     }
 
-    async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
-        println!("Solana rpc...");
-        Ok(JsonRpcResponse {
-            id: 1,
-            jsonrpc: "2.0".to_string(),
-            result: Some(serde_json::Value::Null),
-            error: None,
-        })
+    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+        let response = self.rpc_handler.handle_request(request).await;
+
+        match response {
+            Ok(response) => Ok(response),
+            Err(e) => {
+                let error_response = match e {
+                    SolanaRpcError::UnsupportedMethod(msg) => {
+                        JsonRpcResponse::error(32000, "UNSUPPORTED_METHOD", &msg)
+                    }
+                    SolanaRpcError::FeatureFetch(_) => JsonRpcResponse::error(
+                        -32008,
+                        "FEATURE_FETCH_ERROR",
+                        "Failed to retrieve the list of enabled features.",
+                    ),
+                    SolanaRpcError::InvalidParams(msg) => {
+                        JsonRpcResponse::error(-32602, "INVALID_PARAMS", &msg)
+                    }
+                    SolanaRpcError::UnsupportedFeeToken(_) => JsonRpcResponse::error(
+                        -32000,
+                        "UNSUPPORTED
+                        FEE_TOKEN",
+                        "The provided fee_token is not supported by the relayer.",
+                    ),
+                    SolanaRpcError::Estimation(_) => JsonRpcResponse::error(
+                        -32001,
+                        "ESTIMATION_ERROR",
+                        "Failed to estimate the fee due to internal or network
+issues.",
+                    ),
+                    SolanaRpcError::InsufficientFunds(_) => JsonRpcResponse::error(
+                        -32002,
+                        "INSUFFICIENT_FUNDS",
+                        "The sender does not have enough funds for the transfer.",
+                    ),
+                    SolanaRpcError::TransactionPreparation(_) => JsonRpcResponse::error(
+                        -32003,
+                        "TRANSACTION_PREPARATION_ERROR",
+                        "Failed to prepare the transfer transaction.",
+                    ),
+                    SolanaRpcError::Preparation(_) => JsonRpcResponse::error(
+                        -32013,
+                        "PREPARATION_ERROR",
+                        "Failed to prepare the transfer transaction.",
+                    ),
+                    SolanaRpcError::Signature(_) => JsonRpcResponse::error(
+                        -32005,
+                        "SIGNATURE_ERROR",
+                        "Failed to sign the transaction.",
+                    ),
+                    SolanaRpcError::TokenFetch(_) => JsonRpcResponse::error(
+                        -32007,
+                        "TOKEN_FETCH_ERROR",
+                        "Failed to retrieve the list of supported tokens.",
+                    ),
+                    SolanaRpcError::BadRequest(msg) => {
+                        JsonRpcResponse::error(-32007, "BAD_REQUEST", &msg)
+                    }
+                    SolanaRpcError::Send(_) => JsonRpcResponse::error(
+                        -32006,
+                        "SEND_ERROR",
+                        "Failed to submit the transaction to the blockchain.",
+                    ),
+                };
+                Ok(error_response)
+            }
+        }
     }
 
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {

@@ -1,5 +1,7 @@
 # OpenZeppelin Relayer
 
+[![codecov](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer/graph/badge.svg?token=HKHIQNSJ6H)](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer)
+
 > :warning: This software is in alpha. Use in production environments at your own risk.
 
 This relayer service enables interaction with blockchain networks through transaction submissions. It offers multi-chain support and an extensible architecture for adding new chains.
