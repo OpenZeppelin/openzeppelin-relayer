@@ -152,7 +152,7 @@ impl Relayer for EvmRelayer {
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
         println!("EVM rpc...");
         Ok(JsonRpcResponse {
-            id: 1,
+            id: Some(1),
             jsonrpc: "2.0".to_string(),
             result: Some(serde_json::Value::Null),
             error: None,

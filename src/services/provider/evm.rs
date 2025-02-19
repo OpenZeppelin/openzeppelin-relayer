@@ -94,9 +94,15 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
             from: Some(tx.from.clone().parse().map_err(|_| {
                 TransactionError::InvalidType("Invalid address format".to_string())
             })?),
-            to: Some(TxKind::Call(tx.to.parse().map_err(|_| {
-                TransactionError::InvalidType("Invalid address format".to_string())
-            })?)),
+            to: Some(TxKind::Call(
+                tx.to
+                    .clone()
+                    .unwrap_or("".to_string())
+                    .parse()
+                    .map_err(|_| {
+                        TransactionError::InvalidType("Invalid address format".to_string())
+                    })?,
+            )),
             gas_price: Some(
                 Uint::<256, 4>::from(tx.gas_price)
                     .try_into()
@@ -108,7 +114,7 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
                     .map_err(|_| TransactionError::InvalidType("Invalid gas limit".to_string()))?,
             ),
             value: Some(Uint::<256, 4>::from(tx.value)),
-            input: TransactionInput::from(tx.data.clone().into_bytes()),
+            input: TransactionInput::from(tx.data.clone().unwrap_or("".to_string()).into_bytes()),
             nonce: Some(
                 Uint::<256, 4>::from(tx.nonce)
                     .try_into()

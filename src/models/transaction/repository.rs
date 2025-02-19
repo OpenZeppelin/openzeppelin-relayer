@@ -78,9 +78,9 @@ pub struct EvmTransactionData {
     pub gas_limit: u128,
     pub nonce: u64,
     pub value: u64,
-    pub data: String,
+    pub data: Option<String>,
     pub from: String,
-    pub to: String,
+    pub to: Option<String>,
     pub chain_id: u64,
     pub hash: Option<String>,
     pub signature: Option<EvmTransactionDataSignature>,
@@ -165,5 +165,11 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 }),
             }),
         }
+    }
+}
+
+impl TransactionRepoModel {
+    pub fn validate(&self) -> Result<(), TransactionError> {
+        Ok(())
     }
 }
