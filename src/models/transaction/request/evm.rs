@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct EvmTransactionRequest {
+    pub from: String,
     pub to: Option<String>,
     pub value: u64,
     pub data: Option<String>,
@@ -29,6 +30,7 @@ impl EvmTransactionRequest {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
         validate_target_address(self, relayer)?;
         validate_evm_transaction_request(self)?;
+        validate_pricing(self)?;
         Ok(())
     }
 }
@@ -39,16 +41,6 @@ pub fn validate_evm_transaction_request(request: &EvmTransactionRequest) -> Resu
             "Both txs `to` and `data` fields are missing. At least one of them has to be set."
                 .to_string(),
         ));
-    }
-
-    if let (Some(max_fee), Some(max_priority_fee)) =
-        (request.max_fee_per_gas, request.max_priority_fee_per_gas)
-    {
-        if max_fee < max_priority_fee {
-            return Err(ApiError::BadRequest(
-                "maxFeePerGas should be greater or equal to maxPriorityFeePerGas".to_string(),
-            ));
-        }
     }
 
     if let Some(valid_until) = &request.valid_until {
@@ -94,6 +86,86 @@ pub fn validate_target_address(
     Ok(())
 }
 
+pub fn validate_pricing(request: &EvmTransactionRequest) -> Result<(), ApiError> {
+    let is_eip1559 =
+        request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some();
+    let is_legacy = request.gas_price > 0;
+    let is_speed = request.speed.is_some();
+
+    // count how many transaction types are present
+    let transaction_types = [is_eip1559, is_legacy, is_speed]
+        .iter()
+        .filter(|&&x| x)
+        .count();
+
+    // validate that only one transaction type is present
+    if transaction_types == 0 {
+        return Err(ApiError::BadRequest(
+            "Transaction must specify either gasPrice, speed, or EIP1559 parameters".to_string(),
+        ));
+    }
+
+    if transaction_types > 1 {
+        return Err(ApiError::BadRequest(
+            "Cannot mix different transaction types. Use either gasPrice, speed, or EIP1559 \
+             parameters"
+                .to_string(),
+        ));
+    }
+
+    // validate specific fields based on the type
+    if is_eip1559 {
+        // for eip1559, both fields must be present
+        match (request.max_fee_per_gas, request.max_priority_fee_per_gas) {
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(ApiError::BadRequest(
+                    "EIP1559 transactions require both maxFeePerGas and maxPriorityFeePerGas"
+                        .to_string(),
+                ));
+            }
+            (Some(max_fee), Some(max_priority_fee)) => {
+                if max_fee < max_priority_fee {
+                    return Err(ApiError::BadRequest(
+                        "maxFeePerGas must be greater than or equal to maxPriorityFeePerGas"
+                            .to_string(),
+                    ));
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        // ensure that gasPrice is 0 for eip1559
+        if request.gas_price > 0 {
+            return Err(ApiError::BadRequest(
+                "gasPrice must be 0 for EIP1559 transactions".to_string(),
+            ));
+        }
+    }
+
+    if is_legacy {
+        // ensure that eip1559 fields are not present
+        if request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some() {
+            return Err(ApiError::BadRequest(
+                "Legacy transactions cannot include EIP1559 parameters".to_string(),
+            ));
+        }
+    }
+
+    if is_speed {
+        // ensure that gasPrice and eip1559 fields are not present
+        if request.gas_price > 0
+            || request.max_fee_per_gas.is_some()
+            || request.max_priority_fee_per_gas.is_some()
+        {
+            return Err(ApiError::BadRequest(
+                "Speed-based transactions cannot include manual gas parameters".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::models::{NetworkType, RelayerEvmPolicy};
@@ -103,11 +175,12 @@ mod tests {
 
     fn create_basic_request() -> EvmTransactionRequest {
         EvmTransactionRequest {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: 0,
             data: Some("0x".to_string()),
             gas_limit: 21000,
-            gas_price: 20000000000,
+            gas_price: 0,
             speed: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
@@ -141,17 +214,6 @@ mod tests {
         let mut request = create_basic_request();
         request.to = None;
         request.data = None;
-
-        let result = validate_evm_transaction_request(&request);
-        assert!(result.is_err());
-        assert!(matches!(result, Err(ApiError::BadRequest(_))));
-    }
-
-    #[test]
-    fn test_validate_invalid_gas_fees() {
-        let mut request = create_basic_request();
-        request.max_fee_per_gas = Some(100);
-        request.max_priority_fee_per_gas = Some(200);
 
         let result = validate_evm_transaction_request(&request);
         assert!(result.is_err());
@@ -220,5 +282,134 @@ mod tests {
         request.to = Some(relayer.address.clone());
 
         assert!(validate_target_address(&request, &relayer).is_ok());
+    }
+
+    #[test]
+    fn test_validate_legacy_transaction() {
+        let request = create_basic_request();
+        assert!(validate_evm_transaction_request(&request).is_ok());
+    }
+
+    #[test]
+    fn test_validate_eip1559_transaction() {
+        let mut request = create_basic_request();
+        request.max_fee_per_gas = Some(30000000000);
+        request.max_priority_fee_per_gas = Some(20000000000);
+
+        assert!(validate_evm_transaction_request(&request).is_ok());
+    }
+
+    #[test]
+    fn test_validate_eip1559_invalid_fees() {
+        let mut request = create_basic_request();
+        request.max_fee_per_gas = Some(20000000000);
+        request.max_priority_fee_per_gas = Some(30000000000); // max_fee_per_gas should be greater than max_priority_fee_per_gas
+
+        let result = validate_pricing(&request);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+    #[test]
+    fn test_validate_speed_transaction() {
+        let mut request = create_basic_request();
+        request.speed = Some(Speed::Fast);
+
+        assert!(validate_evm_transaction_request(&request).is_ok());
+    }
+
+    #[test]
+    fn test_validate_missing_required_fields() {
+        let mut request = create_basic_request();
+        request.to = None;
+        request.data = None;
+
+        let result = validate_evm_transaction_request(&request);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn test_validate_invalid_valid_until_format() {
+        let mut request = create_basic_request();
+        request.valid_until = Some("invalid-date-format".to_string());
+
+        let result = validate_evm_transaction_request(&request);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn test_validate_whitelisted_address() {
+        let request = create_basic_request();
+        let mut relayer = create_test_relayer(false, false);
+
+        if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
+            evm_policy.whitelist_receivers = Some(vec![
+                "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            ]);
+        }
+
+        assert!(validate_target_address(&request, &relayer).is_ok());
+    }
+
+    #[test]
+    fn test_validate_non_whitelisted_address() {
+        let mut request = create_basic_request();
+        request.to = Some("0x1234567890123456789012345678901234567890".to_string());
+        let mut relayer = create_test_relayer(false, false);
+
+        if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
+            evm_policy.whitelist_receivers = Some(vec![
+                "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            ]);
+        }
+
+        let result = validate_target_address(&request, &relayer);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn test_validate_mixed_transaction_types() {
+        let mut request = create_basic_request();
+        request.gas_price = 20000000000;
+        request.max_fee_per_gas = Some(30000000000);
+
+        let result = validate_pricing(&request);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn test_validate_incomplete_eip1559() {
+        let mut request = create_basic_request();
+        request.max_fee_per_gas = Some(30000000000);
+        // Falta max_priority_fee_per_gas
+
+        let result = validate_pricing(&request);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn test_validate_invalid_eip1559_fees() {
+        let mut request = create_basic_request();
+        request.max_fee_per_gas = Some(20000000000);
+        request.max_priority_fee_per_gas = Some(30000000000); // Mayor que max_fee
+
+        let result = validate_pricing(&request);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn test_validate_speed_with_gas_price() {
+        let mut request = create_basic_request();
+        request.speed = Some(Speed::Fast);
+        request.gas_price = 20000000000;
+
+        let result = validate_pricing(&request);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
 }
