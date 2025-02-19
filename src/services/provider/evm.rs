@@ -38,7 +38,7 @@ impl EvmProvider {
 
     pub async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<U256> {
         // transform the tx to a transaction request
-        let transaction_request = self.to_transaction_request(tx)?;
+        let transaction_request = TransactionRequest::try_from(tx)?;
         self.provider
             .estimate_gas(&transaction_request)
             .await
@@ -85,12 +85,11 @@ impl EvmProvider {
 
         Ok(result)
     }
+}
 
-    pub fn to_transaction_request(
-        &self,
-        tx: &EvmTransactionData,
-    ) -> Result<TransactionRequest, TransactionError> {
-        println!("self.from: {:?}", tx.from);
+impl TryFrom<&EvmTransactionData> for TransactionRequest {
+    type Error = TransactionError;
+    fn try_from(tx: &EvmTransactionData) -> Result<Self, Self::Error> {
         Ok(TransactionRequest {
             from: Some(tx.from.clone().parse().map_err(|_| {
                 TransactionError::InvalidType("Invalid address format".to_string())
