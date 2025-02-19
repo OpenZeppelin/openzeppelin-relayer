@@ -76,7 +76,7 @@ cp config/config.example.json config/config.json
 
 Create `config/keys/local-signer.json` and make sure to update this file with the correct values. Check the sample file `config/keys/local-signer.example.json`.
 
-Update `.env` file with the correct values
+Create `.env` with correct values according to your needs from `.env.example` file.
 
 ### Starting Redis manually (without docker compose)
 
@@ -104,13 +104,27 @@ cargo run
 
 ### Running services with docker compose
 
-Run the following command to start the services:
+Based on your `.env` file, docker compose may or may not start the metrics server ( within relayer app container), prometheus and grafana.
+
+> Note: If you want to start the metrics server, prometheus and grafana, make sure to set `METRICS_SERVER_ENABLED=true` in your `.env` file.
+
+If you want to start the services using [make](./Makefile.toml) target, you can use the following command to start the services:
 
 ```sh
-docker compose up -d
+cargo make docker-compose-up
 ```
 
-> Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can use the following command: `DOCKERFILE=Dockerfile.production docker compose up -d`.
+> Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can set: `DOCKERFILE=Dockerfile.production` before running `cargo make docker-compose-up`.
+
+We have a [make](./Makefile.toml) target to start the services with docker compose with metrics profile based on your `.env` file. For metrics server you will need to make sure `METRICS_SERVER_ENABLED=true` is set in your `.env` file. If you want to start the services directly using docker compose, you can use the following command:
+
+```sh
+# without metrics profile ( METRICS_SERVER_ENABLED=false by default )
+# will only start the relayer app container and redis container
+docker compose up -d
+# or with metrics profile ( METRICS_SERVER_ENABLED=true in .env file )
+# docker compose --profile metrics up -d
+```
 
 Make sure the containers are running without any restarts/issues:
 
@@ -121,7 +135,13 @@ docker ps -a
 To stop the services, run the following command:
 
 ```sh
-docker compose down
+cargo make docker-compose-down
+# or
+# using docker compose without make target
+# without metrics profile
+# docker compose down
+# or with metrics profile
+# docker compose --profile metrics down
 ```
 
 To check the logs of the services/containers, run the following command:

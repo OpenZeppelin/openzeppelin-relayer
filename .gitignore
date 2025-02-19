@@ -28,6 +28,8 @@ rust_docs
 # logs
 logs/
 
+# env
+.env
 
 # Ignore node_modules
 node_modules

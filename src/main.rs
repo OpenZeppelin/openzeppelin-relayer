@@ -43,6 +43,7 @@ use config::ApiKeyRateLimit;
 use dotenvy::dotenv;
 use init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file};
 use log::info;
+use std::env;
 
 mod api;
 mod config;
@@ -70,6 +71,10 @@ async fn main() -> Result<()> {
     dotenv().ok();
     setup_logging();
 
+    // Set metrics enabled flag to false by default
+    let metrics_enabled = env::var("METRICS_ENABLED")
+        .map(|v| v.to_lowercase() == "true")
+        .unwrap_or(false);
     let config = Arc::new(config::ServerConfig::from_env());
     let server_config = Arc::clone(&config); // clone for use in binding below
     let config_file = load_config_file(&config.config_file_path)?;
@@ -134,19 +139,37 @@ async fn main() -> Result<()> {
     .shutdown_timeout(5)
     .run();
 
-    let metrics_server = HttpServer::new(|| App::new().configure(api::routes::metrics::init))
-        .bind((server_config.host.as_str(), server_config.metrics_port))
-        .wrap_err_with(|| {
-            format!(
-                "Failed to bind server to {}:{}",
-                server_config.host, server_config.metrics_port
-            )
-        })?
-        .shutdown_timeout(5)
-        .run();
+    let metrics_server_future = if metrics_enabled {
+        log::info!("Metrics server enabled, starting metrics server...");
+        Some(
+            HttpServer::new(|| {
+                App::new()
+                    .wrap(middleware::Compress::default())
+                    .wrap(middleware::NormalizePath::trim())
+                    .wrap(middleware::DefaultHeaders::new())
+                    .configure(api::routes::metrics::init)
+            })
+            .workers(2)
+            .bind((server_config.host.as_str(), server_config.metrics_port))
+            .wrap_err_with(|| {
+                format!(
+                    "Failed to bind server to {}:{}",
+                    server_config.host, server_config.metrics_port
+                )
+            })?
+            .shutdown_timeout(5)
+            .run(),
+        )
+    } else {
+        log::info!("Metrics server disabled");
+        None
+    };
 
-    // Run both servers concurrently
-    futures::try_join!(app_server, metrics_server)?;
+    if let Some(metrics_server) = metrics_server_future {
+        futures::try_join!(app_server, metrics_server)?;
+    } else {
+        app_server.await?;
+    }
 
     Ok(())
 }
