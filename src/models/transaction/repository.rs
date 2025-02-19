@@ -169,7 +169,31 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
 }
 
 impl TransactionRepoModel {
-    pub fn validate(&self) -> Result<(), TransactionError> {
+    pub fn validate(&self, relayer_model: &RelayerRepoModel) -> Result<(), TransactionError> {
+        // validate evm
+        match &self.network_data {
+            NetworkTransactionData::Evm(evm_data) => {
+                evm_data.validate(relayer_model)?;
+            }
+            NetworkTransactionData::Solana(_) => {}
+            NetworkTransactionData::Stellar(_) => {}
+        }
+        Ok(())
+    }
+}
+
+impl EvmTransactionData {
+    pub fn validate(&self, relayer_model: &RelayerRepoModel) -> Result<(), TransactionError> {
+        // probably we will end up separating this into a separate files for each network
+        let policy = relayer_model.policies.get_evm_policy();
+        if let Some(gas_price_cap) = policy.gas_price_cap {
+            if self.gas_price > gas_price_cap as u128 {
+                return Err(TransactionError::InvalidGasPrice(format!(
+                    "Gas price is too high: {}",
+                    self.gas_price
+                )));
+            }
+        }
         Ok(())
     }
 }

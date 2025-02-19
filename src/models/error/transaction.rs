@@ -33,6 +33,9 @@ pub enum TransactionError {
 
     #[error("Not supported: {0}")]
     NotSupported(String),
+
+    #[error("Invalid gas price: {0}")]
+    InvalidGasPrice(String),
 }
 
 impl From<TransactionError> for ApiError {
@@ -48,6 +51,7 @@ impl From<TransactionError> for ApiError {
             }
             TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
+            TransactionError::InvalidGasPrice(msg) => ApiError::BadRequest(msg),
         }
     }
 }

@@ -53,7 +53,7 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
         // validate the transaction
-
+        tx.validate(&self.relayer)?;
         // gas estimation
         let _gas_estimation = self
             .provider
