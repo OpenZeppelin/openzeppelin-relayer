@@ -55,12 +55,10 @@ impl Transaction for EvmRelayerTransaction {
         // validate the transaction
 
         // gas estimation
-        let gas_estimation = self
+        let _gas_estimation = self
             .provider
             .estimate_gas(&tx.network_data.get_evm_transaction_data()?)
-            .await
-            .unwrap();
-        println!(" test gas_estimation: {:?}", gas_estimation);
+            .await?;
 
         // After preparing the transaction, submit it to the job queue
         self.job_producer
