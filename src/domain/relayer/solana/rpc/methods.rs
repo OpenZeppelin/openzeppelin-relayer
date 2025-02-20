@@ -1014,7 +1014,6 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
 
         // Mock Jupiter quote
-        // Assuming 1 SOL = 20 USDT, so 0.001 SOL = 0.02 USDT (20_000 with 6 decimals)
         jupiter_service
             .expect_get_sol_to_token_quote()
             .with(
@@ -1072,7 +1071,6 @@ mod tests {
             ..Default::default()
         });
 
-        // Mock 0.001 SOL fee (1_000_000 lamports)
         provider
             .expect_get_latest_blockhash()
             .returning(|| Box::pin(async { Ok([0u8; 32]) }));
@@ -1082,8 +1080,6 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
 
         // Mock Jupiter quote
-        // 1 SOL = 17.7 UNI
-        // For 0.001 SOL fee, we need 0.0177 UNI (1_770_000 with 8 decimals)
         jupiter_service
             .expect_get_sol_to_token_quote()
             .with(
