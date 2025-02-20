@@ -524,11 +524,6 @@ mod tests {
             ..Default::default()
         });
 
-        provider
-            .expect_is_blockhash_valid()
-            .with(predicate::always(), predicate::always())
-            .returning(|_, _| Box::pin(async { Ok(true) }));
-
         provider.expect_simulate_transaction().returning(|_| {
             Box::pin(async {
                 Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
@@ -651,7 +646,6 @@ mod tests {
             Arc::new(signer),
             Arc::new(jupiter_service),
         );
-
         let params = SignTransactionRequestParams {
             transaction: encoded_tx,
         };
