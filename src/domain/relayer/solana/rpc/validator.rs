@@ -89,7 +89,7 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
-    /// Validates a transaction against all relayer policies and constraints before signing.
+    /// Validates a transaction before estimating fee.
     pub async fn validate_fee_estimate_transaction(
         tx: &Transaction,
         relayer: &RelayerRepoModel,
