@@ -181,14 +181,15 @@ impl SolanaTransactionValidator {
     ) -> Result<(), SolanaTransactionValidationError> {
         let num_signatures = tx.message.header.num_required_signatures;
 
-        // Check against maximum allowed signatures
-        if let Some(max_signatures) = policy.max_signatures {
-            if num_signatures > max_signatures as u8 {
-                return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Transaction requires {} signatures, which exceeds maximum allowed {}",
-                    num_signatures, max_signatures
-                )));
-            }
+        let Some(max_signatures) = policy.max_signatures else {
+            return Ok(());
+        };
+
+        if num_signatures > max_signatures as u8 {
+            return Err(SolanaTransactionValidationError::PolicyViolation(format!(
+                "Transaction requires {} signatures, which exceeds maximum allowed {}",
+                num_signatures, max_signatures
+            )));
         }
 
         Ok(())
