@@ -8,7 +8,7 @@ use lazy_static::lazy_static;
 use prometheus::{
     CounterVec, Encoder, Gauge, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
 };
-use sysinfo::System;
+use sysinfo::{Disks, System};
 
 lazy_static! {
     // Global Prometheus registry.
@@ -53,28 +53,49 @@ lazy_static! {
       let gauge = Gauge::new("cpu_usage_percentage", "Current CPU usage percentage").unwrap();
       REGISTRY.register(Box::new(gauge.clone())).unwrap();
       gauge
-  };
+    };
 
-  // Gauge for memory usage in bytes.
-  pub static ref MEMORY_USAGE: Gauge = {
-      let gauge = Gauge::new("memory_usage_bytes", "Memory usage in bytes").unwrap();
+    // Gauge for memory usage percentage.
+    pub static ref MEMORY_USAGE_PERCENT: Gauge = {
+      let gauge = Gauge::new("memory_usage_percentage", "Memory usage percentage").unwrap();
       REGISTRY.register(Box::new(gauge.clone())).unwrap();
       gauge
-  };
+    };
 
-  // Gauge for total memory in bytes.
-  pub static ref TOTAL_MEMORY: Gauge = {
-    let gauge = Gauge::new("total_memory_bytes", "Total memory in bytes").unwrap();
-    REGISTRY.register(Box::new(gauge.clone())).unwrap();
-    gauge
-  };
+    // Gauge for memory usage in bytes.
+    pub static ref MEMORY_USAGE: Gauge = {
+        let gauge = Gauge::new("memory_usage_bytes", "Memory usage in bytes").unwrap();
+        REGISTRY.register(Box::new(gauge.clone())).unwrap();
+        gauge
+    };
 
-  // Gauge for available memory in bytes.
-  pub static ref AVAILABLE_MEMORY: Gauge = {
-      let gauge = Gauge::new("available_memory_bytes", "Available memory in bytes").unwrap();
+    // Gauge for total memory in bytes.
+    pub static ref TOTAL_MEMORY: Gauge = {
+      let gauge = Gauge::new("total_memory_bytes", "Total memory in bytes").unwrap();
       REGISTRY.register(Box::new(gauge.clone())).unwrap();
       gauge
-  };
+    };
+
+    // Gauge for available memory in bytes.
+    pub static ref AVAILABLE_MEMORY: Gauge = {
+        let gauge = Gauge::new("available_memory_bytes", "Available memory in bytes").unwrap();
+        REGISTRY.register(Box::new(gauge.clone())).unwrap();
+        gauge
+    };
+
+    // Gauge for used disk space in bytes.
+    pub static ref DISK_USAGE: Gauge = {
+      let gauge = Gauge::new("disk_usage_bytes", "Used disk space in bytes").unwrap();
+      REGISTRY.register(Box::new(gauge.clone())).unwrap();
+      gauge
+    };
+
+    // Gauge for disk usage percentage.
+    pub static ref DISK_USAGE_PERCENT: Gauge = {
+      let gauge = Gauge::new("disk_usage_percentage", "Disk usage percentage").unwrap();
+      REGISTRY.register(Box::new(gauge.clone())).unwrap();
+      gauge
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
@@ -106,4 +127,33 @@ pub fn update_system_metrics() {
     // Used memory (in bytes).
     let memory_usage = sys.used_memory();
     MEMORY_USAGE.set(memory_usage as f64);
+
+    // Calculate memory usage percentage
+    let memory_percentage = if total_memory > 0 {
+        (memory_usage as f64 / total_memory as f64) * 100.0
+    } else {
+        0.0
+    };
+    MEMORY_USAGE_PERCENT.set(memory_percentage);
+
+    // Calculate disk usage:
+    // Sum total space and available space across all disks.
+    let disks = Disks::new_with_refreshed_list();
+    let mut total_disk_space: u64 = 0;
+    let mut total_disk_available: u64 = 0;
+    for disk in disks.list() {
+        total_disk_space += disk.total_space();
+        total_disk_available += disk.available_space();
+    }
+    // Used disk space is total minus available ( in bytes).
+    let used_disk_space = total_disk_space.saturating_sub(total_disk_available);
+    DISK_USAGE.set(used_disk_space as f64);
+
+    // Calculate disk usage percentage.
+    let disk_percentage = if total_disk_space > 0 {
+        (used_disk_space as f64 / total_disk_space as f64) * 100.0
+    } else {
+        0.0
+    };
+    DISK_USAGE_PERCENT.set(disk_percentage);
 }

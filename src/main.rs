@@ -150,11 +150,11 @@ async fn main() -> Result<()> {
                     .configure(api::routes::metrics::init)
             })
             .workers(2)
-            .bind((server_config.host.as_str(), server_config.metrics_port))
+            .bind((config.host.as_str(), config.metrics_port))
             .wrap_err_with(|| {
                 format!(
                     "Failed to bind server to {}:{}",
-                    server_config.host, server_config.metrics_port
+                    config.host, config.metrics_port
                 )
             })?
             .shutdown_timeout(5)

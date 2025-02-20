@@ -23,7 +23,10 @@ USER defender
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 
-EXPOSE 8080 8081
+ENV APP_PORT=8080
+ENV METRICS_PORT=8081
+
+EXPOSE ${APP_PORT} ${METRICS_PORT}
 
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]

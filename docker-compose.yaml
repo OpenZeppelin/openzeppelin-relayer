@@ -5,7 +5,6 @@
 
 services:
   relayer:
-    container_name: openzeppelin-relayer
     build:
       args:
         UID: ${DOCKER_UID:-1000}
@@ -14,14 +13,16 @@ services:
       dockerfile: ${DOCKERFILE:-Dockerfile.development}
     ports:
       - 8080:8080/tcp
-      - 8081:8081/tcp
     secrets:
       - api_key
       - webhook_signing_key
     environment:
+      # build time specific env vars
+      APP_PORT: ${APP_PORT:-8080}
+      METRICS_PORT: ${METRICS_PORT:-8081}
+      # runtime specific env vars
       REDIS_URL: redis://redis:6379
       CONFIG_PATH: ${CONFIG_FILE_PATH:-config/config.json}
-      PORT: 8080
       RATE_LIMIT_REQUESTS_PER_SECOND: ${RATE_LIMIT_RPS:-10}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
@@ -55,9 +56,9 @@ services:
       #- ${LOGS_DATA_DIR:-./logs}:/app/logs
     networks:
       - relayer-network
+      - metrics-network
 
   redis:
-    container_name: openzeppelin-relayer-redis
     image: redis:bookworm
     # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  uses the same user as the relayer
     ports:
@@ -69,6 +70,21 @@ services:
     command: [redis-server, --appendonly, yes, --save, '60', '1']
     networks:
       - relayer-network
+      - metrics-network
+    restart: on-failure:5
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    security_opt:
+      - no-new-privileges
+    profiles:
+      - metrics
+    depends_on:
+      - redis
+    networks:
+      - metrics-network
     restart: on-failure:5
 
   prometheus:
@@ -80,8 +96,10 @@ services:
     command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
       --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries
       --web.console.templates=/usr/share/prometheus/consoles
-    ports: [9090:9090/tcp]
+    ports:
+      - 9090:9090/tcp
     networks:
+      - metrics-network
       - relayer-network
     volumes:
       - ./cmd/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
@@ -90,13 +108,13 @@ services:
       - metrics
 
   grafana:
-    container_name: openzeppelin-relayer-grafana
     image: grafana/grafana:11.5.1
     security_opt:
       - no-new-privileges
     # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  Uses defender user from Dockerfile
     ports: [3000:3000/tcp]
     networks:
+      - metrics-network
       - relayer-network
     volumes:
       - ./cmd/prometheus/grafana.ini:/etc/grafana/grafana.ini
@@ -107,6 +125,8 @@ services:
       - metrics
 
 networks:
+  metrics-network:
+    internal: true
   relayer-network:
     driver: bridge
 
