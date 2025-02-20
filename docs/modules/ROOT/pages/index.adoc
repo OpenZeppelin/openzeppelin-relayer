@@ -350,7 +350,8 @@ Example for allowed_tokens:
 "allowed_tokens": [
   {
     "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "max_allowed_fee": 1000000
+    "max_allowed_fee": 1000000,
+    "conversion_slippage_percentage": 1.0
   }
 ]
 ----
