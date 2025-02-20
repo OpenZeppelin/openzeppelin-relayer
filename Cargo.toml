@@ -70,8 +70,14 @@ tempfile = "3.2"
 serial_test = "3.2"
 
 [[bin]]
-path = "src/main.rs"
 name = "openzeppelin-relayer"
+path = "src/main.rs"
+doc = true
+doctest = true
+
+[[example]]
+name = "test_tx"
+path = "helpers/test_tx.rs"
 
 [lib]
 path = "src/lib.rs"
