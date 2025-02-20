@@ -17,10 +17,8 @@ services:
       - api_key
       - webhook_signing_key
     environment:
-      # build time specific env vars
       APP_PORT: ${APP_PORT:-8080}
       METRICS_PORT: ${METRICS_PORT:-8081}
-      # runtime specific env vars
       REDIS_URL: redis://redis:6379
       CONFIG_PATH: ${CONFIG_FILE_PATH:-config/config.json}
       RATE_LIMIT_REQUESTS_PER_SECOND: ${RATE_LIMIT_RPS:-10}
@@ -60,7 +58,6 @@ services:
 
   redis:
     image: redis:bookworm
-    # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  uses the same user as the relayer
     ports:
       - 6379:6379/tcp
     security_opt:
@@ -92,7 +89,6 @@ services:
     image: prom/prometheus:v3.1.0
     security_opt:
       - no-new-privileges
-    # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  Uses defender user from Dockerfile
     command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
       --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries
       --web.console.templates=/usr/share/prometheus/consoles
@@ -111,7 +107,6 @@ services:
     image: grafana/grafana:11.5.1
     security_opt:
       - no-new-privileges
-    # user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}  #  Uses defender user from Dockerfile
     ports: [3000:3000/tcp]
     networks:
       - metrics-network

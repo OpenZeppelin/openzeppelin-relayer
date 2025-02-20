@@ -31,7 +31,7 @@ COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/
 ENV APP_PORT=8080
 ENV METRICS_PORT=8081
 
-EXPOSE ${APP_PORT} ${METRICS_PORT}
+EXPOSE ${APP_PORT}/tcp ${METRICS_PORT}/tcp
 
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]
