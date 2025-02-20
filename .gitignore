@@ -21,6 +21,9 @@ target/
 config.json
 local-signer.json
 
+!examples/**/*.json
+
+
 # docs
 docs/build/
 rust_docs
