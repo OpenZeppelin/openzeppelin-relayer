@@ -23,6 +23,8 @@ use crate::{
 use eyre::Result;
 
 use super::{Signer, SignerError, SignerFactoryError};
+#[cfg(test)]
+use mockall::automock;
 
 pub enum SolanaSigner {
     Local(LocalSigner),
@@ -46,6 +48,7 @@ impl Signer for SolanaSigner {
     }
 }
 
+#[cfg_attr(test, automock)]
 pub trait SolanaSignTrait: Send + Sync {
     fn pubkey(&self) -> Result<Address, SignerError>;
     fn sign(&self, message: &[u8]) -> Result<Signature, SignerError>;

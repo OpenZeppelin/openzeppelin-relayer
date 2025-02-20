@@ -45,5 +45,6 @@
     {
       "id": "private-network",
       "name": "Mainnet"
-    }]
+    }
+  ]
 }

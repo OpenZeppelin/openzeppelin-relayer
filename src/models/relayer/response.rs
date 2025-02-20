@@ -45,8 +45,11 @@ pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disallowed_accounts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_supported_token_fee: Option<u64>,
+    pub max_signatures: Option<u8>,
+    pub max_tx_data_size: u16,
     pub min_balance: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_allowed_transfer_amount_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -73,7 +76,10 @@ impl From<RelayerRepoModel> for RelayerResponse {
                     allowed_programs: solana.allowed_programs,
                     allowed_accounts: solana.allowed_accounts,
                     disallowed_accounts: solana.disallowed_accounts,
-                    max_supported_token_fee: solana.max_supported_token_fee,
+                    max_signatures: solana.max_signatures,
+                    max_tx_data_size: solana.max_tx_data_size,
+                    max_allowed_transfer_amount_lamports: solana
+                        .max_allowed_transfer_amount_lamports,
                 })
             }
             RelayerNetworkPolicy::Stellar(stellar) => {

@@ -30,13 +30,20 @@ pub struct ConfigFileRelayerEvmPolicy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AllowedToken {
+    pub mint: String,
+    /// Maximum supported token fee (in lamports) for a transaction. Optional.
+    pub max_allowed_fee: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaPolicy {
     /// Minimum balance required for the relayer (in lamports). Optional.
     pub min_balance: Option<u64>,
 
     /// List of allowed tokens by their identifiers. Only these tokens are supported if provided.
-    pub allowed_tokens: Option<Vec<String>>,
+    pub allowed_tokens: Option<Vec<AllowedToken>>,
 
     /// List of allowed programs by their identifiers. Only these programs are supported if
     /// provided.
@@ -50,8 +57,14 @@ pub struct ConfigFileRelayerSolanaPolicy {
     /// blocked.
     pub disallowed_accounts: Option<Vec<String>>,
 
-    /// Maximum supported token fee (in lamports) for a transaction. Optional.
-    pub max_supported_token_fee: Option<u64>,
+    /// Maximum transaction size. Optional.
+    pub max_tx_data_size: Option<u16>,
+
+    /// Maximum supported signatures. Optional.
+    pub max_signatures: Option<u8>,
+
+    /// Maximum allowed transfer amount (in lamports) for a transaction. Optional.
+    pub max_allowed_transfer_amount_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -226,7 +239,13 @@ impl RelayerFileConfig {
                 if let Some(ConfigFileRelayerNetworkPolicy::Solana(policy)) = &self.policies {
                     self.validate_solana_pub_keys(&policy.allowed_accounts)?;
                     self.validate_solana_pub_keys(&policy.disallowed_accounts)?;
-                    self.validate_solana_pub_keys(&policy.allowed_tokens)?;
+                    let allowed_token_keys = policy.allowed_tokens.as_ref().map(|tokens| {
+                        tokens
+                            .iter()
+                            .map(|token| token.mint.clone())
+                            .collect::<Vec<String>>()
+                    });
+                    self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
@@ -345,7 +364,7 @@ mod tests {
             "paused": false,
             "policies": {
                 "min_balance": 100,
-                "allowed_tokens": ["token1", "token2"],
+                "allowed_tokens": [ {"mint": "token1"}, {"mint": "token2"}],
             }
         });
 

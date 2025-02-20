@@ -20,7 +20,7 @@ use crate::{
         RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaNetwork,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage},
-    services::{SolanaProvider, SolanaProviderTrait},
+    services::{SolanaProvider, SolanaProviderTrait, SolanaSigner},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -33,6 +33,7 @@ use super::{SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl};
 #[allow(dead_code)]
 pub struct SolanaRelayer {
     relayer: RelayerRepoModel,
+    signer: Arc<SolanaSigner>,
     network: SolanaNetwork,
     provider: Arc<SolanaProvider>,
     rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
@@ -44,6 +45,7 @@ pub struct SolanaRelayer {
 impl SolanaRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
+        signer: Arc<SolanaSigner>,
         relayer_repository: Arc<RelayerRepositoryStorage>,
         provider: Arc<SolanaProvider>,
         rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
@@ -57,6 +59,7 @@ impl SolanaRelayer {
 
         Ok(Self {
             relayer,
+            signer,
             network,
             provider,
             rpc_handler,
@@ -112,6 +115,7 @@ impl SolanaRelayer {
                 token_metadata.mint,
                 Some(token_metadata.decimals),
                 Some(token_metadata.symbol.to_string()),
+                token.max_allowed_fee,
             ))
         });
 
@@ -242,6 +246,24 @@ issues.",
                         JsonRpcResponse::error(-32007, "BAD_REQUEST", &msg)
                     }
                     SolanaRpcError::Send(_) => JsonRpcResponse::error(
+                        -32006,
+                        "SEND_ERROR",
+                        "Failed to submit the transaction to the blockchain.",
+                    ),
+                    SolanaRpcError::SolanaTransactionValidation(_) => JsonRpcResponse::error(
+                        -32013,
+                        "PREPARATION_ERROR",
+                        "Failed to prepare the transfer transaction.",
+                    ),
+                    SolanaRpcError::SigningError(_) => {
+                        JsonRpcResponse::error(-32005, "-32005", "Failed to sign the transaction.")
+                    }
+                    SolanaRpcError::EncodingError(_) => JsonRpcResponse::error(
+                        -32601,
+                        "INVALID_PARAMS",
+                        "The transaction parameter is invalid or missing.",
+                    ),
+                    SolanaRpcError::ProviderError(_) => JsonRpcResponse::error(
                         -32006,
                         "SEND_ERROR",
                         "Failed to submit the transaction to the blockchain.",

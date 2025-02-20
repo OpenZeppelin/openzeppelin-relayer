@@ -8,6 +8,7 @@ use crate::{
 };
 
 use super::NetworkRelayer;
+
 pub async fn get_relayer_by_id(
     relayer_id: String,
     state: &ThinData<AppState>,

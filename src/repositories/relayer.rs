@@ -1,6 +1,9 @@
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
-    constants::{DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE},
+    constants::{
+        DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
+        MAX_SOLANA_TX_DATA_SIZE,
+    },
     domain::RelayerUpdateRequest,
     models::{
         NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
@@ -299,7 +302,12 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     .map(|tokens| {
                         tokens
                             .into_iter()
-                            .map(SolanaAllowedTokensPolicy::new_partial)
+                            .map(|token| {
+                                SolanaAllowedTokensPolicy::new_partial(
+                                    token.mint,
+                                    token.max_allowed_fee,
+                                )
+                            })
                             .collect::<Vec<_>>()
                     });
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -308,7 +316,10 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     allowed_programs: solana.allowed_programs,
                     allowed_tokens: mapped_allowed_tokens,
                     disallowed_accounts: solana.disallowed_accounts,
-                    max_supported_token_fee: solana.max_supported_token_fee,
+                    max_signatures: solana.max_signatures,
+                    max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
+                    max_allowed_transfer_amount_lamports: solana
+                        .max_allowed_transfer_amount_lamports,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {

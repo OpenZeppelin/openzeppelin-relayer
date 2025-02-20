@@ -19,14 +19,13 @@ use crate::{
 };
 use eyre::Result;
 use log::{error, info};
-use std::sync::Arc;
 
 pub struct SolanaRpcHandler<T> {
-    rpc_methods: Arc<T>,
+    rpc_methods: T,
 }
 
 impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
-    pub fn new(rpc_methods: Arc<T>) -> Self {
+    pub fn new(rpc_methods: T) -> Self {
         Self { rpc_methods }
     }
 
@@ -102,9 +101,14 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         domain::MockSolanaRpcMethods,
-        models::{FeeEstimateResult, GetFeaturesEnabledResult},
+        models::{
+            EncodedSerializedTransaction, FeeEstimateResult, GetFeaturesEnabledResult,
+            SignAndSendTransactionResult, SignTransactionResult,
+        },
     };
 
     use super::*;
@@ -117,7 +121,7 @@ mod tests {
         mock_rpc_methods
             .expect_fee_estimate()
             .with(predicate::eq(FeeEstimateRequestParams {
-                transaction: "test_transaction".to_string(),
+                transaction: EncodedSerializedTransaction::new("test_transaction".to_string()),
                 fee_token: Some("test_token".to_string()),
             }))
             .returning(|_| {
@@ -127,7 +131,7 @@ mod tests {
                 })
             })
             .times(1);
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -163,7 +167,7 @@ mod tests {
                 })
             })
             .times(1);
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -186,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_method() {
         let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -216,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_params() {
         let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let mock_handler = Arc::new(SolanaRpcHandler::new(Arc::new(mock_rpc_methods)));
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -240,5 +244,147 @@ mod tests {
             Err(e) => panic!("Expected BadRequest error, but got: {:?}", e),
             Ok(resp) => panic!("Expected error response, got Ok: {:?}", resp),
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_sign_transaction() {
+        let mut mock_rpc_methods = MockSolanaRpcMethods::new();
+
+        // Create mock response
+        let mock_signature = "5wHu1qwD4kF3wxjejXkgDYNVnEgB1e8uVvrxNwJYRzHPPxWqRA4nxwE1TU4";
+        let mock_transaction = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+
+        mock_rpc_methods
+            .expect_sign_transaction()
+            .with(predicate::eq(SignTransactionRequestParams {
+                transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
+            }))
+            .returning(move |_| {
+                Ok(SignTransactionResult {
+                    transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
+                    signature: mock_signature.to_string(),
+                })
+            })
+            .times(1);
+
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "signTransaction".to_string(),
+            params: json!({
+                "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            }),
+        };
+
+        let response = mock_handler.handle_request(request).await;
+
+        assert!(response.is_ok(), "Expected Ok response, got {:?}", response);
+        let json_response = response.unwrap();
+
+        match json_response.result {
+            Some(value) => {
+                let result = value.as_object().unwrap();
+                assert!(result.contains_key("transaction"));
+                assert!(result.contains_key("signature"));
+                assert_eq!(result["signature"], mock_signature);
+            }
+            None => panic!("Expected Some result, got None"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_sign_transaction_invalid_params() {
+        let mock_rpc_methods = MockSolanaRpcMethods::new();
+        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "signTransaction".to_string(),
+            params: json!({
+                "invalid_field": "some_value"
+            }),
+        };
+
+        let response = mock_handler.handle_request(request).await;
+
+        match response {
+            Err(SolanaRpcError::BadRequest(msg)) => {
+                assert!(
+                    msg.contains("missing field `transaction`"),
+                    "Unexpected error message: {}",
+                    msg
+                );
+            }
+            _ => panic!("Expected BadRequest error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_sign_and_send_transaction_success() {
+        let mut mock_rpc_methods = MockSolanaRpcMethods::new();
+
+        // Create mock data
+        let mock_signature = "5wHu1qwD4kF3wxjejXkgDYNVnEgB1e8uVvrxNwJYRzHPPxWqRA4nxwE1TU4";
+        let mock_transaction = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+
+        mock_rpc_methods
+            .expect_sign_and_send_transaction()
+            .with(predicate::eq(SignAndSendTransactionRequestParams {
+                transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
+            }))
+            .returning(move |_| {
+                Ok(SignAndSendTransactionResult {
+                    transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
+                    signature: mock_signature.to_string(),
+                })
+            })
+            .times(1);
+
+        let handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "signAndSendTransaction".to_string(),
+            params: json!({
+                "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            }),
+        };
+
+        let response = handler.handle_request(request).await;
+
+        assert!(response.is_ok());
+        let json_response = response.unwrap();
+        match json_response.result {
+            Some(value) => {
+                let result = value.as_object().unwrap();
+                assert!(result.contains_key("transaction"));
+                assert!(result.contains_key("signature"));
+                assert_eq!(result["signature"], mock_signature);
+            }
+            None => panic!("Expected Some result, got None"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_sign_and_send_transaction_invalid_params() {
+        let mock_rpc_methods = MockSolanaRpcMethods::new();
+        let handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "signAndSendTransaction".to_string(),
+            params: json!({
+                "wrong_field": "some_value"
+            }),
+        };
+
+        let response = handler.handle_request(request).await;
+
+        assert!(matches!(response, Err(SolanaRpcError::BadRequest(_))));
     }
 }

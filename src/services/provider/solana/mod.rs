@@ -19,8 +19,8 @@ use solana_client::{
     nonblocking::rpc_client::RpcClient, rpc_response::RpcSimulateTransactionResult,
 };
 use solana_sdk::{
-    account::Account, commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey,
-    signature::Signature, transaction::Transaction,
+    account::Account, commitment_config::CommitmentConfig, hash::Hash, message::Message,
+    program_pack::Pack, pubkey::Pubkey, signature::Signature, transaction::Transaction,
 };
 use spl_token::state::Mint;
 use std::{str::FromStr, time::Duration};
@@ -83,6 +83,16 @@ pub trait SolanaProviderTrait: Send + Sync {
         &self,
         pubkey: &str,
     ) -> Result<TokenMetadata, SolanaProviderError>;
+
+    /// Check if a blockhash is valid.
+    async fn is_blockhash_valid(
+        &self,
+        hash: &Hash,
+        commitment: CommitmentConfig,
+    ) -> Result<bool, SolanaProviderError>;
+
+    /// get fee for message
+    async fn get_fee_for_message(&self, message: &Message) -> Result<u64, SolanaProviderError>;
 }
 
 pub struct SolanaProvider {
@@ -144,6 +154,18 @@ impl SolanaProviderTrait for SolanaProvider {
 
         self.client
             .get_balance(&pubkey)
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+    }
+
+    /// Check if a blockhash is valid
+    async fn is_blockhash_valid(
+        &self,
+        hash: &Hash,
+        commitment: CommitmentConfig,
+    ) -> Result<bool, SolanaProviderError> {
+        self.client
+            .is_blockhash_valid(hash, commitment)
             .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
@@ -272,6 +294,14 @@ impl SolanaProviderTrait for SolanaProvider {
             symbol: normalized_symbol,
             mint: pubkey.to_string(),
         })
+    }
+
+    /// Get the fee for a message
+    async fn get_fee_for_message(&self, message: &Message) -> Result<u64, SolanaProviderError> {
+        self.client
+            .get_fee_for_message(message)
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 }
 

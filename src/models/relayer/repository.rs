@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use crate::{
-    constants::{DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE},
+    constants::{
+        DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
+        MAX_SOLANA_TX_DATA_SIZE,
+    },
     models::RelayerError,
 };
 
@@ -70,25 +73,33 @@ pub struct SolanaAllowedTokensPolicy {
     pub mint: String,
     pub decimals: Option<u8>,
     pub symbol: Option<String>,
+    pub max_allowed_fee: Option<u64>,
 }
 
 impl SolanaAllowedTokensPolicy {
-    pub fn new(mint: String, decimals: Option<u8>, symbol: Option<String>) -> Self {
+    pub fn new(
+        mint: String,
+        decimals: Option<u8>,
+        symbol: Option<String>,
+        max_allowed_fee: Option<u64>,
+    ) -> Self {
         Self {
             mint,
             decimals,
             symbol,
+            max_allowed_fee,
         }
     }
 
     // Create a new SolanaAllowedTokensPolicy with only the mint field
     // We are creating partial entry while processing config file and later
     // we will fill the rest of the fields
-    pub fn new_partial(mint: String) -> Self {
+    pub fn new_partial(mint: String, max_allowed_fee: Option<u64>) -> Self {
         Self {
             mint,
             decimals: None,
             symbol: None,
+            max_allowed_fee,
         }
     }
 }
@@ -101,7 +112,9 @@ pub struct RelayerSolanaPolicy {
     pub allowed_programs: Option<Vec<String>>,
     pub allowed_accounts: Option<Vec<String>>,
     pub disallowed_accounts: Option<Vec<String>>,
-    pub max_supported_token_fee: Option<u64>,
+    pub max_signatures: Option<u8>,
+    pub max_tx_data_size: u16,
+    pub max_allowed_transfer_amount_lamports: Option<u64>,
 }
 
 impl Default for RelayerSolanaPolicy {
@@ -112,7 +125,9 @@ impl Default for RelayerSolanaPolicy {
             allowed_programs: None,
             allowed_accounts: None,
             disallowed_accounts: None,
-            max_supported_token_fee: None,
+            max_signatures: None,
+            max_tx_data_size: MAX_SOLANA_TX_DATA_SIZE,
+            max_allowed_transfer_amount_lamports: None,
         }
     }
 }

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct EvmTransactionRequest {
+    pub from: String,
     pub to: Option<String>,
     pub value: u64,
     pub data: Option<String>,
@@ -103,6 +104,7 @@ mod tests {
 
     fn create_basic_request() -> EvmTransactionRequest {
         EvmTransactionRequest {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: 0,
             data: Some("0x".to_string()),
