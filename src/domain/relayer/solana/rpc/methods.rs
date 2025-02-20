@@ -156,7 +156,8 @@ where
             &transaction_request,
             &self.relayer,
         )
-        .await?;
+        .await
+        .map_err(|e| SolanaRpcError::InvalidParams(e.to_string()))?;
 
         let mut transaction = transaction_request.clone();
 
