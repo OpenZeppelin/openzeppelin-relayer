@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct EvmTransactionRequest {
-    pub from: String,
     pub to: Option<String>,
     pub value: u64,
     pub data: Option<String>,
@@ -133,34 +132,6 @@ pub fn validate_pricing(request: &EvmTransactionRequest) -> Result<(), ApiError>
             }
             _ => unreachable!(),
         }
-
-        // ensure that gasPrice is 0 for eip1559
-        if request.gas_price > 0 {
-            return Err(ApiError::BadRequest(
-                "gasPrice must be 0 for EIP1559 transactions".to_string(),
-            ));
-        }
-    }
-
-    if is_legacy {
-        // ensure that eip1559 fields are not present
-        if request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some() {
-            return Err(ApiError::BadRequest(
-                "Legacy transactions cannot include EIP1559 parameters".to_string(),
-            ));
-        }
-    }
-
-    if is_speed {
-        // ensure that gasPrice and eip1559 fields are not present
-        if request.gas_price > 0
-            || request.max_fee_per_gas.is_some()
-            || request.max_priority_fee_per_gas.is_some()
-        {
-            return Err(ApiError::BadRequest(
-                "Speed-based transactions cannot include manual gas parameters".to_string(),
-            ));
-        }
     }
 
     Ok(())
@@ -175,7 +146,6 @@ mod tests {
 
     fn create_basic_request() -> EvmTransactionRequest {
         EvmTransactionRequest {
-            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: 0,
             data: Some("0x".to_string()),
