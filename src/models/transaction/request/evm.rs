@@ -29,7 +29,7 @@ impl EvmTransactionRequest {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
         validate_target_address(self, relayer)?;
         validate_evm_transaction_request(self)?;
-        validate_price_params(self)?;
+        validate_price_params(self, relayer)?;
         Ok(())
     }
 }
@@ -85,7 +85,10 @@ pub fn validate_target_address(
     Ok(())
 }
 
-pub fn validate_price_params(request: &EvmTransactionRequest) -> Result<(), ApiError> {
+pub fn validate_price_params(
+    request: &EvmTransactionRequest,
+    relayer: &RelayerRepoModel,
+) -> Result<(), ApiError> {
     let is_eip1559 =
         request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some();
     let is_legacy = request.gas_price > 0;
@@ -131,6 +134,16 @@ pub fn validate_price_params(request: &EvmTransactionRequest) -> Result<(), ApiE
                 }
             }
             _ => unreachable!(),
+        }
+    }
+
+    if is_legacy {
+        if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
+            if let Some(gas_price_cap) = evm_policy.gas_price_cap {
+                if request.gas_price > gas_price_cap as u128 {
+                    return Err(ApiError::BadRequest("Gas price is too high".to_string()));
+                }
+            }
         }
     }
 
@@ -274,8 +287,8 @@ mod tests {
         let mut request = create_basic_request();
         request.max_fee_per_gas = Some(20000000000);
         request.max_priority_fee_per_gas = Some(30000000000); // max_fee_per_gas should be greater than max_priority_fee_per_gas
-
-        let result = validate_price_params(&request);
+        let relayer = create_test_relayer(false, false);
+        let result = validate_price_params(&request, &relayer);
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -345,7 +358,8 @@ mod tests {
         request.gas_price = 20000000000;
         request.max_fee_per_gas = Some(30000000000);
 
-        let result = validate_price_params(&request);
+        let relayer = create_test_relayer(false, false);
+        let result = validate_price_params(&request, &relayer);
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -356,7 +370,8 @@ mod tests {
         request.max_fee_per_gas = Some(30000000000);
         // Falta max_priority_fee_per_gas
 
-        let result = validate_price_params(&request);
+        let relayer = create_test_relayer(false, false);
+        let result = validate_price_params(&request, &relayer);
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -366,8 +381,8 @@ mod tests {
         let mut request = create_basic_request();
         request.max_fee_per_gas = Some(20000000000);
         request.max_priority_fee_per_gas = Some(30000000000); // Mayor que max_fee
-
-        let result = validate_price_params(&request);
+        let relayer = create_test_relayer(false, false);
+        let result = validate_price_params(&request, &relayer);
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -377,8 +392,21 @@ mod tests {
         let mut request = create_basic_request();
         request.speed = Some(Speed::Fast);
         request.gas_price = 20000000000;
+        let relayer = create_test_relayer(false, false);
+        let result = validate_price_params(&request, &relayer);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
 
-        let result = validate_price_params(&request);
+    #[test]
+    fn test_validate_gas_price_cap() {
+        let mut request = create_basic_request();
+        request.gas_price = 20000000000;
+        let mut relayer = create_test_relayer(false, false);
+        if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
+            evm_policy.gas_price_cap = Some(10000000000);
+        }
+        let result = validate_price_params(&request, &relayer);
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
