@@ -27,7 +27,7 @@ pub struct EvmTransactionResponse {
     pub nonce: u64,
     pub value: u64,
     pub from: String,
-    pub to: String,
+    pub to: Option<String>,
     pub relayer_id: String,
 }
 
