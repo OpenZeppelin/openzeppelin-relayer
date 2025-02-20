@@ -1,18 +1,13 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
 /// This is a simple example of how to create a transaction in Solana using the Rust SDK.
 /// It demonstrates how to create a transaction with different types of instructions and encode
 /// it as a base64 string.
 /// Can be used for testing transaction encoding and decoding.
 /// Run with  cargo run --example test_tx
+use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Result;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
-    hash::Hash,
-    message::Message,
-    pubkey::Pubkey,
-    signature::{Keypair, Signer},
-    system_instruction,
-    transaction::Transaction,
+    hash::Hash, message::Message, pubkey::Pubkey, system_instruction, transaction::Transaction,
 };
 use spl_token::instruction as token_instruction;
 use std::str::FromStr;
@@ -30,7 +25,6 @@ async fn main() -> Result<()> {
 
     // Get recent blockhash
     let recent_blockhash = client.get_latest_blockhash()?;
-    let usdc_mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")?;
     let token_account = Pubkey::new_unique(); // In real scenario, this would be your token account
     let recipient_token_account = Pubkey::new_unique(); // Recipient's token account
 
@@ -43,7 +37,6 @@ async fn main() -> Result<()> {
             &payer,
             &token_account,
             &recipient_token_account,
-            &usdc_mint,
             1_000_000,
             recent_blockhash,
         )?,
@@ -101,7 +94,6 @@ fn create_token_transfer(
     payer: &Pubkey,
     token_account: &Pubkey,
     recipient_token_account: &Pubkey,
-    mint: &Pubkey,
     amount: u64,
     recent_blockhash: Hash,
 ) -> Result<Transaction> {
