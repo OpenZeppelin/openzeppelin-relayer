@@ -130,7 +130,7 @@ mod tests {
             }],
             signers: vec![SignerFileConfig {
                 id: "test-1".to_string(),
-                path: Some("examples/basic-example/keys/local-signer.json".to_string()),
+                path: Some("examples/basic-example/config/keys/local-signer.json".to_string()),
                 r#type: SignerFileConfigType::Local,
                 passphrase: Some(SignerFileConfigPassphrase::Plain {
                     value: "test".to_string(),

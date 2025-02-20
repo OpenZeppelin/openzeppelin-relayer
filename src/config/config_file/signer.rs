@@ -3,7 +3,7 @@
 //! Provides configuration structures and validation for different signer types:
 //! - Local keystore (encrypted JSON files)
 //! - AWS KMS integration [NOT IMPLEMENTED]
-//! - HashiCorp Vault integration [NOT IMPLEMENTED]
+//! - HashCorp Vault integration [NOT IMPLEMENTED]
 use super::ConfigFileError;
 use async_trait::async_trait;
 use oz_keystore::LocalClient;
@@ -222,7 +222,7 @@ mod tests {
         let config = json!({
             "id": "local-signer",
             "type": "local",
-            "path": "examples/basic-example/keys/local-signer.json",
+            "path": "examples/basic-example/config/keys/local-signer.json",
             "passphrase": {
                 "type": "plain",
                 "value": "secret",
@@ -240,7 +240,7 @@ mod tests {
         let config = json!({
             "id": "local-signer",
             "type": "local",
-            "path": "examples/basic-example/keys/local-signer.json",
+            "path": "examples/basic-example/config/keys/local-signer.json",
             "passphrase": {
                 "type": "env",
                 "name": "LOCAL_SIGNER_KEY_PASSPHRASE"
@@ -259,7 +259,7 @@ mod tests {
                 {
                   "id": "local-signer",
                   "type": "local",
-                  "path": "examples/basic-example/keys/local-signer.json",
+                  "path": "examples/basic-example/config/keys/local-signer.json",
                   "passphrase": {
                       "type": "plain",
                       "value": "secret",
@@ -268,7 +268,7 @@ mod tests {
                 {
                   "id": "local-signer",
                   "type": "local",
-                  "path": "examples/basic-example/keys/local-signer.json",
+                  "path": "examples/basic-example/config/keys/local-signer.json",
                   "passphrase": {
                       "type": "plain",
                       "value": "secret",
@@ -291,7 +291,7 @@ mod tests {
                 {
                   "id": "",
                   "type": "local",
-                  "path": "examples/basic-example/keys/local-signer.json",
+                  "path": "examples/basic-example/config/keys/local-signer.json",
                   "passphrase": {
                       "type": "plain",
                       "value": "secret",
