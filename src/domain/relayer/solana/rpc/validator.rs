@@ -552,7 +552,7 @@ mod tests {
 
         // Setup default mock responses
         let token_account = Account {
-            mint: Pubkey::default(),
+            mint,
             owner: owner.pubkey(),
             amount: 999,
             state: spl_token::state::AccountState::Initialized,
@@ -1099,7 +1099,6 @@ mod tests {
     #[tokio::test]
     async fn test_validate_token_transfers_insufficient_balance() {
         let (tx, policy, provider, ..) = setup_token_transfer_test(Some(2000));
-
         let result = SolanaTransactionValidator::validate_token_transfers(
             &tx,
             &policy,
@@ -1107,7 +1106,6 @@ mod tests {
             &Pubkey::new_unique(),
         )
         .await;
-
         match result {
             Err(SolanaTransactionValidationError::Validation(msg)) => {
                 assert!(
