@@ -200,7 +200,7 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{EvmTransactionData, NetworkType};
+    use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
 
     use super::*;
 
@@ -224,6 +224,7 @@ mod tests {
                 chain_id: 1,
                 signature: None,
                 hash: Some(format!("0x{}", id)),
+                speed: Some(Speed::Fast),
             }),
         }
     }

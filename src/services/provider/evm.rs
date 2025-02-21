@@ -9,6 +9,7 @@ use eyre::{eyre, Result};
 
 use crate::models::{EvmTransactionData, TransactionError};
 
+#[derive(Clone)]
 pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,
 }

@@ -184,6 +184,8 @@ impl RelayerTransactionFactory {
                     relayer.address.clone(),
                     transaction_counter_store,
                 );
+                let gas_estimation_service =
+                    Arc::new(GasEstimationService::new(evm_provider.clone()));
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
                     relayer,
@@ -192,6 +194,7 @@ impl RelayerTransactionFactory {
                     transaction_repository,
                     transaction_counter_service,
                     job_producer,
+                    gas_estimation_service,
                 )?))
             }
             NetworkType::Solana => {

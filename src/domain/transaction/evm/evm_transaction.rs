@@ -14,6 +14,8 @@ use crate::{
     services::{EvmProvider, TransactionCounterService},
 };
 
+use super::GasEstimationService;
+
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction {
     relayer: RelayerRepoModel,
@@ -22,6 +24,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
+    gas_estimation_service: Arc<GasEstimationService>,
 }
 
 #[allow(dead_code)]
@@ -33,6 +36,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
+        gas_estimation_service: Arc<GasEstimationService>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
@@ -41,6 +45,7 @@ impl EvmRelayerTransaction {
             transaction_repository,
             transaction_counter_service,
             job_producer,
+            gas_estimation_service,
         })
     }
 }
@@ -54,11 +59,15 @@ impl Transaction for EvmRelayerTransaction {
         info!("Preparing transaction");
         // validate the transaction
 
-        // gas estimation
-        let gas_estimation = self
-            .provider
-            .estimate_gas(&tx.network_data.get_evm_transaction_data()?)
-            .await?;
+        let tx_data = tx.network_data.get_evm_transaction_data()?;
+        let gas_estimation = match &tx_data.speed {
+            Some(speed) => {
+                self.gas_estimation_service
+                    .estimate_gas_with_speed(&tx_data, speed.clone())
+                    .await?
+            }
+            None => self.gas_estimation_service.estimate_gas(&tx_data).await?,
+        };
         info!("Gas estimation: {:?}", gas_estimation);
 
         // After preparing the transaction, submit it to the job queue

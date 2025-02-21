@@ -5,6 +5,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::evm::Speed;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
@@ -84,6 +86,7 @@ pub struct EvmTransactionData {
     pub chain_id: u64,
     pub hash: Option<String>,
     pub signature: Option<EvmTransactionDataSignature>,
+    pub speed: Option<Speed>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +124,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 confirmed_at: "".to_string(),
                 network_type: NetworkType::Evm,
                 network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                    gas_price: evm_request.gas_price,
+                    gas_price: evm_request.gas_price.unwrap_or(0),
                     gas_limit: evm_request.gas_limit,
                     nonce: 0, // TODO
                     value: evm_request.value,
@@ -131,6 +134,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     chain_id: 1, // TODO
                     hash: Some("0x".to_string()),
                     signature: None,
+                    speed: evm_request.speed.clone(),
                 }),
             }),
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
