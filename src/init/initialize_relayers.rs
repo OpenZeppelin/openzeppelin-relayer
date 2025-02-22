@@ -33,6 +33,6 @@ pub async fn initialize_relayers(app_state: ThinData<AppState>) -> Result<()> {
 
     try_join_all(relayer_futures)
         .await
-        .wrap_err("Failed to sync relayers")?;
+        .wrap_err("Failed to initialize relayers")?;
     Ok(())
 }

@@ -25,7 +25,7 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
-use log::{info, warn};
+use log::{info, warn, error};
 use solana_sdk::account::Account;
 
 use super::{SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl};
@@ -194,6 +194,7 @@ impl SolanaRelayerTrait for SolanaRelayer {
         match response {
             Ok(response) => Ok(response),
             Err(e) => {
+                error!("Error while processing RPC request: {}", e);
                 let error_response = match e {
                     SolanaRpcError::UnsupportedMethod(msg) => {
                         JsonRpcResponse::error(32000, "UNSUPPORTED_METHOD", &msg)
