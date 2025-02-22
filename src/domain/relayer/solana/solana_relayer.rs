@@ -25,7 +25,7 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
-use log::{info, warn, error};
+use log::{error, info, warn};
 use solana_sdk::account::Account;
 
 use super::{SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl};

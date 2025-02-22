@@ -296,11 +296,9 @@ impl SolanaProviderTrait for SolanaProvider {
         let metadata_pda = Metadata::find_pda(&mint_pubkey).0;
 
         let symbol = match self.get_account_from_pubkey(&metadata_pda).await {
-            Ok(metadata_account) => {
-                match Metadata::from_bytes(&metadata_account.data) {
-                    Ok(metadata) => metadata.symbol.trim_end_matches('\u{0}').to_string(),
-                    Err(_) => String::new(),
-                }
+            Ok(metadata_account) => match Metadata::from_bytes(&metadata_account.data) {
+                Ok(metadata) => metadata.symbol.trim_end_matches('\u{0}').to_string(),
+                Err(_) => String::new(),
             },
             Err(_) => String::new(), // Return empty symbol if metadata doesn't exist
         };
