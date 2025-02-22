@@ -65,8 +65,8 @@ impl SolanaTransactionValidator {
 
         let sync_validations = async {
             SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
             SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
-            SolanaTransactionValidator::validate_disallowed_accounts(tx, policy)?;
             SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
             SolanaTransactionValidator::validate_fee_payer(tx, &relayer_pubkey)?;
             SolanaTransactionValidator::validate_data_size(tx, policy)?;
@@ -85,7 +85,6 @@ impl SolanaTransactionValidator {
                 provider,
                 &relayer_pubkey,
             ),
-            SolanaTransactionValidator::validate_tx_fee(tx, policy, provider),
         )?;
 
         Ok(())
@@ -94,6 +93,7 @@ impl SolanaTransactionValidator {
     /// Validates a transaction before estimating fee.
     pub async fn validate_fee_estimate_transaction(
         tx: &Transaction,
+        token_mint: &str,
         relayer: &RelayerRepoModel,
     ) -> Result<(), SolanaTransactionValidationError> {
         let policy = &relayer.policies.get_solana_policy();
@@ -106,16 +106,57 @@ impl SolanaTransactionValidator {
 
         let sync_validations = async {
             SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
             SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
-            SolanaTransactionValidator::validate_disallowed_accounts(tx, policy)?;
             SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
-            SolanaTransactionValidator::validate_fee_payer(tx, &relayer_pubkey)?;
             SolanaTransactionValidator::validate_data_size(tx, policy)?;
+            SolanaTransactionValidator::validate_allowed_token(token_mint, policy)?;
             Ok::<(), SolanaTransactionValidationError>(())
         };
 
         // Run all validations concurrently.
         try_join!(sync_validations)?;
+
+        Ok(())
+    }
+
+    /// Validates a transaction before estimating fee.
+    pub async fn validate_prepare_transaction<P: SolanaProviderTrait + Send + Sync>(
+        tx: &Transaction,
+        token: &str,
+        relayer: &RelayerRepoModel,
+        provider: &P,
+    ) -> Result<(), SolanaTransactionValidationError> {
+        let policy = &relayer.policies.get_solana_policy();
+        let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
+            SolanaTransactionValidationError::ValidationError(format!(
+                "Invalid relayer address: {}",
+                e
+            ))
+        })?;
+
+        let sync_validations = async {
+            SolanaTransactionValidator::validate_tx_allowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_tx_disallowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
+            SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
+            SolanaTransactionValidator::validate_data_size(tx, policy)?;
+            SolanaTransactionValidator::validate_allowed_token(token, policy)?;
+            Ok::<(), SolanaTransactionValidationError>(())
+        };
+
+        // Run all validations concurrently.
+        try_join!(
+            sync_validations,
+            SolanaTransactionValidator::simulate_transaction(tx, provider),
+            SolanaTransactionValidator::validate_lamports_transfers(tx, policy, &relayer_pubkey),
+            SolanaTransactionValidator::validate_token_transfers(
+                tx,
+                policy,
+                provider,
+                &relayer_pubkey,
+            ),
+        )?;
 
         Ok(())
     }
@@ -131,22 +172,29 @@ impl SolanaTransactionValidator {
         let policy = &relayer.policies.get_solana_policy();
         SolanaTransactionValidator::validate_allowed_account(source, policy)?;
         SolanaTransactionValidator::validate_disallowed_account(source, policy)?;
-
         SolanaTransactionValidator::validate_allowed_account(destination, policy)?;
         SolanaTransactionValidator::validate_disallowed_account(destination, policy)?;
+        SolanaTransactionValidator::validate_allowed_token(token_mint, policy)?;
 
+        if amount == 0 {
+            return Err(SolanaTransactionValidationError::ValidationError(
+                "Amount must be greater than 0".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_allowed_token(
+        token_mint: &str,
+        policy: &RelayerSolanaPolicy,
+    ) -> Result<(), SolanaTransactionValidationError> {
         let allowed_token = policy.get_allowed_token_entry(token_mint);
         if allowed_token.is_none() {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
                 "Token {} not allowed for transfers",
                 token_mint
             )));
-        }
-
-        if amount == 0 {
-            return Err(SolanaTransactionValidationError::ValidationError(
-                "Amount must be greater than 0".to_string(),
-            ));
         }
 
         Ok(())
@@ -305,18 +353,20 @@ impl SolanaTransactionValidator {
     }
 
     /// Validates that the transaction's accounts are not disallowed by the relayer's policy.
-    pub fn validate_disallowed_accounts(
+    pub fn validate_tx_disallowed_accounts(
         tx: &Transaction,
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
-        if let Some(disallowed_accounts) = &policy.disallowed_accounts {
-            for account_key in &tx.message.account_keys {
-                if disallowed_accounts.contains(&account_key.to_string()) {
-                    return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                        "Account {} is explicitly disallowed",
-                        account_key
-                    )));
-                }
+        let Some(disallowed_accounts) = &policy.disallowed_accounts else {
+            return Ok(());
+        };
+
+        for account_key in &tx.message.account_keys {
+            if disallowed_accounts.contains(&account_key.to_string()) {
+                return Err(SolanaTransactionValidationError::PolicyViolation(format!(
+                    "Account {} is explicitly disallowed",
+                    account_key
+                )));
             }
         }
 
@@ -348,6 +398,13 @@ impl SolanaTransactionValidator {
         policy: &RelayerSolanaPolicy,
         relayer_account: &Pubkey,
     ) -> Result<(), SolanaTransactionValidationError> {
+        // early return if no policy is set
+        let Some(max_allowed_transfer_amount_lamports) =
+            policy.max_allowed_transfer_amount_lamports
+        else {
+            return Ok(());
+        };
+
         // Iterate over each instruction in the transaction
         for (ix_index, ix) in tx.message.instructions.iter().enumerate() {
             let program_id = tx.message.account_keys[ix.program_id_index as usize];
@@ -368,49 +425,20 @@ impl SolanaTransactionValidator {
 
                         // Only validate transfers where the source is the relayer fee account.
                         if source_pubkey == relayer_account {
-                            if let Some(max_allowed) = policy.max_allowed_transfer_amount_lamports {
-                                if lamports > max_allowed {
-                                    return Err(SolanaTransactionValidationError::PolicyViolation(
-                                        format!(
-                                            "Lamports transfer amount {} exceeds max allowed fee \
-                                             {} in instruction {}",
-                                            lamports, max_allowed, ix_index
-                                        ),
-                                    ));
-                                }
+                            if lamports > max_allowed_transfer_amount_lamports {
+                                return Err(SolanaTransactionValidationError::PolicyViolation(
+                                    format!(
+                                        "Lamports transfer amount {} exceeds max allowed fee {} \
+                                         in instruction {}",
+                                        lamports, max_allowed_transfer_amount_lamports, ix_index
+                                    ),
+                                ));
                             }
                         }
                     }
                 }
             }
         }
-        Ok(())
-    }
-
-    /// Validates transaction base fee against policy limits.
-    pub async fn validate_tx_fee(
-        tx: &Transaction,
-        policy: &RelayerSolanaPolicy,
-        provider: &impl SolanaProviderTrait,
-    ) -> Result<(), SolanaTransactionValidationError> {
-        if policy.max_allowed_transfer_amount_lamports.is_none() {
-            return Ok(());
-        }
-
-        let tx_fee = provider
-            .get_fee_for_message(&tx.message())
-            .await
-            .map_err(|e| SolanaTransactionValidationError::ValidationError(e.to_string()))?;
-
-        if let Some(max_fee) = policy.max_allowed_transfer_amount_lamports {
-            if tx_fee > max_fee {
-                return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                    "Transaction fee {} exceeds max fee allowed {}",
-                    tx_fee, max_fee
-                )));
-            }
-        }
-
         Ok(())
     }
 
@@ -1032,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_disallowed_accounts_success() {
+    fn test_validate_tx_disallowed_accounts_success() {
         let payer = Keypair::new();
 
         let tx = create_test_transaction(&payer.pubkey());
@@ -1042,12 +1070,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        let result = SolanaTransactionValidator::validate_tx_disallowed_accounts(&tx, &policy);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_validate_disallowed_accounts_blocked() {
+    fn test_validate_tx_disallowed_accounts_blocked() {
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
 
@@ -1060,7 +1088,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        let result = SolanaTransactionValidator::validate_tx_disallowed_accounts(&tx, &policy);
         assert!(matches!(
             result.unwrap_err(),
             SolanaTransactionValidationError::PolicyViolation(_)
@@ -1068,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_disallowed_accounts_no_restrictions() {
+    fn test_validate_tx_disallowed_accounts_no_restrictions() {
         let tx = create_test_transaction(&Keypair::new().pubkey());
 
         let policy = RelayerSolanaPolicy {
@@ -1076,12 +1104,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        let result = SolanaTransactionValidator::validate_tx_disallowed_accounts(&tx, &policy);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_validate_disallowed_accounts_system_program() {
+    fn test_validate_tx_disallowed_accounts_system_program() {
         let payer = Keypair::new();
         let tx = create_test_transaction(&payer.pubkey());
 
@@ -1090,7 +1118,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SolanaTransactionValidator::validate_disallowed_accounts(&tx, &policy);
+        let result = SolanaTransactionValidator::validate_tx_disallowed_accounts(&tx, &policy);
         assert!(matches!(
             result.unwrap_err(),
             SolanaTransactionValidationError::PolicyViolation(_)
@@ -1436,121 +1464,6 @@ mod tests {
             &relayer.pubkey(),
         )
         .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_validate_tx_fee_success() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
-        let mut mock_provider = MockSolanaProviderTrait::new();
-        let policy = RelayerSolanaPolicy {
-            max_allowed_transfer_amount_lamports: Some(5000),
-            ..Default::default()
-        };
-
-        mock_provider
-            .expect_get_fee_for_message()
-            .returning(|_| Box::pin(async { Ok(1000) }));
-
-        let result =
-            SolanaTransactionValidator::validate_tx_fee(&transaction, &policy, &mock_provider)
-                .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_validate_tx_fee_exceeds_max() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
-        let mut mock_provider = MockSolanaProviderTrait::new();
-        let policy = RelayerSolanaPolicy {
-            max_allowed_transfer_amount_lamports: Some(1000),
-            ..Default::default()
-        };
-
-        // Mock provider to return fee greater than max
-        mock_provider
-            .expect_get_fee_for_message()
-            .returning(|_| Box::pin(async { Ok(2000) }));
-
-        let result =
-            SolanaTransactionValidator::validate_tx_fee(&transaction, &policy, &mock_provider)
-                .await;
-
-        match result {
-            Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
-                assert!(
-                    msg.contains("Transaction fee 2000 exceeds max fee allowed 1000"),
-                    "Unexpected error message: {}",
-                    msg
-                );
-            }
-            other => panic!("Expected PolicyViolation error, got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_validate_tx_fee_no_max_limit() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
-        let mut mock_provider = MockSolanaProviderTrait::new();
-        let policy = RelayerSolanaPolicy {
-            max_allowed_transfer_amount_lamports: None,
-            ..Default::default()
-        };
-
-        mock_provider.expect_get_fee_for_message().times(0);
-
-        let result =
-            SolanaTransactionValidator::validate_tx_fee(&transaction, &policy, &mock_provider)
-                .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_validate_tx_fee_provider_error() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
-        let mut mock_provider = MockSolanaProviderTrait::new();
-        let policy = RelayerSolanaPolicy {
-            max_allowed_transfer_amount_lamports: Some(1000),
-            ..Default::default()
-        };
-
-        mock_provider.expect_get_fee_for_message().returning(|_| {
-            Box::pin(async {
-                Err(SolanaProviderError::RpcError(
-                    "Failed to get fee".to_string(),
-                ))
-            })
-        });
-
-        let result =
-            SolanaTransactionValidator::validate_tx_fee(&transaction, &policy, &mock_provider)
-                .await;
-
-        assert!(matches!(
-            result.unwrap_err(),
-            SolanaTransactionValidationError::ValidationError(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_validate_tx_fee_exact_max() {
-        let transaction = create_test_transaction(&Keypair::new().pubkey());
-        let mut mock_provider = MockSolanaProviderTrait::new();
-        let policy = RelayerSolanaPolicy {
-            max_allowed_transfer_amount_lamports: Some(1000),
-            ..Default::default()
-        };
-
-        mock_provider
-            .expect_get_fee_for_message()
-            .returning(|_| Box::pin(async { Ok(1000) }));
-
-        let result =
-            SolanaTransactionValidator::validate_tx_fee(&transaction, &policy, &mock_provider)
-                .await;
 
         assert!(result.is_ok());
     }

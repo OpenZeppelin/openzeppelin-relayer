@@ -142,7 +142,39 @@ where
         Ok((transaction, signature))
     }
 
-    pub async fn get_fee_quote(
+    pub async fn estimate_fee_payer_total_fee(
+        &self,
+        transaction: &Transaction,
+    ) -> Result<u64, SolanaRpcError> {
+        let tx_fee = self
+            .provider
+            .calculate_total_fee(&transaction.message())
+            .await?;
+
+        // Count ATA creation instructions
+        let ata_creations = transaction
+            .message
+            .instructions
+            .iter()
+            .filter(|ix| {
+                transaction.message.account_keys[ix.program_id_index as usize]
+                    == spl_associated_token_account::id()
+            })
+            .count();
+
+        if ata_creations == 0 {
+            return Ok(tx_fee);
+        }
+
+        let account_creation_fee = self
+            .provider
+            .get_minimum_balance_for_rent_exemption(Account::LEN)
+            .await?;
+
+        Ok(tx_fee + (ata_creations as u64 * account_creation_fee))
+    }
+
+    pub async fn get_fee_token_quote(
         &self,
         token: &str,
         total_fee: u64,
@@ -199,7 +231,7 @@ where
     pub async fn create_and_sign_transaction(
         &self,
         instructions: Vec<Instruction>,
-    ) -> Result<(Transaction, u64, (Hash, u64)), SolanaRpcError> {
+    ) -> Result<(Transaction, (Hash, u64)), SolanaRpcError> {
         let recent_blockhash = self
             .provider
             .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
@@ -212,14 +244,10 @@ where
             Message::new_with_blockhash(&instructions, Some(&relayer_pubkey), &recent_blockhash.0);
 
         let transaction = Transaction::new_unsigned(message);
-        let fee = self
-            .provider
-            .calculate_total_fee(&transaction.message())
-            .await?;
 
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction)?;
 
-        Ok((signed_transaction, fee, recent_blockhash))
+        Ok((signed_transaction, recent_blockhash))
     }
 
     pub async fn handle_token_transfer(
@@ -228,10 +256,8 @@ where
         destination: &Pubkey,
         token_mint: &Pubkey,
         amount: u64,
-    ) -> Result<(Vec<Instruction>, u64), SolanaRpcError> {
+    ) -> Result<Vec<Instruction>, SolanaRpcError> {
         let mut instructions = Vec::new();
-        let mut total_fee = 0;
-
         let source_ata = get_associated_token_address(source, token_mint);
         let destination_ata = get_associated_token_address(destination, token_mint);
 
@@ -253,12 +279,6 @@ where
             .await
             .is_err()
         {
-            let account_creation_fee = self
-                .provider
-                .get_minimum_balance_for_rent_exemption(Account::LEN)
-                .await?;
-            total_fee += account_creation_fee;
-
             let relayer_pubkey = &Pubkey::from_str(&self.relayer.address)
                 .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
 
@@ -292,7 +312,7 @@ where
             .map_err(|e| SolanaRpcError::TransactionPreparation(e.to_string()))?,
         );
 
-        Ok((instructions, total_fee))
+        Ok(instructions)
     }
 }
 
@@ -339,6 +359,7 @@ where
 
         SolanaTransactionValidator::validate_fee_estimate_transaction(
             &transaction_request,
+            &params.fee_token,
             &self.relayer,
         )
         .await
@@ -351,12 +372,11 @@ where
         // update tx blockhash
         transaction.message.recent_blockhash = recent_blockhash;
 
-        let total_fee = self
-            .provider
-            .calculate_total_fee(&transaction.message())
-            .await?;
+        let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
 
-        let fee_quota = self.get_fee_quote(&params.fee_token, total_fee).await?;
+        let fee_quota = self
+            .get_fee_token_quote(&params.fee_token, total_fee)
+            .await?;
 
         Ok(FeeEstimateResult {
             estimated_fee: fee_quota.fee_in_spl_ui,
@@ -385,26 +405,23 @@ where
             &self.relayer,
         )?;
 
-        let (instructions, mut total_fee) = if token_mint.to_string() == SOL_MINT {
-            (
-                vec![system_instruction::transfer(
-                    &source,
-                    &destination,
-                    params.amount,
-                )],
-                0,
-            )
+        let instructions = if token_mint.to_string() == SOL_MINT {
+            vec![system_instruction::transfer(
+                &source,
+                &destination,
+                params.amount,
+            )]
         } else {
             self.handle_token_transfer(&source, &destination, &token_mint, params.amount)
                 .await?
         };
 
-        let (transaction, fee, recent_blockhash) =
+        let (transaction, recent_blockhash) =
             self.create_and_sign_transaction(instructions).await?;
 
-        total_fee += fee;
+        let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
 
-        let fee_quote = self.get_fee_quote(&params.token, total_fee).await?;
+        let fee_quote = self.get_fee_token_quote(&params.token, total_fee).await?;
 
         SolanaTransactionValidator::validate_fee_against_relayer_balance(
             total_fee,
@@ -425,17 +442,66 @@ where
         })
     }
 
+    // todo tests
     async fn prepare_transaction(
         &self,
-        _params: PrepareTransactionRequestParams,
+        params: PrepareTransactionRequestParams,
     ) -> Result<PrepareTransactionResult, SolanaRpcError> {
-        // Implementation
+        let mut transaction_request = Transaction::try_from(params.transaction)?;
+
+        // Validate transaction
+        SolanaTransactionValidator::validate_prepare_transaction(
+            &transaction_request,
+            &params.fee_token,
+            &self.relayer,
+            &*self.provider,
+        )
+        .await?;
+
+        let recent_blockhash = self
+            .provider
+            .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+            .await?;
+        transaction_request.message.recent_blockhash = recent_blockhash.0;
+
+        let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
+            .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
+
+        // Update fee payer
+        if transaction_request.message.account_keys[0] != relayer_pubkey {
+            transaction_request.message.account_keys[0] = relayer_pubkey;
+        }
+
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction_request)
+            .await?;
+
+        // Validate relayer has sufficient balance
+        SolanaTransactionValidator::validate_fee_against_relayer_balance(
+            total_fee,
+            &self.relayer.address,
+            &self.relayer.policies.get_solana_policy(),
+            &*self.provider,
+        )
+        .await?;
+
+        // Get fee quote
+        let fee_quote = self
+            .get_fee_token_quote(&params.fee_token, total_fee)
+            .await?;
+
+        // Sign transaction
+        let (signed_transaction, _) = self.relayer_sign_transaction(transaction_request)?;
+
+        // Serialize and encode
+        let encoded_tx = EncodedSerializedTransaction::try_from(&signed_transaction)?;
+
         Ok(PrepareTransactionResult {
-            transaction: EncodedSerializedTransaction::new("".to_string()),
-            fee_in_spl: "0".to_string(),
-            fee_in_lamports: "0".to_string(),
-            fee_token: "".to_string(),
-            valid_until_blockheight: 0,
+            transaction: encoded_tx,
+            fee_in_spl: fee_quote.fee_in_spl.to_string(),
+            fee_in_lamports: fee_quote.fee_in_lamports.to_string(),
+            fee_token: params.fee_token,
+            valid_until_blockheight: recent_blockhash.1,
         })
     }
 
@@ -453,9 +519,7 @@ where
         )
         .await?;
 
-        let transaction = transaction_request.clone();
-
-        let (signed_transaction, signature) = self.relayer_sign_transaction(transaction)?;
+        let (signed_transaction, signature) = self.relayer_sign_transaction(transaction_request)?;
 
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
 
@@ -479,9 +543,7 @@ where
         )
         .await?;
 
-        let transaction = transaction_request.clone();
-
-        let (signed_transaction, _) = self.relayer_sign_transaction(transaction)?;
+        let (signed_transaction, _) = self.relayer_sign_transaction(transaction_request)?;
 
         let send_signature = self.provider.send_transaction(&signed_transaction).await?;
 
@@ -561,7 +623,7 @@ mod tests {
             system_disabled: false,
         };
 
-        // // Setup mock signer
+        // Setup mock signer
         let mut mock_signer = MockSolanaSignTrait::new();
         let test_signature = Signature::new_unique();
         mock_signer
@@ -606,7 +668,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_fee_quote_sol() {
+    async fn test_get_fee_token_quote_sol() {
         let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
 
         // Setup policy with SOL
@@ -628,7 +690,7 @@ mod tests {
             Arc::new(jupiter_service),
         );
 
-        let result = rpc.get_fee_quote(SOL_MINT, 1_000_000).await;
+        let result = rpc.get_fee_token_quote(SOL_MINT, 1_000_000).await;
         assert!(result.is_ok());
 
         let quote = result.unwrap();
@@ -639,7 +701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_fee_quote_spl_token() {
+    async fn test_get_fee_token_quote_spl_token() {
         let (mut relayer, signer, provider, mut jupiter_service, _) = setup_test_context();
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
 
@@ -677,7 +739,7 @@ mod tests {
             Arc::new(jupiter_service),
         );
 
-        let result = rpc.get_fee_quote(&test_token, 1_000_000_000).await;
+        let result = rpc.get_fee_token_quote(&test_token, 1_000_000_000).await;
         assert!(result.is_ok());
         let quote = result.unwrap();
         assert_eq!(quote.fee_in_spl, 2_000_000);
@@ -714,10 +776,9 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
-        let (transaction, fee, (_, slot)) = result.unwrap();
+        let (transaction, (_, slot)) = result.unwrap();
 
         assert_eq!(transaction.message.instructions.len(), 1);
-        assert_eq!(fee, 5000);
         assert_eq!(slot, 100);
         assert!(!transaction.signatures.is_empty());
     }
@@ -1687,7 +1748,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transfer_spl_token_success_ata() {
+    async fn test_transfer_spl_token_success_token_account_creation() {
         let (mut relayer, signer, mut provider, mut jupiter_service, _) = setup_test_context();
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
 
