@@ -68,7 +68,7 @@ pub struct FeeEstimateResult {
 // transferTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct TransferTransactionRequestParams {
-    pub amount: usize,
+    pub amount: u64,
     pub token: String,
     pub source: String,
     pub destination: String,

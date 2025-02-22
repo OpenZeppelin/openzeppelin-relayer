@@ -3,8 +3,8 @@ use strum::Display;
 
 use crate::{
     constants::{
-        DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
-        MAX_SOLANA_TX_DATA_SIZE,
+        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_EVM_MIN_BALANCE,
+        DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE, MAX_SOLANA_TX_DATA_SIZE,
     },
     models::RelayerError,
 };
@@ -123,6 +123,52 @@ pub struct RelayerSolanaPolicy {
     pub max_signatures: Option<u8>,
     pub max_tx_data_size: u16,
     pub max_allowed_transfer_amount_lamports: Option<u64>,
+}
+
+impl RelayerSolanaPolicy {
+    pub fn get_allowed_tokens(&self) -> Vec<SolanaAllowedTokensPolicy> {
+        self.allowed_tokens.clone().unwrap_or_default()
+    }
+
+    pub fn get_allowed_token_entry(&self, mint: &str) -> Option<SolanaAllowedTokensPolicy> {
+        self.allowed_tokens
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|entry| entry.mint == mint)
+    }
+
+    pub fn get_allowed_token_decimals(&self, mint: &str) -> Option<u8> {
+        self.get_allowed_token_entry(mint)
+            .and_then(|entry| entry.decimals)
+    }
+
+    pub fn get_allowed_token_slippage(&self, mint: &str) -> f32 {
+        self.get_allowed_token_entry(mint)
+            .and_then(|entry| entry.conversion_slippage_percentage)
+            .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE)
+    }
+
+    pub fn get_allowed_programs(&self) -> Vec<String> {
+        self.allowed_programs.clone().unwrap_or_default()
+    }
+
+    pub fn get_allowed_accounts(&self) -> Vec<String> {
+        self.allowed_accounts.clone().unwrap_or_default()
+    }
+
+    pub fn get_disallowed_accounts(&self) -> Vec<String> {
+        self.disallowed_accounts.clone().unwrap_or_default()
+    }
+
+    pub fn get_max_signatures(&self) -> u8 {
+        self.max_signatures.unwrap_or(1)
+    }
+
+    pub fn get_max_allowed_transfer_amount_lamports(&self) -> u64 {
+        self.max_allowed_transfer_amount_lamports
+            .unwrap_or(u64::MAX)
+    }
 }
 
 impl Default for RelayerSolanaPolicy {
