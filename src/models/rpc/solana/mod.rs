@@ -4,6 +4,7 @@ use solana_sdk::transaction::Transaction;
 use thiserror::Error;
 
 #[derive(Debug, Error, Deserialize, Serialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum SolanaEncodingError {
     #[error("Failed to serialize transaction: {0}")]
     SerializationError(String),

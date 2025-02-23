@@ -9,9 +9,6 @@ pub use handler::*;
 use log::error;
 use thiserror::Error;
 
-mod validator;
-pub use validator::*;
-
 use crate::{
     models::SolanaEncodingError,
     services::{SignerError, SolanaProviderError},

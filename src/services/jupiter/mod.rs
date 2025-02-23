@@ -195,7 +195,8 @@ impl JupiterService {
     pub fn new_from_network(network: &str) -> Self {
         match network {
             "devnet" | "testnet" => JupiterService::Mock(MockJupiterService::new()),
-            "mainnet" | _ => JupiterService::Mainnet(MainnetJupiterService::new()),
+            "mainnet" => JupiterService::Mainnet(MainnetJupiterService::new()),
+            _ => JupiterService::Mainnet(MainnetJupiterService::new()),
         }
     }
 }

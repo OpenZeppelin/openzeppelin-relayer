@@ -181,7 +181,7 @@ impl SolanaProviderTrait for SolanaProvider {
         commitment: CommitmentConfig,
     ) -> Result<bool, SolanaProviderError> {
         self.client
-            .is_blockhash_valid(&hash, commitment)
+            .is_blockhash_valid(hash, commitment)
             .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
@@ -323,7 +323,7 @@ impl SolanaProviderTrait for SolanaProvider {
         addresses: &[Pubkey],
     ) -> Result<Vec<RpcPrioritizationFee>, SolanaProviderError> {
         self.client
-            .get_recent_prioritization_fees(&addresses)
+            .get_recent_prioritization_fees(addresses)
             .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }

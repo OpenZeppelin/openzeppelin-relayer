@@ -57,8 +57,8 @@ fn create_sol_transfer(
     amount: u64,
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Result<Transaction> {
-    let ix = system_instruction::transfer(&payer, recipient, amount);
-    let mut message = Message::new(&[ix], Some(&payer));
+    let ix = system_instruction::transfer(payer, recipient, amount);
+    let mut message = Message::new(&[ix], Some(payer));
     message.recent_blockhash = recent_blockhash;
     Ok(Transaction::new_unsigned(message))
 }
@@ -69,8 +69,8 @@ fn create_large_sol_transfer(
     amount: u64,
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Result<Transaction> {
-    let ix = system_instruction::transfer(&payer, recipient, amount);
-    let mut message = Message::new(&[ix], Some(&payer));
+    let ix = system_instruction::transfer(payer, recipient, amount);
+    let mut message = Message::new(&[ix], Some(payer));
     message.recent_blockhash = recent_blockhash;
     Ok(Transaction::new_unsigned(message))
 }
@@ -81,11 +81,11 @@ fn create_multi_instruction_tx(
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Result<Transaction> {
     let instructions = vec![
-        system_instruction::transfer(&payer, recipient, 1_000_000),
-        system_instruction::transfer(&payer, recipient, 2_000_000),
-        system_instruction::transfer(&payer, recipient, 3_000_000),
+        system_instruction::transfer(payer, recipient, 1_000_000),
+        system_instruction::transfer(payer, recipient, 2_000_000),
+        system_instruction::transfer(payer, recipient, 3_000_000),
     ];
-    let mut message = Message::new(&instructions, Some(&payer));
+    let mut message = Message::new(&instructions, Some(payer));
     message.recent_blockhash = recent_blockhash;
     Ok(Transaction::new_unsigned(message))
 }
@@ -101,12 +101,12 @@ fn create_token_transfer(
         &spl_token::id(),
         token_account,
         recipient_token_account,
-        &payer,
-        &[&payer],
+        payer,
+        &[payer],
         amount,
     )?;
 
-    let mut message = Message::new(&[ix], Some(&payer));
+    let mut message = Message::new(&[ix], Some(payer));
     message.recent_blockhash = recent_blockhash;
     Ok(Transaction::new_unsigned(message))
 }
