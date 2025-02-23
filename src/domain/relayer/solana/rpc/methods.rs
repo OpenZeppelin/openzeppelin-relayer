@@ -8,8 +8,15 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 use solana_sdk::{
-    commitment_config::CommitmentConfig, hash::Hash, instruction::Instruction, message::Message,
-    program_pack::Pack, pubkey::Pubkey, signature::Signature, system_instruction,
+    commitment_config::CommitmentConfig,
+    hash::Hash,
+    instruction::Instruction,
+    message::Message,
+    program_pack::Pack,
+    pubkey::Pubkey,
+    signature::Signature,
+    system_instruction::{self, SystemInstruction},
+    system_program,
     transaction::Transaction,
 };
 use spl_associated_token_account::{
@@ -172,6 +179,43 @@ where
             .await?;
 
         Ok(tx_fee + (ata_creations as u64 * account_creation_fee))
+    }
+
+    pub async fn estimate_relayer_lampart_outflow(
+        &self,
+        tx: &Transaction,
+    ) -> Result<u64, SolanaRpcError> {
+        let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
+            .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
+
+        let mut total_lamports_outflow: u64 = 0;
+        for (ix_index, ix) in tx.message.instructions.iter().enumerate() {
+            let program_id = tx.message.account_keys[ix.program_id_index as usize];
+
+            // Check if the instruction comes from the System Program (native SOL transfers)
+            if program_id == system_program::id() {
+                if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
+                    if let SystemInstruction::Transfer { lamports } = system_ix {
+                        // In a system transfer instruction, the first account is the source and the
+                        // second is the destination.
+                        let source_index = ix.accounts.get(0).ok_or_else(|| {
+                            SolanaRpcError::Internal(format!(
+                                "Missing source account in instruction {}",
+                                ix_index
+                            ))
+                        })?;
+                        let source_pubkey = &tx.message.account_keys[*source_index as usize];
+
+                        // Only validate transfers where the source is the relayer fee account.
+                        if source_pubkey == &relayer_pubkey {
+                            total_lamports_outflow += lamports;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(total_lamports_outflow)
     }
 
     pub async fn get_fee_token_quote(
@@ -476,7 +520,7 @@ where
 
         let fee_quote = self.get_fee_token_quote(&params.token, total_fee).await?;
 
-        SolanaTransactionValidator::validate_fee_against_relayer_balance(
+        SolanaTransactionValidator::validate_sufficient_relayer_balance(
             total_fee,
             &self.relayer.address,
             &self.relayer.policies.get_solana_policy(),
@@ -556,10 +600,12 @@ where
         };
 
         let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
+        let lamports_outflow = self.estimate_relayer_lampart_outflow(&transaction).await?;
+        let total_outflow = total_fee + lamports_outflow;
 
         // Validate relayer has sufficient balance
-        SolanaTransactionValidator::validate_fee_against_relayer_balance(
-            total_fee,
+        SolanaTransactionValidator::validate_sufficient_relayer_balance(
+            total_outflow,
             &self.relayer.address,
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
@@ -617,6 +663,23 @@ where
         )
         .await?;
 
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction_request)
+            .await?;
+        let lamports_outflow = self
+            .estimate_relayer_lampart_outflow(&transaction_request)
+            .await?;
+        let total_outflow = total_fee + lamports_outflow;
+
+        // Validate relayer has sufficient balance
+        SolanaTransactionValidator::validate_sufficient_relayer_balance(
+            total_outflow,
+            &self.relayer.address,
+            &self.relayer.policies.get_solana_policy(),
+            &*self.provider,
+        )
+        .await?;
+
         let (signed_transaction, signature) = self.relayer_sign_transaction(transaction_request)?;
 
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
@@ -656,6 +719,23 @@ where
         SolanaTransactionValidator::validate_sign_transaction(
             &transaction_request,
             &self.relayer,
+            &*self.provider,
+        )
+        .await?;
+
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction_request)
+            .await?;
+        let lamports_outflow = self
+            .estimate_relayer_lampart_outflow(&transaction_request)
+            .await?;
+        let total_outflow = total_fee + lamports_outflow;
+
+        // Validate relayer has sufficient balance
+        SolanaTransactionValidator::validate_sufficient_relayer_balance(
+            total_outflow,
+            &self.relayer.address,
+            &self.relayer.policies.get_solana_policy(),
             &*self.provider,
         )
         .await?;
@@ -969,6 +1049,14 @@ mod tests {
             .with(predicate::always(), predicate::always())
             .returning(|_, _| Box::pin(async { Ok(true) }));
 
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
         // mock simulate_transaction
         provider.expect_simulate_transaction().returning(|_| {
             Box::pin(async {
@@ -1005,6 +1093,72 @@ mod tests {
             .into_vec()
             .expect("Failed to decode base58 signature");
         assert_eq!(decoded_sig.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_balance_failure() {
+        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+
+        let signature = Signature::new_unique();
+
+        signer
+            .expect_sign()
+            .returning(move |_| Ok(signature.clone()));
+
+        provider
+            .expect_is_blockhash_valid()
+            .with(predicate::always(), predicate::always())
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000) }));
+
+        // mock simulate_transaction
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let params = SignTransactionRequestParams {
+            transaction: encoded_tx,
+        };
+
+        let result = rpc.sign_transaction(params).await;
+
+        assert!(result.is_err());
+
+        match result {
+            Err(SolanaRpcError::SolanaTransactionValidation(err)) => {
+                let error_string = err.to_string();
+                assert!(
+                    error_string.contains("Insufficient funds:"),
+                    "Unexpected error message: {}",
+                    err
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -1261,6 +1415,14 @@ mod tests {
             .with(predicate::always(), predicate::always())
             .returning(|_, _| Box::pin(async { Ok(true) }));
 
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
         provider.expect_simulate_transaction().returning(|_| {
             Box::pin(async {
                 Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
@@ -1376,6 +1538,14 @@ mod tests {
             .with(predicate::always(), predicate::always())
             .returning(|_, _| Box::pin(async { Ok(true) }));
 
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
         provider.expect_simulate_transaction().returning(|_| {
             Box::pin(async {
                 Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
@@ -1457,7 +1627,7 @@ mod tests {
         assert_eq!(tokens[0].max_allowed_fee, Some(1000));
     }
 
-    #[tokio::test]
+    #[tokio::test] // TODO
     async fn test_estimate_fee_success() {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
         let signature = Signature::new_unique();
@@ -1470,6 +1640,14 @@ mod tests {
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
             .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
 
         provider.expect_simulate_transaction().returning(|_| {
             Box::pin(async {

@@ -454,7 +454,7 @@ impl SolanaTransactionValidator {
     }
 
     /// Validates transfer amount against policy limits.
-    pub async fn validate_fee_against_relayer_balance(
+    pub async fn validate_sufficient_relayer_balance(
         fee: u64,
         relayer_address: &str,
         policy: &RelayerSolanaPolicy,
