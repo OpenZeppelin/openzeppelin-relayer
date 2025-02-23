@@ -1,6 +1,7 @@
 use crate::{
+    models::{SignerError, SignerFactoryError},
     repositories::TransactionCounterError,
-    services::{ProviderError, SignerError, SignerFactoryError, SolanaProviderError},
+    services::{ProviderError, SolanaProviderError},
 };
 
 use super::{ApiError, RepositoryError};

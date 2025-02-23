@@ -1,7 +1,8 @@
 use crate::{
     models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
-    utils::deserialize_u128,
+    utils::{deserialize_u128, deserialize_u64},
 };
+use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -22,10 +23,10 @@ pub struct EvmTransactionResponse {
     pub confirmed_at: String,
     #[serde(deserialize_with = "deserialize_u128")]
     pub gas_price: u128,
-    #[serde(deserialize_with = "deserialize_u128")]
-    pub gas_limit: u128,
+    #[serde(deserialize_with = "deserialize_u64")]
+    pub gas_limit: u64,
     pub nonce: u64,
-    pub value: u64,
+    pub value: U256,
     pub from: String,
     pub to: Option<String>,
     pub relayer_id: String,

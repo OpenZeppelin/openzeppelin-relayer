@@ -13,8 +13,8 @@ mod validator;
 pub use validator::*;
 
 use crate::{
-    models::SolanaEncodingError,
-    services::{SignerError, SolanaProviderError},
+    models::{SignerError, SolanaEncodingError},
+    services::SolanaProviderError,
 };
 
 #[derive(Debug, Error)]

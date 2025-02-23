@@ -200,6 +200,9 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::U256;
+    use std::str::FromStr;
+
     use crate::models::{EvmTransactionData, NetworkType};
 
     use super::*;
@@ -217,13 +220,14 @@ mod tests {
                 gas_price: 1000000000,
                 gas_limit: 21000,
                 nonce: 1,
-                value: 1000000000000000000,
+                value: U256::from_str("1000000000000000000").unwrap(),
                 data: Some("Ox".to_string()),
                 from: "0x".to_string(),
                 to: Some("0x".to_string()),
                 chain_id: 1,
                 signature: None,
                 hash: Some(format!("0x{}", id)),
+                raw: None,
             }),
         }
     }

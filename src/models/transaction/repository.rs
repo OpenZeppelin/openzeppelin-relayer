@@ -1,9 +1,14 @@
 use crate::models::{
-    NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, TransactionError,
+    AddressError, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+    SignerError, TransactionError,
+};
+use alloy::{
+    consensus::TxLegacy,
+    primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
+use std::{convert::TryFrom, str::FromStr};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -26,6 +31,21 @@ pub struct TransactionRepoModel {
     pub confirmed_at: String,
     pub network_data: NetworkTransactionData,
     pub network_type: NetworkType,
+}
+
+impl TransactionRepoModel {
+    pub fn validate(&self) -> Result<(), TransactionError> {
+        Ok(())
+    }
+
+    fn into_evm_data(self) -> Result<EvmTransactionData, SignerError> {
+        match self.network_data {
+            NetworkTransactionData::Evm(data) => Ok(data),
+            _ => Err(SignerError::SigningError(
+                "Not an EVM transaction".to_string(),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,24 +87,26 @@ impl NetworkTransactionData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionDataSignature {
-    pub v: u64,
     pub r: String,
     pub s: String,
+    pub v: u8,
+    pub sig: String,
 }
 
 // TODO support legacy and eip1559 transactions models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionData {
     pub gas_price: u128,
-    pub gas_limit: u128,
+    pub gas_limit: u64,
     pub nonce: u64,
-    pub value: u64,
+    pub value: U256,
     pub data: Option<String>,
     pub from: String,
     pub to: Option<String>,
     pub chain_id: u64,
     pub hash: Option<String>,
     pub signature: Option<EvmTransactionDataSignature>,
+    pub raw: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +154,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     chain_id: 1, // TODO
                     hash: Some("0x".to_string()),
                     signature: None,
+                    raw: None,
                 }),
             }),
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
@@ -169,8 +192,60 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
     }
 }
 
-impl TransactionRepoModel {
-    pub fn validate(&self) -> Result<(), TransactionError> {
-        Ok(())
+impl EvmTransactionData {
+    pub fn from_address(&self) -> Result<AlloyAddress, AddressError> {
+        println!("Attempting to parse address: {}", &self.from); // Debug log
+        AlloyAddress::from_str(&self.from)
+            .map_err(|_| AddressError::ConversionError("Invalid address format".into()))
+    }
+
+    pub fn to_address(&self) -> Result<Option<AlloyAddress>, SignerError> {
+        Ok(match self.to.as_deref().filter(|s| !s.is_empty()) {
+            Some(addr_str) => Some(AlloyAddress::from_str(addr_str).map_err(|e| {
+                AddressError::ConversionError(format!("Invalid 'to' address: {}", e))
+            })?),
+            None => None,
+        })
+    }
+
+    pub fn data_to_bytes(&self) -> Result<Bytes, SignerError> {
+        Bytes::from_str(self.data.as_deref().unwrap_or(""))
+            .map_err(|e| SignerError::SigningError(format!("Invalid transaction data: {}", e)))
+    }
+}
+
+impl TryFrom<TransactionRepoModel> for TxLegacy {
+    type Error = SignerError;
+
+    fn try_from(model: TransactionRepoModel) -> Result<Self, Self::Error> {
+        // If the transaction is not EVM, this will fail early.
+        let evm_data = model.into_evm_data()?;
+
+        // If 'to' address is present, interpret as a Call; otherwise, it's Create.
+        let tx_kind = match evm_data.to_address()? {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+
+        Ok(Self {
+            chain_id: Some(evm_data.chain_id),
+            nonce: evm_data.nonce,
+            gas_limit: evm_data.gas_limit,
+            gas_price: evm_data.gas_price,
+            to: tx_kind,
+            value: evm_data.value,
+            input: evm_data.data_to_bytes()?,
+        })
+    }
+}
+
+impl From<&[u8; 65]> for EvmTransactionDataSignature {
+    fn from(bytes: &[u8; 65]) -> Self {
+        Self {
+            r: hex::encode(&bytes[0..32]),
+            s: hex::encode(&bytes[32..64]),
+            v: bytes[64],
+            sig: hex::encode(bytes),
+        }
     }
 }

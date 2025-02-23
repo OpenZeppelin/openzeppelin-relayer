@@ -14,8 +14,8 @@ use std::sync::Arc;
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, TransactionRepoModel,
+        EvmNetwork, EvmTransactionDataSignature, NetworkTransactionRequest, NetworkType,
+        RelayerError, RelayerRepoModel, SignerRepoModel, TransactionRepoModel,
     },
     repositories::RelayerRepositoryStorage,
     services::{
@@ -277,6 +277,19 @@ pub enum SignDataResponse {
 pub struct SignTypedDataRequest {
     pub domain_separator: String,
     pub hash_struct_message: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignTransactionResponseEvm {
+    pub hash: String,
+    pub signature: EvmTransactionDataSignature,
+    pub raw: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum SignTransactionResponse {
+    Evm(SignTransactionResponseEvm),
+    Solana(Vec<u8>),
 }
 
 // JSON-RPC Request struct

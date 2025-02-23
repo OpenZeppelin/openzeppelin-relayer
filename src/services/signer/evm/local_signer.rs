@@ -1,19 +1,31 @@
-use alloy::signers::{
-    k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient, Signer as AlloySigner,
-    SignerSync,
+use alloy::{
+    consensus::{SignableTransaction, TxLegacy},
+    network::{EthereumWallet, TransactionBuilder, TxSigner},
+    rpc::types::Transaction,
+    signers::{
+        k256::ecdsa::SigningKey, local::LocalSigner as AlloyLocalSignerClient,
+        Signer as AlloySigner, SignerSync,
+    },
 };
 
-use alloy::primitives::{Address as AlloyAddress, FixedBytes};
+use alloy::primitives::{address, Address as AlloyAddress, FixedBytes, U256};
 
 use async_trait::async_trait;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTypedDataRequest},
-    models::{Address, SignerRepoModel, TransactionRepoModel},
-    services::{Signer, SignerError},
+    domain::{
+        SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
+        SignTransactionResponseEvm, SignTypedDataRequest,
+    },
+    models::{
+        Address, EvmTransactionDataSignature, SignerError, SignerRepoModel, TransactionRepoModel,
+    },
+    services::Signer,
 };
 
 use super::DataSignerTrait;
+
+use alloy::rpc::types::TransactionRequest;
 
 pub struct LocalSigner {
     local_signer_client: AlloyLocalSignerClient<SigningKey>,
@@ -49,9 +61,27 @@ impl Signer for LocalSigner {
 
     async fn sign_transaction(
         &self,
-        _transaction: TransactionRepoModel,
-    ) -> Result<Vec<u8>, SignerError> {
-        todo!()
+        transaction: TransactionRepoModel,
+    ) -> Result<SignTransactionResponse, SignerError> {
+        let mut unsigned_tx = TxLegacy::try_from(transaction)?;
+
+        let signature = self
+            .local_signer_client
+            .sign_transaction(&mut unsigned_tx)
+            .await
+            .map_err(|e| SignerError::SigningError(format!("Failed to sign transaction: {e}")))?;
+
+        let signed_tx = unsigned_tx.into_signed(signature);
+        let signature_bytes = signature.as_bytes();
+
+        let mut raw = Vec::new();
+        signed_tx.rlp_encode(&mut raw);
+
+        Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
+            hash: signed_tx.hash().to_string(),
+            signature: EvmTransactionDataSignature::from(&signature_bytes),
+            raw,
+        }))
     }
 }
 
