@@ -323,7 +323,17 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
-    /// Retrieves the supported tokens.
+    /// Retrieves a list of tokens supported by the relayer for fee payments.
+    ///
+    /// # Description
+    ///
+    /// This function queries the relayer for the tokens that are supported for fee payments. For
+    /// each token, it returns metadata including the token symbol, mint address, and the number
+    /// of decimal places supported.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a vector of [`TokenMetadata`] structures.
     async fn get_supported_tokens(
         &self,
         _params: GetSupportedTokensRequestParams,
@@ -350,7 +360,26 @@ where
         Ok(GetSupportedTokensResult { tokens })
     }
 
-    /// Estimates the fee for a transaction.
+    /// Estimates the fee for an arbitrary transaction using a specified fee token.
+    ///
+    /// # Description
+    ///
+    /// This function simulates fee estimation for a transaction by executing it against the current
+    /// blockchain state. It calculates the fee in the UI unit of the selected token (accounting
+    /// for token decimals) and returns a conversion rate from SOL to the specified token.
+    ///
+    /// # Parameters
+    ///
+    /// * `transaction` - A Base64-encoded serialized transaction. This transaction can be signed or
+    ///   unsigned.
+    /// * `fee_token` - A string representing the token mint address to be used for fee payment.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a tuple containing:
+    ///
+    /// * `estimated_fee` - A string with the fee amount in the token's UI units.
+    /// * `conversion_rate` - A string with the conversion rate from SOL to the specified token.
     async fn fee_estimate(
         &self,
         params: FeeEstimateRequestParams,
@@ -384,7 +413,31 @@ where
         })
     }
 
-    /// Creates token transfer transaction between two accounts.
+    /// Creates a transfer transaction for a specified token, sender, and recipient.
+    ///
+    /// # Description
+    ///
+    /// This function constructs a partially signed transfer transaction using the provided
+    /// parameters. In addition to the transfer, it calculates fee amounts both in SPL tokens
+    /// and in lamports, and sets an expiration block height for the transaction.
+    ///
+    /// # Parameters
+    ///
+    /// * `amount` - The amount to transfer, specified in the smallest unit of the token.
+    /// * `token` - A string representing the token mint address for both the transfer and the fee
+    ///   payment.
+    /// * `source` - A string representing the sender's public key.
+    /// * `destination` - A string representing the recipient's public key.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a tuple containing:
+    ///
+    /// * `transaction` - A Base64-encoded partially signed transaction.
+    /// * `fee_in_spl` - The fee amount in SPL tokens (smallest unit).
+    /// * `fee_in_lamports` - The fee amount in lamports (SOL equivalent).
+    /// * `fee_token` - The token mint address used for fee payments.
+    /// * `valid_until_blockheight` - The block height until which the transaction remains valid.
     async fn transfer_transaction(
         &self,
         params: TransferTransactionRequestParams,
@@ -442,6 +495,30 @@ where
         })
     }
 
+    /// Prepares a transaction by adding relayer-specific instructions.
+    ///
+    /// # Description
+    ///
+    /// This function takes an existing Base64-encoded serialized transaction and adds
+    /// relayer-specific instructions.
+    /// The updated transaction will include additional data required by the relayer, and the
+    /// function also provides updated fee information and an expiration block height.
+    ///
+    /// # Parameters
+    ///
+    /// * `transaction` - A Base64-encoded serialized transaction that the end user would like
+    ///   relayed.
+    /// * `fee_token` - A string representing the token mint address to be used for fee payment.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a tuple containing:
+    ///
+    /// * `transaction` - A Base64-encoded transaction with the added relayer-specific instructions.
+    /// * `fee_in_spl` - The fee amount in SPL tokens (in the smallest unit).
+    /// * `fee_in_lamports` - The fee amount in lamports.
+    /// * `fee_token` - The token mint address used for fee payments.
+    /// * `valid_until_block_height` - The block height until which the transaction remains valid.
     async fn prepare_transaction(
         &self,
         params: PrepareTransactionRequestParams,
@@ -509,7 +586,24 @@ where
         })
     }
 
-    /// Signs a Solana transaction using the relayer's signer.
+    /// Signs a prepared transaction without submitting it to the blockchain.
+    ///
+    /// # Description
+    ///
+    /// This function is used to sign a prepared transaction (one that may have been modified by the
+    /// relayer) to ensure its validity and authorization before submission. It returns the
+    /// signed transaction along with the corresponding signature.
+    ///
+    /// # Parameters
+    ///
+    /// * `transaction` - A Base64-encoded prepared transaction that requires signing.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a tuple containing:
+    ///
+    /// * `transaction` - A Base64-encoded signed transaction.
+    /// * `signature` - Signature of the submitted transaction.
     async fn sign_transaction(
         &self,
         params: SignTransactionRequestParams,
@@ -533,7 +627,26 @@ where
         })
     }
 
-    /// Signs a Solana transaction using the relayer's signer and sends it to network.
+    /// Signs a prepared transaction and immediately submits it to the Solana blockchain.
+    ///
+    /// # Description
+    ///
+    /// This function combines the signing and submission steps into one operation. After validating
+    /// and signing the provided transaction, it is immediately sent to the blockchain for
+    /// execution. This is particularly useful when you want to reduce the number of
+    /// client-server interactions.
+    ///
+    /// # Parameters
+    ///
+    /// * `transaction` - A Base64-encoded prepared transaction that needs to be signed and
+    ///   submitted.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a tuple containing:
+    ///
+    /// * `transaction` - A Base64-encoded signed transaction that has been submitted.
+    /// * `signature` - Signature of the submitted transaction.
     async fn sign_and_send_transaction(
         &self,
         params: SignAndSendTransactionRequestParams,
@@ -559,6 +672,21 @@ where
         })
     }
 
+    /// Retrieves a list of features enabled by the relayer.
+    ///
+    /// # Deprecated
+    ///
+    /// This method is deprecated. It is recommended to use more fine-grained methods for feature
+    /// detection.
+    ///
+    /// # Description
+    ///
+    /// This function returns a list of enabled features on the relayer.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a vector of strings where each string represents an enabled feature
+    /// (e.g., "gasless").
     async fn get_features_enabled(
         &self,
         _params: GetFeaturesEnabledRequestParams,
