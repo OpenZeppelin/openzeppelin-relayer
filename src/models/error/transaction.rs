@@ -4,6 +4,7 @@ use crate::{
 };
 
 use super::{ApiError, RepositoryError};
+use eyre::Report;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -27,6 +28,9 @@ pub enum TransactionError {
     #[error("Underlying Solana provider error: {0}")]
     UnderlyingSolanaProvider(#[from] SolanaProviderError),
 
+    #[error("Unexpected error: {0}")]
+    UnexpectedError(String),
+
     #[error("Not supported: {0}")]
     NotSupported(String),
 }
@@ -43,6 +47,7 @@ impl From<TransactionError> for ApiError {
                 ApiError::InternalError(err.to_string())
             }
             TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
+            TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
         }
     }
 }
@@ -50,5 +55,11 @@ impl From<TransactionError> for ApiError {
 impl From<RepositoryError> for TransactionError {
     fn from(error: RepositoryError) -> Self {
         TransactionError::ValidationError(error.to_string())
+    }
+}
+
+impl From<Report> for TransactionError {
+    fn from(err: Report) -> Self {
+        TransactionError::UnexpectedError(err.to_string())
     }
 }

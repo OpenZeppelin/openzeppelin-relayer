@@ -8,10 +8,13 @@
 //! * `/relayers` - Relayer management endpoints
 
 pub mod health;
+pub mod metrics;
 pub mod relayer;
 
 use actix_web::web;
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    cfg.configure(health::init).configure(relayer::init);
+    cfg.configure(health::init)
+        .configure(relayer::init)
+        .configure(metrics::init);
 }

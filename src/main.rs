@@ -35,6 +35,7 @@ use actix_web::{
 use color_eyre::{eyre::WrapErr, Result};
 use config::Config;
 use logging::setup_logging;
+use metrics::middleware::MetricsMiddleware;
 
 use actix_web::HttpResponse;
 
@@ -42,6 +43,7 @@ use config::ApiKeyRateLimit;
 use dotenvy::dotenv;
 use init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file};
 use log::info;
+use std::env;
 
 mod api;
 mod config;
@@ -50,6 +52,7 @@ mod domain;
 mod init;
 mod jobs;
 mod logging;
+mod metrics;
 mod models;
 mod repositories;
 mod services;
@@ -68,7 +71,12 @@ async fn main() -> Result<()> {
     dotenv().ok();
     setup_logging();
 
+    // Set metrics enabled flag to false by default
+    let metrics_enabled = env::var("METRICS_ENABLED")
+        .map(|v| v.to_lowercase() == "true")
+        .unwrap_or(false);
     let config = Arc::new(config::ServerConfig::from_env());
+    let server_config = Arc::clone(&config); // clone for use in binding below
     let config_file = load_config_file(&config.config_file_path)?;
 
     let app_state = initialize_app_state().await?;
@@ -90,11 +98,14 @@ async fn main() -> Result<()> {
         .finish()
         .unwrap();
 
-    let moved_cfg = Arc::clone(&config);
     info!("Starting server on {}:{}", config.host, config.port);
-    HttpServer::new(move || {
-        let config = Arc::clone(&moved_cfg);
-        App::new()
+    let app_server = HttpServer::new({
+      // Clone the config for use within the closure.
+      let server_config = Arc::clone(&server_config);
+      let app_state = app_state.clone();
+        move || {
+          let config = Arc::clone(&server_config);
+            App::new()
             .wrap_fn(move |req, srv| {
                 // Check for x-api-key header
                 let expected_key = config.api_key.clone();
@@ -105,7 +116,6 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-
                 Box::pin(async move {
                     Ok(req.into_response(
                         HttpResponse::Unauthorized().body(
@@ -118,14 +128,48 @@ async fn main() -> Result<()> {
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::DefaultHeaders::new())
+            .wrap(MetricsMiddleware)
             .wrap(Logger::default())
             .app_data(app_state.clone())
             .service(web::scope("/api/v1").configure(api::routes::configure_routes))
+        }
     })
     .bind((config.host.as_str(), config.port))
     .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
     .shutdown_timeout(5)
-    .run()
-    .await
-    .wrap_err("Server runtime error")
+    .run();
+
+    let metrics_server_future = if metrics_enabled {
+        log::info!("Metrics server enabled, starting metrics server...");
+        Some(
+            HttpServer::new(|| {
+                App::new()
+                    .wrap(middleware::Compress::default())
+                    .wrap(middleware::NormalizePath::trim())
+                    .wrap(middleware::DefaultHeaders::new())
+                    .configure(api::routes::metrics::init)
+            })
+            .workers(2)
+            .bind((config.host.as_str(), config.metrics_port))
+            .wrap_err_with(|| {
+                format!(
+                    "Failed to bind server to {}:{}",
+                    config.host, config.metrics_port
+                )
+            })?
+            .shutdown_timeout(5)
+            .run(),
+        )
+    } else {
+        log::info!("Metrics server disabled");
+        None
+    };
+
+    if let Some(metrics_server) = metrics_server_future {
+        futures::try_join!(app_server, metrics_server)?;
+    } else {
+        app_server.await?;
+    }
+
+    Ok(())
 }

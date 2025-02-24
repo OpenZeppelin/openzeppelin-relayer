@@ -9,7 +9,7 @@
 //! EvmSigner
 //!   ├── LocalSigner (encrypted JSON keystore)
 //!   ├── AwsKmsSigner (AWS KMS backend) [NOT SUPPORTED]
-//!   └── VaultSigner (HashCorp Vault backend) [NOT SUPPORTED]
+//!   └── VaultSigner (HashiCorp Vault backend) [NOT SUPPORTED]
 //! ```
 mod local_signer;
 use async_trait::async_trait;

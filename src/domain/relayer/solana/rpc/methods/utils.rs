@@ -278,9 +278,7 @@ mod tests {
         let transaction = Transaction::new_unsigned(message);
         let signature = Signature::new_unique();
 
-        signer
-            .expect_sign()
-            .returning(move |_| Ok(signature));
+        signer.expect_sign().returning(move |_| Ok(signature));
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
