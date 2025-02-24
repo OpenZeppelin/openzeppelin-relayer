@@ -1,10 +1,16 @@
 use crate::{
     jobs::JobProducer,
-    models::{EvmNetwork, NetworkType, RelayerRepoModel, TransactionError, TransactionRepoModel},
+    models::{
+        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, TransactionError,
+        TransactionRepoModel,
+    },
     repositories::{
         InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
-    services::{get_solana_network_provider_from_str, EvmProvider, TransactionCounterService},
+    services::{
+        get_solana_network_provider_from_str, EvmProvider, EvmSignerFactory,
+        TransactionCounterService,
+    },
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -160,6 +166,7 @@ pub struct RelayerTransactionFactory;
 impl RelayerTransactionFactory {
     pub fn create_transaction(
         relayer: RelayerRepoModel,
+        signer: SignerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
@@ -184,6 +191,7 @@ impl RelayerTransactionFactory {
                     relayer.address.clone(),
                     transaction_counter_store,
                 );
+                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
                     relayer,
@@ -192,6 +200,7 @@ impl RelayerTransactionFactory {
                     transaction_repository,
                     transaction_counter_service,
                     job_producer,
+                    signer_service,
                 )?))
             }
             NetworkType::Solana => {

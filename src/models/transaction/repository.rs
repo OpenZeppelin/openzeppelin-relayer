@@ -1,6 +1,9 @@
-use crate::models::{
-    AddressError, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-    SignerError, TransactionError,
+use crate::{
+    domain::{SignTransactionResponse, SignTransactionResponseEvm},
+    models::{
+        AddressError, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+        SignerError, TransactionError,
+    },
 };
 use alloy::{
     consensus::TxLegacy,
@@ -38,13 +41,35 @@ impl TransactionRepoModel {
         Ok(())
     }
 
-    fn into_evm_data(self) -> Result<EvmTransactionData, SignerError> {
-        match self.network_data {
-            NetworkTransactionData::Evm(data) => Ok(data),
-            _ => Err(SignerError::SigningError(
-                "Not an EVM transaction".to_string(),
-            )),
-        }
+    pub fn with_signed_transaction_data(
+        self,
+        signature: SignTransactionResponse,
+    ) -> Result<Self, TransactionError> {
+        let network_data = match (self.network_data, signature) {
+            (NetworkTransactionData::Evm(data), SignTransactionResponse::Evm(sig)) => {
+                NetworkTransactionData::Evm(data.with_signed_transaction_data(sig))
+            }
+            (NetworkTransactionData::Solana(_), _) => {
+                return Err(TransactionError::NotSupported(
+                    "Solana signing not implemented".into(),
+                ))
+            }
+            (NetworkTransactionData::Stellar(_), _) => {
+                return Err(TransactionError::NotSupported(
+                    "Stellar signing not implemented".into(),
+                ))
+            }
+            _ => {
+                return Err(TransactionError::InvalidType(
+                    "Mismatched network types".into(),
+                ))
+            }
+        };
+
+        Ok(Self {
+            network_data,
+            ..self
+        })
     }
 }
 
@@ -109,6 +134,17 @@ pub struct EvmTransactionData {
     pub raw: Option<Vec<u8>>,
 }
 
+impl EvmTransactionData {
+    pub fn with_signed_transaction_data(self, data: SignTransactionResponseEvm) -> Self {
+        Self {
+            signature: Some(data.signature),
+            hash: Some(data.hash),
+            raw: Some(data.raw),
+            ..self
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaTransactionData {
     pub recent_blockhash: Option<String>,
@@ -152,7 +188,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     from: evm_request.from.clone(),
                     to: evm_request.to.clone(),
                     chain_id: 1, // TODO
-                    hash: Some("0x".to_string()),
+                    hash: None,
                     signature: None,
                     raw: None,
                 }),

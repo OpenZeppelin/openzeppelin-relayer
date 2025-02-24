@@ -10,8 +10,8 @@ use crate::{
         produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
         TransactionRepoModel, TransactionStatus,
     },
-    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
-    services::{EvmProvider, TransactionCounterService},
+    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage, Repository},
+    services::{EvmProvider, EvmSigner, Signer, TransactionCounterService},
 };
 
 #[allow(dead_code)]
@@ -22,6 +22,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
+    signer: EvmSigner,
 }
 
 #[allow(dead_code)]
@@ -33,6 +34,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
+        signer: EvmSigner,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
@@ -41,6 +43,7 @@ impl EvmRelayerTransaction {
             transaction_repository,
             transaction_counter_service,
             job_producer,
+            signer,
         })
     }
 }
@@ -62,27 +65,40 @@ impl Transaction for EvmRelayerTransaction {
         info!("Gas estimation: {:?}", gas_estimation);
 
         // After preparing the transaction, submit it to the job queue
+        // sign the transaction
+        let result = self
+            .signer
+            .sign_transaction(tx.network_data.clone())
+            .await?;
+
+        let updated_tx = tx.with_signed_transaction_data(result)?;
+        let updated_tx = self
+            .transaction_repository
+            .update(updated_tx.id.clone(), updated_tx)
+            .await?;
+
+        // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
-                TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionSend::submit(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
                 None,
             )
             .await?;
         let updated = self
             .transaction_repository
-            .update_status(tx.id.clone(), TransactionStatus::Sent)
+            .update_status(updated_tx.id.clone(), TransactionStatus::Sent)
             .await?;
 
         if let Some(notification_id) = &self.relayer.notification_id {
             self.job_producer
                 .produce_send_notification_job(
-                    produce_transaction_update_notification_payload(notification_id, &updated),
+                    produce_transaction_update_notification_payload(notification_id, &updated_tx),
                     None,
                 )
                 .await?;
         }
 
-        Ok(tx)
+        Ok(updated)
     }
 
     async fn submit_transaction(
