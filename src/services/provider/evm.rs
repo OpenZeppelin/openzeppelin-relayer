@@ -47,6 +47,14 @@ impl EvmProvider {
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
     }
 
+    pub async fn get_gas_price(&self) -> Result<U256> {
+        self.provider
+            .get_gas_price()
+            .await
+            .map(|gas| U256::from(gas))
+            .map_err(|e| eyre!("Failed to get gas price: {}", e))
+    }
+
     pub async fn send_transaction(&self, tx: TransactionRequest) -> Result<String> {
         let pending_tx = self
             .provider

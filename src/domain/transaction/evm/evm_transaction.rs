@@ -64,8 +64,12 @@ impl Transaction for EvmRelayerTransaction {
         // validate the transaction
 
         let price_params = get_transaction_price_params(self, &tx, &self.relayer).await?;
-        info!("Gas estimation: {:?}", price_params.gas_price);
-
+        info!("Gas price: {:?}", price_params.gas_price);
+        let gas_estimation = self
+            .gas_price_service
+            .estimate_gas(&tx.network_data.get_evm_transaction_data()?)
+            .await?;
+        info!("Gas estimation: {:?}", gas_estimation);
         // After preparing the transaction, submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
@@ -177,10 +181,10 @@ pub async fn get_transaction_price_params(
     _relayer: &RelayerRepoModel,
 ) -> Result<TransactionPriceParams, TransactionError> {
     let tx_data: crate::models::EvmTransactionData = tx.network_data.get_evm_transaction_data()?;
-    let gas_estimation = match &tx_data.speed {
+    let gas_price = match &tx_data.speed {
         Some(speed) => Ok(evm_relayer_transaction
             .gas_price_service
-            .get_legacy_prices_from_json_rpc(&tx_data)
+            .get_legacy_prices_from_json_rpc()
             .await?
             .into_iter()
             .find(|(s, _)| s == speed)
@@ -197,7 +201,7 @@ pub async fn get_transaction_price_params(
     }?;
 
     Ok(TransactionPriceParams {
-        gas_price: Some(gas_estimation),
+        gas_price: Some(gas_price),
         balance: None,
     })
 }

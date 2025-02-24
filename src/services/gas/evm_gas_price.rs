@@ -40,9 +40,8 @@ impl GasPriceService {
 
     pub async fn get_legacy_prices_from_json_rpc(
         &self,
-        tx_data: &EvmTransactionData,
     ) -> Result<Vec<(Speed, U256)>, TransactionError> {
-        let base = self.estimate_gas(tx_data).await?;
+        let base = self.provider.get_gas_price().await?;
         let base_u128: u128 = base.to::<u128>();
         Ok(Speed::multiplier()
             .into_iter()
