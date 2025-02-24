@@ -8,21 +8,21 @@ use log::info;
 
 // calculate the multiplier for the gas estimation
 impl Speed {
-    pub fn multiplier(&self) -> f64 {
-        match self {
-            Speed::Slow => 1.0,
-            Speed::Average => 1.25,
-            Speed::Fast => 1.5,
-            Speed::Fastest => 2.0,
-        }
+    pub fn multiplier() -> [(Speed, f64); 4] {
+        [
+            (Speed::SafeLow, 1.0),
+            (Speed::Average, 1.25),
+            (Speed::Fast, 1.5),
+            (Speed::Fastest, 2.0),
+        ]
     }
 }
 
-pub struct GasEstimationService {
+pub struct GasPriceService {
     provider: EvmProvider,
 }
 
-impl GasEstimationService {
+impl GasPriceService {
     pub fn new(provider: EvmProvider) -> Self {
         Self { provider }
     }
@@ -37,20 +37,20 @@ impl GasEstimationService {
         })?;
         Ok(gas_estimation)
     }
+
     // TODO: This is a temporary implementation for legacy only
     pub async fn estimate_gas_with_speed(
         &self,
         tx_data: &EvmTransactionData,
-        speed: Speed,
-    ) -> Result<U256, TransactionError> {
-        info!("Estimating gas with speed: {:?}", speed);
+    ) -> Result<Vec<(Speed, U256)>, TransactionError> {
         let base = self.estimate_gas(tx_data).await?;
-        let factor = speed.multiplier();
-
-        // Convert U256 to u128 first, then to f64
         let base_u128: u128 = base.to::<u128>();
-        let final_gas = ((base_u128 as f64) * factor).round() as u128;
-
-        Ok(U256::from(final_gas))
+        Ok(Speed::multiplier()
+            .into_iter()
+            .map(|(speed, multiplier)| {
+                let final_gas = ((base_u128 as f64) * multiplier).round() as u128;
+                (speed, U256::from(final_gas))
+            })
+            .collect())
     }
 }

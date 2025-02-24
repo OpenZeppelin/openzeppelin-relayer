@@ -1,5 +1,6 @@
 use crate::models::{
-    NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, TransactionError,
+    EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+    TransactionError,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -115,28 +116,32 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
         let now = Utc::now().to_rfc3339();
 
         match request {
-            NetworkTransactionRequest::Evm(evm_request) => Ok(Self {
-                id: Uuid::new_v4().to_string(),
-                relayer_id: relayer_model.id.clone(),
-                status: TransactionStatus::Pending,
-                created_at: now,
-                sent_at: "".to_string(),
-                confirmed_at: "".to_string(),
-                network_type: NetworkType::Evm,
-                network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                    gas_price: evm_request.gas_price.unwrap_or(0),
-                    gas_limit: evm_request.gas_limit,
-                    nonce: 0, // TODO
-                    value: evm_request.value,
-                    data: evm_request.data.clone(),
-                    from: evm_request.from.clone(),
-                    to: evm_request.to.clone(),
-                    chain_id: 1, // TODO
-                    hash: Some("0x".to_string()),
-                    signature: None,
-                    speed: evm_request.speed.clone(),
-                }),
-            }),
+            NetworkTransactionRequest::Evm(evm_request) => {
+                let named_network = relayer_model.network.clone();
+                let network = EvmNetwork::from_network_str(&named_network);
+                Ok(Self {
+                    id: Uuid::new_v4().to_string(),
+                    relayer_id: relayer_model.id.clone(),
+                    status: TransactionStatus::Pending,
+                    created_at: now,
+                    sent_at: "".to_string(),
+                    confirmed_at: "".to_string(),
+                    network_type: NetworkType::Evm,
+                    network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                        gas_price: evm_request.gas_price.unwrap(),
+                        gas_limit: evm_request.gas_limit,
+                        nonce: 0, // TODO
+                        value: evm_request.value,
+                        data: evm_request.data.clone(),
+                        from: evm_request.from.clone(),
+                        to: evm_request.to.clone(),
+                        chain_id: network.unwrap().id(),
+                        hash: Some("0x".to_string()),
+                        signature: None,
+                        speed: evm_request.speed.clone(),
+                    }),
+                })
+            }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
                 relayer_id: relayer_model.id.clone(),

@@ -4,7 +4,10 @@ use crate::{
     repositories::{
         InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
-    services::{get_solana_network_provider_from_str, EvmProvider, TransactionCounterService},
+    services::{
+        get_solana_network_provider_from_str, EvmProvider, GasPriceService,
+        TransactionCounterService,
+    },
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -184,8 +187,7 @@ impl RelayerTransactionFactory {
                     relayer.address.clone(),
                     transaction_counter_store,
                 );
-                let gas_estimation_service =
-                    Arc::new(GasEstimationService::new(evm_provider.clone()));
+                let gas_price_service = Arc::new(GasPriceService::new(evm_provider.clone()));
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
                     relayer,
@@ -194,7 +196,7 @@ impl RelayerTransactionFactory {
                     transaction_repository,
                     transaction_counter_service,
                     job_producer,
-                    gas_estimation_service,
+                    gas_price_service,
                 )?))
             }
             NetworkType::Solana => {

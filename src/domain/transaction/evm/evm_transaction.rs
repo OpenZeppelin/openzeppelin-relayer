@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use async_trait::async_trait;
 use eyre::Result;
 use log::info;
@@ -11,10 +12,13 @@ use crate::{
         TransactionRepoModel, TransactionStatus,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
-    services::{EvmProvider, TransactionCounterService},
+    services::{EvmProvider, GasPriceService, TransactionCounterService},
 };
-
-use super::GasEstimationService;
+#[allow(dead_code)]
+pub struct TransactionPriceParams {
+    pub gas_price: Option<U256>,
+    pub balance: Option<U256>,
+}
 
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction {
@@ -24,7 +28,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
-    gas_estimation_service: Arc<GasEstimationService>,
+    gas_price_service: Arc<GasPriceService>,
 }
 
 #[allow(dead_code)]
@@ -36,7 +40,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
-        gas_estimation_service: Arc<GasEstimationService>,
+        gas_price_service: Arc<GasPriceService>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
@@ -45,7 +49,7 @@ impl EvmRelayerTransaction {
             transaction_repository,
             transaction_counter_service,
             job_producer,
-            gas_estimation_service,
+            gas_price_service,
         })
     }
 }
@@ -59,16 +63,8 @@ impl Transaction for EvmRelayerTransaction {
         info!("Preparing transaction");
         // validate the transaction
 
-        let tx_data = tx.network_data.get_evm_transaction_data()?;
-        let gas_estimation = match &tx_data.speed {
-            Some(speed) => {
-                self.gas_estimation_service
-                    .estimate_gas_with_speed(&tx_data, speed.clone())
-                    .await?
-            }
-            None => self.gas_estimation_service.estimate_gas(&tx_data).await?,
-        };
-        info!("Gas estimation: {:?}", gas_estimation);
+        let price_params = get_transaction_price_params(self, &tx, &self.relayer).await?;
+        info!("Gas estimation: {:?}", price_params.gas_price);
 
         // After preparing the transaction, submit it to the job queue
         self.job_producer
@@ -171,4 +167,37 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<bool, TransactionError> {
         Ok(true)
     }
+}
+
+/// Get the price params for the transaction based on getTransactionPriceParams defender
+/// totalCost, balance, priceParams, extraCost
+pub async fn get_transaction_price_params(
+    evm_relayer_transaction: &EvmRelayerTransaction,
+    tx: &TransactionRepoModel,
+    _relayer: &RelayerRepoModel,
+) -> Result<TransactionPriceParams, TransactionError> {
+    let tx_data: crate::models::EvmTransactionData = tx.network_data.get_evm_transaction_data()?;
+    let gas_estimation = match &tx_data.speed {
+        Some(speed) => Ok(evm_relayer_transaction
+            .gas_price_service
+            .estimate_gas_with_speed(&tx_data)
+            .await?
+            .into_iter()
+            .find(|(s, _)| s == speed)
+            .map(|(_, gas_price)| gas_price)
+            .ok_or(TransactionError::NotSupported(
+                "Not supported speed".to_string(),
+            ))?),
+        None => {
+            evm_relayer_transaction
+                .gas_price_service
+                .estimate_gas(&tx_data)
+                .await
+        }
+    }?;
+
+    Ok(TransactionPriceParams {
+        gas_price: Some(gas_estimation),
+        balance: None,
+    })
 }

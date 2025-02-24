@@ -24,7 +24,7 @@ pub enum Speed {
     Fastest,
     Fast,
     Average,
-    Slow,
+    SafeLow,
 }
 impl EvmTransactionRequest {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
