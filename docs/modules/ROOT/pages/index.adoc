@@ -112,14 +112,14 @@ You can use Docker Compose to run the container:
 
 [source,bash]
 ----
-docker-compose up
+docker compose up -d
 ----
 
 For production runs, you can use:
 
 [source,bash]
 ----
-DOCKERFILE=Dockerfile.production docker-compose up
+DOCKERFILE=Dockerfile.production docker compose up -d
 ----
 
 == Configuration References

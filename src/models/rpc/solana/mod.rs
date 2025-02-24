@@ -6,11 +6,11 @@ use thiserror::Error;
 #[derive(Debug, Error, Deserialize, Serialize)]
 pub enum SolanaEncodingError {
     #[error("Failed to serialize transaction: {0}")]
-    SerializationError(String),
+    Serialization(String),
     #[error("Failed to decode base64: {0}")]
-    DecodeError(String),
+    Decode(String),
     #[error("Failed to deserialize transaction: {0}")]
-    DeserializeError(String),
+    Deserialize(String),
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -31,7 +31,7 @@ impl TryFrom<&solana_sdk::transaction::Transaction> for EncodedSerializedTransac
 
     fn try_from(transaction: &Transaction) -> Result<Self, Self::Error> {
         let serialized = bincode::serialize(transaction)
-            .map_err(|e| SolanaEncodingError::SerializationError(e.to_string()))?;
+            .map_err(|e| SolanaEncodingError::Serialization(e.to_string()))?;
 
         Ok(Self(STANDARD.encode(serialized)))
     }
@@ -43,10 +43,10 @@ impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transact
     fn try_from(encoded: EncodedSerializedTransaction) -> Result<Self, Self::Error> {
         let tx_bytes = STANDARD
             .decode(encoded.0)
-            .map_err(|e| SolanaEncodingError::DecodeError(e.to_string()))?;
+            .map_err(|e| SolanaEncodingError::Decode(e.to_string()))?;
 
         let decoded_tx: Transaction = bincode::deserialize(&tx_bytes)
-            .map_err(|e| SolanaEncodingError::DeserializeError(e.to_string()))?;
+            .map_err(|e| SolanaEncodingError::Deserialize(e.to_string()))?;
 
         Ok(decoded_tx)
     }
@@ -250,7 +250,7 @@ mod tests {
         let result = Transaction::try_from(invalid_encoded);
         assert!(matches!(
             result.unwrap_err(),
-            SolanaEncodingError::DecodeError(_)
+            SolanaEncodingError::Decode(_)
         ));
     }
 
@@ -263,7 +263,7 @@ mod tests {
         let result = Transaction::try_from(invalid_encoded);
         assert!(matches!(
             result.unwrap_err(),
-            SolanaEncodingError::DeserializeError(_)
+            SolanaEncodingError::Deserialize(_)
         ));
     }
 }

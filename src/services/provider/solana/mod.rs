@@ -175,7 +175,7 @@ impl SolanaProviderTrait for SolanaProvider {
         commitment: CommitmentConfig,
     ) -> Result<bool, SolanaProviderError> {
         self.client
-            .is_blockhash_valid(&hash, commitment)
+            .is_blockhash_valid(hash, commitment)
             .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }

@@ -6,3 +6,15 @@ script = [
   "npx antora antora-playbook.yml",
   "bash ../scripts/rust_antora.sh"
 ]
+[tasks.docker-compose-up]
+description = "Run docker compose up according to the user defined settings"
+script = [
+  "chmod +x ./scripts/docker_compose.sh",
+  "./scripts/docker_compose.sh up"
+]
+[tasks.docker-compose-down]
+description = "Run docker compose down according to the user defined settings"
+script = [
+  "chmod +x ./scripts/docker_compose.sh",
+  "./scripts/docker_compose.sh down"
+]

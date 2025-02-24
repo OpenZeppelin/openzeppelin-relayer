@@ -1,17 +1,15 @@
 # Base image
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev AS base
 
-WORKDIR /usr/app
-
 USER root
-RUN apk update && apk add openssl-dev
-RUN apk add --no-cache perl
+RUN apk update && apk --no-cache add openssl-dev perl
 
 ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig
 
+WORKDIR /usr/app
+
 # Copy
 COPY . .
-
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo install --root /usr/app --path . --debug --locked
@@ -19,8 +17,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Setting up build directories
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest-dev
 
+# Create a nonroot user and mimic those of a regular user on the linux host
+ARG UID=1000
+ARG GID=1000
+USER root
+
+RUN adduser -D -u $UID -g $GID defender
+USER defender
+
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
+
+ENV APP_PORT=8080
+ENV METRICS_PORT=8081
+
+EXPOSE ${APP_PORT}/tcp ${METRICS_PORT}/tcp
 
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]

@@ -21,6 +21,9 @@ target/
 config.json
 local-signer.json
 
+!examples/**/*.json
+
+
 # docs
 docs/build/
 rust_docs
@@ -28,6 +31,8 @@ rust_docs
 # logs
 logs/
 
+# env
+.env
 
 # Ignore node_modules
 node_modules
