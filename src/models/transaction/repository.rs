@@ -1,5 +1,5 @@
 use crate::{
-    domain::{SignTransactionResponse, SignTransactionResponseEvm},
+    domain::{SignTransactionResponse, SignTransactionResponseEvm, U256},
     models::{
         AddressError, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         SignerError, TransactionError,
@@ -7,7 +7,7 @@ use crate::{
 };
 use alloy::{
     consensus::TxLegacy,
-    primitives::{Address as AlloyAddress, Bytes, TxKind, U256},
+    primitives::{Address as AlloyAddress, Bytes, TxKind},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

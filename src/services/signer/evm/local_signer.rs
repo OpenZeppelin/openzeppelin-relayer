@@ -117,10 +117,9 @@ impl DataSignerTrait for LocalSigner {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::EvmTransactionData;
+    use crate::{domain::U256, models::EvmTransactionData};
 
     use super::*;
-    use alloy::primitives::U256;
     use std::str::FromStr;
 
     fn create_test_signer_model() -> SignerRepoModel {

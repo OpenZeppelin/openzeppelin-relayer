@@ -1,13 +1,16 @@
 // TODO improve and add missing methods
 use alloy::{
-    primitives::{TxKind, Uint, U256},
+    primitives::{TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
     rpc::types::{TransactionInput, TransactionRequest},
     transports::http::{Client, Http},
 };
 use eyre::{eyre, Result};
 
-use crate::models::{EvmTransactionData, TransactionError};
+use crate::{
+    domain::U256,
+    models::{EvmTransactionData, TransactionError},
+};
 
 pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,

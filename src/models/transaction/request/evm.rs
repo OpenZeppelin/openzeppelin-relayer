@@ -1,8 +1,8 @@
 use crate::{
     constants::ZERO_ADDRESS,
+    domain::U256,
     models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel},
 };
-use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Default)]

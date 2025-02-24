@@ -172,8 +172,9 @@ impl NotificationSend {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::U256;
     use std::str::FromStr;
+
+    use crate::domain::U256;
 
     use crate::models::{
         EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload,

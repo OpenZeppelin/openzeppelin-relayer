@@ -1,8 +1,8 @@
 use crate::{
+    domain::U256,
     models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
     utils::{deserialize_u128, deserialize_u64},
 };
-use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
