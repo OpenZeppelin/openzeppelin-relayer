@@ -262,6 +262,7 @@ mod tests {
 
     use super::*;
     use solana_sdk::{
+        instruction::AccountMeta,
         signature::{Keypair, Signature},
         signer::Signer,
         system_instruction,
@@ -377,5 +378,372 @@ mod tests {
         assert_eq!(quote.fee_in_spl_ui, "2");
         assert_eq!(quote.fee_in_lamports, 1_000_000_000);
         assert_eq!(quote.conversion_rate, 2.0);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_fee_no_ata_creation() {
+        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+
+        // Setup provider mock
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        // Create simple transfer transaction
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+        let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let message = Message::new(&[ix], Some(&payer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_fee_payer_total_fee(&transaction).await;
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            5000,
+            "Should return base transaction fee only"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_fee_with_single_ata_creation() {
+        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+
+        // Setup provider expectations
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_minimum_balance_for_rent_exemption()
+            .returning(|_| Box::pin(async { Ok(2039280) })); // Typical rent exemption
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let payer = Keypair::new();
+        let owner = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+
+        let ata_ix =
+            create_associated_token_account(&payer.pubkey(), &owner, &mint, &spl_token::id());
+
+        let message = Message::new(&[ata_ix], Some(&payer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_fee_payer_total_fee(&transaction).await;
+
+        assert!(result.is_ok());
+        let total_fee = result.unwrap();
+        assert_eq!(
+            total_fee,
+            5000 + 2039280,
+            "Should include base fee plus rent exemption"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_fee_with_multiple_ata_creations() {
+        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_minimum_balance_for_rent_exemption()
+            .returning(|_| Box::pin(async { Ok(2039280) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let payer = Keypair::new();
+        let owner1 = Pubkey::new_unique();
+        let owner2 = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+
+        let ata_ix1 =
+            create_associated_token_account(&payer.pubkey(), &owner1, &mint, &spl_token::id());
+        let ata_ix2 =
+            create_associated_token_account(&payer.pubkey(), &owner2, &mint, &spl_token::id());
+
+        let message = Message::new(&[ata_ix1, ata_ix2], Some(&payer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_fee_payer_total_fee(&transaction).await;
+        assert!(result.is_ok());
+        let total_fee = result.unwrap();
+        assert_eq!(
+            total_fee,
+            5000 + (2 * 2039280),
+            "Should include base fee plus rent exemption for two ATAs"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_no_lamport_outflow() {
+        let (relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer.clone(),
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let payer = Keypair::new();
+        let message = Message::new(&[], Some(&payer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_relayer_lampart_outflow(&transaction).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            0,
+            "Should return zero when no SOL transfers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_single_lamport_transfer() {
+        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+
+        // Set relayer address
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let recipient = Pubkey::new_unique();
+        let transfer_amount = 1_000_000;
+        let ix =
+            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, transfer_amount);
+        let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_relayer_lampart_outflow(&transaction).await;
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            transfer_amount,
+            "Should count transfer amount from relayer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_multiple_lamport_transfers() {
+        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let recipient1 = Pubkey::new_unique();
+        let recipient2 = Pubkey::new_unique();
+        let amount1 = 1_000_000;
+        let amount2 = 2_000_000;
+
+        let instructions = vec![
+            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient1, amount1),
+            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient2, amount2),
+        ];
+
+        let message = Message::new(&instructions, Some(&relayer_keypair.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_relayer_lampart_outflow(&transaction).await;
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            amount1 + amount2,
+            "Should sum all transfers from relayer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_ignore_non_relayer_transfers() {
+        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+        let other_keypair = Keypair::new();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let recipient = Pubkey::new_unique();
+        let relayer_amount = 1_000_000;
+        let other_amount = 2_000_000;
+
+        let instructions = vec![
+            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, relayer_amount),
+            system_instruction::transfer(&other_keypair.pubkey(), &recipient, other_amount),
+        ];
+
+        let message = Message::new(&instructions, Some(&relayer_keypair.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_relayer_lampart_outflow(&transaction).await;
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            relayer_amount,
+            "Should only count transfers from relayer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_non_system_program_instructions() {
+        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        // Create non-system program instruction
+        let other_program = Pubkey::new_unique();
+        let other_ix = Instruction {
+            program_id: other_program,
+            accounts: vec![
+                AccountMeta::new(relayer_keypair.pubkey(), true),
+                AccountMeta::new(Pubkey::new_unique(), false),
+            ],
+            data: vec![0],
+        };
+
+        let message = Message::new(&[other_ix], Some(&relayer_keypair.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.estimate_relayer_lampart_outflow(&transaction).await;
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            0,
+            "Should ignore non-system program instructions"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_and_sign_transaction_success() {
+        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+        let recipient = Pubkey::new_unique();
+        let amount = 1_000_000;
+
+        let expected_signature = Signature::new_unique();
+        signer
+            .expect_sign()
+            .returning(move |_| Ok(expected_signature));
+
+        let expected_blockhash = Hash::new_unique();
+        let expected_slot = 100u64;
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(move |_| Box::pin(async move { Ok((expected_blockhash, expected_slot)) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let instructions = vec![system_instruction::transfer(
+            &relayer_keypair.pubkey(),
+            &recipient,
+            amount,
+        )];
+        let result = rpc.create_and_sign_transaction(instructions).await;
+
+        assert!(result.is_ok(), "Transaction creation should succeed");
+
+        let (signed_tx, (_, slot)) = result.unwrap();
+
+        assert_eq!(signed_tx.message.recent_blockhash, expected_blockhash);
+        assert_eq!(slot, expected_slot);
+        assert_eq!(signed_tx.signatures[0], expected_signature);
+        assert_eq!(
+            signed_tx.message.account_keys[0],
+            Pubkey::from_str(&relayer_keypair.pubkey().to_string()).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_and_sign_transaction_multiple_instructions() {
+        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        signer
+            .expect_sign()
+            .returning(|_| Ok(Signature::new_unique()));
+
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let recipient1 = Pubkey::new_unique();
+        let recipient2 = Pubkey::new_unique();
+
+        let instructions = vec![
+            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient1, 1000),
+            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient2, 2000),
+        ];
+
+        let result = rpc.create_and_sign_transaction(instructions).await;
+
+        assert!(result.is_ok());
+        let (signed_tx, _) = result.unwrap();
+        assert_eq!(signed_tx.message.instructions.len(), 2);
     }
 }
