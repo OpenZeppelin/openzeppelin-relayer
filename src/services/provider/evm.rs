@@ -117,11 +117,12 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
                     .try_into()
                     .map_err(|_| TransactionError::InvalidType("Invalid gas price".to_string()))?,
             ),
-            gas: Some(
-                Uint::<256, 4>::from(tx.gas_limit)
-                    .try_into()
-                    .map_err(|_| TransactionError::InvalidType("Invalid gas limit".to_string()))?,
-            ),
+            // we should not set gas here
+            // gas: Some(
+            //     Uint::<256, 4>::from(tx.gas_limit)
+            //         .try_into()
+            //         .map_err(|_| TransactionError::InvalidType("Invalid gas
+            // limit".to_string()))?, ),
             value: Some(Uint::<256, 4>::from(tx.value)),
             input: TransactionInput::from(tx.data.clone().unwrap_or("".to_string()).into_bytes()),
             nonce: Some(

@@ -62,13 +62,14 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
         // validate the transaction
-
+        let mut evm_data: crate::models::EvmTransactionData =
+            tx.network_data.get_evm_transaction_data()?;
         let price_params = get_transaction_price_params(self, &tx, &self.relayer).await?;
         info!("Gas price: {:?}", price_params.gas_price);
-        let gas_estimation = self
-            .gas_price_service
-            .estimate_gas(&tx.network_data.get_evm_transaction_data()?)
-            .await?;
+        if let Some(gas_price) = price_params.gas_price {
+            evm_data.gas_price = Some(gas_price.to::<u128>());
+        }
+        let gas_estimation = self.gas_price_service.estimate_gas(&evm_data).await?;
         info!("Gas estimation: {:?}", gas_estimation);
         // After preparing the transaction, submit it to the job queue
         self.job_producer
@@ -182,7 +183,7 @@ pub async fn get_transaction_price_params(
 ) -> Result<TransactionPriceParams, TransactionError> {
     let tx_data: crate::models::EvmTransactionData = tx.network_data.get_evm_transaction_data()?;
     let gas_price = match &tx_data.speed {
-        Some(speed) => Ok(evm_relayer_transaction
+        Some(speed) => evm_relayer_transaction
             .gas_price_service
             .get_legacy_prices_from_json_rpc()
             .await?
@@ -191,14 +192,11 @@ pub async fn get_transaction_price_params(
             .map(|(_, gas_price)| gas_price)
             .ok_or(TransactionError::NotSupported(
                 "Not supported speed".to_string(),
-            ))?),
-        None => {
-            evm_relayer_transaction
-                .gas_price_service
-                .estimate_gas(&tx_data)
-                .await
-        }
-    }?;
+            ))?,
+        None => U256::from(tx_data.gas_price.ok_or(TransactionError::NotSupported(
+            "Gas price is required".to_string(),
+        ))?),
+    };
 
     Ok(TransactionPriceParams {
         gas_price: Some(gas_price),
