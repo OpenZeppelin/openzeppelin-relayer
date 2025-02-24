@@ -157,3 +157,51 @@ pub fn update_system_metrics() {
     };
     DISK_USAGE_PERCENT.set(disk_percentage);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // Call update_system_metrics function
+    #[test]
+    fn test_gather_metrics_contains_expected_names() {
+        // Update the metrics with the current system values.
+        update_system_metrics();
+        let metrics = gather_metrics().expect("failed to gather metrics");
+        let output = String::from_utf8(metrics).expect("metrics output is not valid UTF-8");
+
+        // Check that some of our defined metric names are present.
+        assert!(output.contains("cpu_usage_percentage"));
+        assert!(output.contains("total_memory_bytes"));
+        assert!(output.contains("disk_usage_bytes"));
+    }
+
+    // A helper function to compute percentage used from total.
+    // This is used in the property-based test below.
+    fn compute_percentage(used: u64, total: u64) -> f64 {
+        if total > 0 {
+            (used as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    // Property-based test:
+    // We generate a total (at least 1) and a used value such that used <= total,
+    // and check that the computed percentage is between 0 and 100.
+    proptest! {
+        #[test]
+        fn prop_compute_percentage((total, used) in {
+            // Generate a total between 1 and 1_000_000 and a used value between 0 and total.
+            (1u64..1_000_000u64).prop_flat_map(|total| {
+                (Just(total), 0u64..=total)
+            })
+        }) {
+            let percentage = compute_percentage(used, total);
+            // For valid memory metrics, the percentage should be in the [0, 100] range.
+            prop_assert!(percentage >= 0.0);
+            prop_assert!(percentage <= 100.0);
+        }
+    }
+}
