@@ -117,24 +117,24 @@ impl DataSignerTrait for LocalSigner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::models::{
-        EvmTransactionData, NetworkTransactionData, SignerType, TransactionStatus,
-    };
+    use crate::models::EvmTransactionData;
 
-    #[tokio::test]
-    async fn test_sign_transaction() {
-        let signer_model = SignerRepoModel {
+    use super::*;
+    use alloy::primitives::U256;
+    use std::str::FromStr;
+
+    fn create_test_signer_model() -> SignerRepoModel {
+        SignerRepoModel {
             id: "test".to_string(),
             signer_type: SignerType::Local,
             path: None,
             raw_key: Some(vec![1u8; 32]),
             passphrase: None,
-        };
+        }
+    }
 
-        let signer = LocalSigner::new(&signer_model);
-
-        let transaction = NetworkTransactionData::Evm(EvmTransactionData {
+    fn create_test_transaction() -> NetworkTransactionData {
+        NetworkTransactionData::Evm(EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
             gas_price: 20000000000,
@@ -146,16 +146,97 @@ mod tests {
             hash: None,
             signature: None,
             raw: None,
-        });
+        })
+    }
 
-        let result = signer.sign_transaction(transaction).await.unwrap();
-        match result {
-            SignTransactionResponse::Evm(evm) => {
-                assert!(!evm.hash.is_empty());
-                assert!(!evm.raw.is_empty());
-                assert!(!evm.signature.sig.is_empty());
+    #[tokio::test]
+    async fn test_address_generation() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let address = signer.address().await.unwrap();
+
+        match address {
+            Address::Evm(addr) => {
+                assert_eq!(addr.len(), 20); // EVM addresses are 20 bytes
             }
-            _ => panic!("Wrong variant"),
+            _ => panic!("Expected EVM address"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_invalid_data() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let mut tx = create_test_transaction();
+
+        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
+            evm_tx.data = Some("invalid_hex".to_string());
+        }
+
+        let result = signer.sign_transaction(tx).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_invalid_address() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let mut tx = create_test_transaction();
+
+        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
+            evm_tx.from = "invalid_address".to_string();
+        }
+
+        let result = signer.sign_transaction(tx).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sign_data() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let request = SignDataRequest {
+            message: "Test message".to_string(),
+        };
+
+        let result = signer.sign_data(request).await.unwrap();
+
+        match result {
+            SignDataResponse::Evm(sig) => {
+                assert_eq!(sig.r.len(), 64); // 32 bytes in hex
+                assert_eq!(sig.s.len(), 64); // 32 bytes in hex
+                assert!(sig.v == 27 || sig.v == 28); // Valid v values
+                assert_eq!(sig.sig.len(), 130); // 65 bytes in hex
+            }
+            _ => panic!("Expected EVM signature"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_data_empty_message() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let request = SignDataRequest {
+            message: "".to_string(),
+        };
+
+        let result = signer.sign_data(request).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_with_contract_creation() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let mut tx = create_test_transaction();
+
+        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
+            evm_tx.to = None;
+            evm_tx.data = Some("0x6080604000".to_string()); // Minimal valid hex string for test
+        }
+
+        let result = signer.sign_transaction(tx).await.unwrap();
+        match result {
+            SignTransactionResponse::Evm(signed_tx) => {
+                assert!(!signed_tx.hash.is_empty());
+                assert!(!signed_tx.raw.is_empty());
+                assert!(!signed_tx.signature.sig.is_empty());
+            }
+            _ => panic!("Expected EVM transaction response"),
         }
     }
 }
