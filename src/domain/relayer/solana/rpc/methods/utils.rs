@@ -336,7 +336,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_fee_token_quote_spl_token() {
         let (mut relayer, signer, provider, mut jupiter_service, _) = setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {

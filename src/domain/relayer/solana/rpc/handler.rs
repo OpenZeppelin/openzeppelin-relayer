@@ -400,13 +400,13 @@ mod tests {
                 source: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                 destination: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                 amount: 10,
-                token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
+                token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
             }))
             .returning(move |_| {
                 Ok(TransferTransactionResult {
                     fee_in_lamports: "1005000".to_string(),
                     fee_in_spl: "1005000".to_string(),
-                    fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
+                    fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
                     transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
                     valid_until_blockheight: 351207983,
                 })
@@ -423,7 +423,7 @@ mod tests {
                 "source": "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                 "destination": "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
                 "amount": 10,
-                "token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
+                "token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
             }),
         };
 
@@ -474,7 +474,7 @@ mod tests {
             method: "prepareTransaction".to_string(),
             params: json!({
                 "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                "fee_token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
+                "fee_token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
             }),
         };
 

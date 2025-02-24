@@ -224,7 +224,7 @@ mod tests {
         let params = FeeEstimateRequestParams {
             transaction: encoded_tx,
             // noboost
-            fee_token: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(),
+            fee_token: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // noboost
         };
 
         let result = rpc.fee_estimate(params).await;
@@ -291,7 +291,7 @@ mod tests {
         let params = FeeEstimateRequestParams {
             transaction: encoded_tx,
             // noboost
-            fee_token: "8qJSyQprMC57TWKaYEmetUR3UUiTP2M3hXW6D2evU9Tt".to_string(),
+            fee_token: "8qJSyQprMC57TWKaYEmetUR3UUiTP2M3hXW6D2evU9Tt".to_string(), // noboost
         };
 
         let result = rpc.fee_estimate(params).await;

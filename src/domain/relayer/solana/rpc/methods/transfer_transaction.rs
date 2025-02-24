@@ -201,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn test_transfer_spl_token_success() {
         let (mut relayer, mut signer, mut provider, mut jupiter_service, _) = setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         // Create valid token account data
         let token_account = spl_token::state::Account {
@@ -306,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn test_transfer_spl_token_success_token_account_creation() {
         let (mut relayer, mut signer, mut provider, mut jupiter_service, _) = setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         let source_token_account = spl_token::state::Account {
             mint: Pubkey::from_str(test_token).unwrap(),
@@ -425,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn test_transfer_spl_insufficient_balance() {
         let (_, signer, mut provider, jupiter_service, _) = setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         // Create test relayer
         let relayer = RelayerRepoModel {

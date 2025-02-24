@@ -211,7 +211,7 @@ mod tests {
 
         // USDC -> SOL quote request
         let request = QuoteRequest {
-            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
+            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // noboost
             output_mint: "So11111111111111111111111111111111111111112".to_string(), // SOL
             amount: 1000000,                                                        // 1 USDC
             slippage: 0.5,                                                          // 0.5%
