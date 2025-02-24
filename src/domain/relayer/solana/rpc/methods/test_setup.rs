@@ -1,3 +1,4 @@
+/// Test setup for solana rpc methods
 use solana_sdk::{
     message::Message, pubkey::Pubkey, signature::Keypair, signer::Signer, system_instruction,
     transaction::Transaction,
@@ -19,7 +20,6 @@ pub fn setup_test_context() -> (
     EncodedSerializedTransaction,
 ) {
     // Create test transaction
-
     let payer = Keypair::new();
     let recipient = Pubkey::new_unique();
     let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);

@@ -283,11 +283,13 @@ impl SolanaTransactionValidator {
                         let source_pubkey = &tx.message.account_keys[*source_index as usize];
 
                         // Only validate transfers where the source is the relayer fee account.
-                        if source_pubkey == relayer_account && lamports > max_allowed_transfer_amount_lamports {
+                        if source_pubkey == relayer_account
+                            && lamports > max_allowed_transfer_amount_lamports
+                        {
                             return Err(SolanaTransactionValidationError::PolicyViolation(
                                 format!(
-                                    "Lamports transfer amount {} exceeds max allowed fee {} \
-                                     in instruction {}",
+                                    "Lamports transfer amount {} exceeds max allowed fee {} in \
+                                     instruction {}",
                                     lamports, max_allowed_transfer_amount_lamports, ix_index
                                 ),
                             ));

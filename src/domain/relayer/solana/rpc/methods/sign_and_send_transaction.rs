@@ -115,7 +115,7 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
 mod tests {
     use super::*;
     use mockall::predicate::{self};
-    use solana_sdk::signature::Signature;
+    use solana_sdk::{message::Message, signature::Signature, system_instruction};
 
     #[tokio::test]
     async fn test_sign_and_send_transaction_success() {
@@ -174,5 +174,221 @@ mod tests {
 
         let send_result = result.unwrap();
         assert_eq!(send_result.signature, expected_signature.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_invalid_blockhash() {
+        let (relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let result = rpc
+            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+                transaction: encoded_tx,
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(SolanaRpcError::SolanaTransactionValidation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_simulation_failure() {
+        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+
+        let expected_signature = Signature::new_unique();
+
+        signer
+            .expect_sign()
+            .returning(move |_| Ok(expected_signature));
+
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async { Err(SolanaProviderError::RpcError("Simulate error".to_string())) })
+        });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let result = rpc
+            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+                transaction: encoded_tx,
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(SolanaRpcError::SolanaTransactionValidation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_with_lamports_outflow() {
+        let (relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+
+        // Create transaction with lamports transfer
+        let recipient = Pubkey::new_unique();
+        let transfer_amount = 1_000_000;
+        let ix = system_instruction::transfer(
+            &Pubkey::from_str(&relayer.address).unwrap(),
+            &recipient,
+            transfer_amount,
+        );
+
+        let message = Message::new(&[ix], Some(&Pubkey::from_str(&relayer.address).unwrap()));
+        let transaction = Transaction::new_unsigned(message);
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        let expected_signature = Signature::new_unique();
+        signer
+            .expect_sign()
+            .returning(move |_| Ok(expected_signature));
+
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(10_000_000) }));
+
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        provider
+            .expect_send_transaction()
+            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let result = rpc
+            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+                transaction: encoded_tx,
+            })
+            .await;
+
+        assert!(result.is_ok());
+        let send_result = result.unwrap();
+        assert_eq!(send_result.signature, expected_signature.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_with_lamports_outflow_fail() {
+        let (relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+
+        // Create transaction with lamports transfer
+        let recipient = Pubkey::new_unique();
+        let transfer_amount = 10_000_000;
+        let ix = system_instruction::transfer(
+            &Pubkey::from_str(&relayer.address).unwrap(),
+            &recipient,
+            transfer_amount,
+        );
+
+        let message = Message::new(&[ix], Some(&Pubkey::from_str(&relayer.address).unwrap()));
+        let transaction = Transaction::new_unsigned(message);
+        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+        let expected_signature = Signature::new_unique();
+        signer
+            .expect_sign()
+            .returning(move |_| Ok(expected_signature));
+
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(10_000_000) }));
+
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+        );
+
+        let result = rpc
+            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
+                transaction: encoded_tx,
+            })
+            .await;
+
+        assert!(result.is_err());
+        match result {
+            Err(SolanaRpcError::SolanaTransactionValidation(err)) => {
+                let error_string = err.to_string();
+                assert!(
+                    error_string.contains("Insufficient funds:"),
+                    "Unexpected error message: {}",
+                    err
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
     }
 }
