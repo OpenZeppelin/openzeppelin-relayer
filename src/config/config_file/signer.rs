@@ -1,6 +1,7 @@
 //! Configuration file definitions for signer services.
 //!
 //! Provides configuration structures and validation for different signer types:
+//! - Test (temporary private keys)
 //! - Local keystore (encrypted JSON files)
 //! - AWS KMS integration [NOT IMPLEMENTED]
 //! - HashiCorp Vault integration [NOT IMPLEMENTED]

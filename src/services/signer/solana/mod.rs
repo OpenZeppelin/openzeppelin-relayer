@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! EvmSigner
+//!   ├── TestSigner (Temporary testing private key)
 //!   ├── LocalSigner (encrypted JSON keystore)
 //!   ├── AwsKmsSigner (AWS KMS backend) [NOT SUPPORTED]
 //!   └── VaultSigner (HashiCorp Vault backend) [NOT SUPPORTED]

@@ -80,6 +80,39 @@ Create `config/keys/local-signer.json` and make sure to update this file with th
 
 Create `.env` with correct values according to your needs from `.env.example` file.
 
+### Creating a Signer
+
+To create a new signer keystore, use the provided key generation tool:
+
+```sh
+cargo run --example create_key -- \
+    --password DEFINE_YOUR_PASSWORD \
+    --output-dir config/keys \
+    --filename local-signer.json
+```
+
+The tool supports the following options:
+
+- `--password`: Required. Must contain at least:
+  - 12 characters
+  - One uppercase letter
+  - One lowercase letter
+  - One number
+  - One special character
+- `--output-dir`: Directory for the keystore file (creates if not exists)
+- `--filename`: Optional. Uses timestamp-based name if not provided
+- `--force`: Optional. Allows overwriting existing files
+
+Example with all options:
+
+```sh
+cargo run --example create_key -- \
+    --password "YourSecurePassword123!" \
+    --output-dir config/keys \
+    --filename local-signer.json \
+    --force
+```
+
 ### Starting Redis manually (without docker compose)
 
 Run Redis container:
@@ -186,6 +219,7 @@ docker compose logs -f
 ## Metrics
 
 - Metrics server is started on port `8081` by default, which collects the metrics from the relayer server.
+
   - Exposes list of metrics on the `/metrics` endpoint.
   - Exposes `/debug/metrics/scrape` endpoint for prometheus to scrape metrics.
 
