@@ -214,28 +214,31 @@ impl EvmTransactionData {
     }
 }
 
-impl TryFrom<TransactionRepoModel> for TxLegacy {
+impl TryFrom<NetworkTransactionData> for TxLegacy {
     type Error = SignerError;
 
-    fn try_from(model: TransactionRepoModel) -> Result<Self, Self::Error> {
-        // If the transaction is not EVM, this will fail early.
-        let evm_data = model.into_evm_data()?;
+    fn try_from(tx: NetworkTransactionData) -> Result<Self, Self::Error> {
+        match tx {
+            NetworkTransactionData::Evm(tx) => {
+                let tx_kind = match tx.to_address()? {
+                    Some(addr) => TxKind::Call(addr),
+                    None => TxKind::Create,
+                };
 
-        // If 'to' address is present, interpret as a Call; otherwise, it's Create.
-        let tx_kind = match evm_data.to_address()? {
-            Some(addr) => TxKind::Call(addr),
-            None => TxKind::Create,
-        };
-
-        Ok(Self {
-            chain_id: Some(evm_data.chain_id),
-            nonce: evm_data.nonce,
-            gas_limit: evm_data.gas_limit,
-            gas_price: evm_data.gas_price,
-            to: tx_kind,
-            value: evm_data.value,
-            input: evm_data.data_to_bytes()?,
-        })
+                Ok(Self {
+                    chain_id: Some(tx.chain_id),
+                    nonce: tx.nonce,
+                    gas_limit: tx.gas_limit,
+                    gas_price: tx.gas_price,
+                    to: tx_kind,
+                    value: tx.value,
+                    input: tx.data_to_bytes()?,
+                })
+            }
+            _ => Err(SignerError::SigningError(
+                "Not an EVM transaction".to_string(),
+            )),
+        }
     }
 }
 
@@ -247,5 +250,28 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
             v: bytes[64],
             sig: hex::encode(bytes),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_signature_from_bytes() {
+        let test_bytes: [u8; 65] = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, // r (32 bytes)
+            33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+            55, 56, 57, 58, 59, 60, 61, 62, 63, 64, // s (32 bytes)
+            27, // v (1 byte)
+        ];
+
+        let signature = EvmTransactionDataSignature::from(&test_bytes);
+
+        assert_eq!(signature.r.len(), 64); // 32 bytes in hex
+        assert_eq!(signature.s.len(), 64); // 32 bytes in hex
+        assert_eq!(signature.v, 27);
+        assert_eq!(signature.sig.len(), 130); // 65 bytes in hex
     }
 }

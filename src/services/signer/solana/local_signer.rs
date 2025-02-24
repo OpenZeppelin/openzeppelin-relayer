@@ -13,7 +13,7 @@ use crate::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
         SignTypedDataRequest,
     },
-    models::{Address, SignerError, SignerRepoModel, TransactionRepoModel},
+    models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, TransactionRepoModel},
     services::Signer,
 };
 
@@ -55,7 +55,7 @@ impl Signer for LocalSigner {
 
     async fn sign_transaction(
         &self,
-        _transaction: TransactionRepoModel,
+        _transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         // TODO: not implemented
         Ok(SignTransactionResponse::Solana(vec![]))

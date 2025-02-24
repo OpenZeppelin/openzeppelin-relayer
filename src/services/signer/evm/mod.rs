@@ -20,7 +20,7 @@ use crate::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
         SignTypedDataRequest,
     },
-    models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
+    models::{Address, NetworkTransactionData, SignerRepoModel, SignerType, TransactionRepoModel},
 };
 use eyre::Result;
 
@@ -52,7 +52,7 @@ impl Signer for EvmSigner {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel,
+        transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_transaction(transaction).await,

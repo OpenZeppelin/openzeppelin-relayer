@@ -18,7 +18,8 @@ use crate::{
         SignTransactionResponseEvm, SignTypedDataRequest,
     },
     models::{
-        Address, EvmTransactionDataSignature, SignerError, SignerRepoModel, TransactionRepoModel,
+        Address, EvmTransactionDataSignature, NetworkTransactionData, SignerError, SignerRepoModel,
+        SignerType, TransactionRepoModel,
     },
     services::Signer,
 };
@@ -61,7 +62,7 @@ impl Signer for LocalSigner {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel,
+        transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         let mut unsigned_tx = TxLegacy::try_from(transaction)?;
 
@@ -111,5 +112,50 @@ impl DataSignerTrait for LocalSigner {
         _typed_data: SignTypedDataRequest,
     ) -> Result<SignDataResponse, SignerError> {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        EvmTransactionData, NetworkTransactionData, SignerType, TransactionStatus,
+    };
+
+    #[tokio::test]
+    async fn test_sign_transaction() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            signer_type: SignerType::Local,
+            path: None,
+            raw_key: Some(vec![1u8; 32]),
+            passphrase: None,
+        };
+
+        let signer = LocalSigner::new(&signer_model);
+
+        let transaction = NetworkTransactionData::Evm(EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
+            gas_price: 20000000000,
+            gas_limit: 21000,
+            nonce: 0,
+            value: U256::from(1000000000000000000u64),
+            data: Some("0x".to_string()),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            raw: None,
+        });
+
+        let result = signer.sign_transaction(transaction).await.unwrap();
+        match result {
+            SignTransactionResponse::Evm(evm) => {
+                assert!(!evm.hash.is_empty());
+                assert!(!evm.raw.is_empty());
+                assert!(!evm.signature.sig.is_empty());
+            }
+            _ => panic!("Wrong variant"),
+        }
     }
 }

@@ -36,8 +36,8 @@ pub use stellar::*;
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
     models::{
-        Address, NetworkType, SignerError, SignerFactoryError, SignerRepoModel, SignerType,
-        TransactionError, TransactionRepoModel,
+        Address, NetworkTransactionData, NetworkType, SignerError, SignerFactoryError,
+        SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
     },
 };
 
@@ -49,8 +49,8 @@ pub trait Signer: Send + Sync {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel, /* TODO introduce Transactions models for specific
-                                            * operations */
+        transaction: NetworkTransactionData, /* TODO introduce Transactions models for specific
+                                              * operations */
     ) -> Result<SignTransactionResponse, SignerError>;
 }
 
@@ -73,7 +73,7 @@ impl Signer for NetworkSigner {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel,
+        transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Evm(signer) => signer.sign_transaction(transaction).await,
