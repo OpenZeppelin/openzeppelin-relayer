@@ -114,17 +114,6 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("submitting transaction");
 
-        self.provider
-            .send_raw_transaction(
-                &tx.network_data
-                    .get_evm_transaction_data()
-                    .unwrap()
-                    .raw
-                    .as_ref()
-                    .unwrap(),
-            )
-            .await?;
-
         let updated = self
             .transaction_repository
             .update_status(tx.id.clone(), TransactionStatus::Submitted)
@@ -153,25 +142,6 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let receipt = self
-            .provider
-            .get_transaction_receipt(
-                tx.network_data
-                    .get_evm_transaction_data()
-                    .unwrap()
-                    .hash
-                    .as_ref()
-                    .unwrap(),
-            )
-            .await?;
-
-        info!("Transaction receipt: {:?}", receipt);
-        // ... existing code ...
-
-        // if receipt.status() != TransactionReceiptStatus::Success {
-        //     Ok(tx)
-        // }
-
         let updated: TransactionRepoModel = self
             .transaction_repository
             .update_status(tx.id.clone(), TransactionStatus::Confirmed)
