@@ -149,7 +149,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     nonce: 0, // TODO
                     value: evm_request.value,
                     data: evm_request.data.clone(),
-                    from: "0x".to_string(), // TODO
+                    from: evm_request.from.clone(),
                     to: evm_request.to.clone(),
                     chain_id: 1, // TODO
                     hash: Some("0x".to_string()),

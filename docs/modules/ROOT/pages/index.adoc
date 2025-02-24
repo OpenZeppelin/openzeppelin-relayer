@@ -112,14 +112,14 @@ You can use Docker Compose to run the container:
 
 [source,bash]
 ----
-docker-compose up
+docker compose up -d
 ----
 
 For production runs, you can use:
 
 [source,bash]
 ----
-DOCKERFILE=Dockerfile.production docker-compose up
+DOCKERFILE=Dockerfile.production docker compose up -d
 ----
 
 == Configuration References
@@ -350,7 +350,8 @@ Example for allowed_tokens:
 "allowed_tokens": [
   {
     "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "max_allowed_fee": 1000000
+    "max_allowed_fee": 1000000,
+    "conversion_slippage_percentage": 1.0
   }
 ]
 ----

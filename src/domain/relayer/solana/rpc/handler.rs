@@ -122,7 +122,7 @@ mod tests {
             .expect_fee_estimate()
             .with(predicate::eq(FeeEstimateRequestParams {
                 transaction: EncodedSerializedTransaction::new("test_transaction".to_string()),
-                fee_token: Some("test_token".to_string()),
+                fee_token: "test_token".to_string(),
             }))
             .returning(|_| {
                 Ok(FeeEstimateResult {

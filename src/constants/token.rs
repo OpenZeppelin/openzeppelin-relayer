@@ -1,0 +1,4 @@
+pub const DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE: f32 = 1.0;
+pub const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
+pub const SOLANA_DECIMALS: u8 = 9;
+pub const JUPITER_API_URL: &str = "https://quote-api.jup.ag/v6";

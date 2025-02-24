@@ -9,13 +9,14 @@ pub struct ServerConfig {
     pub api_key: String,
     pub rate_limit_requests_per_second: u64,
     pub rate_limit_burst_size: u32,
+    pub metrics_port: u16,
 }
 
 impl ServerConfig {
     pub fn from_env() -> Self {
         Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
-            port: env::var("PORT")
+            port: env::var("APP_PORT")
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
                 .unwrap_or(8080),
@@ -31,6 +32,10 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
                 .unwrap_or(300),
+            metrics_port: env::var("METRICS_PORT")
+                .unwrap_or_else(|_| "8081".to_string())
+                .parse()
+                .unwrap_or(8081),
         }
     }
 }

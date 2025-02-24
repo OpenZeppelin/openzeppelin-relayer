@@ -7,44 +7,55 @@ services:
       context: ../../
       dockerfile: Dockerfile.development
     ports:
-      - 8080:8080
+      - 8080:8080/tcp
     environment:
-      - REDIS_URL=redis://redis:6379
-      - LOG_LEVEL=debug
-      - LOCAL_SIGNER_KEY_PASSPHRASE=test  # todo
-      # Logging options
-      # LOG_MODE=file
-      # comment this line to disable file logging
-      - LOG_MODE=file
-      # LOG FILE PATH, BY DEFAULT ./logs/
-      - LOG_FILE_PATH=logs/
-      # LOG FILE SIZE IN BYTES, BY DEFAULT 1GB (1073741824 BYTES)
-      - LOG_MAX_SIZE=1073741824
+      REDIS_URL: redis://redis:6379
+      CONFIG_PATH: config/config.json
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      # Set `WEBHOOK_SIGNING_KEY` & `API_KEY` values in your .env file (recommended ) and use that instead of hardcoding them here
+      # To avoid accidentally committing sensitive information to your repository
+      WEBHOOK_SIGNING_KEY: example-key
+      API_KEY: example-123456
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+      - metrics-network
     volumes:
-      - ./config.json:/app/config/config.json
-      - ./keys:/app/keys:ro
-      # Mount logs folder to persist logs
-      - ./logs:/app/logs
+      - ./config:/app/config/
     depends_on:
       - redis
-    networks:
-      - relayer-network
-    restart: always
+    restart: on-failure:5
+
 
   redis:
-    image: redis:latest
+    image: redis:bookworm
     ports:
-      - 6379:6379
+      - 6379:6379/tcp
+    security_opt:
+      - no-new-privileges
     volumes:
       - redis_data:/data
-    command: [redis-server, --appendonly, yes]
+    command: [redis-server, --appendonly, yes, --save, '60', '1']
     networks:
       - relayer-network
-    restart: always
+      - metrics-network
+    restart: on-failure:5
+
 
 networks:
+  metrics-network:
+    internal: true
   relayer-network:
     driver: bridge
 
 volumes:
   redis_data:
+    driver: local
+
+secrets:
+  api_key:
+    environment: API_KEY
+  webhook_signing_key:
+    environment: WEBHOOK_SIGNING_KEY

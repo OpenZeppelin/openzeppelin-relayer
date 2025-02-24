@@ -25,19 +25,19 @@ use tokio::try_join;
 #[allow(dead_code)]
 pub enum SolanaTransactionValidationError {
     #[error("Failed to decode transaction: {0}")]
-    DecodeError(String),
+    Decode(String),
     #[error("Failed to deserialize transaction: {0}")]
-    DeserializeError(String),
+    Deserialize(String),
     #[error("Validation error: {0}")]
-    SigningError(String),
+    Signing(String),
     #[error("Simulation error: {0}")]
-    SimulationError(String),
+    Simulation(String),
     #[error("Policy violation: {0}")]
     PolicyViolation(String),
     #[error("Blockhash {0} is expired")]
     ExpiredBlockhash(String),
     #[error("Validation error: {0}")]
-    ValidationError(String),
+    Validation(String),
     #[error("Fee payer error: {0}")]
     FeePayer(String),
 }
@@ -55,10 +55,7 @@ impl SolanaTransactionValidator {
     ) -> Result<(), SolanaTransactionValidationError> {
         let policy = &relayer.policies.get_solana_policy();
         let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
-            SolanaTransactionValidationError::ValidationError(format!(
-                "Invalid relayer address: {}",
-                e
-            ))
+            SolanaTransactionValidationError::Validation(format!("Invalid relayer address: {}", e))
         })?;
 
         let sync_validations = async {
@@ -89,6 +86,35 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
+    /// Validates a transaction before estimating fee.
+    pub async fn validate_fee_estimate_transaction(
+        tx: &Transaction,
+        relayer: &RelayerRepoModel,
+    ) -> Result<(), SolanaTransactionValidationError> {
+        let policy = &relayer.policies.get_solana_policy();
+        let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
+            SolanaTransactionValidationError::ValidationError(format!(
+                "Invalid relayer address: {}",
+                e
+            ))
+        })?;
+
+        let sync_validations = async {
+            SolanaTransactionValidator::validate_allowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
+            SolanaTransactionValidator::validate_disallowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
+            SolanaTransactionValidator::validate_fee_payer(tx, &relayer_pubkey)?;
+            SolanaTransactionValidator::validate_data_size(tx, policy)?;
+            Ok::<(), SolanaTransactionValidationError>(())
+        };
+
+        // Run all validations concurrently.
+        try_join!(sync_validations)?;
+
+        Ok(())
+    }
+
     /// Validates that the transaction's fee payer matches the relayer's address.
     pub fn validate_fee_payer(
         tx: &Transaction,
@@ -100,7 +126,7 @@ impl SolanaTransactionValidator {
         })?;
 
         // Verify fee payer matches relayer address
-        if &fee_payer != &relayer_pubkey {
+        if fee_payer != relayer_pubkey {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
                 "Fee payer {} does not match relayer address {}",
                 fee_payer, relayer_pubkey
@@ -129,7 +155,7 @@ impl SolanaTransactionValidator {
             .is_blockhash_valid(&blockhash, CommitmentConfig::confirmed())
             .await
             .map_err(|e| {
-                SolanaTransactionValidationError::ValidationError(format!(
+                SolanaTransactionValidationError::Validation(format!(
                     "Failed to check blockhash validity: {}",
                     e
                 ))
@@ -156,7 +182,7 @@ impl SolanaTransactionValidator {
             return Ok(());
         };
 
-        if num_signatures > max_signatures as u8 {
+        if num_signatures > max_signatures {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
                 "Transaction requires {} signatures, which exceeds maximum allowed {}",
                 num_signatures, max_signatures
@@ -235,7 +261,7 @@ impl SolanaTransactionValidator {
     ) -> Result<(), SolanaTransactionValidationError> {
         let max_size: usize = config.max_tx_data_size.into();
         let tx_bytes = bincode::serialize(tx)
-            .map_err(|e| SolanaTransactionValidationError::DeserializeError(e.to_string()))?;
+            .map_err(|e| SolanaTransactionValidationError::Deserialize(e.to_string()))?;
 
         if tx_bytes.len() > max_size {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
@@ -259,30 +285,30 @@ impl SolanaTransactionValidator {
 
             // Check if the instruction comes from the System Program (native SOL transfers)
             if program_id == system_program::id() {
-                if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
-                    if let SystemInstruction::Transfer { lamports } = system_ix {
-                        // In a system transfer instruction, the first account is the source and the
-                        // second is the destination.
-                        let source_index = ix.accounts.get(0).ok_or_else(|| {
-                            SolanaTransactionValidationError::ValidationError(format!(
-                                "Missing source account in instruction {}",
-                                ix_index
-                            ))
-                        })?;
-                        let source_pubkey = &tx.message.account_keys[*source_index as usize];
+                if let Ok(SystemInstruction::Transfer { lamports }) =
+                    bincode::deserialize::<SystemInstruction>(&ix.data)
+                {
+                    // In a system transfer instruction, the first account is the source and the
+                    // second is the destination.
+                    let source_index = ix.accounts.first().ok_or_else(|| {
+                        SolanaTransactionValidationError::Validation(format!(
+                            "Missing source account in instruction {}",
+                            ix_index
+                        ))
+                    })?;
+                    let source_pubkey = &tx.message.account_keys[*source_index as usize];
 
-                        // Only validate transfers where the source is the relayer fee account.
-                        if source_pubkey == relayer_account {
-                            if let Some(max_allowed) = policy.max_allowed_transfer_amount_lamports {
-                                if lamports > max_allowed {
-                                    return Err(SolanaTransactionValidationError::PolicyViolation(
-                                        format!(
-                                            "Lamports transfer amount {} exceeds max allowed fee \
-                                             {} in instruction {}",
-                                            lamports, max_allowed, ix_index
-                                        ),
-                                    ));
-                                }
+                    // Only validate transfers where the source is the relayer fee account.
+                    if source_pubkey == relayer_account {
+                        if let Some(max_allowed) = policy.max_allowed_transfer_amount_lamports {
+                            if lamports > max_allowed {
+                                return Err(SolanaTransactionValidationError::PolicyViolation(
+                                    format!(
+                                        "Lamports transfer amount {} exceeds max allowed fee {} \
+                                         in instruction {}",
+                                        lamports, max_allowed, ix_index
+                                    ),
+                                ));
                             }
                         }
                     }
@@ -303,9 +329,9 @@ impl SolanaTransactionValidator {
         }
 
         let tx_fee = provider
-            .get_fee_for_message(&tx.message())
+            .get_fee_for_message(tx.message())
             .await
-            .map_err(|e| SolanaTransactionValidationError::ValidationError(e.to_string()))?;
+            .map_err(|e| SolanaTransactionValidationError::Validation(e.to_string()))?;
 
         if let Some(max_fee) = policy.max_allowed_transfer_amount_lamports {
             if tx_fee > max_fee {
@@ -347,12 +373,12 @@ impl SolanaTransactionValidator {
 
                             // Validate source account is writable but not signer
                             if !tx.message.is_maybe_writable(source_index, None) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
+                                return Err(SolanaTransactionValidationError::Validation(
                                     "Source account must be writable".to_string(),
                                 ));
                             }
                             if tx.message.is_signer(source_index) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
+                                return Err(SolanaTransactionValidationError::Validation(
                                     "Source account must not be signer".to_string(),
                                 ));
                             }
@@ -362,12 +388,12 @@ impl SolanaTransactionValidator {
 
                             // Validate destination account is writable but not signer
                             if !tx.message.is_maybe_writable(dest_index, None) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
+                                return Err(SolanaTransactionValidationError::Validation(
                                     "Destination account must be writable".to_string(),
                                 ));
                             }
                             if tx.message.is_signer(dest_index) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
+                                return Err(SolanaTransactionValidationError::Validation(
                                     "Destination account must not be signer".to_string(),
                                 ));
                             }
@@ -375,12 +401,12 @@ impl SolanaTransactionValidator {
                             let owner_index = ix.accounts[2] as usize;
                             // Validate owner is signer but not writable
                             if !tx.message.is_signer(owner_index) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
+                                return Err(SolanaTransactionValidationError::Validation(
                                     "Owner must be signer".to_string(),
                                 ));
                             }
                             if tx.message.is_maybe_writable(owner_index, None) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
+                                return Err(SolanaTransactionValidationError::Validation(
                                     "Owner must not be writable".to_string(),
                                 ));
                             }
@@ -390,12 +416,12 @@ impl SolanaTransactionValidator {
                                 .get_account_from_pubkey(source_pubkey)
                                 .await
                                 .map_err(|e| {
-                                    SolanaTransactionValidationError::ValidationError(e.to_string())
+                                    SolanaTransactionValidationError::Validation(e.to_string())
                                 })?;
 
                             let token_account =
                                 Account::unpack(&source_account.data).map_err(|e| {
-                                    SolanaTransactionValidationError::ValidationError(format!(
+                                    SolanaTransactionValidationError::Validation(format!(
                                         "Invalid token account: {}",
                                         e
                                     ))
@@ -416,32 +442,28 @@ impl SolanaTransactionValidator {
                                 return Err(SolanaTransactionValidationError::PolicyViolation(
                                     format!(
                                         "Token {} not allowed for transfers",
-                                        token_account.mint.to_string()
+                                        token_account.mint
                                     ),
                                 ));
                             }
 
                             if token_account.amount < amount {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    format!(
-                                        "Insufficient balance for transfer: {} < {}",
-                                        token_account.amount, amount
-                                    ),
-                                ));
+                                return Err(SolanaTransactionValidationError::Validation(format!(
+                                    "Insufficient balance for transfer: {} < {}",
+                                    token_account.amount, amount
+                                )));
                             }
 
                             if let Some(config) = token_config {
                                 if let TokenInstruction::TransferChecked { decimals, .. } = token_ix
                                 {
                                     if Some(decimals) != config.decimals {
-                                        return Err(
-                                            SolanaTransactionValidationError::ValidationError(
-                                                format!(
-                                                    "Invalid decimals: expected {:?}, got {}",
-                                                    config.decimals, decimals
-                                                ),
+                                        return Err(SolanaTransactionValidationError::Validation(
+                                            format!(
+                                                "Invalid decimals: expected {:?}, got {}",
+                                                config.decimals, decimals
                                             ),
-                                        );
+                                        ));
                                     }
                                 }
 
@@ -455,9 +477,7 @@ impl SolanaTransactionValidator {
                                                     format!(
                                                         "Transfer amount {} exceeds max fee \
                                                          allowed {} for token {}",
-                                                        amount,
-                                                        max_fee,
-                                                        token_account.mint.to_string()
+                                                        amount, max_fee, token_account.mint
                                                     ),
                                                 ),
                                             );
@@ -485,7 +505,7 @@ impl SolanaTransactionValidator {
         provider
             .simulate_transaction(&new_tx)
             .await
-            .map_err(|e| SolanaTransactionValidationError::SimulationError(e.to_string()))
+            .map_err(|e| SolanaTransactionValidationError::Simulation(e.to_string()))
     }
 }
 
@@ -553,6 +573,7 @@ mod tests {
                 decimals: Some(9),
                 symbol: Some("USDC".to_string()),
                 max_allowed_fee: Some(100),
+                conversion_slippage_percentage: None,
             }]),
             ..Default::default()
         };
@@ -560,11 +581,13 @@ mod tests {
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         // Setup default mock responses
-        let mut token_account = Account::default();
-        token_account.mint = mint;
-        token_account.owner = owner.pubkey();
-        token_account.amount = 999;
-        token_account.state = spl_token::state::AccountState::Initialized;
+        let token_account = Account {
+            mint,
+            owner: owner.pubkey(),
+            amount: 999,
+            state: spl_token::state::AccountState::Initialized,
+            ..Default::default()
+        };
 
         let mut account_data = vec![0; Account::LEN];
         Account::pack(token_account, &mut account_data).unwrap();
@@ -699,7 +722,7 @@ mod tests {
 
         assert!(matches!(
             result.unwrap_err(),
-            SolanaTransactionValidationError::ValidationError(_)
+            SolanaTransactionValidationError::Validation(_)
         ));
     }
 
@@ -1084,7 +1107,7 @@ mod tests {
 
         assert!(matches!(
             result.unwrap_err(),
-            SolanaTransactionValidationError::SimulationError(_)
+            SolanaTransactionValidationError::Simulation(_)
         ));
     }
 
@@ -1106,7 +1129,6 @@ mod tests {
     #[tokio::test]
     async fn test_validate_token_transfers_insufficient_balance() {
         let (tx, policy, provider, ..) = setup_token_transfer_test(Some(2000));
-
         let result = SolanaTransactionValidator::validate_token_transfers(
             &tx,
             &policy,
@@ -1114,9 +1136,8 @@ mod tests {
             &Pubkey::new_unique(),
         )
         .await;
-
         match result {
-            Err(SolanaTransactionValidationError::ValidationError(msg)) => {
+            Err(SolanaTransactionValidationError::Validation(msg)) => {
                 assert!(
                     msg.contains("Insufficient balance for transfer: 999 < 2000"),
                     "Unexpected error message: {}",
@@ -1182,6 +1203,7 @@ mod tests {
             decimals: Some(9),
             symbol: Some("USDT".to_string()),
             max_allowed_fee: None,
+            conversion_slippage_percentage: None,
         }]);
 
         let result = SolanaTransactionValidator::validate_token_transfers(
@@ -1389,7 +1411,7 @@ mod tests {
 
         assert!(matches!(
             result.unwrap_err(),
-            SolanaTransactionValidationError::ValidationError(_)
+            SolanaTransactionValidationError::Validation(_)
         ));
     }
 

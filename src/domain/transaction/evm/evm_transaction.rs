@@ -53,7 +53,15 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
         // validate the transaction
-        // after preparing the transaction, we need to submit it to the job queue
+
+        // gas estimation
+        let gas_estimation = self
+            .provider
+            .estimate_gas(&tx.network_data.get_evm_transaction_data()?)
+            .await?;
+        info!("Gas estimation: {:?}", gas_estimation);
+
+        // After preparing the transaction, submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
                 TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),

@@ -1,0 +1,119 @@
+---
+# Default UID: 1000
+# Default GID: 1000
+# Ports `8080` for relayer server, `6379`for redis server.
+
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080/tcp
+    secrets:
+      - api_key
+      - webhook_signing_key
+    environment:
+      METRICS_PORT: 8081
+      REDIS_URL: redis://redis:6379
+      CONFIG_PATH: config/config.json
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 30
+      METRICS_ENABLED: true
+      # Set `WEBHOOK_SIGNING_KEY` & `API_KEY` values in your .env file (recommended) and use that instead of hardcoding them here
+      # To avoid accidentally committing sensitive information to your repository
+      WEBHOOK_SIGNING_KEY: example-key
+      API_KEY: example-123456
+    depends_on:
+      - redis
+    restart: on-failure:5
+    mem_swappiness: 0
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - ./config:/app/config/
+      # Uncomment to persist logs
+      # Default: writes to stdout/console
+      #- ${LOGS_DATA_DIR:-./logs}:/app/logs
+    networks:
+      - relayer-network
+      - metrics-network
+
+  redis:
+    image: redis:bookworm
+    ports:
+      - 6379:6379/tcp
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command: [redis-server, --appendonly, yes, --save, '60', '1']
+    networks:
+      - relayer-network
+      - metrics-network
+    restart: on-failure:5
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    security_opt:
+      - no-new-privileges
+    profiles:
+      - metrics
+    depends_on:
+      - redis
+    networks:
+      - metrics-network
+    restart: on-failure:5
+
+  prometheus:
+    container_name: openzeppelin-relayer-prometheus
+    image: prom/prometheus:v3.1.0
+    security_opt:
+      - no-new-privileges
+    command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
+      --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries
+      --web.console.templates=/usr/share/prometheus/consoles
+    ports:
+      - 9090:9090/tcp
+    networks:
+      - metrics-network
+      - relayer-network
+    volumes:
+      - ./cmd/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: on-failure:5
+    profiles:
+      - metrics
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    security_opt:
+      - no-new-privileges
+    ports: [3000:3000/tcp]
+    networks:
+      - metrics-network
+      - relayer-network
+    volumes:
+      - ./cmd/prometheus/grafana.ini:/etc/grafana/grafana.ini
+      - ./cmd/prometheus/datasources:/etc/grafana/provisioning/datasources
+      - ./cmd/prometheus/dashboards:/etc/grafana/provisioning/dashboards
+    restart: on-failure:5
+    profiles:
+      - metrics
+
+networks:
+  metrics-network:
+    internal: true
+  relayer-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
+
+secrets:
+  api_key:
+    environment: API_KEY
+  webhook_signing_key:
+    environment: WEBHOOK_SIGNING_KEY

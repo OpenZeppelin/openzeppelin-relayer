@@ -74,6 +74,7 @@ pub struct SolanaAllowedTokensPolicy {
     pub decimals: Option<u8>,
     pub symbol: Option<String>,
     pub max_allowed_fee: Option<u64>,
+    pub conversion_slippage_percentage: Option<f32>,
 }
 
 impl SolanaAllowedTokensPolicy {
@@ -82,24 +83,31 @@ impl SolanaAllowedTokensPolicy {
         decimals: Option<u8>,
         symbol: Option<String>,
         max_allowed_fee: Option<u64>,
+        conversion_slippage_percentage: Option<f32>,
     ) -> Self {
         Self {
             mint,
             decimals,
             symbol,
             max_allowed_fee,
+            conversion_slippage_percentage,
         }
     }
 
     // Create a new SolanaAllowedTokensPolicy with only the mint field
     // We are creating partial entry while processing config file and later
     // we will fill the rest of the fields
-    pub fn new_partial(mint: String, max_allowed_fee: Option<u64>) -> Self {
+    pub fn new_partial(
+        mint: String,
+        max_allowed_fee: Option<u64>,
+        conversion_slippage_percentage: Option<f32>,
+    ) -> Self {
         Self {
             mint,
             decimals: None,
             symbol: None,
             max_allowed_fee,
+            conversion_slippage_percentage,
         }
     }
 }
