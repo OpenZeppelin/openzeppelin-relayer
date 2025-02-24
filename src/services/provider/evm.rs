@@ -87,18 +87,6 @@ impl EvmProvider {
 
         Ok(result)
     }
-
-    pub async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<TransactionReceipt> {
-        let tx_hash = tx_hash.parse()?;
-        let receipt = self
-            .provider
-            .get_transaction_receipt(tx_hash)
-            .await
-            .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))?
-            .ok_or_else(|| eyre!("Transaction receipt not found"))?;
-
-        Ok(receipt)
-    }
 }
 
 impl TryFrom<&EvmTransactionData> for TransactionRequest {
