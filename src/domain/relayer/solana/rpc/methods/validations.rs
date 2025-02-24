@@ -269,6 +269,7 @@ impl SolanaTransactionValidator {
             let program_id = tx.message.account_keys[ix.program_id_index as usize];
 
             // Check if the instruction comes from the System Program (native SOL transfers)
+            #[allow(clippy::collapsible_match)]
             if program_id == system_program::id() {
                 if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
                     if let SystemInstruction::Transfer { lamports } = system_ix {
@@ -586,12 +587,13 @@ mod tests {
         let mut mock_provider = MockSolanaProviderTrait::new();
 
         // Setup default mock responses
-        let mut token_account = Account::default();
-        token_account.mint = mint;
-        token_account.owner = owner.pubkey();
-        token_account.amount = 999;
-        token_account.state = spl_token::state::AccountState::Initialized;
-
+        let token_account = Account {
+            mint,
+            owner: owner.pubkey(),
+            amount: 999,
+            state: spl_token::state::AccountState::Initialized,
+            ..Default::default()
+        };
         let mut account_data = vec![0; Account::LEN];
         Account::pack(token_account, &mut account_data).unwrap();
 

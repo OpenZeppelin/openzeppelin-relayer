@@ -85,6 +85,7 @@ where
             let program_id = tx.message.account_keys[ix.program_id_index as usize];
 
             // Check if the instruction comes from the System Program (native SOL transfers)
+            #[allow(clippy::collapsible_match)]
             if program_id == system_program::id() {
                 if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
                     if let SystemInstruction::Transfer { lamports } = system_ix {
