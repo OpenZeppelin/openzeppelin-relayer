@@ -2,7 +2,7 @@
 use alloy::{
     primitives::{TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
-    rpc::types::{TransactionInput, TransactionRequest},
+    rpc::types::{TransactionInput, TransactionReceipt, TransactionRequest},
     transports::http::{Client, Http},
 };
 use eyre::{eyre, Result};
@@ -39,13 +39,12 @@ impl EvmProvider {
             .map_err(|e| eyre!("Failed to get block number: {}", e))
     }
 
-    pub async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<U256> {
+    pub async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64> {
         // transform the tx to a transaction request
         let transaction_request = TransactionRequest::try_from(tx)?;
         self.provider
             .estimate_gas(&transaction_request)
             .await
-            .map(|gas| U256::from(gas))
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
     }
 
@@ -87,6 +86,18 @@ impl EvmProvider {
             .map_err(|e| eyre!("Health check failed: {}", e))?;
 
         Ok(result)
+    }
+
+    pub async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<TransactionReceipt> {
+        let tx_hash = tx_hash.parse()?;
+        let receipt = self
+            .provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))?
+            .ok_or_else(|| eyre!("Transaction receipt not found"))?;
+
+        Ok(receipt)
     }
 }
 

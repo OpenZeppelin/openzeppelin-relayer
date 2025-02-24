@@ -40,37 +40,6 @@ impl TransactionRepoModel {
     pub fn validate(&self) -> Result<(), TransactionError> {
         Ok(())
     }
-
-    pub fn with_signed_transaction_data(
-        self,
-        signature: SignTransactionResponse,
-    ) -> Result<Self, TransactionError> {
-        let network_data = match (self.network_data, signature) {
-            (NetworkTransactionData::Evm(data), SignTransactionResponse::Evm(sig)) => {
-                NetworkTransactionData::Evm(data.with_signed_transaction_data(sig))
-            }
-            (NetworkTransactionData::Solana(_), _) => {
-                return Err(TransactionError::NotSupported(
-                    "Solana signing not implemented".into(),
-                ))
-            }
-            (NetworkTransactionData::Stellar(_), _) => {
-                return Err(TransactionError::NotSupported(
-                    "Stellar signing not implemented".into(),
-                ))
-            }
-            _ => {
-                return Err(TransactionError::InvalidType(
-                    "Mismatched network types".into(),
-                ))
-            }
-        };
-
-        Ok(Self {
-            network_data,
-            ..self
-        })
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,13 +104,16 @@ pub struct EvmTransactionData {
 }
 
 impl EvmTransactionData {
-    pub fn with_signed_transaction_data(self, data: SignTransactionResponseEvm) -> Self {
-        Self {
-            signature: Some(data.signature),
-            hash: Some(data.hash),
-            raw: Some(data.raw),
-            ..self
-        }
+    pub fn with_gas_estimate(mut self, gas_limit: u64) -> Self {
+        self.gas_limit = gas_limit;
+        self
+    }
+
+    pub fn with_signed_transaction_data(mut self, sig: SignTransactionResponseEvm) -> Self {
+        self.signature = Some(sig.signature);
+        self.hash = Some(sig.hash);
+        self.raw = Some(sig.raw);
+        self
     }
 }
 

@@ -7,8 +7,8 @@ use crate::{
     domain::transaction::Transaction,
     jobs::{JobProducer, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus,
+        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage, Repository},
     services::{EvmProvider, EvmSigner, Signer, TransactionCounterService},
@@ -57,24 +57,31 @@ impl Transaction for EvmRelayerTransaction {
         info!("Preparing transaction");
         // validate the transaction
 
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+
         // gas estimation
-        let gas_estimation = self
-            .provider
-            .estimate_gas(&tx.network_data.get_evm_transaction_data()?)
-            .await?;
+        let gas_estimation = self.provider.estimate_gas(&evm_data).await?;
         info!("Gas estimation: {:?}", gas_estimation);
 
-        // After preparing the transaction, submit it to the job queue
+        let evm_data = evm_data.with_gas_estimate(gas_estimation);
+
         // sign the transaction
-        let result = self
+        let sig_result = self
             .signer
             .sign_transaction(tx.network_data.clone())
             .await?;
 
-        let updated_tx = tx.with_signed_transaction_data(result)?;
+        let evm_data = evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+
         let updated_tx = self
             .transaction_repository
-            .update(updated_tx.id.clone(), updated_tx)
+            .update(
+                tx.id.clone(),
+                TransactionRepoModel {
+                    network_data: NetworkTransactionData::Evm(evm_data),
+                    ..tx
+                },
+            )
             .await?;
 
         // after preparing the transaction, we need to submit it to the job queue
@@ -84,7 +91,7 @@ impl Transaction for EvmRelayerTransaction {
                 None,
             )
             .await?;
-        let updated = self
+        let updated_tx = self
             .transaction_repository
             .update_status(updated_tx.id.clone(), TransactionStatus::Sent)
             .await?;
@@ -98,7 +105,7 @@ impl Transaction for EvmRelayerTransaction {
                 .await?;
         }
 
-        Ok(updated)
+        Ok(updated_tx)
     }
 
     async fn submit_transaction(
@@ -106,6 +113,17 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("submitting transaction");
+
+        self.provider
+            .send_raw_transaction(
+                &tx.network_data
+                    .get_evm_transaction_data()
+                    .unwrap()
+                    .raw
+                    .as_ref()
+                    .unwrap(),
+            )
+            .await?;
 
         let updated = self
             .transaction_repository
@@ -135,6 +153,25 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        let receipt = self
+            .provider
+            .get_transaction_receipt(
+                tx.network_data
+                    .get_evm_transaction_data()
+                    .unwrap()
+                    .hash
+                    .as_ref()
+                    .unwrap(),
+            )
+            .await?;
+
+        info!("Transaction receipt: {:?}", receipt);
+        // ... existing code ...
+
+        // if receipt.status() != TransactionReceiptStatus::Success {
+        //     Ok(tx)
+        // }
+
         let updated: TransactionRepoModel = self
             .transaction_repository
             .update_status(tx.id.clone(), TransactionStatus::Confirmed)

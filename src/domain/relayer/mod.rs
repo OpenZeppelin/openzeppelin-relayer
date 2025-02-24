@@ -15,7 +15,7 @@ use crate::{
     jobs::JobProducer,
     models::{
         EvmNetwork, EvmTransactionDataSignature, NetworkTransactionRequest, NetworkType,
-        RelayerError, RelayerRepoModel, SignerRepoModel, TransactionRepoModel,
+        RelayerError, RelayerRepoModel, SignerRepoModel, TransactionError, TransactionRepoModel,
     },
     repositories::RelayerRepositoryStorage,
     services::{
@@ -294,6 +294,17 @@ pub struct SignTransactionResponseEvm {
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
     Solana(Vec<u8>),
+}
+
+impl SignTransactionResponse {
+    pub fn into_evm(self) -> Result<SignTransactionResponseEvm, TransactionError> {
+        match self {
+            SignTransactionResponse::Evm(e) => Ok(e),
+            _ => Err(TransactionError::InvalidType(
+                "Expected EVM signature".to_string(),
+            )),
+        }
+    }
 }
 
 // JSON-RPC Request struct
