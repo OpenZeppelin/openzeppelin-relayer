@@ -75,6 +75,7 @@ impl SolanaSignerFactory {
         signer_model: &SignerRepoModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
         let signer = match signer_model.signer_type {
+            SignerType::Test => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerType::Local => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerType::AwsKms => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))

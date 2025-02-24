@@ -118,6 +118,7 @@ impl TryFrom<SignerFileConfig> for SignerRepoModel {
         Ok(Self {
             id: config.id,
             signer_type: match config.r#type {
+                SignerFileConfigType::Test => SignerType::Test,
                 SignerFileConfigType::Local => SignerType::Local,
                 SignerFileConfigType::AwsKms => SignerType::AwsKms,
                 SignerFileConfigType::Vault => SignerType::Vault,

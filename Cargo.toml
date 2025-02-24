@@ -71,7 +71,7 @@ proptest = "1.6.0"
 rand = "0.9.0"
 tempfile = "3.2"
 serial_test = "3.2"
-
+clap = { version = "4.4", features = ["derive"] }
 
 [[bin]]
 name = "openzeppelin-relayer"
@@ -82,6 +82,11 @@ doctest = true
 [[example]]
 name = "test_tx"
 path = "helpers/test_tx.rs"
+
+[[example]]
+name = "create_key"
+path = "helpers/create_key.rs"
+
 
 [lib]
 path = "src/lib.rs"

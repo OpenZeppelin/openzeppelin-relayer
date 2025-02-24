@@ -189,6 +189,10 @@ impl EvmNetwork {
         matches!(self.named(), Some(named) if named.is_arbitrum())
     }
 
+    pub const fn is_testnet(self) -> bool {
+        matches!(self.named(), Some(named) if named.is_testnet())
+    }
+
     pub const fn named(self) -> Option<EvmNamedNetwork> {
         match *self.kind() {
             EvmNetworkKind::Named(named) => Some(named),
