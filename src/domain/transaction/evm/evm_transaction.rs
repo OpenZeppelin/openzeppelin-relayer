@@ -180,7 +180,7 @@ pub async fn get_transaction_price_params(
     let gas_estimation = match &tx_data.speed {
         Some(speed) => Ok(evm_relayer_transaction
             .gas_price_service
-            .estimate_gas_with_speed(&tx_data)
+            .get_legacy_prices_from_json_rpc(&tx_data)
             .await?
             .into_iter()
             .find(|(s, _)| s == speed)

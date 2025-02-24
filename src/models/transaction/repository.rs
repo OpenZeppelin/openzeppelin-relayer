@@ -77,7 +77,7 @@ pub struct EvmTransactionDataSignature {
 // TODO support legacy and eip1559 transactions models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionData {
-    pub gas_price: u128,
+    pub gas_price: Option<u128>,
     pub gas_limit: u128,
     pub nonce: u64,
     pub value: u64,
@@ -128,7 +128,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     confirmed_at: "".to_string(),
                     network_type: NetworkType::Evm,
                     network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                        gas_price: evm_request.gas_price.unwrap(),
+                        gas_price: evm_request.gas_price,
                         gas_limit: evm_request.gas_limit,
                         nonce: 0, // TODO
                         value: evm_request.value,

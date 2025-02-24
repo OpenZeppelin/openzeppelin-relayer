@@ -38,8 +38,7 @@ impl GasPriceService {
         Ok(gas_estimation)
     }
 
-    // TODO: This is a temporary implementation for legacy only
-    pub async fn estimate_gas_with_speed(
+    pub async fn get_legacy_prices_from_json_rpc(
         &self,
         tx_data: &EvmTransactionData,
     ) -> Result<Vec<(Speed, U256)>, TransactionError> {

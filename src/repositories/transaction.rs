@@ -214,7 +214,7 @@ mod tests {
             confirmed_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                gas_price: 1000000000,
+                gas_price: Some(1000000000),
                 gas_limit: 21000,
                 nonce: 1,
                 value: 1000000000000000000,

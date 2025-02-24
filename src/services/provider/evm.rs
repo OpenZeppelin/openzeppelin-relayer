@@ -105,7 +105,7 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
                     })?,
             )),
             gas_price: Some(
-                Uint::<256, 4>::from(tx.gas_price)
+                Uint::<256, 4>::from(tx.gas_price.unwrap_or(0))
                     .try_into()
                     .map_err(|_| TransactionError::InvalidType("Invalid gas price".to_string()))?,
             ),
@@ -121,7 +121,7 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
                     .try_into()
                     .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))?,
             ),
-            chain_id: Some(11155111),
+            chain_id: Some(tx.chain_id),
             ..Default::default()
         })
     }
