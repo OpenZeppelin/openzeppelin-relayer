@@ -229,12 +229,6 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
 }
 
 impl EvmTransactionData {
-    pub fn from_address(&self) -> Result<AlloyAddress, AddressError> {
-        println!("Attempting to parse address: {}", &self.from); // Debug log
-        AlloyAddress::from_str(&self.from)
-            .map_err(|_| AddressError::ConversionError("Invalid address format".into()))
-    }
-
     pub fn to_address(&self) -> Result<Option<AlloyAddress>, SignerError> {
         Ok(match self.to.as_deref().filter(|s| !s.is_empty()) {
             Some(addr_str) => Some(AlloyAddress::from_str(addr_str).map_err(|e| {
