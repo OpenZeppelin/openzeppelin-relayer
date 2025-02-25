@@ -200,10 +200,9 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::U256;
     use std::str::FromStr;
 
-    use crate::models::{EvmTransactionData, NetworkType};
+    use crate::models::{EvmTransactionData, NetworkType, U256};
 
     use super::*;
 

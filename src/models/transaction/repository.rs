@@ -1,8 +1,8 @@
 use crate::{
-    domain::{SignTransactionResponse, SignTransactionResponseEvm, U256},
+    domain::SignTransactionResponseEvm,
     models::{
         AddressError, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerError, TransactionError,
+        SignerError, TransactionError, U256,
     },
 };
 use alloy::{

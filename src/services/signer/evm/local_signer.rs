@@ -117,7 +117,7 @@ impl DataSignerTrait for LocalSigner {
 
 #[cfg(test)]
 mod tests {
-    use crate::{domain::U256, models::EvmTransactionData};
+    use crate::models::{EvmTransactionData, U256};
 
     use super::*;
     use std::str::FromStr;

@@ -2,15 +2,12 @@
 use alloy::{
     primitives::{TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
-    rpc::types::{TransactionInput, TransactionReceipt, TransactionRequest},
+    rpc::types::{TransactionInput, TransactionRequest},
     transports::http::{Client, Http},
 };
 use eyre::{eyre, Result};
 
-use crate::{
-    domain::U256,
-    models::{EvmTransactionData, TransactionError},
-};
+use crate::models::{EvmTransactionData, TransactionError, U256};
 
 pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,

@@ -1,7 +1,6 @@
 use crate::{
     constants::ZERO_ADDRESS,
-    domain::U256,
-    models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel},
+    models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel, U256},
 };
 use serde::{Deserialize, Serialize};
 

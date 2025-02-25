@@ -174,10 +174,8 @@ impl NotificationSend {
 mod tests {
     use std::str::FromStr;
 
-    use crate::domain::U256;
-
     use crate::models::{
-        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload,
+        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload, U256,
     };
 
     use super::*;

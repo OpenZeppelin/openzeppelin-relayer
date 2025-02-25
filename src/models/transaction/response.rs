@@ -1,6 +1,5 @@
 use crate::{
-    domain::U256,
-    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
+    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus, U256},
     utils::{deserialize_u128, deserialize_u64},
 };
 use serde::{Deserialize, Serialize};
