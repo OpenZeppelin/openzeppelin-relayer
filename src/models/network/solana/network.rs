@@ -104,6 +104,10 @@ impl SolanaNetwork {
     pub const fn explorer_urls(self) -> &'static [&'static str] {
         self.0.explorer_urls()
     }
+
+    pub const fn is_testnet(self) -> bool {
+        self.0.is_testnet()
+    }
 }
 
 #[cfg(test)]

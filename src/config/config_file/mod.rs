@@ -11,6 +11,8 @@ pub use signer::*;
 mod notification;
 pub use notification::*;
 
+use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
+
 #[derive(Error, Debug)]
 pub enum ConfigFileError {
     #[error("Invalid ID length: {0}")]
@@ -43,6 +45,8 @@ pub enum ConfigFileError {
     InvalidReference(String),
     #[error("File read error: {0}")]
     FileRead(String),
+    #[error("Test Signer error: {0}")]
+    TestSigner(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -81,6 +85,67 @@ impl Config {
                     "Relayer '{}' references non-existent signer '{}'",
                     relayer.id, relayer.signer_id
                 )));
+            }
+            let signer_config = self
+                .signers
+                .iter()
+                .find(|s| s.id == relayer.signer_id)
+                .ok_or_else(|| {
+                    ConfigFileError::InternalError(format!(
+                        "Signer '{}' not found for relayer '{}'",
+                        relayer.signer_id, relayer.id
+                    ))
+                })?;
+
+            if signer_config.r#type == SignerFileConfigType::Test {
+                // ensure that only testnets are used with test signers
+                match relayer.network_type {
+                    ConfigFileNetworkType::Evm => {
+                        let network =
+                            EvmNetwork::from_network_str(&relayer.network).map_err(|_| {
+                                ConfigFileError::InvalidNetwork {
+                                    network_type: "EVM".to_string(),
+                                    name: relayer.network.clone(),
+                                }
+                            })?;
+                        if !network.is_testnet() {
+                            return Err(ConfigFileError::TestSigner(
+                                "Test signer type cannot be used on production networks"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    ConfigFileNetworkType::Solana => {
+                        let network =
+                            SolanaNetwork::from_network_str(&relayer.network).map_err(|_| {
+                                ConfigFileError::InvalidNetwork {
+                                    network_type: "EVM".to_string(),
+                                    name: relayer.network.clone(),
+                                }
+                            })?;
+                        if !network.is_testnet() {
+                            return Err(ConfigFileError::TestSigner(
+                                "Test signer type cannot be used on production networks"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    ConfigFileNetworkType::Stellar => {
+                        let network =
+                            StellarNetwork::from_network_str(&relayer.network).map_err(|_| {
+                                ConfigFileError::InvalidNetwork {
+                                    network_type: "EVM".to_string(),
+                                    name: relayer.network.clone(),
+                                }
+                            })?;
+                        if !network.is_testnet() {
+                            return Err(ConfigFileError::TestSigner(
+                                "Test signer type cannot be used on production networks"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
             }
         }
 
@@ -128,14 +193,22 @@ mod tests {
                 signer_id: "test-1".to_string(),
                 notification_id: Some("test-1".to_string()),
             }],
-            signers: vec![SignerFileConfig {
-                id: "test-1".to_string(),
-                path: Some("examples/basic-example/config/keys/local-signer.json".to_string()),
-                r#type: SignerFileConfigType::Local,
-                passphrase: Some(SignerFileConfigPassphrase::Plain {
-                    value: "test".to_string(),
-                }),
-            }],
+            signers: vec![
+                SignerFileConfig {
+                    id: "test-1".to_string(),
+                    path: Some("examples/basic-example/config/keys/local-signer.json".to_string()),
+                    r#type: SignerFileConfigType::Local,
+                    passphrase: Some(SignerFileConfigPassphrase::Plain {
+                        value: "test".to_string(),
+                    }),
+                },
+                SignerFileConfig {
+                    id: "test-type".to_string(),
+                    path: None,
+                    r#type: SignerFileConfigType::Test,
+                    passphrase: None,
+                },
+            ],
             notifications: vec![NotificationFileConfig {
                 id: "test-1".to_string(),
                 r#type: NotificationFileConfigType::Webhook,
@@ -258,5 +331,78 @@ mod tests {
             config.validate(),
             Err(ConfigFileError::InvalidReference(_))
         ));
+    }
+
+    #[test]
+    fn test_evm_mainnet_not_allowed_for_signer_type_test() {
+        let mut config = create_valid_config();
+        config.relayers[0].network = "mainnet".to_string();
+        config.relayers[0].signer_id = "test-type".to_string();
+
+        let result = config.validate();
+        assert!(matches!(
+            result,
+            Err(ConfigFileError::TestSigner(msg)) if msg.contains("production networks")
+        ));
+    }
+
+    #[test]
+    fn test_evm_sepolia_allowed_for_signer_type_test() {
+        let mut config = create_valid_config();
+        config.relayers[0].network = "sepolia".to_string();
+        config.relayers[0].signer_id = "test-type".to_string();
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_solana_mainnet_not_allowed_for_signer_type_test() {
+        let mut config = create_valid_config();
+        config.relayers[0].network_type = ConfigFileNetworkType::Solana;
+        config.relayers[0].network = "mainnet-beta".to_string();
+        config.relayers[0].signer_id = "test-type".to_string();
+
+        let result = config.validate();
+        assert!(matches!(
+            result,
+            Err(ConfigFileError::TestSigner(msg)) if msg.contains("production networks")
+        ));
+    }
+
+    #[test]
+    fn test_solana_devnet_allowed_for_signer_type_test() {
+        let mut config = create_valid_config();
+        config.relayers[0].network_type = ConfigFileNetworkType::Solana;
+        config.relayers[0].network = "devnet".to_string();
+        config.relayers[0].signer_id = "test-type".to_string();
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_stellar_mainnet_not_allowed_for_signer_type_test() {
+        let mut config = create_valid_config();
+        config.relayers[0].network_type = ConfigFileNetworkType::Stellar;
+        config.relayers[0].network = "mainnet".to_string();
+        config.relayers[0].signer_id = "test-type".to_string();
+
+        let result = config.validate();
+        assert!(matches!(
+            result,
+            Err(ConfigFileError::TestSigner(msg)) if msg.contains("production networks")
+        ));
+    }
+
+    #[test]
+    fn test_stellar_testnet_allowed_for_signer_type_test() {
+        let mut config = create_valid_config();
+        config.relayers[0].network_type = ConfigFileNetworkType::Stellar;
+        config.relayers[0].network = "testnet".to_string();
+        config.relayers[0].signer_id = "test-type".to_string();
+
+        let result = config.validate();
+        assert!(result.is_ok());
     }
 }

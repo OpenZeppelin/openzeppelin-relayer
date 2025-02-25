@@ -1,15 +1,17 @@
 //! Configuration file definitions for signer services.
 //!
 //! Provides configuration structures and validation for different signer types:
+//! - Test (temporary private keys)
 //! - Local keystore (encrypted JSON files)
 //! - AWS KMS integration [NOT IMPLEMENTED]
 //! - HashiCorp Vault integration [NOT IMPLEMENTED]
+use crate::utils::unsafe_generate_random_private_key;
+
 use super::ConfigFileError;
 use async_trait::async_trait;
 use oz_keystore::LocalClient;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::Path};
-
 #[async_trait]
 pub trait SignerConfigKeystore {
     async fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError>;
@@ -29,6 +31,11 @@ pub struct SignerFileConfig {
 impl SignerConfigKeystore for SignerFileConfig {
     async fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError> {
         match &self.r#type {
+            SignerFileConfigType::Test => {
+                // generate temporary key
+                let key_raw = unsafe_generate_random_private_key();
+                Ok(key_raw)
+            }
             SignerFileConfigType::Local => {
                 let path = self.path.as_ref().ok_or_else(|| {
                     ConfigFileError::MissingField("Signer path is required for local signer".into())
@@ -70,6 +77,7 @@ impl SignerConfigKeystore for SignerFileConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SignerFileConfigType {
+    Test,
     Local,
     AwsKms,
     Vault,
@@ -168,6 +176,9 @@ impl SignerFileConfig {
         }
 
         match &self.r#type {
+            SignerFileConfigType::Test => {
+                return Ok(());
+            }
             SignerFileConfigType::Local => {
                 return self.validate_local();
             }

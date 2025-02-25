@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! EvmSigner
+//!   ├── TestSigner (Temporary testing private key)
 //!   ├── LocalSigner (encrypted JSON keystore)
 //!   ├── AwsKmsSigner (AWS KMS backend) [NOT IMPLEMENTED]
 //!   └── VaultSigner (HashiCorp Vault backend) [NOT IMPLEMENTED]
@@ -82,6 +83,7 @@ impl EvmSignerFactory {
         signer_model: &SignerRepoModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match signer_model.signer_type {
+            SignerType::Test => EvmSigner::Local(LocalSigner::new(signer_model)),
             SignerType::Local => EvmSigner::Local(LocalSigner::new(signer_model)),
             SignerType::AwsKms => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))

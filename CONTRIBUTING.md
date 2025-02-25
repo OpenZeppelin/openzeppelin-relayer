@@ -355,6 +355,7 @@ Testing is the responsibility of all contributors as such all contributions must
    ```
 
 3. Ensure no warnings or errors.
+4. Make sure you have test coverage for your code. You can run ```RUST_TEST_THREADS=1 cargo llvm-cov --locked --html --open``` to open the coverage report in the browser and verify the percentages for your code. Make sure to have a minimum of 80% coverage.
 
 ## Security
 
