@@ -71,17 +71,13 @@ impl Transaction for EvmRelayerTransaction {
             .sign_transaction(tx.network_data.clone())
             .await?;
 
-        let evm_data = evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+        let evm_data = NetworkTransactionData::Evm(
+            evm_data.with_signed_transaction_data(sig_result.into_evm()?),
+        );
 
         let updated_tx = self
             .transaction_repository
-            .update(
-                tx.id.clone(),
-                TransactionRepoModel {
-                    network_data: NetworkTransactionData::Evm(evm_data),
-                    ..tx
-                },
-            )
+            .update_network_data(tx.id.clone(), evm_data)
             .await?;
 
         // after preparing the transaction, we need to submit it to the job queue
