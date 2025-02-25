@@ -1,16 +1,18 @@
 //! getSupportedTokens RPC method implementation.
 use crate::{
+    jobs::JobProducerTrait,
     models::{GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     /// Retrieves a list of tokens supported by the relayer for fee payments.
     ///
@@ -64,7 +66,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_supported_tokens() {
-        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Update relayer policy with some tokens
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -92,6 +95,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let result = rpc

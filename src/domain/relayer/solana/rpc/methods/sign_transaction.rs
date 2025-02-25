@@ -5,17 +5,21 @@ use futures::try_join;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 
 use crate::{
-    models::{EncodedSerializedTransaction, SignTransactionRequestParams, SignTransactionResult},
+    models::{
+        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction,
+        SignTransactionRequestParams, SignTransactionResult, SolanaWebhookRpcPayload,
+    },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     /// Signs a prepared transaction without submitting it to the blockchain.
     ///
@@ -64,10 +68,30 @@ where
 
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
 
-        Ok(SignTransactionResult {
+        let result = SignTransactionResult {
             transaction: serialized_transaction,
             signature: signature.to_string(),
-        })
+        };
+
+        if let Some(notification_id) = &self.relayer.notification_id {
+            let webhook_result = self
+                .job_producer
+                .produce_send_notification_job(
+                    produce_solana_rpc_webhook_payload(
+                        notification_id,
+                        "sign_transaction".to_string(),
+                        SolanaWebhookRpcPayload::SignTransaction(result.clone()),
+                    ),
+                    None,
+                )
+                .await;
+
+            if let Err(e) = webhook_result {
+                error!("Failed to produce notification job: {}", e);
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -119,7 +143,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_sign_transaction_success() {
-        let (relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
         let expected_signature = Signature::new_unique();
 
         signer
@@ -139,6 +164,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         // Create test instructions
@@ -159,7 +185,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_sign_transaction_provider_error() {
-        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Mock provider error
         provider
@@ -177,6 +204,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let test_instruction =
@@ -191,7 +219,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_success() {
-        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         let signature = Signature::new_unique();
 
@@ -210,7 +239,6 @@ mod tests {
             .expect_get_balance()
             .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
 
-        // mock simulate_transaction
         provider.expect_simulate_transaction().returning(|_| {
             Box::pin(async {
                 Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
@@ -230,6 +258,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -250,7 +279,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_balance_failure() {
-        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         let signature = Signature::new_unique();
 
@@ -289,6 +319,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -314,7 +345,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_validation_failure_blockhash() {
-        let (relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         provider
             .expect_is_blockhash_valid()
@@ -326,6 +358,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -338,7 +371,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_exceeds_max_signatures() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         // Update policy with low max signatures
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -370,6 +404,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -395,7 +430,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_disallowed_program() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         // Update policy with disallowed programs
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -422,6 +458,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -447,7 +484,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_exceeds_data_size() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         // Update policy with small max data size
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -479,6 +517,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -503,7 +542,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_wrong_fee_payer() {
-        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Create transaction with different fee payer
         let wrong_fee_payer = Keypair::new();
@@ -524,6 +564,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
         let params = SignTransactionRequestParams {
             transaction: encoded_tx,
@@ -546,7 +587,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_disallowed_account() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx) =
+        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Update policy with disallowed accounts
@@ -590,6 +631,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -604,7 +646,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_exceeds_max_lamports_transfer() {
-        let (mut relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Set max allowed transfer amount in policy
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -650,6 +693,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = SignTransactionRequestParams {
@@ -670,5 +714,67 @@ mod tests {
             }
             other => panic!("Expected ValidationError, got: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_with_webhook_success() {
+        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, mut job_producer) =
+            setup_test_context();
+
+        relayer.notification_id = Some("test-webhook-id".to_string());
+
+        let signature = Signature::new_unique();
+        signer
+            .expect_sign()
+            .returning(move |_| Ok(signature.clone()));
+
+        provider
+            .expect_is_blockhash_valid()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        // Expect webhook job to be produced
+        job_producer
+            .expect_produce_send_notification_job()
+            .withf(move |notification, _| {
+                matches!(notification.notification_id.as_str(), "test-webhook-id")
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let params = SignTransactionRequestParams {
+            transaction: encoded_tx,
+        };
+
+        let result = rpc.sign_transaction(params).await;
+        assert!(result.is_ok());
     }
 }

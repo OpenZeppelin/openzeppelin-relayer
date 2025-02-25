@@ -16,11 +16,12 @@ use crate::{
 
 use super::*;
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     /// Prepares a transaction by adding relayer-specific instructions.
     ///
@@ -165,7 +166,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_success() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx) =
+        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Setup policy with SOL
@@ -216,6 +217,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -235,7 +237,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_insufficient_balance() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         // Set high minimum balance requirement
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -280,6 +283,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -298,7 +302,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_updates_fee_payer() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             min_balance: 100_000_000, // 0.1 SOL minimum balance
@@ -353,6 +358,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -373,7 +379,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_signature_verification() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
         println!("Setting up known keypair for signature verification");
         let relayer_keypair = Keypair::new();
         let expected_signature = Signature::new_unique();
@@ -432,6 +439,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -464,7 +472,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_not_allowed_token() {
-        let (mut relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Configure policy with allowed tokens
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -517,6 +526,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {

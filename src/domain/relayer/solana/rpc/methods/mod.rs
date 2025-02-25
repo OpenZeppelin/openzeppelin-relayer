@@ -25,11 +25,15 @@ pub use test_setup::*;
 pub use validations::*;
 
 use crate::{
+    jobs::{JobProducer, JobProducerTrait},
     models::RelayerRepoModel,
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
+
+#[cfg(test)]
+use crate::jobs::MockJobProducerTrait;
 
 #[cfg(test)]
 use crate::services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait};
@@ -83,29 +87,45 @@ pub trait SolanaRpcMethods: Send + Sync {
 pub type DefaultProvider = SolanaProvider;
 pub type DefaultSigner = SolanaSigner;
 pub type DefaultJupiterService = JupiterService;
+pub type DefaultJobProducer = JobProducer;
 
 #[cfg(test)]
-impl SolanaRpcMethodsImpl<MockSolanaProviderTrait, MockSolanaSignTrait, MockJupiterServiceTrait> {
+impl
+    SolanaRpcMethodsImpl<
+        MockSolanaProviderTrait,
+        MockSolanaSignTrait,
+        MockJupiterServiceTrait,
+        MockJobProducerTrait,
+    >
+{
     pub fn new_mock(
         relayer: RelayerRepoModel,
         provider: Arc<MockSolanaProviderTrait>,
         signer: Arc<MockSolanaSignTrait>,
         jupiter_service: Arc<MockJupiterServiceTrait>,
+        job_producer: Arc<MockJobProducerTrait>,
     ) -> Self {
         Self {
             relayer,
             provider,
             signer,
             jupiter_service,
+            job_producer,
         }
     }
 }
 
-pub struct SolanaRpcMethodsImpl<P = DefaultProvider, S = DefaultSigner, J = DefaultJupiterService> {
+pub struct SolanaRpcMethodsImpl<
+    P = DefaultProvider,
+    S = DefaultSigner,
+    J = DefaultJupiterService,
+    JP = DefaultJobProducer,
+> {
     pub(crate) relayer: RelayerRepoModel,
     pub(crate) provider: Arc<P>,
     pub(crate) signer: Arc<S>,
     pub(crate) jupiter_service: Arc<J>,
+    pub(crate) job_producer: Arc<JP>,
 }
 
 // Default implementation
@@ -115,22 +135,25 @@ impl SolanaRpcMethodsImpl<DefaultProvider, DefaultSigner, DefaultJupiterService>
         provider: Arc<DefaultProvider>,
         signer: Arc<DefaultSigner>,
         jupiter_service: Arc<DefaultJupiterService>,
+        job_producer: Arc<DefaultJobProducer>,
     ) -> Self {
         Self {
             relayer,
             provider,
             signer,
             jupiter_service,
+            job_producer,
         }
     }
 }
 
 #[async_trait]
-impl<P, S, J> SolanaRpcMethods for SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethods for SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     async fn fee_estimate(
         &self,

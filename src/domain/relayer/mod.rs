@@ -224,6 +224,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     provider.clone(),
                     signer_service.clone(),
                     Arc::new(jupiter_service),
+                    job_producer.clone(),
                 );
                 let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
                 let relayer = SolanaRelayer::new(

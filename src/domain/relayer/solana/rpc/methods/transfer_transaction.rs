@@ -6,18 +6,20 @@ use solana_sdk::{pubkey::Pubkey, system_instruction};
 use crate::{
     constants::SOL_MINT,
     models::{
-        EncodedSerializedTransaction, TransferTransactionRequestParams, TransferTransactionResult,
+        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, SolanaWebhookRpcPayload,
+        TransferTransactionRequestParams, TransferTransactionResult,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     /// Creates a transfer transaction for a specified token, sender, and recipient.
     ///
@@ -92,13 +94,33 @@ where
 
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)?;
 
-        Ok(TransferTransactionResult {
+        let result = TransferTransactionResult {
             transaction: encoded_tx,
             fee_in_spl: fee_quote.fee_in_spl.to_string(),
             fee_in_lamports: fee_quote.fee_in_lamports.to_string(),
             fee_token: params.token,
             valid_until_blockheight: recent_blockhash.1,
-        })
+        };
+
+        if let Some(notification_id) = &self.relayer.notification_id {
+            let webhook_result = self
+                .job_producer
+                .produce_send_notification_job(
+                    produce_solana_rpc_webhook_payload(
+                        notification_id,
+                        "transfer_transaction".to_string(),
+                        SolanaWebhookRpcPayload::TransferTransaction(result.clone()),
+                    ),
+                    None,
+                )
+                .await;
+
+            if let Err(e) = webhook_result {
+                error!("Failed to produce notification job: {}", e);
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -147,7 +169,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_transfer_sol_success() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Set up policy with SOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -182,6 +205,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = TransferTransactionRequestParams {
@@ -200,7 +224,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_transfer_spl_token_success() {
-        let (mut relayer, mut signer, mut provider, mut jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, mut jupiter_service, _, job_producer) =
+            setup_test_context();
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         // Create valid token account data
@@ -284,6 +309,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = TransferTransactionRequestParams {
@@ -305,7 +331,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_transfer_spl_token_success_token_account_creation() {
-        let (mut relayer, mut signer, mut provider, mut jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, mut jupiter_service, _, job_producer) =
+            setup_test_context();
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         let source_token_account = spl_token::state::Account {
@@ -403,6 +430,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = TransferTransactionRequestParams {
@@ -424,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transfer_spl_insufficient_balance() {
-        let (_, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (_, signer, mut provider, jupiter_service, _, job_producer) = setup_test_context();
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         // Create test relayer
@@ -490,6 +518,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = TransferTransactionRequestParams {
@@ -501,5 +530,68 @@ mod tests {
 
         let result = rpc.transfer_transaction(params).await;
         assert!(matches!(result, Err(SolanaRpcError::InsufficientFunds(_))));
+    }
+
+    #[tokio::test]
+    async fn test_transfer_transaction_with_webhook() {
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, mut job_producer) =
+            setup_test_context();
+
+        // Set notification ID in relayer config
+        relayer.notification_id = Some("test-webhook".to_string());
+
+        // Set up policy with SOL
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: SOL_MINT.to_string(),
+                symbol: Some("SOL".to_string()),
+                decimals: Some(9),
+                max_allowed_fee: None,
+                conversion_slippage_percentage: None,
+            }]),
+            ..Default::default()
+        });
+
+        let signature = Signature::new_unique();
+        signer.expect_sign().returning(move |_| Ok(signature));
+
+        // Mock provider responses
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }))
+            .times(1);
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let params = TransferTransactionRequestParams {
+            token: SOL_MINT.to_string(),
+            source: Pubkey::new_unique().to_string(),
+            destination: Pubkey::new_unique().to_string(),
+            amount: 1_000_000,
+        };
+
+        let result = rpc.transfer_transaction(params).await;
+        assert!(result.is_ok());
+
+        let transfer_result = result.unwrap();
+        assert_eq!(transfer_result.fee_token, SOL_MINT);
+        assert_eq!(transfer_result.fee_in_lamports, "5000");
     }
 }

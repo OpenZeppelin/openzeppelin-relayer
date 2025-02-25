@@ -7,7 +7,7 @@ use crate::{
         BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
         SignTypedDataRequest,
     },
-    jobs::{JobProducer, TransactionRequest},
+    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, EvmNetwork, NetworkTransactionRequest, RelayerRepoModel,
         RepositoryError, TransactionRepoModel,

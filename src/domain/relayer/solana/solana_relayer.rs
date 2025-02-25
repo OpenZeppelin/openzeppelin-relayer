@@ -14,7 +14,7 @@ use crate::{
     domain::{
         relayer::RelayerError, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SolanaRelayerTrait,
     },
-    jobs::JobProducer,
+    jobs::{JobProducer, JobProducerTrait},
     models::{
         produce_relayer_disabled_payload, RelayerNetworkPolicy, RelayerRepoModel,
         RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaNetwork,

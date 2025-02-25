@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::{
     domain::transaction::Transaction,
-    jobs::{JobProducer, TransactionSend, TransactionStatusCheck},
+    jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
         TransactionRepoModel, TransactionStatus,
