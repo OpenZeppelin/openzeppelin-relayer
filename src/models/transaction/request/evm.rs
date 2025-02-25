@@ -92,7 +92,7 @@ pub fn validate_price_params(
 ) -> Result<(), ApiError> {
     let is_eip1559 =
         request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some();
-    let is_legacy = request.gas_price.unwrap_or(0) > 0;
+    let is_legacy = request.gas_price.is_some();
     let is_speed = request.speed.is_some();
 
     // count how many transaction types are present

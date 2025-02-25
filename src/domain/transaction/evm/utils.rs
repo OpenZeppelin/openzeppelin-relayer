@@ -7,7 +7,6 @@ use crate::{
 };
 
 use super::{EvmRelayerTransaction, TransactionPriceParams};
-
 /// Get the price params for the transaction based on getTransactionPriceParams defender
 pub async fn get_transaction_price_params(
     evm_relayer_transaction: &EvmRelayerTransaction,
@@ -43,7 +42,6 @@ pub async fn get_transaction_price_params(
                         .gas_price_service()
                         .get_legacy_prices_from_json_rpc()
                         .await?;
-
                     prices
                         .into_iter()
                         .find(|(s, _)| s == speed)
@@ -65,10 +63,10 @@ pub async fn get_transaction_price_params(
             ));
         };
 
-    // Apply gas price cap if configured
-    let gas_price = gas_price
-        .map(|price| apply_gas_price_cap(price, evm_relayer_transaction.relayer()))
-        .transpose()?;
+    // TODO Apply gas price cap if configured
+    // let gas_price = gas_price
+    //     .map(|price| apply_gas_price_cap(price, evm_relayer_transaction.relayer()))
+    //     .transpose()?;
     // TODO: Add balance
     // TODO: price cap for max_fee_per_gas and max_priority_fee_per_gas
     Ok(TransactionPriceParams {
@@ -79,6 +77,7 @@ pub async fn get_transaction_price_params(
     })
 }
 
+#[allow(dead_code)]
 fn apply_gas_price_cap(
     gas_price: U256,
     relayer: &RelayerRepoModel,

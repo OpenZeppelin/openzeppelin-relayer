@@ -73,14 +73,11 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
-        // validate the transaction Nahim
+        // set the gas price
         let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
         info!("Gas price: {:?}", price_params.gas_price);
         let evm_data = tx.network_data.get_evm_transaction_data()?;
-        evm_data.with_price_params(price_params);
-        // After preparing the transaction, submit it to the job queue
-
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
+        let evm_data = evm_data.with_price_params(price_params);
 
         // gas estimation
         let gas_estimation = self.provider.estimate_gas(&evm_data).await?;
@@ -93,7 +90,6 @@ impl Transaction for EvmRelayerTransaction {
             .signer
             .sign_transaction(tx.network_data.clone())
             .await?;
-
         let evm_data = NetworkTransactionData::Evm(
             evm_data.with_signed_transaction_data(sig_result.into_evm()?),
         );
