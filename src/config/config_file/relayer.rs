@@ -34,6 +34,8 @@ pub struct AllowedToken {
     pub mint: String,
     /// Maximum supported token fee (in lamports) for a transaction. Optional.
     pub max_allowed_fee: Option<u64>,
+    // Conversion slippage percentage for token. Optional.
+    pub conversion_slippage_percentage: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

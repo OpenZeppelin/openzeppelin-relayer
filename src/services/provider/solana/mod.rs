@@ -16,7 +16,8 @@ use mockall::automock;
 use mpl_token_metadata::accounts::Metadata;
 use serde::Serialize;
 use solana_client::{
-    nonblocking::rpc_client::RpcClient, rpc_response::RpcSimulateTransactionResult,
+    nonblocking::rpc_client::RpcClient,
+    rpc_response::{RpcPrioritizationFee, RpcSimulateTransactionResult},
 };
 use solana_sdk::{
     account::Account, commitment_config::CommitmentConfig, hash::Hash, message::Message,
@@ -93,6 +94,15 @@ pub trait SolanaProviderTrait: Send + Sync {
 
     /// get fee for message
     async fn get_fee_for_message(&self, message: &Message) -> Result<u64, SolanaProviderError>;
+
+    /// get recent prioritization fees
+    async fn get_recent_prioritization_fees(
+        &self,
+        addresses: &[Pubkey],
+    ) -> Result<Vec<RpcPrioritizationFee>, SolanaProviderError>;
+
+    /// calculate total fee
+    async fn calculate_total_fee(&self, message: &Message) -> Result<u64, SolanaProviderError>;
 }
 
 pub struct SolanaProvider {
@@ -302,6 +312,29 @@ impl SolanaProviderTrait for SolanaProvider {
             .get_fee_for_message(message)
             .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+    }
+
+    async fn get_recent_prioritization_fees(
+        &self,
+        addresses: &[Pubkey],
+    ) -> Result<Vec<RpcPrioritizationFee>, SolanaProviderError> {
+        self.client
+            .get_recent_prioritization_fees(&addresses)
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+    }
+
+    async fn calculate_total_fee(&self, message: &Message) -> Result<u64, SolanaProviderError> {
+        let base_fee = self.get_fee_for_message(message).await?;
+        let priority_fees = self.get_recent_prioritization_fees(&[]).await?;
+
+        let max_priority_fee = priority_fees
+            .iter()
+            .map(|fee| fee.prioritization_fee)
+            .max()
+            .unwrap_or(0);
+
+        Ok(base_fee + max_priority_fee)
     }
 }
 

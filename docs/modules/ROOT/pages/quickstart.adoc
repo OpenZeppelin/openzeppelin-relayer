@@ -35,14 +35,14 @@ cd openzeppelin-relayer
 RUST_LOG=info
 ----
 
-. Create a signer configuration and save it under `config/keys`.
-+
-You can find a sample signer config in `config/keys/local-signer.example.json`
-
+. Create a new signer key and save it under `config/keys`.
 +
 [source,bash]
 ----
-cp config/keys/local-signer.example.json config/keys/local-signer.json
+cargo run --example create_key -- \
+    --password DEFINE_YOUR_PASSWORD \
+    --output-dir config/keys \
+    --filename local-signer.json
 ----
 
 . Create a configuration file for your relayer and save it in `config/config.json`.

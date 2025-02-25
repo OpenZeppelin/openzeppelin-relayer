@@ -55,8 +55,8 @@ sha2 = { version = "0.10" }
 dashmap = { version = "6.1" }
 actix-governor = "0.8"
 governor = "0.8.0"
-solana-sdk = { version = "2.1" }
-solana-client = { version = "2.1" }
+solana-sdk = { version = "2.2" }
+solana-client = { version = "2.2" }
 spl-token = { version = "7" }
 mpl-token-metadata = { version = "5.1" }
 sysinfo = "0.33"
@@ -71,8 +71,22 @@ proptest = "1.6.0"
 rand = "0.9.0"
 tempfile = "3.2"
 serial_test = "3.2"
-
+clap = { version = "4.4", features = ["derive"] }
 
 [[bin]]
-path = "src/main.rs"
 name = "openzeppelin-relayer"
+path = "src/main.rs"
+doc = true
+doctest = true
+
+[[example]]
+name = "test_tx"
+path = "helpers/test_tx.rs"
+
+[[example]]
+name = "create_key"
+path = "helpers/create_key.rs"
+
+
+[lib]
+path = "src/lib.rs"
