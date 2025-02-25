@@ -319,7 +319,7 @@ impl SolanaProviderTrait for SolanaProvider {
         addresses: &[Pubkey],
     ) -> Result<Vec<RpcPrioritizationFee>, SolanaProviderError> {
         self.client
-            .get_recent_prioritization_fees(&addresses)
+            .get_recent_prioritization_fees(addresses)
             .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }

@@ -169,7 +169,7 @@ where
 
         let total_fee = self
             .provider
-            .calculate_total_fee(&transaction.message())
+            .calculate_total_fee(transaction.message())
             .await?;
 
         let solana_policy = self.relayer.policies.get_solana_policy();
