@@ -1,12 +1,17 @@
 use crate::{
-    domain::TransactionPriceParams,
+    domain::{SignTransactionResponseEvm, TransactionPriceParams},
     models::{
-        EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        TransactionError,
+        AddressError, EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError,
+        RelayerRepoModel, SignerError, TransactionError, U256,
     },
+};
+use alloy::{
+    consensus::TxLegacy,
+    primitives::{Address as AlloyAddress, Bytes, TxKind},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::{convert::TryFrom, str::FromStr};
 use uuid::Uuid;
 
 use super::evm::Speed;
@@ -31,6 +36,12 @@ pub struct TransactionRepoModel {
     pub confirmed_at: String,
     pub network_data: NetworkTransactionData,
     pub network_type: NetworkType,
+}
+
+impl TransactionRepoModel {
+    pub fn validate(&self) -> Result<(), TransactionError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,9 +84,10 @@ impl NetworkTransactionData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionDataSignature {
-    pub v: u64,
     pub r: String,
     pub s: String,
+    pub v: u8,
+    pub sig: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,7 +95,7 @@ pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
     pub gas_limit: u128,
     pub nonce: u64,
-    pub value: u64,
+    pub value: U256,
     pub data: Option<String>,
     pub from: String,
     pub to: Option<String>,
@@ -93,6 +105,7 @@ pub struct EvmTransactionData {
     pub speed: Option<Speed>,
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
+    pub raw: Option<Vec<u8>>,
 }
 
 impl EvmTransactionData {
@@ -102,6 +115,17 @@ impl EvmTransactionData {
         self.max_priority_fee_per_gas = price_params
             .max_priority_fee_per_gas
             .map(|price| price.to::<u128>());
+        self
+    }
+    pub fn with_gas_estimate(mut self, gas_limit: u64) -> Self {
+        self.gas_limit = U256::from(gas_limit).to::<u128>();
+        self
+    }
+
+    pub fn with_signed_transaction_data(mut self, sig: SignTransactionResponseEvm) -> Self {
+        self.signature = Some(sig.signature);
+        self.hash = Some(sig.hash);
+        self.raw = Some(sig.raw);
         self
     }
 }
@@ -177,6 +201,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                         speed: evm_request.speed.clone(),
                         max_fee_per_gas: evm_request.max_fee_per_gas,
                         max_priority_fee_per_gas: evm_request.max_priority_fee_per_gas,
+                        raw: None,
                     }),
                 })
             }
@@ -215,8 +240,80 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
     }
 }
 
-impl TransactionRepoModel {
-    pub fn validate(&self) -> Result<(), TransactionError> {
-        Ok(())
+impl EvmTransactionData {
+    pub fn to_address(&self) -> Result<Option<AlloyAddress>, SignerError> {
+        Ok(match self.to.as_deref().filter(|s| !s.is_empty()) {
+            Some(addr_str) => Some(AlloyAddress::from_str(addr_str).map_err(|e| {
+                AddressError::ConversionError(format!("Invalid 'to' address: {}", e))
+            })?),
+            None => None,
+        })
+    }
+
+    pub fn data_to_bytes(&self) -> Result<Bytes, SignerError> {
+        Bytes::from_str(self.data.as_deref().unwrap_or(""))
+            .map_err(|e| SignerError::SigningError(format!("Invalid transaction data: {}", e)))
+    }
+}
+
+impl TryFrom<NetworkTransactionData> for TxLegacy {
+    type Error = SignerError;
+
+    fn try_from(tx: NetworkTransactionData) -> Result<Self, Self::Error> {
+        match tx {
+            NetworkTransactionData::Evm(tx) => {
+                let tx_kind = match tx.to_address()? {
+                    Some(addr) => TxKind::Call(addr),
+                    None => TxKind::Create,
+                };
+
+                Ok(Self {
+                    chain_id: Some(tx.chain_id),
+                    nonce: tx.nonce,
+                    gas_limit: tx.gas_limit as u64,
+                    gas_price: tx.gas_price.unwrap_or(0),
+                    to: tx_kind,
+                    value: tx.value,
+                    input: tx.data_to_bytes()?,
+                })
+            }
+            _ => Err(SignerError::SigningError(
+                "Not an EVM transaction".to_string(),
+            )),
+        }
+    }
+}
+
+impl From<&[u8; 65]> for EvmTransactionDataSignature {
+    fn from(bytes: &[u8; 65]) -> Self {
+        Self {
+            r: hex::encode(&bytes[0..32]),
+            s: hex::encode(&bytes[32..64]),
+            v: bytes[64],
+            sig: hex::encode(bytes),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_signature_from_bytes() {
+        let test_bytes: [u8; 65] = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, // r (32 bytes)
+            33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+            55, 56, 57, 58, 59, 60, 61, 62, 63, 64, // s (32 bytes)
+            27, // v (1 byte)
+        ];
+
+        let signature = EvmTransactionDataSignature::from(&test_bytes);
+
+        assert_eq!(signature.r.len(), 64); // 32 bytes in hex
+        assert_eq!(signature.s.len(), 64); // 32 bytes in hex
+        assert_eq!(signature.v, 27);
+        assert_eq!(signature.sig.len(), 130); // 65 bytes in hex
     }
 }

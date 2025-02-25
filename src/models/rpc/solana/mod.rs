@@ -56,7 +56,7 @@ impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transact
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct FeeEstimateRequestParams {
     pub transaction: EncodedSerializedTransaction,
-    pub fee_token: Option<String>,
+    pub fee_token: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -133,6 +133,7 @@ pub struct GetSupportedTokensItem {
     pub symbol: String,
     pub decimals: u8,
     pub max_allowed_fee: Option<u64>,
+    pub conversion_slippage_percentage: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]

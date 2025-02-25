@@ -1,5 +1,6 @@
 use crate::{
     jobs::JobProducerError,
+    models::{SignerError, SignerFactoryError},
     services::{ProviderError, SolanaProviderError},
 };
 
@@ -33,6 +34,9 @@ pub enum TransactionError {
 
     #[error("Not supported: {0}")]
     NotSupported(String),
+
+    #[error("Signer error: {0}")]
+    SignerError(String),
 }
 
 impl From<TransactionError> for ApiError {
@@ -48,6 +52,7 @@ impl From<TransactionError> for ApiError {
             }
             TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
+            TransactionError::SignerError(msg) => ApiError::InternalError(msg),
         }
     }
 }
@@ -61,5 +66,17 @@ impl From<RepositoryError> for TransactionError {
 impl From<Report> for TransactionError {
     fn from(err: Report) -> Self {
         TransactionError::UnexpectedError(err.to_string())
+    }
+}
+
+impl From<SignerFactoryError> for TransactionError {
+    fn from(error: SignerFactoryError) -> Self {
+        TransactionError::SignerError(error.to_string())
+    }
+}
+
+impl From<SignerError> for TransactionError {
+    fn from(error: SignerError) -> Self {
+        TransactionError::SignerError(error.to_string())
     }
 }

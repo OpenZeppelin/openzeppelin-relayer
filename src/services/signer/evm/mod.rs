@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! EvmSigner
+//!   ├── TestSigner (Temporary testing private key)
 //!   ├── LocalSigner (encrypted JSON keystore)
 //!   ├── AwsKmsSigner (AWS KMS backend) [NOT IMPLEMENTED]
 //!   └── VaultSigner (HashiCorp Vault backend) [NOT IMPLEMENTED]
@@ -16,8 +17,11 @@ use async_trait::async_trait;
 pub use local_signer::*;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTypedDataRequest},
-    models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
+    domain::{
+        SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
+        SignTypedDataRequest,
+    },
+    models::{Address, NetworkTransactionData, SignerRepoModel, SignerType, TransactionRepoModel},
 };
 use eyre::Result;
 
@@ -49,8 +53,8 @@ impl Signer for EvmSigner {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel,
-    ) -> Result<Vec<u8>, SignerError> {
+        transaction: NetworkTransactionData,
+    ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_transaction(transaction).await,
         }
@@ -82,6 +86,7 @@ impl EvmSignerFactory {
         signer_model: &SignerRepoModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match signer_model.signer_type {
+            SignerType::Test => EvmSigner::Local(LocalSigner::new(signer_model)),
             SignerType::Local => EvmSigner::Local(LocalSigner::new(signer_model)),
             SignerType::AwsKms => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))

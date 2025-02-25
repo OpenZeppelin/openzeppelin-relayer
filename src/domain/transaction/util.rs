@@ -25,9 +25,14 @@ pub async fn get_relayer_transaction(
     state: &ThinData<AppState>,
 ) -> Result<NetworkTransaction, ApiError> {
     let relayer_model = get_relayer_by_id(relayer_id, state).await?;
+    let signer_model = state
+        .signer_repository
+        .get_by_id(relayer_model.signer_id.clone())
+        .await?;
 
     RelayerTransactionFactory::create_transaction(
         relayer_model,
+        signer_model,
         state.relayer_repository(),
         state.transaction_repository(),
         state.transaction_counter_store(),
@@ -40,8 +45,14 @@ pub async fn get_relayer_transaction_by_model(
     relayer_model: RelayerRepoModel,
     state: &ThinData<AppState>,
 ) -> Result<NetworkTransaction, ApiError> {
+    let signer_model = state
+        .signer_repository
+        .get_by_id(relayer_model.signer_id.clone())
+        .await?;
+
     RelayerTransactionFactory::create_transaction(
         relayer_model,
+        signer_model,
         state.relayer_repository(),
         state.transaction_repository(),
         state.transaction_counter_store(),

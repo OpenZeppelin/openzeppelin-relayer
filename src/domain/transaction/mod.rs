@@ -1,11 +1,14 @@
 use crate::{
     jobs::JobProducer,
-    models::{EvmNetwork, NetworkType, RelayerRepoModel, TransactionError, TransactionRepoModel},
+    models::{
+        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, TransactionError,
+        TransactionRepoModel,
+    },
     repositories::{
         InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{
-        get_solana_network_provider_from_str, EvmGasPriceService, EvmProvider,
+        get_solana_network_provider_from_str, EvmGasPriceService, EvmProvider, EvmSignerFactory,
         TransactionCounterService,
     },
 };
@@ -163,6 +166,7 @@ pub struct RelayerTransactionFactory;
 impl RelayerTransactionFactory {
     pub fn create_transaction(
         relayer: RelayerRepoModel,
+        signer: SignerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
@@ -188,6 +192,7 @@ impl RelayerTransactionFactory {
                     transaction_counter_store,
                 );
                 let gas_price_service = Arc::new(EvmGasPriceService::new(evm_provider.clone()));
+                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
                     relayer,
@@ -197,6 +202,7 @@ impl RelayerTransactionFactory {
                     transaction_counter_service,
                     job_producer,
                     gas_price_service,
+                    signer_service,
                 )?))
             }
             NetworkType::Solana => {

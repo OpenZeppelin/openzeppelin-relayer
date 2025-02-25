@@ -45,7 +45,7 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
             let msg = format!("Failed to estimate gas: {err}");
             TransactionError::NetworkConfiguration(msg)
         })?;
-        Ok(gas_estimation)
+        Ok(U256::from(gas_estimation))
     }
 
     async fn get_legacy_prices_from_json_rpc(
@@ -62,24 +62,3 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
             .collect())
     }
 }
-
-// // Agregamos los tests
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use mockall::automock;
-
-//     #[automock]
-//     pub trait GasPriceEstimator {
-//         async fn estimate_gas(
-//             &self,
-//             tx_data: &EvmTransactionData,
-//         ) -> Result<U256, TransactionError>;
-
-//         async fn get_legacy_prices_from_json_rpc(
-//             &self,
-//         ) -> Result<Vec<(Speed, U256)>, TransactionError>;
-//     }
-
-//     // Aquí puedes agregar tus tests usando MockGasPriceEstimator
-// }

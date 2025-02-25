@@ -86,6 +86,32 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
+    /// Validates a transaction before estimating fee.
+    pub async fn validate_fee_estimate_transaction(
+        tx: &Transaction,
+        relayer: &RelayerRepoModel,
+    ) -> Result<(), SolanaTransactionValidationError> {
+        let policy = &relayer.policies.get_solana_policy();
+        let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|e| {
+            SolanaTransactionValidationError::Validation(format!("Invalid relayer address: {}", e))
+        })?;
+
+        let sync_validations = async {
+            SolanaTransactionValidator::validate_allowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_allowed_programs(tx, policy)?;
+            SolanaTransactionValidator::validate_disallowed_accounts(tx, policy)?;
+            SolanaTransactionValidator::validate_max_signatures(tx, policy)?;
+            SolanaTransactionValidator::validate_fee_payer(tx, &relayer_pubkey)?;
+            SolanaTransactionValidator::validate_data_size(tx, policy)?;
+            Ok::<(), SolanaTransactionValidationError>(())
+        };
+
+        // Run all validations concurrently.
+        try_join!(sync_validations)?;
+
+        Ok(())
+    }
+
     /// Validates that the transaction's fee payer matches the relayer's address.
     pub fn validate_fee_payer(
         tx: &Transaction,
@@ -544,6 +570,7 @@ mod tests {
                 decimals: Some(9),
                 symbol: Some("USDC".to_string()),
                 max_allowed_fee: Some(100),
+                conversion_slippage_percentage: None,
             }]),
             ..Default::default()
         };
@@ -1173,6 +1200,7 @@ mod tests {
             decimals: Some(9),
             symbol: Some("USDT".to_string()),
             max_allowed_fee: None,
+            conversion_slippage_percentage: None,
         }]);
 
         let result = SolanaTransactionValidator::validate_token_transfers(

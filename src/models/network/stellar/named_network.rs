@@ -43,6 +43,10 @@ impl StellarNamedNetwork {
             StellarNamedNetwork::Testnet => &["https://horizon-testnet.stellar.org"],
         }
     }
+
+    pub const fn is_testnet(&self) -> bool {
+        matches!(self, StellarNamedNetwork::Testnet)
+    }
 }
 
 impl fmt::Display for StellarNamedNetwork {

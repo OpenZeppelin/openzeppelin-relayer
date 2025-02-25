@@ -14,13 +14,13 @@ use std::sync::Arc;
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, TransactionRepoModel,
+        EvmNetwork, EvmTransactionDataSignature, NetworkTransactionRequest, NetworkType,
+        RelayerError, RelayerRepoModel, SignerRepoModel, TransactionError, TransactionRepoModel,
     },
     repositories::RelayerRepositoryStorage,
     services::{
-        get_solana_network_provider_from_str, EvmSignerFactory, SolanaSignerFactory,
-        TransactionCounterService,
+        get_solana_network_provider_from_str, EvmSignerFactory, JupiterService,
+        SolanaSignerFactory, TransactionCounterService,
     },
 };
 
@@ -218,10 +218,12 @@ impl RelayerFactoryTrait for RelayerFactory {
             NetworkType::Solana => {
                 let provider = Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
                 let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
+                let jupiter_service = Arc::new(JupiterService::new());
                 let rpc_methods = SolanaRpcMethodsImpl::new(
                     relayer.clone(),
                     provider.clone(),
                     signer_service.clone(),
+                    jupiter_service.clone(),
                 );
                 let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
                 let relayer = SolanaRelayer::new(
@@ -277,6 +279,30 @@ pub enum SignDataResponse {
 pub struct SignTypedDataRequest {
     pub domain_separator: String,
     pub hash_struct_message: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SignTransactionResponseEvm {
+    pub hash: String,
+    pub signature: EvmTransactionDataSignature,
+    pub raw: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum SignTransactionResponse {
+    Evm(SignTransactionResponseEvm),
+    Solana(Vec<u8>),
+}
+
+impl SignTransactionResponse {
+    pub fn into_evm(self) -> Result<SignTransactionResponseEvm, TransactionError> {
+        match self {
+            SignTransactionResponse::Evm(e) => Ok(e),
+            _ => Err(TransactionError::InvalidType(
+                "Expected EVM signature".to_string(),
+            )),
+        }
+    }
 }
 
 // JSON-RPC Request struct

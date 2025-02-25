@@ -7,11 +7,11 @@ use crate::{
     domain::{get_transaction_price_params, transaction::Transaction},
     jobs::{JobProducer, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus, U256,
+        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus, U256,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
-    services::{EvmGasPriceService, EvmProvider, TransactionCounterService},
+    services::{EvmGasPriceService, EvmProvider, EvmSigner, Signer, TransactionCounterService},
 };
 #[allow(dead_code)]
 pub struct TransactionPriceParams {
@@ -30,9 +30,10 @@ pub struct EvmRelayerTransaction {
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
     gas_price_service: Arc<EvmGasPriceService>,
+    signer: EvmSigner,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 impl EvmRelayerTransaction {
     pub fn new(
         relayer: RelayerRepoModel,
@@ -42,6 +43,7 @@ impl EvmRelayerTransaction {
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
         gas_price_service: Arc<EvmGasPriceService>,
+        signer: EvmSigner,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
@@ -51,6 +53,7 @@ impl EvmRelayerTransaction {
             transaction_counter_service,
             job_producer,
             gas_price_service,
+            signer,
         })
     }
 
@@ -70,33 +73,58 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
-        // validate the transaction
+        // validate the transaction Nahim
         let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
         info!("Gas price: {:?}", price_params.gas_price);
         let evm_data = tx.network_data.get_evm_transaction_data()?;
         evm_data.with_price_params(price_params);
         // After preparing the transaction, submit it to the job queue
+
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+
+        // gas estimation
+        let gas_estimation = self.provider.estimate_gas(&evm_data).await?;
+        info!("Gas estimation: {:?}", gas_estimation);
+
+        let evm_data = evm_data.with_gas_estimate(gas_estimation);
+
+        // sign the transaction
+        let sig_result = self
+            .signer
+            .sign_transaction(tx.network_data.clone())
+            .await?;
+
+        let evm_data = NetworkTransactionData::Evm(
+            evm_data.with_signed_transaction_data(sig_result.into_evm()?),
+        );
+
+        let updated_tx = self
+            .transaction_repository
+            .update_network_data(tx.id.clone(), evm_data)
+            .await?;
+
+        // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
-                TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionSend::submit(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
                 None,
             )
             .await?;
-        let updated = self
+        let updated_tx = self
             .transaction_repository
-            .update_status(tx.id.clone(), TransactionStatus::Sent)
+            .update_status(updated_tx.id.clone(), TransactionStatus::Sent)
             .await?;
 
         if let Some(notification_id) = &self.relayer.notification_id {
             self.job_producer
                 .produce_send_notification_job(
-                    produce_transaction_update_notification_payload(notification_id, &updated),
+                    produce_transaction_update_notification_payload(notification_id, &updated_tx),
                     None,
                 )
                 .await?;
         }
 
-        Ok(tx)
+        Ok(updated_tx)
     }
 
     async fn submit_transaction(

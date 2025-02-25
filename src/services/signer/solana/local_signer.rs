@@ -9,9 +9,12 @@ use solana_sdk::{
 };
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTypedDataRequest},
-    models::{Address, SignerRepoModel, TransactionRepoModel},
-    services::{Signer, SignerError},
+    domain::{
+        SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
+        SignTypedDataRequest,
+    },
+    models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, TransactionRepoModel},
+    services::Signer,
 };
 
 use super::SolanaSignTrait;
@@ -52,10 +55,10 @@ impl Signer for LocalSigner {
 
     async fn sign_transaction(
         &self,
-        _transaction: TransactionRepoModel,
-    ) -> Result<Vec<u8>, SignerError> {
+        _transaction: NetworkTransactionData,
+    ) -> Result<SignTransactionResponse, SignerError> {
         // TODO: not implemented
-        Ok(vec![])
+        Ok(SignTransactionResponse::Solana(vec![]))
     }
 }
 

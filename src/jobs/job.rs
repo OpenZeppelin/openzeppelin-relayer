@@ -172,8 +172,10 @@ impl NotificationSend {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use crate::models::{
-        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload,
+        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload, U256,
     };
 
     use super::*;
@@ -191,7 +193,7 @@ mod tests {
                 gas_price: 1000000000,
                 gas_limit: 21000,
                 nonce: 1,
-                value: 1000000000000000000,
+                value: U256::from_str("1000000000000000000").unwrap(),
                 from: "0xabc".to_string(),
                 to: Some("0xdef".to_string()),
                 relayer_id: "relayer-1".to_string(),
