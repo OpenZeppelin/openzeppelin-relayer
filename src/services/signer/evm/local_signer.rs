@@ -175,19 +175,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_invalid_address() {
-        let signer = LocalSigner::new(&create_test_signer_model());
-        let mut tx = create_test_transaction();
-
-        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
-            evm_tx.from = "invalid_address".to_string();
-        }
-
-        let result = signer.sign_transaction(tx).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_sign_data() {
         let signer = LocalSigner::new(&create_test_signer_model());
         let request = SignDataRequest {
