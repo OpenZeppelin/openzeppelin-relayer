@@ -1,5 +1,6 @@
 //! feeEstimate RPC method implementation.
 use futures::try_join;
+use log::{debug, info};
 use solana_sdk::transaction::Transaction;
 
 use crate::{
@@ -41,11 +42,15 @@ where
         &self,
         params: FeeEstimateRequestParams,
     ) -> Result<FeeEstimateResult, SolanaRpcError> {
-        let transaction_request = Transaction::try_from(params.transaction)?;
+        info!(
+            "Processing fee estimate request for token: {}",
+            params.fee_token
+        );
+
+        let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
         validate_fee_estimate_transaction(&transaction_request, &params.fee_token, &self.relayer)
-            .await
-            .map_err(|e| SolanaRpcError::InvalidParams(e.to_string()))?;
+            .await?;
 
         let mut transaction = transaction_request.clone();
 
@@ -54,11 +59,27 @@ where
         // update tx blockhash
         transaction.message.recent_blockhash = recent_blockhash;
 
-        let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction)
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+        debug!("Estimated SOL fee: {} lamports", total_fee);
 
         let fee_quota = self
             .get_fee_token_quote(&params.fee_token, total_fee)
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("Failed to fee quote: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
+        info!(
+            "Fee estimate: {} {} (SOL fee: {} lamports, conversion rate: {})",
+            fee_quota.fee_in_spl_ui, params.fee_token, total_fee, fee_quota.conversion_rate
+        );
 
         Ok(FeeEstimateResult {
             estimated_fee: fee_quota.fee_in_spl_ui,

@@ -2,6 +2,7 @@
 use std::str::FromStr;
 
 use futures::try_join;
+use log::info;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 
 use crate::{
@@ -43,13 +44,18 @@ where
         &self,
         params: SignTransactionRequestParams,
     ) -> Result<SignTransactionResult, SolanaRpcError> {
+        info!("Processing sign transaction request");
         let transaction_request = Transaction::try_from(params.transaction)?;
-
         validate_sign_transaction(&transaction_request, &self.relayer, &*self.provider).await?;
 
         let total_fee = self
             .estimate_fee_payer_total_fee(&transaction_request)
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
         let lamports_outflow = self
             .estimate_relayer_lampart_outflow(&transaction_request)
             .await?;
@@ -62,7 +68,11 @@ where
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            error!("Insufficient funds: {}", e);
+            SolanaRpcError::InsufficientFunds(e.to_string())
+        })?;
 
         let (signed_transaction, signature) = self.relayer_sign_transaction(transaction_request)?;
 
@@ -90,6 +100,10 @@ where
                 error!("Failed to produce notification job: {}", e);
             }
         }
+        info!(
+            "Transaction signed successfully with signature: {}",
+            result.signature
+        );
 
         Ok(result)
     }

@@ -2,6 +2,7 @@
 use std::str::FromStr;
 
 use futures::try_join;
+use log::info;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 
 use crate::{
@@ -45,6 +46,7 @@ where
         &self,
         params: SignAndSendTransactionRequestParams,
     ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
+        info!("Processing sign and send transaction request");
         let transaction_request = Transaction::try_from(params.transaction)?;
 
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
@@ -52,10 +54,16 @@ where
 
         let total_fee = self
             .estimate_fee_payer_total_fee(&transaction_request)
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
         let lamports_outflow = self
             .estimate_relayer_lampart_outflow(&transaction_request)
             .await?;
+
         let total_outflow = total_fee + lamports_outflow;
 
         // Validate relayer has sufficient balance
@@ -65,11 +73,22 @@ where
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            error!("Insufficient funds: {}", e);
+            SolanaRpcError::InsufficientFunds(e.to_string())
+        })?;
 
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction_request)?;
 
-        let send_signature = self.provider.send_transaction(&signed_transaction).await?;
+        let send_signature = self
+            .provider
+            .send_transaction(&signed_transaction)
+            .await
+            .map_err(|e| {
+                error!("Failed to send transaction: {}", e);
+                SolanaRpcError::Send(e.to_string())
+            })?;
 
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
 
@@ -95,6 +114,10 @@ where
                 error!("Failed to produce notification job: {}", e);
             }
         }
+        info!(
+            "Transaction signed and sent successfully with signature: {}",
+            result.signature
+        );
         Ok(result)
     }
 }

@@ -1,4 +1,6 @@
 //! getSupportedTokens RPC method implementation.
+use log::info;
+
 use crate::{
     jobs::JobProducerTrait,
     models::{GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult},
@@ -29,6 +31,8 @@ where
         &self,
         _params: GetSupportedTokensRequestParams,
     ) -> Result<GetSupportedTokensResult, SolanaRpcError> {
+        info!("Processing get supported tokens request");
+
         let tokens = self
             .relayer
             .policies
@@ -47,6 +51,11 @@ where
                     .collect()
             })
             .unwrap_or_default();
+
+        info!(
+            "Successfully handled request to get supported tokens: {:?}",
+            tokens
+        );
 
         Ok(GetSupportedTokensResult { tokens })
     }

@@ -37,7 +37,10 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
         &self,
         request: JsonRpcRequest,
     ) -> Result<JsonRpcResponse, SolanaRpcError> {
-        info!("Received request with method: {}", request.method);
+        info!(
+            "Received {} request.method and params: {:?}",
+            request.method, request.params
+        );
         let method = SolanaRpcMethod::from_str(request.method.as_str()).ok_or_else(|| {
             error!("Unsupported method: {}", request.method);
             SolanaRpcError::UnsupportedMethod(request.method.clone())

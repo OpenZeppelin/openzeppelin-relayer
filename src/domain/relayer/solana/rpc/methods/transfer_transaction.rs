@@ -1,6 +1,7 @@
 //! transferTransaction RPC method implementation.
 use std::str::FromStr;
 
+use log::info;
 use solana_sdk::{pubkey::Pubkey, system_instruction};
 
 use crate::{
@@ -50,6 +51,10 @@ where
         &self,
         params: TransferTransactionRequestParams,
     ) -> Result<TransferTransactionResult, SolanaRpcError> {
+        info!(
+            "Processing transfer transaction for token: {} and amount {}",
+            params.token, params.amount
+        );
         let token_mint = Pubkey::from_str(&params.token)
             .map_err(|_| SolanaRpcError::InvalidParams("Invalid token mint address".to_string()))?;
         let source = Pubkey::from_str(&params.source)
@@ -80,9 +85,21 @@ where
         let (transaction, recent_blockhash) =
             self.create_and_sign_transaction(instructions).await?;
 
-        let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction)
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
 
-        let fee_quote = self.get_fee_token_quote(&params.token, total_fee).await?;
+        let fee_quote = self
+            .get_fee_token_quote(&params.token, total_fee)
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate fee quota: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
 
         SolanaTransactionValidator::validate_sufficient_relayer_balance(
             total_fee,
@@ -90,7 +107,11 @@ where
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            error!("Insufficient funds: {}", e);
+            SolanaRpcError::InsufficientFunds(e.to_string())
+        })?;
 
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)?;
 
@@ -119,6 +140,8 @@ where
                 error!("Failed to produce notification job: {}", e);
             }
         }
+
+        info!("Transfer transaction processed successfully");
 
         Ok(result)
     }

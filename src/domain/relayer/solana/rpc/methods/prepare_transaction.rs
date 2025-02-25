@@ -2,6 +2,7 @@
 use std::str::FromStr;
 
 use futures::try_join;
+use log::info;
 use solana_sdk::{
     commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
     transaction::Transaction,
@@ -51,11 +52,16 @@ where
         &self,
         params: PrepareTransactionRequestParams,
     ) -> Result<PrepareTransactionResult, SolanaRpcError> {
-        let transaction_request = Transaction::try_from(params.transaction)?;
+        info!(
+            "Processing prepare transaction request for fee token: {}",
+            params.fee_token
+        );
+
+        let transaction_request = Transaction::try_from(params.transaction.clone())?;
+
         let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
             .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
 
-        // Validate transaction
         validate_prepare_transaction(
             &transaction_request,
             &params.fee_token,
@@ -83,8 +89,16 @@ where
             message,
         };
 
-        let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction)
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
         let lamports_outflow = self.estimate_relayer_lampart_outflow(&transaction).await?;
+
         let total_outflow = total_fee + lamports_outflow;
 
         // Validate relayer has sufficient balance
@@ -94,18 +108,31 @@ where
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            error!("Insufficient funds: {}", e);
+            SolanaRpcError::InsufficientFunds(e.to_string())
+        })?;
 
         // Get fee quote
         let fee_quote = self
             .get_fee_token_quote(&params.fee_token, total_fee)
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate fee quote: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
 
         // Sign transaction
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction)?;
 
         // Serialize and encode
         let encoded_tx = EncodedSerializedTransaction::try_from(&signed_transaction)?;
+
+        info!(
+            "Successfully prepared transaction. Fee: {} SPL tokens, valid until block height: {}",
+            fee_quote.fee_in_spl, recent_blockhash.1
+        );
 
         Ok(PrepareTransactionResult {
             transaction: encoded_tx,
