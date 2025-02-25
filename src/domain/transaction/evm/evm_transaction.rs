@@ -1,22 +1,23 @@
-use alloy::primitives::U256;
 use async_trait::async_trait;
 use eyre::Result;
 use log::info;
 use std::sync::Arc;
 
 use crate::{
-    domain::transaction::Transaction,
+    domain::{get_transaction_price_params, transaction::Transaction},
     jobs::{JobProducer, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus,
+        TransactionRepoModel, TransactionStatus, U256,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
-    services::{EvmProvider, GasPriceService, TransactionCounterService},
+    services::{EvmGasPriceService, EvmProvider, TransactionCounterService},
 };
 #[allow(dead_code)]
 pub struct TransactionPriceParams {
     pub gas_price: Option<U256>,
+    pub max_priority_fee_per_gas: Option<U256>,
+    pub max_fee_per_gas: Option<U256>,
     pub balance: Option<U256>,
 }
 
@@ -28,7 +29,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
-    gas_price_service: Arc<GasPriceService>,
+    gas_price_service: Arc<EvmGasPriceService>,
 }
 
 #[allow(dead_code)]
@@ -40,7 +41,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
-        gas_price_service: Arc<GasPriceService>,
+        gas_price_service: Arc<EvmGasPriceService>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
@@ -52,6 +53,14 @@ impl EvmRelayerTransaction {
             gas_price_service,
         })
     }
+
+    pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService> {
+        &self.gas_price_service
+    }
+
+    pub fn relayer(&self) -> &RelayerRepoModel {
+        &self.relayer
+    }
 }
 
 #[async_trait]
@@ -62,15 +71,10 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction");
         // validate the transaction
-        let mut evm_data: crate::models::EvmTransactionData =
-            tx.network_data.get_evm_transaction_data()?;
-        let price_params = get_transaction_price_params(self, &tx, &self.relayer).await?;
+        let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
         info!("Gas price: {:?}", price_params.gas_price);
-        if let Some(gas_price) = price_params.gas_price {
-            evm_data.gas_price = Some(gas_price.to::<u128>());
-        }
-        let gas_estimation = self.gas_price_service.estimate_gas(&evm_data).await?;
-        info!("Gas estimation: {:?}", gas_estimation);
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+        evm_data.with_price_params(price_params);
         // After preparing the transaction, submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
@@ -172,34 +176,4 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<bool, TransactionError> {
         Ok(true)
     }
-}
-
-/// Get the price params for the transaction based on getTransactionPriceParams defender
-/// totalCost, balance, priceParams, extraCost
-pub async fn get_transaction_price_params(
-    evm_relayer_transaction: &EvmRelayerTransaction,
-    tx: &TransactionRepoModel,
-    _relayer: &RelayerRepoModel,
-) -> Result<TransactionPriceParams, TransactionError> {
-    let tx_data: crate::models::EvmTransactionData = tx.network_data.get_evm_transaction_data()?;
-    let gas_price = match &tx_data.speed {
-        Some(speed) => evm_relayer_transaction
-            .gas_price_service
-            .get_legacy_prices_from_json_rpc()
-            .await?
-            .into_iter()
-            .find(|(s, _)| s == speed)
-            .map(|(_, gas_price)| gas_price)
-            .ok_or(TransactionError::NotSupported(
-                "Not supported speed".to_string(),
-            ))?,
-        None => U256::from(tx_data.gas_price.ok_or(TransactionError::NotSupported(
-            "Gas price is required".to_string(),
-        ))?),
-    };
-
-    Ok(TransactionPriceParams {
-        gas_price: Some(gas_price),
-        balance: None,
-    })
 }

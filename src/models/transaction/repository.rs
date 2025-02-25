@@ -1,6 +1,9 @@
-use crate::models::{
-    EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-    TransactionError,
+use crate::{
+    domain::TransactionPriceParams,
+    models::{
+        EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+        TransactionError,
+    },
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -32,6 +35,7 @@ pub struct TransactionRepoModel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "network_data", content = "data")]
+#[allow(clippy::large_enum_variant)]
 pub enum NetworkTransactionData {
     Evm(EvmTransactionData),
     Solana(SolanaTransactionData),
@@ -74,7 +78,6 @@ pub struct EvmTransactionDataSignature {
     pub s: String,
 }
 
-// TODO support legacy and eip1559 transactions models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
@@ -88,6 +91,39 @@ pub struct EvmTransactionData {
     pub hash: Option<String>,
     pub signature: Option<EvmTransactionDataSignature>,
     pub speed: Option<Speed>,
+    pub max_fee_per_gas: Option<u128>,
+    pub max_priority_fee_per_gas: Option<u128>,
+}
+
+impl EvmTransactionData {
+    pub fn with_price_params(mut self, price_params: TransactionPriceParams) -> Self {
+        self.gas_price = price_params.gas_price.map(|price| price.to::<u128>());
+        self.max_fee_per_gas = price_params.max_fee_per_gas.map(|price| price.to::<u128>());
+        self.max_priority_fee_per_gas = price_params
+            .max_priority_fee_per_gas
+            .map(|price| price.to::<u128>());
+        self
+    }
+}
+
+pub trait EvmTransactionDataTrait {
+    fn is_legacy(&self) -> bool;
+    fn is_eip1559(&self) -> bool;
+    fn is_speed(&self) -> bool;
+}
+
+impl EvmTransactionDataTrait for EvmTransactionData {
+    fn is_legacy(&self) -> bool {
+        self.gas_price.is_some()
+    }
+
+    fn is_eip1559(&self) -> bool {
+        self.max_fee_per_gas.is_some() && self.max_priority_fee_per_gas.is_some()
+    }
+
+    fn is_speed(&self) -> bool {
+        self.speed.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +175,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                         hash: Some("0x".to_string()),
                         signature: None,
                         speed: evm_request.speed.clone(),
+                        max_fee_per_gas: evm_request.max_fee_per_gas,
+                        max_priority_fee_per_gas: evm_request.max_priority_fee_per_gas,
                     }),
                 })
             }

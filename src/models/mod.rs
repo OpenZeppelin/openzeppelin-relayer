@@ -34,3 +34,6 @@ pub use notification::*;
 
 mod rpc;
 pub use rpc::*;
+
+mod types;
+pub use types::*;

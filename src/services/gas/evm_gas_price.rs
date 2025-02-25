@@ -1,10 +1,11 @@
 use crate::{
-    models::{evm::Speed, EvmTransactionData, TransactionError},
+    models::{evm::Speed, EvmTransactionData, TransactionError, U256},
     services::EvmProvider,
 };
-use alloy::primitives::U256;
 use eyre::Result;
 use log::info;
+
+use async_trait::async_trait;
 
 // calculate the multiplier for the gas estimation
 impl Speed {
@@ -17,19 +18,28 @@ impl Speed {
         ]
     }
 }
+#[async_trait]
+#[allow(dead_code)]
+pub trait EvmGasPriceServiceTrait {
+    async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError>;
 
-pub struct GasPriceService {
+    async fn get_legacy_prices_from_json_rpc(&self)
+        -> Result<Vec<(Speed, U256)>, TransactionError>;
+}
+
+pub struct EvmGasPriceService {
     provider: EvmProvider,
 }
 
-impl GasPriceService {
+impl EvmGasPriceService {
     pub fn new(provider: EvmProvider) -> Self {
         Self { provider }
     }
-    pub async fn estimate_gas(
-        &self,
-        tx_data: &EvmTransactionData,
-    ) -> Result<U256, TransactionError> {
+}
+
+#[async_trait]
+impl EvmGasPriceServiceTrait for EvmGasPriceService {
+    async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError> {
         info!("Estimating gas for tx_data: {:?}", tx_data);
         let gas_estimation = self.provider.estimate_gas(tx_data).await.map_err(|err| {
             let msg = format!("Failed to estimate gas: {err}");
@@ -38,7 +48,7 @@ impl GasPriceService {
         Ok(gas_estimation)
     }
 
-    pub async fn get_legacy_prices_from_json_rpc(
+    async fn get_legacy_prices_from_json_rpc(
         &self,
     ) -> Result<Vec<(Speed, U256)>, TransactionError> {
         let base = self.provider.get_gas_price().await?;
@@ -52,3 +62,24 @@ impl GasPriceService {
             .collect())
     }
 }
+
+// // Agregamos los tests
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use mockall::automock;
+
+//     #[automock]
+//     pub trait GasPriceEstimator {
+//         async fn estimate_gas(
+//             &self,
+//             tx_data: &EvmTransactionData,
+//         ) -> Result<U256, TransactionError>;
+
+//         async fn get_legacy_prices_from_json_rpc(
+//             &self,
+//         ) -> Result<Vec<(Speed, U256)>, TransactionError>;
+//     }
+
+//     // Aquí puedes agregar tus tests usando MockGasPriceEstimator
+// }

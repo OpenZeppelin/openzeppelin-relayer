@@ -225,6 +225,8 @@ mod tests {
                 signature: None,
                 hash: Some(format!("0x{}", id)),
                 speed: Some(Speed::Fast),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
             }),
         }
     }
