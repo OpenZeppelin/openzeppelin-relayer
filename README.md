@@ -106,9 +106,11 @@ cargo run
 
 ### Running services with docker compose
 
+If you use `docker-compose` over `docker compose` please read [Compose V1 vs Compose V2](#compose-v1-vs-compose-v2) section.
+
 Based on your `.env` file, docker compose may or may not start the metrics server ( within relayer app container), prometheus and grafana.
 
-> Note: If you want to start the metrics server, prometheus and grafana, make sure to set `METRICS_SERVER_ENABLED=true` in your `.env` file.
+> Note: If you want to start the metrics server, prometheus and grafana, make sure to set `METRICS_ENABLED=true` in your `.env` file.
 
 If you want to start the services using [make](./Makefile.toml) target, you can use the following command to start the services:
 
@@ -118,13 +120,13 @@ cargo make docker-compose-up
 
 > Note: By default docker compose command uses Dockerfile.development to build the image. If you want to use Dockerfile.production, you can set: `DOCKERFILE=Dockerfile.production` before running `cargo make docker-compose-up`.
 
-We have a [make](./Makefile.toml) target to start the services with docker compose with metrics profile based on your `.env` file. For metrics server you will need to make sure `METRICS_SERVER_ENABLED=true` is set in your `.env` file. If you want to start the services directly using docker compose, you can use the following command:
+We have a [make](./Makefile.toml) target to start the services with docker compose with metrics profile based on your `.env` file. For metrics server you will need to make sure `METRICS_ENABLED=true` is set in your `.env` file. If you want to start the services directly using docker compose, you can use the following command:
 
 ```sh
-# without metrics profile ( METRICS_SERVER_ENABLED=false by default )
+# without metrics profile ( METRICS_ENABLED=false by default )
 # will only start the relayer app container and redis container
 docker compose up -d
-# or with metrics profile ( METRICS_SERVER_ENABLED=true in .env file )
+# or with metrics profile ( METRICS_ENABLED=true in .env file )
 # docker compose --profile metrics up -d
 ```
 
@@ -152,6 +154,12 @@ To check the logs of the services/containers, run the following command:
 docker compose logs -f
 ```
 
+## Compose V1 vs Compose V2
+
+- If you use `docker-compose` command, it will use Compose V1 by default which is deprecated. We recommend using `docker compose` command.
+- You can read more about the differences between Compose V1 and Compose V2 [here](https://docs.docker.com/compose/intro/history/).
+- You can also check out the issue [here](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/64).
+
 ## Documentation
 
 - Pre-requisites:
@@ -175,15 +183,15 @@ docker compose logs -f
 
 - To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
 
-### Observability
+## Observability
 
 - Currently we support logs and metrics ( uses prometheus and grafana) for the relayer server.
 
-## Logs
+### Logs
 
 - For logs, our app defaults to writing logs to stdout/console. You can also configure it to write logs to a file pathn by setting `LOG_MODE` to `file`. See [docker compose file](./docker-compose.yaml) for more details.
 
-## Metrics
+### Metrics
 
 - Metrics server is started on port `8081` by default, which collects the metrics from the relayer server.
   - Exposes list of metrics on the `/metrics` endpoint.
