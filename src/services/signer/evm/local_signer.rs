@@ -75,7 +75,7 @@ impl Signer for LocalSigner {
         let signed_tx = unsigned_tx.into_signed(signature);
         let signature_bytes = signature.as_bytes();
 
-        let mut raw = Vec::new();
+        let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
         signed_tx.rlp_encode(&mut raw);
 
         Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
