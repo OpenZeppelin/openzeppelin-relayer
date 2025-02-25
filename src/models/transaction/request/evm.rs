@@ -10,7 +10,7 @@ pub struct EvmTransactionRequest {
     pub to: Option<String>,
     pub value: U256,
     pub data: Option<String>,
-    pub gas_limit: u128,
+    pub gas_limit: u64,
     pub gas_price: Option<u128>,
     pub speed: Option<Speed>,
     pub max_fee_per_gas: Option<u128>,

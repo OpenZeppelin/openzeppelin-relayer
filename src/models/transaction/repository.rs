@@ -93,7 +93,7 @@ pub struct EvmTransactionDataSignature {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
-    pub gas_limit: u128,
+    pub gas_limit: u64,
     pub nonce: u64,
     pub value: U256,
     pub data: Option<String>,
@@ -118,7 +118,7 @@ impl EvmTransactionData {
         self
     }
     pub fn with_gas_estimate(mut self, gas_limit: u64) -> Self {
-        self.gas_limit = U256::from(gas_limit).to::<u128>();
+        self.gas_limit = gas_limit;
         self
     }
 
@@ -270,7 +270,7 @@ impl TryFrom<NetworkTransactionData> for TxLegacy {
                 Ok(Self {
                     chain_id: Some(tx.chain_id),
                     nonce: tx.nonce,
-                    gas_limit: tx.gas_limit as u64,
+                    gas_limit: tx.gas_limit,
                     gas_price: tx.gas_price.unwrap_or(0),
                     to: tx_kind,
                     value: tx.value,

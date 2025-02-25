@@ -69,7 +69,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
                     gas_price: evm_data.gas_price.unwrap_or(0),
-                    gas_limit: evm_data.gas_limit as u64,
+                    gas_limit: evm_data.gas_limit,
                     nonce: evm_data.nonce,
                     value: evm_data.value,
                     from: evm_data.from,

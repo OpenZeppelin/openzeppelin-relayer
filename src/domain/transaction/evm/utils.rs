@@ -8,7 +8,6 @@ use crate::{
 
 use super::{EvmRelayerTransaction, TransactionPriceParams};
 
-// Add this type definition at the top level
 type GasPriceCapResult = (Option<U256>, Option<U256>, Option<U256>);
 
 /// Get the price params for the transaction based on getTransactionPriceParams defender
