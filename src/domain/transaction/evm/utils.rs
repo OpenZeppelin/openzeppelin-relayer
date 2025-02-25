@@ -7,6 +7,10 @@ use crate::{
 };
 
 use super::{EvmRelayerTransaction, TransactionPriceParams};
+
+// Add this type definition at the top level
+type GasPriceCapResult = (Option<U256>, Option<U256>, Option<U256>);
+
 /// Get the price params for the transaction based on getTransactionPriceParams defender
 pub async fn get_transaction_price_params(
     evm_relayer_transaction: &EvmRelayerTransaction,
@@ -63,12 +67,15 @@ pub async fn get_transaction_price_params(
             ));
         };
 
-    // TODO Apply gas price cap if configured
-    // let gas_price = gas_price
-    //     .map(|price| apply_gas_price_cap(price, evm_relayer_transaction.relayer()))
-    //     .transpose()?;
+    // Apply gas price cap
+    let (gas_price, max_fee_per_gas, max_priority_fee_per_gas) = apply_gas_price_cap(
+        gas_price.unwrap_or_default(),
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        evm_relayer_transaction.relayer(),
+    )?;
+
     // TODO: Add balance
-    // TODO: price cap for max_fee_per_gas and max_priority_fee_per_gas
     Ok(TransactionPriceParams {
         gas_price,
         max_fee_per_gas,
@@ -77,11 +84,12 @@ pub async fn get_transaction_price_params(
     })
 }
 
-#[allow(dead_code)]
 fn apply_gas_price_cap(
     gas_price: U256,
+    max_fee_per_gas: Option<U256>,
+    max_priority_fee_per_gas: Option<U256>,
     relayer: &RelayerRepoModel,
-) -> Result<U256, TransactionError> {
+) -> Result<GasPriceCapResult, TransactionError> {
     // Get gas price cap from relayer policies and convert to U256, default to U256::MAX if None
     let gas_price_cap = relayer
         .policies
@@ -90,5 +98,21 @@ fn apply_gas_price_cap(
         .map(U256::from)
         .unwrap_or(U256::MAX);
 
-    Ok(std::cmp::min(gas_price, gas_price_cap))
+    let is_eip1559 = max_fee_per_gas.is_some() && max_priority_fee_per_gas.is_some();
+
+    if is_eip1559 {
+        let max_fee = max_fee_per_gas.unwrap();
+        let max_priority_fee = max_priority_fee_per_gas.unwrap();
+
+        // Cap the maxFeePerGas
+        let capped_max_fee = std::cmp::min(gas_price_cap, max_fee);
+
+        // Ensure maxPriorityFeePerGas < maxFeePerGas to avoid client errors
+        let capped_max_priority_fee = std::cmp::min(capped_max_fee, max_priority_fee);
+
+        Ok((None, Some(capped_max_fee), Some(capped_max_priority_fee)))
+    } else {
+        // Handle legacy transaction
+        Ok((Some(std::cmp::min(gas_price, gas_price_cap)), None, None))
+    }
 }
