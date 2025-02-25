@@ -92,6 +92,7 @@ pub fn produce_relayer_disabled_payload(
     )
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum SolanaWebhookRpcPayload {

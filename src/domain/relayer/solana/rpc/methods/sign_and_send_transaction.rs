@@ -430,9 +430,7 @@ mod tests {
         relayer.notification_id = Some("test-webhook-id".to_string());
 
         let signature = Signature::new_unique();
-        signer
-            .expect_sign()
-            .returning(move |_| Ok(signature.clone()));
+        signer.expect_sign().returning(move |_| Ok(signature));
 
         provider
             .expect_is_blockhash_valid()
