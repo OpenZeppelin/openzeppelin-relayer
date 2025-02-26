@@ -210,9 +210,10 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
     use std::str::FromStr;
 
-    use crate::models::{EvmTransactionData, NetworkType, U256};
+    use crate::models::U256;
 
     use super::*;
 
@@ -226,7 +227,7 @@ mod tests {
             confirmed_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                gas_price: 1000000000,
+                gas_price: Some(1000000000),
                 gas_limit: 21000,
                 nonce: 1,
                 value: U256::from_str("1000000000000000000").unwrap(),
@@ -236,6 +237,9 @@ mod tests {
                 chain_id: 1,
                 signature: None,
                 hash: Some(format!("0x{}", id)),
+                speed: Some(Speed::Fast),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
                 raw: None,
             }),
         }
@@ -351,7 +355,7 @@ mod tests {
 
         // Create new network data with updated values
         let updated_network_data = NetworkTransactionData::Evm(EvmTransactionData {
-            gas_price: 2000000000,
+            gas_price: Some(2000000000),
             gas_limit: 30000,
             nonce: 2,
             value: U256::from_str("2000000000000000000").unwrap(),
@@ -362,6 +366,9 @@ mod tests {
             signature: None,
             hash: Some("0xUpdated".to_string()),
             raw: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
         });
 
         let updated = repo
@@ -371,7 +378,7 @@ mod tests {
 
         // Verify the network data was updated
         if let NetworkTransactionData::Evm(data) = &updated.network_data {
-            assert_eq!(data.gas_price, 2000000000);
+            assert_eq!(data.gas_price, Some(2000000000));
             assert_eq!(data.gas_limit, 30000);
             assert_eq!(data.nonce, 2);
             assert_eq!(data.hash, Some("0xUpdated".to_string()));

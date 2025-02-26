@@ -8,7 +8,7 @@ use crate::{
         InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{
-        get_solana_network_provider_from_str, EvmProvider, EvmSignerFactory,
+        get_solana_network_provider_from_str, EvmGasPriceService, EvmProvider, EvmSignerFactory,
         TransactionCounterService,
     },
 };
@@ -191,6 +191,7 @@ impl RelayerTransactionFactory {
                     relayer.address.clone(),
                     transaction_counter_store,
                 );
+                let gas_price_service = Arc::new(EvmGasPriceService::new(evm_provider.clone()));
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
@@ -200,6 +201,7 @@ impl RelayerTransactionFactory {
                     transaction_repository,
                     transaction_counter_service,
                     job_producer,
+                    gas_price_service,
                     signer_service,
                 )?))
             }

@@ -9,6 +9,7 @@ use eyre::{eyre, Result};
 
 use crate::models::{EvmTransactionData, TransactionError, U256};
 
+#[derive(Clone)]
 pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,
 }
@@ -43,6 +44,14 @@ impl EvmProvider {
             .estimate_gas(&transaction_request)
             .await
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
+    }
+
+    pub async fn get_gas_price(&self) -> Result<U256> {
+        self.provider
+            .get_gas_price()
+            .await
+            .map(|gas| U256::from(gas))
+            .map_err(|e| eyre!("Failed to get gas price: {}", e))
     }
 
     pub async fn send_transaction(&self, tx: TransactionRequest) -> Result<String> {
@@ -103,15 +112,16 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
                     })?,
             )),
             gas_price: Some(
-                Uint::<256, 4>::from(tx.gas_price)
+                Uint::<256, 4>::from(tx.gas_price.unwrap_or(0))
                     .try_into()
                     .map_err(|_| TransactionError::InvalidType("Invalid gas price".to_string()))?,
             ),
-            gas: Some(
-                Uint::<256, 4>::from(tx.gas_limit)
-                    .try_into()
-                    .map_err(|_| TransactionError::InvalidType("Invalid gas limit".to_string()))?,
-            ),
+            // we should not set gas here
+            // gas: Some(
+            //     Uint::<256, 4>::from(tx.gas_limit)
+            //         .try_into()
+            //         .map_err(|_| TransactionError::InvalidType("Invalid gas
+            // limit".to_string()))?, ),
             value: Some(Uint::<256, 4>::from(tx.value)),
             input: TransactionInput::from(tx.data.clone().unwrap_or("".to_string()).into_bytes()),
             nonce: Some(
@@ -119,7 +129,7 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
                     .try_into()
                     .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))?,
             ),
-            chain_id: Some(11155111),
+            chain_id: Some(tx.chain_id),
             ..Default::default()
         })
     }

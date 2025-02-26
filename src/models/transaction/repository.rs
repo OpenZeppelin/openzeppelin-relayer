@@ -1,8 +1,8 @@
 use crate::{
-    domain::SignTransactionResponseEvm,
+    domain::{SignTransactionResponseEvm, TransactionPriceParams},
     models::{
-        AddressError, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerError, TransactionError, U256,
+        AddressError, EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError,
+        RelayerRepoModel, SignerError, TransactionError, U256,
     },
 };
 use alloy::{
@@ -13,6 +13,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, str::FromStr};
 use uuid::Uuid;
+
+use super::evm::Speed;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -44,6 +46,7 @@ impl TransactionRepoModel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "network_data", content = "data")]
+#[allow(clippy::large_enum_variant)]
 pub enum NetworkTransactionData {
     Evm(EvmTransactionData),
     Solana(SolanaTransactionData),
@@ -87,10 +90,9 @@ pub struct EvmTransactionDataSignature {
     pub sig: String,
 }
 
-// TODO support legacy and eip1559 transactions models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmTransactionData {
-    pub gas_price: u128,
+    pub gas_price: Option<u128>,
     pub gas_limit: u64,
     pub nonce: u64,
     pub value: U256,
@@ -100,12 +102,27 @@ pub struct EvmTransactionData {
     pub chain_id: u64,
     pub hash: Option<String>,
     pub signature: Option<EvmTransactionDataSignature>,
+    pub speed: Option<Speed>,
+    pub max_fee_per_gas: Option<u128>,
+    pub max_priority_fee_per_gas: Option<u128>,
     pub raw: Option<Vec<u8>>,
 }
 
 impl EvmTransactionData {
+    pub fn with_price_params(mut self, price_params: TransactionPriceParams) -> Self {
+        self.gas_price = price_params.gas_price.map(|price| price.to::<u128>());
+        self.max_fee_per_gas = price_params.max_fee_per_gas.map(|price| price.to::<u128>());
+        self.max_priority_fee_per_gas = price_params
+            .max_priority_fee_per_gas
+            .map(|price| price.to::<u128>());
+        self
+    }
     pub fn with_gas_estimate(mut self, gas_limit: u64) -> Self {
         self.gas_limit = gas_limit;
+        self
+    }
+    pub fn with_nonce(mut self, nonce: u64) -> Self {
+        self.nonce = nonce;
         self
     }
 
@@ -114,6 +131,26 @@ impl EvmTransactionData {
         self.hash = Some(sig.hash);
         self.raw = Some(sig.raw);
         self
+    }
+}
+
+pub trait EvmTransactionDataTrait {
+    fn is_legacy(&self) -> bool;
+    fn is_eip1559(&self) -> bool;
+    fn is_speed(&self) -> bool;
+}
+
+impl EvmTransactionDataTrait for EvmTransactionData {
+    fn is_legacy(&self) -> bool {
+        self.gas_price.is_some()
+    }
+
+    fn is_eip1559(&self) -> bool {
+        self.max_fee_per_gas.is_some() && self.max_priority_fee_per_gas.is_some()
+    }
+
+    fn is_speed(&self) -> bool {
+        self.speed.is_some()
     }
 }
 
@@ -143,28 +180,35 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
         let now = Utc::now().to_rfc3339();
 
         match request {
-            NetworkTransactionRequest::Evm(evm_request) => Ok(Self {
-                id: Uuid::new_v4().to_string(),
-                relayer_id: relayer_model.id.clone(),
-                status: TransactionStatus::Pending,
-                created_at: now,
-                sent_at: "".to_string(),
-                confirmed_at: "".to_string(),
-                network_type: NetworkType::Evm,
-                network_data: NetworkTransactionData::Evm(EvmTransactionData {
-                    gas_price: evm_request.gas_price,
-                    gas_limit: evm_request.gas_limit,
-                    nonce: 0, // TODO
-                    value: evm_request.value,
-                    data: evm_request.data.clone(),
-                    from: evm_request.from.clone(),
-                    to: evm_request.to.clone(),
-                    chain_id: 1, // TODO
-                    hash: None,
-                    signature: None,
-                    raw: None,
-                }),
-            }),
+            NetworkTransactionRequest::Evm(evm_request) => {
+                let named_network = relayer_model.network.clone();
+                let network = EvmNetwork::from_network_str(&named_network);
+                Ok(Self {
+                    id: Uuid::new_v4().to_string(),
+                    relayer_id: relayer_model.id.clone(),
+                    status: TransactionStatus::Pending,
+                    created_at: now,
+                    sent_at: "".to_string(),
+                    confirmed_at: "".to_string(),
+                    network_type: NetworkType::Evm,
+                    network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                        gas_price: evm_request.gas_price,
+                        gas_limit: evm_request.gas_limit,
+                        nonce: 0, // TODO
+                        value: evm_request.value,
+                        data: evm_request.data.clone(),
+                        from: relayer_model.address.clone(),
+                        to: evm_request.to.clone(),
+                        chain_id: network.unwrap().id(),
+                        hash: Some("0x".to_string()),
+                        signature: None,
+                        speed: evm_request.speed.clone(),
+                        max_fee_per_gas: evm_request.max_fee_per_gas,
+                        max_priority_fee_per_gas: evm_request.max_priority_fee_per_gas,
+                        raw: None,
+                    }),
+                })
+            }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
                 relayer_id: relayer_model.id.clone(),
@@ -231,7 +275,7 @@ impl TryFrom<NetworkTransactionData> for TxLegacy {
                     chain_id: Some(tx.chain_id),
                     nonce: tx.nonce,
                     gas_limit: tx.gas_limit,
-                    gas_price: tx.gas_price,
+                    gas_price: tx.gas_price.unwrap_or(0),
                     to: tx_kind,
                     value: tx.value,
                     input: tx.data_to_bytes()?,
