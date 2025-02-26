@@ -10,7 +10,7 @@ use crate::{
         produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
         TransactionError, TransactionRepoModel, TransactionStatus,
     },
-    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage, Repository},
+    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
     services::{EvmProvider, EvmSigner, Signer, TransactionCounterService},
 };
 
