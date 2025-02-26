@@ -1,6 +1,6 @@
 use crate::{
     constants::ZERO_ADDRESS,
-    models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel},
+    models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel, U256},
 };
 use serde::{Deserialize, Serialize};
 
@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 pub struct EvmTransactionRequest {
     pub from: String,
     pub to: Option<String>,
-    pub value: u64,
+    pub value: U256,
     pub data: Option<String>,
-    pub gas_limit: u128,
+    pub gas_limit: u64,
     pub gas_price: u128,
     pub speed: Option<Speed>,
     pub max_fee_per_gas: Option<u128>,
@@ -162,7 +162,7 @@ mod tests {
         EvmTransactionRequest {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
-            value: 0,
+            value: U256::from(0),
             data: Some("0x".to_string()),
             gas_limit: 21000,
             gas_price: 0,

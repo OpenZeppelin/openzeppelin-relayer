@@ -10,8 +10,8 @@ use log::error;
 use thiserror::Error;
 
 use crate::{
-    models::SolanaEncodingError,
-    services::{SignerError, SolanaProviderError},
+    models::{SignerError, SolanaEncodingError},
+    services::SolanaProviderError,
 };
 
 #[derive(Debug, Error)]

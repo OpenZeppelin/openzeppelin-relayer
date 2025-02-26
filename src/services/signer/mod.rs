@@ -34,30 +34,12 @@ mod stellar;
 pub use stellar::*;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignTypedDataRequest},
+    domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
     models::{
-        Address, NetworkType, SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
+        Address, NetworkTransactionData, NetworkType, SignerError, SignerFactoryError,
+        SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
     },
 };
-
-#[derive(Error, Debug, Serialize)]
-#[allow(clippy::enum_variant_names)]
-pub enum SignerError {
-    #[error("Failed to sign transaction: {0}")]
-    SigningError(String),
-
-    #[error("Invalid key format: {0}")]
-    KeyError(String),
-
-    #[error("Provider error: {0}")]
-    ProviderError(String),
-
-    #[error("Unsupported signer type: {0}")]
-    UnsupportedTypeError(String),
-
-    #[error("Invalid transaction: {0}")]
-    InvalidTransaction(#[from] TransactionError),
-}
 
 #[async_trait]
 #[cfg_attr(test, automock)]
@@ -67,19 +49,9 @@ pub trait Signer: Send + Sync {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel, /* TODO introduce Transactions models for specific
-                                            * operations */
-    ) -> Result<Vec<u8>, SignerError>;
-}
-
-#[derive(Error, Debug, Serialize)]
-pub enum SignerFactoryError {
-    #[error("Invalid configuration: {0}")]
-    InvalidConfig(String),
-    #[error("Signer creation failed: {0}")]
-    CreationFailed(String),
-    #[error("Unsupported signer type: {0}")]
-    UnsupportedType(String),
+        transaction: NetworkTransactionData, /* TODO introduce Transactions models for specific
+                                              * operations */
+    ) -> Result<SignTransactionResponse, SignerError>;
 }
 
 #[allow(dead_code)]
@@ -101,8 +73,8 @@ impl Signer for NetworkSigner {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel,
-    ) -> Result<Vec<u8>, SignerError> {
+        transaction: NetworkTransactionData,
+    ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Evm(signer) => signer.sign_transaction(transaction).await,
             Self::Solana(signer) => signer.sign_transaction(transaction).await,

@@ -319,12 +319,7 @@ mod tests {
         };
 
         let result = rpc.prepare_transaction(params).await;
-        assert!(matches!(
-            result,
-            Err(SolanaRpcError::SolanaTransactionValidation(
-                SolanaTransactionValidationError::InsufficientFunds(_)
-            ))
-        ));
+        assert!(matches!(result, Err(SolanaRpcError::InsufficientFunds(_))));
     }
 
     #[tokio::test]

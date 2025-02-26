@@ -101,6 +101,16 @@ impl InMemoryTransactionRepository {
         tx.status = status;
         self.update(tx_id, tx).await
     }
+
+    pub async fn update_network_data(
+        &self,
+        tx_id: String,
+        network_data: NetworkTransactionData,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut tx = self.get_by_id(tx_id.clone()).await?;
+        tx.network_data = network_data;
+        self.update(tx_id, tx).await
+    }
 }
 
 impl Default for InMemoryTransactionRepository {
@@ -200,7 +210,9 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{EvmTransactionData, NetworkType};
+    use std::str::FromStr;
+
+    use crate::models::{EvmTransactionData, NetworkType, U256};
 
     use super::*;
 
@@ -217,13 +229,14 @@ mod tests {
                 gas_price: 1000000000,
                 gas_limit: 21000,
                 nonce: 1,
-                value: 1000000000000000000,
+                value: U256::from_str("1000000000000000000").unwrap(),
                 data: Some("Ox".to_string()),
                 from: "0x".to_string(),
                 to: Some("0x".to_string()),
                 chain_id: 1,
                 signature: None,
                 hash: Some(format!("0x{}", id)),
+                raw: None,
             }),
         }
     }
@@ -327,5 +340,44 @@ mod tests {
 
         let result = repo.update("nonexistent".to_string(), tx).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[actix_web::test]
+    async fn test_update_network_data() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx.clone()).await.unwrap();
+
+        // Create new network data with updated values
+        let updated_network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            gas_price: 2000000000,
+            gas_limit: 30000,
+            nonce: 2,
+            value: U256::from_str("2000000000000000000").unwrap(),
+            data: Some("0xUpdated".to_string()),
+            from: "0x".to_string(),
+            to: Some("0x".to_string()),
+            chain_id: 1,
+            signature: None,
+            hash: Some("0xUpdated".to_string()),
+            raw: None,
+        });
+
+        let updated = repo
+            .update_network_data("test-1".to_string(), updated_network_data)
+            .await
+            .unwrap();
+
+        // Verify the network data was updated
+        if let NetworkTransactionData::Evm(data) = &updated.network_data {
+            assert_eq!(data.gas_price, 2000000000);
+            assert_eq!(data.gas_limit, 30000);
+            assert_eq!(data.nonce, 2);
+            assert_eq!(data.hash, Some("0xUpdated".to_string()));
+            assert_eq!(data.data, Some("0xUpdated".to_string()));
+        } else {
+            panic!("Expected EVM network data");
+        }
     }
 }

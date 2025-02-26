@@ -1,13 +1,13 @@
 // TODO improve and add missing methods
 use alloy::{
-    primitives::{TxKind, Uint, U256},
+    primitives::{TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
     rpc::types::{TransactionInput, TransactionRequest},
     transports::http::{Client, Http},
 };
 use eyre::{eyre, Result};
 
-use crate::models::{EvmTransactionData, TransactionError};
+use crate::models::{EvmTransactionData, TransactionError, U256};
 
 pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,
@@ -36,13 +36,12 @@ impl EvmProvider {
             .map_err(|e| eyre!("Failed to get block number: {}", e))
     }
 
-    pub async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<U256> {
+    pub async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64> {
         // transform the tx to a transaction request
         let transaction_request = TransactionRequest::try_from(tx)?;
         self.provider
             .estimate_gas(&transaction_request)
             .await
-            .map(|gas| U256::from(gas))
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
     }
 

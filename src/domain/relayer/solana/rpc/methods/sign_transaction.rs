@@ -345,7 +345,7 @@ mod tests {
         assert!(result.is_err());
 
         match result {
-            Err(SolanaRpcError::SolanaTransactionValidation(err)) => {
+            Err(SolanaRpcError::InsufficientFunds(err)) => {
                 let error_string = err.to_string();
                 assert!(
                     error_string.contains("Insufficient funds:"),

@@ -18,8 +18,11 @@ pub use local_signer::*;
 use solana_sdk::signature::Signature;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTypedDataRequest},
-    models::{Address, SignerRepoModel, SignerType, TransactionRepoModel},
+    domain::{
+        SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
+        SignTypedDataRequest,
+    },
+    models::{Address, NetworkTransactionData, SignerRepoModel, SignerType, TransactionRepoModel},
 };
 use eyre::Result;
 
@@ -41,8 +44,8 @@ impl Signer for SolanaSigner {
 
     async fn sign_transaction(
         &self,
-        transaction: TransactionRepoModel,
-    ) -> Result<Vec<u8>, SignerError> {
+        transaction: NetworkTransactionData,
+    ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_transaction(transaction).await,
         }

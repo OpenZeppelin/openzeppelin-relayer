@@ -7,11 +7,11 @@ use crate::{
     domain::transaction::Transaction,
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus,
+        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
-    services::{EvmProvider, TransactionCounterService},
+    services::{EvmProvider, EvmSigner, Signer, TransactionCounterService},
 };
 
 #[allow(dead_code)]
@@ -22,6 +22,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
+    signer: EvmSigner,
 }
 
 #[allow(dead_code)]
@@ -33,6 +34,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
+        signer: EvmSigner,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer,
@@ -41,6 +43,7 @@ impl EvmRelayerTransaction {
             transaction_repository,
             transaction_counter_service,
             job_producer,
+            signer,
         })
     }
 }
@@ -54,35 +57,51 @@ impl Transaction for EvmRelayerTransaction {
         info!("Preparing transaction");
         // validate the transaction
 
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+
         // gas estimation
-        let gas_estimation = self
-            .provider
-            .estimate_gas(&tx.network_data.get_evm_transaction_data()?)
-            .await?;
+        let gas_estimation = self.provider.estimate_gas(&evm_data).await?;
         info!("Gas estimation: {:?}", gas_estimation);
 
-        // After preparing the transaction, submit it to the job queue
+        let evm_data = evm_data.with_gas_estimate(gas_estimation);
+
+        // sign the transaction
+        let sig_result = self
+            .signer
+            .sign_transaction(tx.network_data.clone())
+            .await?;
+
+        let evm_data = NetworkTransactionData::Evm(
+            evm_data.with_signed_transaction_data(sig_result.into_evm()?),
+        );
+
+        let updated_tx = self
+            .transaction_repository
+            .update_network_data(tx.id.clone(), evm_data)
+            .await?;
+
+        // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
-                TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionSend::submit(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
                 None,
             )
             .await?;
-        let updated = self
+        let updated_tx = self
             .transaction_repository
-            .update_status(tx.id.clone(), TransactionStatus::Sent)
+            .update_status(updated_tx.id.clone(), TransactionStatus::Sent)
             .await?;
 
         if let Some(notification_id) = &self.relayer.notification_id {
             self.job_producer
                 .produce_send_notification_job(
-                    produce_transaction_update_notification_payload(notification_id, &updated),
+                    produce_transaction_update_notification_payload(notification_id, &updated_tx),
                     None,
                 )
                 .await?;
         }
 
-        Ok(tx)
+        Ok(updated_tx)
     }
 
     async fn submit_transaction(
