@@ -6,6 +6,8 @@ use std::fmt;
 
 use serde::{de, Deserializer};
 
+use super::deserialize_u64;
+
 #[derive(Debug)]
 struct U128Visitor;
 
@@ -52,4 +54,18 @@ where
     D: Deserializer<'de>,
 {
     deserializer.deserialize_any(U128Visitor)
+}
+
+pub fn deserialize_optional_u128<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(deserialize_u128(deserializer)?))
+}
+
+pub fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(deserialize_u64(deserializer)?))
 }

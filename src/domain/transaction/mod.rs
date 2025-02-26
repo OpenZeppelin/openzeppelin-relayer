@@ -52,7 +52,6 @@ pub trait Transaction {
     /// # Returns
     ///
     /// A `Result` containing the prepared `TransactionRepoModel` or a `TransactionError`.
-
     async fn prepare_transaction(
         &self,
         tx: TransactionRepoModel,

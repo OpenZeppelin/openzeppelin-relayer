@@ -1,6 +1,8 @@
 use crate::{
     models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus, U256},
-    utils::{deserialize_u128, deserialize_u64},
+    utils::{
+        deserialize_optional_u128, deserialize_optional_u64, deserialize_u128, deserialize_u64,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,11 +22,12 @@ pub struct EvmTransactionResponse {
     pub created_at: String,
     pub sent_at: String,
     pub confirmed_at: String,
-    #[serde(deserialize_with = "deserialize_u128")]
-    pub gas_price: u128,
+    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    pub gas_price: Option<u128>,
     #[serde(deserialize_with = "deserialize_u64")]
     pub gas_limit: u64,
-    pub nonce: u64,
+    #[serde(deserialize_with = "deserialize_optional_u64", default)]
+    pub nonce: Option<u64>,
     pub value: U256,
     pub from: String,
     pub to: Option<String>,
@@ -68,7 +71,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
-                    gas_price: evm_data.gas_price.unwrap_or(0),
+                    gas_price: evm_data.gas_price,
                     gas_limit: evm_data.gas_limit,
                     nonce: evm_data.nonce,
                     value: evm_data.value,

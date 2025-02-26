@@ -89,7 +89,6 @@ impl EvmRelayerTransaction {
     }
 
     /// Returns a reference to the relayer model.
-
     pub fn relayer(&self) -> &RelayerRepoModel {
         &self.relayer
     }
@@ -131,9 +130,8 @@ impl Transaction for EvmRelayerTransaction {
             .network_data
             .get_evm_transaction_data()?
             .with_price_params(price_params)
-            .with_nonce(nonce)
+            .with_nonce(Some(nonce))
             .with_signed_transaction_data(sig_result.into_evm()?);
-
         let updated_tx = self
             .transaction_repository
             .update_network_data(tx.id.clone(), NetworkTransactionData::Evm(updated_evm_data))
@@ -159,7 +157,7 @@ impl Transaction for EvmRelayerTransaction {
                 )
                 .await?;
         }
-
+        info!("updated_tx: {:?}", updated_tx);
         Ok(updated_tx)
     }
 

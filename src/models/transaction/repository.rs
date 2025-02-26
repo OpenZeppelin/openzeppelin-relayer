@@ -94,7 +94,7 @@ pub struct EvmTransactionDataSignature {
 pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
     pub gas_limit: u64,
-    pub nonce: u64,
+    pub nonce: Option<u64>,
     pub value: U256,
     pub data: Option<String>,
     pub from: String,
@@ -121,7 +121,7 @@ impl EvmTransactionData {
         self.gas_limit = gas_limit;
         self
     }
-    pub fn with_nonce(mut self, nonce: u64) -> Self {
+    pub fn with_nonce(mut self, nonce: Option<u64>) -> Self {
         self.nonce = nonce;
         self
     }
@@ -194,7 +194,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     network_data: NetworkTransactionData::Evm(EvmTransactionData {
                         gas_price: evm_request.gas_price,
                         gas_limit: evm_request.gas_limit,
-                        nonce: 0, // TODO
+                        nonce: None,
                         value: evm_request.value,
                         data: evm_request.data.clone(),
                         from: relayer_model.address.clone(),
@@ -273,7 +273,7 @@ impl TryFrom<NetworkTransactionData> for TxLegacy {
 
                 Ok(Self {
                     chain_id: Some(tx.chain_id),
-                    nonce: tx.nonce,
+                    nonce: tx.nonce.unwrap_or(0),
                     gas_limit: tx.gas_limit,
                     gas_price: tx.gas_price.unwrap_or(0),
                     to: tx_kind,
