@@ -14,12 +14,16 @@ use crate::{
 };
 use apalis::prelude::Storage;
 use apalis_redis::RedisError;
+use async_trait::async_trait;
 use log::{error, info};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
 use super::JobType;
+
+#[cfg(test)]
+use mockall::automock;
 
 #[derive(Debug, Error, Serialize)]
 pub enum JobProducerError {
@@ -44,6 +48,34 @@ pub struct JobProducer {
     queue: Mutex<Queue>,
 }
 
+#[async_trait]
+#[cfg_attr(test, automock)]
+pub trait JobProducerTrait: Send + Sync {
+    async fn produce_transaction_request_job(
+        &self,
+        transaction_process_job: TransactionRequest,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError>;
+
+    async fn produce_submit_transaction_job(
+        &self,
+        transaction_submit_job: TransactionSend,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError>;
+
+    async fn produce_check_transaction_status_job(
+        &self,
+        transaction_status_check_job: TransactionStatusCheck,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError>;
+
+    async fn produce_send_notification_job(
+        &self,
+        notification_send_job: NotificationSend,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError>;
+}
+
 impl JobProducer {
     pub fn new(queue: Queue) -> Self {
         Self {
@@ -56,8 +88,11 @@ impl JobProducer {
 
         Ok(queue.clone())
     }
+}
 
-    pub async fn produce_transaction_request_job(
+#[async_trait]
+impl JobProducerTrait for JobProducer {
+    async fn produce_transaction_request_job(
         &self,
         transaction_process_job: TransactionRequest,
         scheduled_on: Option<i64>,
@@ -85,7 +120,7 @@ impl JobProducer {
         Ok(())
     }
 
-    pub async fn produce_submit_transaction_job(
+    async fn produce_submit_transaction_job(
         &self,
         transaction_submit_job: TransactionSend,
         scheduled_on: Option<i64>,
@@ -106,7 +141,7 @@ impl JobProducer {
         Ok(())
     }
 
-    pub async fn produce_check_transaction_status_job(
+    async fn produce_check_transaction_status_job(
         &self,
         transaction_status_check_job: TransactionStatusCheck,
         scheduled_on: Option<i64>,
@@ -128,7 +163,7 @@ impl JobProducer {
         Ok(())
     }
 
-    pub async fn produce_send_notification_job(
+    async fn produce_send_notification_job(
         &self,
         notification_send_job: NotificationSend,
         scheduled_on: Option<i64>,

@@ -9,23 +9,29 @@
 //! # Returns
 //!
 //! On success, returns a vector of [`GetSupportedTokensItem`] structures.
+use log::info;
+
 use crate::{
+    jobs::JobProducerTrait,
     models::{GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     pub(crate) async fn get_supported_tokens_impl(
         &self,
         _params: GetSupportedTokensRequestParams,
     ) -> Result<GetSupportedTokensResult, SolanaRpcError> {
+        info!("Processing get supported tokens request");
+
         let tokens = self
             .relayer
             .policies
@@ -45,6 +51,11 @@ where
             })
             .unwrap_or_default();
 
+        info!(
+            "Successfully handled request to get supported tokens: {:?}",
+            tokens
+        );
+
         Ok(GetSupportedTokensResult { tokens })
     }
 }
@@ -63,7 +74,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_supported_tokens() {
-        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Update relayer policy with some tokens
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -91,6 +103,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let result = rpc

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::{
     domain::{get_transaction_price_params, transaction::Transaction},
-    jobs::{JobProducer, TransactionSend, TransactionStatusCheck},
+    jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
         TransactionError, TransactionRepoModel, TransactionStatus, U256,

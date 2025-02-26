@@ -23,6 +23,7 @@
 //! * `valid_until_block_height` - The block height until which the transaction remains valid.use
 //!   std::str::FromStr;
 use futures::try_join;
+use log::info;
 use solana_sdk::{
     commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
     transaction::Transaction,
@@ -38,21 +39,27 @@ use crate::{
 
 use super::*;
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     pub(crate) async fn prepare_transaction_impl(
         &self,
         params: PrepareTransactionRequestParams,
     ) -> Result<PrepareTransactionResult, SolanaRpcError> {
-        let transaction_request = Transaction::try_from(params.transaction)?;
+        info!(
+            "Processing prepare transaction request for fee token: {}",
+            params.fee_token
+        );
+
+        let transaction_request = Transaction::try_from(params.transaction.clone())?;
+
         let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
             .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
 
-        // Validate transaction
         validate_prepare_transaction(
             &transaction_request,
             &params.fee_token,
@@ -80,8 +87,16 @@ where
             message,
         };
 
-        let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction)
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
         let lamports_outflow = self.estimate_relayer_lampart_outflow(&transaction).await?;
+
         let total_outflow = total_fee + lamports_outflow;
 
         // Validate relayer has sufficient balance
@@ -91,18 +106,31 @@ where
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            error!("Insufficient funds: {}", e);
+            SolanaRpcError::InsufficientFunds(e.to_string())
+        })?;
 
         // Get fee quote
         let fee_quote = self
             .get_fee_token_quote(&params.fee_token, total_fee)
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate fee quote: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
 
         // Sign transaction
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction)?;
 
         // Serialize and encode
         let encoded_tx = EncodedSerializedTransaction::try_from(&signed_transaction)?;
+
+        info!(
+            "Successfully prepared transaction. Fee: {} SPL tokens, valid until block height: {}",
+            fee_quote.fee_in_spl, recent_blockhash.1
+        );
 
         Ok(PrepareTransactionResult {
             transaction: encoded_tx,
@@ -165,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_success() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx) =
+        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Setup policy with SOL
@@ -216,6 +244,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -235,7 +264,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_insufficient_balance() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         // Set high minimum balance requirement
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -280,6 +310,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -288,17 +319,13 @@ mod tests {
         };
 
         let result = rpc.prepare_transaction(params).await;
-        assert!(matches!(
-            result,
-            Err(SolanaRpcError::SolanaTransactionValidation(
-                SolanaTransactionValidationError::InsufficientFunds(_)
-            ))
-        ));
+        assert!(matches!(result, Err(SolanaRpcError::InsufficientFunds(_))));
     }
 
     #[tokio::test]
     async fn test_prepare_transaction_updates_fee_payer() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             min_balance: 100_000_000, // 0.1 SOL minimum balance
@@ -353,6 +380,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -373,7 +401,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_signature_verification() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
         println!("Setting up known keypair for signature verification");
         let relayer_keypair = Keypair::new();
         let expected_signature = Signature::new_unique();
@@ -432,6 +461,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -464,7 +494,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_not_allowed_token() {
-        let (mut relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Configure policy with allowed tokens
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -517,6 +548,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = PrepareTransactionRequestParams {

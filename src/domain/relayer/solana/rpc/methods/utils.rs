@@ -49,11 +49,12 @@ pub struct FeeQuote {
     pub conversion_rate: f64,
 }
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     /// Signs a transaction with the relayer's keypair and returns both the signed transaction and
     /// signature.
@@ -425,7 +426,8 @@ mod tests {
 
     #[test]
     fn test_relayer_sign_transaction() {
-        let (relayer, mut signer, provider, jupiter_service, _) = setup_test_context();
+        let (relayer, mut signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
@@ -441,6 +443,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let result = rpc.relayer_sign_transaction(transaction);
@@ -456,7 +459,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_fee_token_quote_sol() {
-        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Setup policy with SOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -475,6 +479,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let result = rpc.get_fee_token_quote(SOL_MINT, 1_000_000).await;
@@ -489,7 +494,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_fee_token_quote_spl_token() {
-        let (mut relayer, signer, provider, mut jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, mut jupiter_service, _, job_producer) =
+            setup_test_context();
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -524,6 +530,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let result = rpc.get_fee_token_quote(test_token, 1_000_000_000).await;
@@ -537,7 +544,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_no_ata_creation() {
-        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Setup provider mock
         provider
@@ -549,6 +557,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         // Create simple transfer transaction
@@ -570,7 +579,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_single_ata_creation() {
-        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Setup provider expectations
         provider
@@ -586,6 +596,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let payer = Keypair::new();
@@ -611,7 +622,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_multiple_ata_creations() {
-        let (relayer, signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         provider
             .expect_calculate_total_fee()
@@ -626,6 +638,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let payer = Keypair::new();
@@ -653,12 +666,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_no_lamport_outflow() {
-        let (relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let payer = Keypair::new();
@@ -676,7 +690,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_single_lamport_transfer() {
-        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         // Set relayer address
         let relayer_keypair = Keypair::new();
@@ -687,6 +702,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let recipient = Pubkey::new_unique();
@@ -708,7 +724,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_multiple_lamport_transfers() {
-        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
@@ -718,6 +735,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let recipient1 = Pubkey::new_unique();
@@ -745,7 +763,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_ignore_non_relayer_transfers() {
-        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
@@ -756,6 +775,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let recipient = Pubkey::new_unique();
@@ -782,7 +802,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_non_system_program_instructions() {
-        let (mut relayer, signer, provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
@@ -792,6 +813,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         // Create non-system program instruction
@@ -820,7 +842,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_sign_transaction_success() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
@@ -843,6 +866,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let instructions = vec![system_instruction::transfer(
@@ -867,7 +891,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_sign_transaction_multiple_instructions() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _) = setup_test_context();
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
 
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
@@ -885,6 +910,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let recipient1 = Pubkey::new_unique();

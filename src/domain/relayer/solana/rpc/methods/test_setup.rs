@@ -5,6 +5,7 @@ use solana_sdk::{
 };
 
 use crate::{
+    jobs::MockJobProducerTrait,
     models::{
         EncodedSerializedTransaction, NetworkType, RelayerNetworkPolicy, RelayerRepoModel,
         RelayerSolanaPolicy,
@@ -18,6 +19,7 @@ pub fn setup_test_context() -> (
     MockSolanaProviderTrait,
     MockJupiterServiceTrait,
     EncodedSerializedTransaction,
+    MockJobProducerTrait,
 ) {
     // Create test transaction
     let payer = Keypair::new();
@@ -56,6 +58,14 @@ pub fn setup_test_context() -> (
 
     let jupiter_service = MockJupiterServiceTrait::new();
     let provider = MockSolanaProviderTrait::new();
+    let job_producer = MockJobProducerTrait::new();
 
-    (relayer, mock_signer, provider, jupiter_service, encoded_tx)
+    (
+        relayer,
+        mock_signer,
+        provider,
+        jupiter_service,
+        encoded_tx,
+        job_producer,
+    )
 }

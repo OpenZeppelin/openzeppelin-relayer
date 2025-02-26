@@ -8,6 +8,7 @@
 /// * Have correct fee payer configuration
 /// * Comply with relayer policies
 use crate::{models::RelayerSolanaPolicy, services::SolanaProviderTrait};
+use log::info;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
     commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey,
@@ -183,6 +184,7 @@ impl SolanaTransactionValidator {
     ) -> Result<(), SolanaTransactionValidationError> {
         if let Some(allowed_accounts) = &policy.allowed_accounts {
             for account_key in &tx.message.account_keys {
+                info!("Checking account {}", account_key);
                 if !allowed_accounts.contains(&account_key.to_string()) {
                     return Err(SolanaTransactionValidationError::PolicyViolation(format!(
                         "Account {} not allowed",

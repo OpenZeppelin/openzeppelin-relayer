@@ -1,6 +1,9 @@
 use crate::{
     jobs::NotificationSend,
-    models::{RelayerRepoModel, RelayerResponse, TransactionRepoModel, TransactionResponse},
+    models::{
+        RelayerRepoModel, RelayerResponse, SignAndSendTransactionResult, SignTransactionResult,
+        TransactionRepoModel, TransactionResponse, TransferTransactionResult,
+    },
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -46,6 +49,8 @@ pub enum WebhookPayload {
     TransactionFailure(TransactionFailurePayload),
     #[serde(rename = "relayer_disabled")]
     RelayerDisabled(RelayerDisabledPayload),
+    #[serde(rename = "solana_rpc")]
+    SolanaRpc(SolanaWebhookRpcPayload),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -84,5 +89,26 @@ pub fn produce_relayer_disabled_payload(
             "relayer_state_update".to_string(),
             WebhookPayload::RelayerDisabled(payload),
         ),
+    )
+}
+
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum SolanaWebhookRpcPayload {
+    SignAndSendTransaction(SignAndSendTransactionResult),
+    SignTransaction(SignTransactionResult),
+    TransferTransaction(TransferTransactionResult),
+}
+
+/// Produces a notification payload for a Solana RPC webhook event
+pub fn produce_solana_rpc_webhook_payload(
+    notification_id: &str,
+    event: String,
+    payload: SolanaWebhookRpcPayload,
+) -> NotificationSend {
+    NotificationSend::new(
+        notification_id.to_string(),
+        WebhookNotification::new(event, WebhookPayload::SolanaRpc(payload)),
     )
 }

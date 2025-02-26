@@ -14,7 +14,7 @@ pub enum SolanaEncodingError {
     Deserialize(String),
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct EncodedSerializedTransaction(String);
 
 impl EncodedSerializedTransaction {
@@ -75,7 +75,7 @@ pub struct TransferTransactionRequestParams {
     pub destination: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TransferTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub fee_in_spl: String,
@@ -106,7 +106,7 @@ pub struct SignTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
 pub struct SignTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub signature: String,
@@ -118,7 +118,7 @@ pub struct SignAndSendTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SignAndSendTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub signature: String,

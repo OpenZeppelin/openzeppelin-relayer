@@ -19,20 +19,23 @@
 //! * `estimated_fee` - A string with the fee amount in the token's UI units.
 //! * `conversion_rate` - A string with the conversion rate from SOL to the specified token.use
 use futures::try_join;
+use log::{debug, info};
 use solana_sdk::transaction::Transaction;
 
 use crate::{
+    jobs::JobProducerTrait,
     models::{FeeEstimateRequestParams, FeeEstimateResult},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J> SolanaRpcMethodsImpl<P, S, J>
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
+    JP: JobProducerTrait + Send + Sync,
 {
     /// Estimates the fee for an arbitrary transaction using a specified fee token.
     ///
@@ -58,11 +61,15 @@ where
         &self,
         params: FeeEstimateRequestParams,
     ) -> Result<FeeEstimateResult, SolanaRpcError> {
-        let transaction_request = Transaction::try_from(params.transaction)?;
+        info!(
+            "Processing fee estimate request for token: {}",
+            params.fee_token
+        );
+
+        let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
         validate_fee_estimate_transaction(&transaction_request, &params.fee_token, &self.relayer)
-            .await
-            .map_err(|e| SolanaRpcError::InvalidParams(e.to_string()))?;
+            .await?;
 
         let mut transaction = transaction_request.clone();
 
@@ -71,11 +78,27 @@ where
         // update tx blockhash
         transaction.message.recent_blockhash = recent_blockhash;
 
-        let total_fee = self.estimate_fee_payer_total_fee(&transaction).await?;
+        let total_fee = self
+            .estimate_fee_payer_total_fee(&transaction)
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+        debug!("Estimated SOL fee: {} lamports", total_fee);
 
         let fee_quota = self
             .get_fee_token_quote(&params.fee_token, total_fee)
-            .await?;
+            .await
+            .map_err(|e| {
+                error!("Failed to fee quote: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
+        info!(
+            "Fee estimate: {} {} (SOL fee: {} lamports, conversion rate: {})",
+            fee_quota.fee_in_spl_ui, params.fee_token, total_fee, fee_quota.conversion_rate
+        );
 
         Ok(FeeEstimateResult {
             estimated_fee: fee_quota.fee_in_spl_ui,
@@ -121,7 +144,7 @@ mod tests {
     use solana_sdk::hash::Hash;
     #[tokio::test]
     async fn test_fee_estimate_with_allowed_token() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx) =
+        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Set up policy with allowed token
@@ -171,6 +194,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = FeeEstimateRequestParams {
@@ -188,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_usdt_to_sol_conversion() {
-        let (mut relayer, signer, _provider, mut jupiter_service, encoded_tx) =
+        let (mut relayer, signer, _provider, mut jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -238,6 +262,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = FeeEstimateRequestParams {
@@ -256,7 +281,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_uni_to_sol_dynamic_price() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx) =
+        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Set up policy with UNI token (decimals = 8)
@@ -305,6 +330,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = FeeEstimateRequestParams {
@@ -323,7 +349,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_native_sol() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx) = setup_test_context();
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+            setup_test_context();
 
         // Set up policy with SOL token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -353,6 +380,7 @@ mod tests {
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
+            Arc::new(job_producer),
         );
 
         let params = FeeEstimateRequestParams {
