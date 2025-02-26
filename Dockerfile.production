@@ -1,6 +1,7 @@
 # Base image
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest AS base
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev AS base
 
+USER root
 RUN apk update && apk --no-cache add openssl-dev perl
 
 WORKDIR /usr/app
@@ -13,12 +14,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Setting up build directories
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest
-
-# Create a nonroot user and mimic those of a regular user on the linux host
-ARG UID=1000
-ARG GID=1000
-RUN adduser -D -u $UID -g $GID defender
-USER defender
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
