@@ -1,3 +1,25 @@
+//! This module provides functionality for loading and validating configuration files
+//! for a blockchain relayer application. It includes definitions for configuration
+//! structures, error handling, and validation logic to ensure that the configuration
+//! is correct and complete before use.
+//!
+//! The module supports configuration for different network types, including EVM, Solana,
+//! and Stellar, and ensures that test signers are only used with test networks.
+//!
+//! # Modules
+//! - `relayer`: Handles relayer-specific configuration.
+//! - `signer`: Manages signer-specific configuration.
+//! - `notification`: Deals with notification-specific configuration.
+//!
+//! # Errors
+//! The module defines a comprehensive set of errors to handle various issues that might
+//! arise during configuration loading and validation, such as missing fields, invalid
+//! formats, and invalid references.
+//!
+//! # Usage
+//! To use this module, load a configuration file using `load_config`, which will parse
+//! the file and validate its contents. If the configuration is valid, it can be used
+//! to initialize the application components.
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs};
 use thiserror::Error;
@@ -67,6 +89,14 @@ pub struct Config {
 }
 
 impl Config {
+    /// Validates the configuration by checking the validity of relayers, signers, and
+    /// notifications.
+    ///
+    /// This method ensures that all references between relayers, signers, and notifications are
+    /// valid. It also checks that test signers are only used with test networks.
+    ///
+    /// # Errors
+    /// Returns a `ConfigFileError` if any validation checks fail.
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         RelayersFileConfig::new(self.relayers.clone()).validate()?;
         SignersFileConfig::new(self.signers.clone()).validate()?;
@@ -76,6 +106,14 @@ impl Config {
         Ok(())
     }
 
+    /// Validates that all relayer references to signers are valid.
+    ///
+    /// This method checks that each relayer references an existing signer and that test signers
+    /// are only used with test networks.
+    ///
+    /// # Errors
+    /// Returns a `ConfigFileError::InvalidReference` if a relayer references a non-existent signer.
+    /// Returns a `ConfigFileError::TestSigner` if a test signer is used on a production network.
     fn validate_relayer_signer_refs(&self) -> Result<(), ConfigFileError> {
         let signer_ids: HashSet<_> = self.signers.iter().map(|s| &s.id).collect();
 
@@ -152,6 +190,13 @@ impl Config {
         Ok(())
     }
 
+    /// Validates that all relayer references to notifications are valid.
+    ///
+    /// This method checks that each relayer references an existing notification, if specified.
+    ///
+    /// # Errors
+    /// Returns a `ConfigFileError::InvalidReference` if a relayer references a non-existent
+    /// notification.
     fn validate_relayer_notification_refs(&self) -> Result<(), ConfigFileError> {
         let notification_ids: HashSet<_> = self.notifications.iter().map(|s| &s.id).collect();
 
@@ -170,6 +215,17 @@ impl Config {
     }
 }
 
+/// Loads and validates a configuration file from the specified path.
+///
+/// This function reads the configuration file, parses it as JSON, and validates its contents.
+/// If the configuration is valid, it returns a `Config` object.
+///
+/// # Arguments
+/// * `config_file_path` - A string slice that holds the path to the configuration file.
+///
+/// # Errors
+/// Returns a `ConfigFileError` if the file cannot be read, parsed, or if the configuration is
+/// invalid.
 pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
     let config_str = fs::read_to_string(config_file_path)?;
     let config: Config = serde_json::from_str(&config_str)?;

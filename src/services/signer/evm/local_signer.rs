@@ -136,15 +136,18 @@ mod tests {
         NetworkTransactionData::Evm(EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
-            gas_price: 20000000000,
+            gas_price: Some(20000000000),
             gas_limit: 21000,
-            nonce: 0,
+            nonce: Some(0),
             value: U256::from(1000000000000000000u64),
             data: Some("0x".to_string()),
             chain_id: 1,
             hash: None,
             signature: None,
             raw: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            speed: None,
         })
     }
 

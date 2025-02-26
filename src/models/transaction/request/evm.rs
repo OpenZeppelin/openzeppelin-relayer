@@ -6,12 +6,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct EvmTransactionRequest {
-    pub from: String,
     pub to: Option<String>,
     pub value: U256,
     pub data: Option<String>,
     pub gas_limit: u64,
-    pub gas_price: u128,
+    pub gas_price: Option<u128>,
     pub speed: Option<Speed>,
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
@@ -24,7 +23,8 @@ pub enum Speed {
     Fastest,
     Fast,
     Average,
-    Slow,
+    #[serde(rename = "safeLow")]
+    SafeLow,
 }
 impl EvmTransactionRequest {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
@@ -92,7 +92,7 @@ pub fn validate_price_params(
 ) -> Result<(), ApiError> {
     let is_eip1559 =
         request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some();
-    let is_legacy = request.gas_price > 0;
+    let is_legacy = request.gas_price.is_some();
     let is_speed = request.speed.is_some();
 
     // count how many transaction types are present
@@ -141,7 +141,7 @@ pub fn validate_price_params(
     if is_legacy {
         if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
             if let Some(gas_price_cap) = evm_policy.gas_price_cap {
-                if request.gas_price > gas_price_cap as u128 {
+                if request.gas_price.unwrap_or(0) > gas_price_cap as u128 {
                     return Err(ApiError::BadRequest("Gas price is too high".to_string()));
                 }
             }
@@ -160,12 +160,11 @@ mod tests {
 
     fn create_basic_request() -> EvmTransactionRequest {
         EvmTransactionRequest {
-            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: U256::from(0),
             data: Some("0x".to_string()),
             gas_limit: 21000,
-            gas_price: 0,
+            gas_price: Some(0),
             speed: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
@@ -357,7 +356,7 @@ mod tests {
     #[test]
     fn test_validate_mixed_transaction_types() {
         let mut request = create_basic_request();
-        request.gas_price = 20000000000;
+        request.gas_price = Some(20000000000);
         request.max_fee_per_gas = Some(30000000000);
 
         let relayer = create_test_relayer(false, false);
@@ -393,7 +392,7 @@ mod tests {
     fn test_validate_speed_with_gas_price() {
         let mut request = create_basic_request();
         request.speed = Some(Speed::Fast);
-        request.gas_price = 20000000000;
+        request.gas_price = Some(20000000000);
         let relayer = create_test_relayer(false, false);
         let result = validate_price_params(&request, &relayer);
         assert!(result.is_err());
@@ -403,7 +402,7 @@ mod tests {
     #[test]
     fn test_validate_gas_price_cap() {
         let mut request = create_basic_request();
-        request.gas_price = 20000000000;
+        request.gas_price = Some(20000000000);
         let mut relayer = create_test_relayer(false, false);
         if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
             evm_policy.gas_price_cap = Some(10000000000);

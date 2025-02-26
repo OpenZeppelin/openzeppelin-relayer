@@ -9,9 +9,6 @@ pub use handler::*;
 use log::error;
 use thiserror::Error;
 
-mod validator;
-pub use validator::*;
-
 use crate::{
     models::{SignerError, SolanaEncodingError},
     services::SolanaProviderError,
@@ -47,9 +44,11 @@ pub enum SolanaRpcError {
     #[error("Transaction validation error: {0}")]
     SolanaTransactionValidation(#[from] SolanaTransactionValidationError),
     #[error("Signing error: {0}")]
-    SigningError(#[from] SignerError),
+    Signing(#[from] SignerError),
     #[error("Encoding error: {0}")]
-    EncodingError(#[from] SolanaEncodingError),
+    Encoding(#[from] SolanaEncodingError),
     #[error("Provider error: {0}")]
-    ProviderError(#[from] SolanaProviderError),
+    Provider(#[from] SolanaProviderError),
+    #[error("Internal error: {0}")]
+    Internal(String),
 }

@@ -34,7 +34,7 @@
     {
       "id": "local-signer",
       "type": "local",
-      "path": "examples/basic-example/keys/local-signer.json",
+      "path": "examples/basic-example/config/keys/local-signer.json",
       "passphrase": {
         "type": "plain",
         "value": "test"

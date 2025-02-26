@@ -30,7 +30,7 @@ impl de::Visitor<'_> for U64Visitor {
     where
         E: de::Error,
     {
-        Ok(value as u64)
+        Ok(value)
     }
 
     // Handle i64 inputs

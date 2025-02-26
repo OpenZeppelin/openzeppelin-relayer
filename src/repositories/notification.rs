@@ -1,3 +1,9 @@
+//! This module defines an in-memory notification repository for managing
+//! notifications. It provides functionality to create, retrieve, and list
+//! notifications, while update and delete operations are not supported.
+//! The repository is implemented using a `Mutex`-protected `HashMap` to
+//! ensure thread safety in asynchronous contexts. Additionally, it includes
+//! conversion implementations for `NotificationFileConfig` to `NotificationRepoModel`.
 use crate::{
     config::{NotificationFileConfig, NotificationFileConfigType},
     models::{NotificationRepoModel, NotificationType as ModelNotificationType, RepositoryError},

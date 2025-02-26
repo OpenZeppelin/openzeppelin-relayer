@@ -1,6 +1,5 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
-
 use crate::{
     config::{Config, SignerConfigKeystore},
     models::{NotificationRepoModel, RelayerRepoModel, SignerRepoModel, SignerType},

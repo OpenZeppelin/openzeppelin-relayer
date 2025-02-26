@@ -1,3 +1,8 @@
+//! This module provides a service for managing transaction counters.
+//!
+//! The `TransactionCounterService` struct offers methods to get, increment,
+//! decrement, and set transaction counts associated with a specific relayer
+//! and address. It uses an in-memory store to keep track of these counts.
 use std::sync::Arc;
 
 use crate::repositories::{

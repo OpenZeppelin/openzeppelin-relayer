@@ -24,6 +24,16 @@ use actix_web::{web, HttpResponse};
 use eyre::Result;
 use log::info;
 
+/// Lists all relayers with pagination support.
+///
+/// # Arguments
+///
+/// * `query` - The pagination query parameters.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// A paginated list of relayers.
 pub async fn list_relayers(
     query: PaginationQuery,
     state: web::ThinData<AppState>,
@@ -42,6 +52,16 @@ pub async fn list_relayers(
     )))
 }
 
+/// Retrieves details of a specific relayer by its ID.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer to retrieve.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The details of the specified relayer.
 pub async fn get_relayer(
     relayer_id: String,
     state: web::ThinData<AppState>,
@@ -53,6 +73,17 @@ pub async fn get_relayer(
     Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
 
+/// Updates a relayer's information.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer to update.
+/// * `update_req` - The update request containing new relayer data.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The updated relayer information.
 pub async fn update_relayer(
     relayer_id: String,
     update_req: RelayerUpdateRequest,
@@ -69,6 +100,16 @@ pub async fn update_relayer(
     Ok(HttpResponse::Ok().json(ApiResponse::success(updated_relayer)))
 }
 
+/// Retrieves the status of a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer to check status for.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The status of the specified relayer.
 pub async fn get_relayer_status(
     relayer_id: String,
     state: web::ThinData<AppState>,
@@ -80,6 +121,16 @@ pub async fn get_relayer_status(
     Ok(HttpResponse::Ok().json(ApiResponse::success(status)))
 }
 
+/// Retrieves the balance of a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer to check balance for.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The balance of the specified relayer.
 pub async fn get_relayer_balance(
     relayer_id: String,
     state: web::ThinData<AppState>,
@@ -91,6 +142,17 @@ pub async fn get_relayer_balance(
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
+/// Sends a transaction through a specified relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer to send the transaction through.
+/// * `request` - The transaction request data.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The response of the transaction processing.
 pub async fn send_transaction(
     relayer_id: String,
     request: serde_json::Value,
@@ -113,6 +175,17 @@ pub async fn send_transaction(
     Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
 }
 
+/// Retrieves a transaction by its ID for a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `transaction_id` - The ID of the transaction to retrieve.
+/// * `state` - The application state containing the transaction repository.
+///
+/// # Returns
+///
+/// The details of the specified transaction.
 pub async fn get_transaction_by_id(
     relayer_id: String,
     transaction_id: String,
@@ -128,6 +201,17 @@ pub async fn get_transaction_by_id(
     Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
 }
 
+/// Retrieves a transaction by its nonce for a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `nonce` - The nonce of the transaction to retrieve.
+/// * `state` - The application state containing the transaction repository.
+///
+/// # Returns
+///
+/// The details of the specified transaction.
 pub async fn get_transaction_by_nonce(
     relayer_id: String,
     nonce: u64,
@@ -153,6 +237,17 @@ pub async fn get_transaction_by_nonce(
     Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
 }
 
+/// Lists all transactions for a specific relayer with pagination support.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `query` - The pagination query parameters.
+/// * `state` - The application state containing the transaction repository.
+///
+/// # Returns
+///
+/// A paginated list of transactions
 pub async fn list_transactions(
     relayer_id: String,
     query: PaginationQuery,
@@ -178,6 +273,16 @@ pub async fn list_transactions(
     )))
 }
 
+/// Deletes all pending transactions for a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// A success response if the operation was successful.
 pub async fn delete_pending_transactions(
     relayer_id: String,
     state: web::ThinData<AppState>,
@@ -191,6 +296,17 @@ pub async fn delete_pending_transactions(
     Ok(HttpResponse::Ok().json(ApiResponse::success(())))
 }
 
+/// Cancels a specific transaction for a relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `transaction_id` - The ID of the transaction to cancel.
+/// * `state` - The application state containing the transaction repository.
+///
+/// # Returns
+///
+/// The details of the canceled transaction.
 pub async fn cancel_transaction(
     relayer_id: String,
     transaction_id: String,
@@ -210,6 +326,17 @@ pub async fn cancel_transaction(
     Ok(HttpResponse::Ok().json(ApiResponse::success(canceled_transaction)))
 }
 
+/// Replaces a specific transaction for a relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `transaction_id` - The ID of the transaction to replace.
+/// * `state` - The application state containing the transaction repository.
+///
+/// # Returns
+///
+/// The details of the replaced transaction.
 pub async fn replace_transaction(
     relayer_id: String,
     transaction_id: String,
@@ -232,6 +359,17 @@ pub async fn replace_transaction(
     Ok(HttpResponse::Ok().json(ApiResponse::success(replaced_transaction)))
 }
 
+/// Signs data using a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `request` - The sign data request.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The signed data response.
 pub async fn sign_data(
     relayer_id: String,
     request: SignDataRequest,
@@ -250,6 +388,17 @@ pub async fn sign_data(
     }
 }
 
+/// Signs typed data using a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `request` - The sign typed data request.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The signed typed data response.
 pub async fn sign_typed_data(
     relayer_id: String,
     request: SignTypedDataRequest,
@@ -264,6 +413,17 @@ pub async fn sign_typed_data(
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
+/// Performs a JSON-RPC call through a specific relayer.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `request` - The JSON-RPC request.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The result of the JSON-RPC call.
 pub async fn relayer_rpc(
     relayer_id: String,
     request: JsonRpcRequest,

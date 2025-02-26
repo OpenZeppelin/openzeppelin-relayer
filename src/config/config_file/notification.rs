@@ -1,3 +1,13 @@
+//! This module defines the configuration structures and validation logic for notifications.
+//!
+//! It includes:
+//! - `NotificationFileConfigType`: An enum representing the type of notification configuration.
+//! - `SigningKeyConfig`: An enum for specifying signing key configurations, either from an
+//!   environment variable or a plain value.
+//! - `NotificationFileConfig`: A struct representing a single notification configuration, with
+//!   methods for validation and signing key retrieval.
+//! - `NotificationsFileConfig`: A struct for managing a collection of notification configurations,
+//!   with validation to ensure uniqueness and completeness.
 use super::ConfigFileError;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -16,6 +26,7 @@ pub enum SigningKeyConfig {
     Plain { value: String },
 }
 
+/// Represents the type of notification configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationFileConfig {
@@ -92,6 +103,7 @@ impl NotificationFileConfig {
     }
 }
 
+/// Manages a collection of notification configurations.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationsFileConfig {
@@ -99,10 +111,14 @@ pub struct NotificationsFileConfig {
 }
 
 impl NotificationsFileConfig {
+    /// Creates a new `NotificationsFileConfig` with the given notifications.
     pub fn new(notifications: Vec<NotificationFileConfig>) -> Self {
         Self { notifications }
     }
 
+    /// Validates the collection of notification configurations.
+    ///
+    /// Ensures that each notification is valid and that there are no duplicate IDs.
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         if self.notifications.is_empty() {
             return Err(ConfigFileError::MissingField("notifications".into()));
