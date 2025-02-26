@@ -125,9 +125,11 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
             value: Some(Uint::<256, 4>::from(tx.value)),
             input: TransactionInput::from(tx.data.clone().unwrap_or("".to_string()).into_bytes()),
             nonce: Some(
-                Uint::<256, 4>::from(tx.nonce.unwrap_or(0))
-                    .try_into()
-                    .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))?,
+                Uint::<256, 4>::from(tx.nonce.ok_or_else(|| {
+                    TransactionError::InvalidType("Nonce must be defined".to_string())
+                })?)
+                .try_into()
+                .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))?,
             ),
             chain_id: Some(tx.chain_id),
             ..Default::default()
