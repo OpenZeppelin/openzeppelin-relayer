@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
+use log::{debug, info};
 use std::sync::Arc;
 
 use crate::{
@@ -75,28 +75,30 @@ impl Transaction for EvmRelayerTransaction {
         info!("Preparing transaction");
         // set the gas price
         let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
-        info!("Gas price: {:?}", price_params.gas_price);
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
-        let evm_data = evm_data.with_price_params(price_params);
-
-        // gas estimation
-        let gas_estimation = self.provider.estimate_gas(&evm_data).await?;
-        info!("Gas estimation: {:?}", gas_estimation);
-
-        let evm_data = evm_data.with_gas_estimate(gas_estimation);
+        debug!("Gas price: {:?}", price_params.gas_price);
 
         // sign the transaction
         let sig_result = self
             .signer
             .sign_transaction(tx.network_data.clone())
             .await?;
-        let evm_data = NetworkTransactionData::Evm(
-            evm_data.with_signed_transaction_data(sig_result.into_evm()?),
-        );
+
+        // increment the nonce
+        let nonce = self
+            .transaction_counter_service
+            .get_and_increment()
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        let updated_evm_data = tx
+            .network_data
+            .get_evm_transaction_data()?
+            .with_price_params(price_params)
+            .with_nonce(nonce)
+            .with_signed_transaction_data(sig_result.into_evm()?);
 
         let updated_tx = self
             .transaction_repository
-            .update_network_data(tx.id.clone(), evm_data)
+            .update_network_data(tx.id.clone(), NetworkTransactionData::Evm(updated_evm_data))
             .await?;
 
         // after preparing the transaction, we need to submit it to the job queue

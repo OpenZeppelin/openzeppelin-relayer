@@ -121,6 +121,10 @@ impl EvmTransactionData {
         self.gas_limit = gas_limit;
         self
     }
+    pub fn with_nonce(mut self, nonce: u64) -> Self {
+        self.nonce = nonce;
+        self
+    }
 
     pub fn with_signed_transaction_data(mut self, sig: SignTransactionResponseEvm) -> Self {
         self.signature = Some(sig.signature);
@@ -193,7 +197,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                         nonce: 0, // TODO
                         value: evm_request.value,
                         data: evm_request.data.clone(),
-                        from: evm_request.from.clone(),
+                        from: relayer_model.address.clone(),
                         to: evm_request.to.clone(),
                         chain_id: network.unwrap().id(),
                         hash: Some("0x".to_string()),

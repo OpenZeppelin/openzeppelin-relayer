@@ -10,7 +10,7 @@ use super::{EvmRelayerTransaction, TransactionPriceParams};
 
 type GasPriceCapResult = (Option<U256>, Option<U256>, Option<U256>);
 
-/// Get the price params for the transaction based on getTransactionPriceParams defender
+/// Get the price params for the transaction
 pub async fn get_transaction_price_params(
     evm_relayer_transaction: &EvmRelayerTransaction,
     tx: &TransactionRepoModel,
