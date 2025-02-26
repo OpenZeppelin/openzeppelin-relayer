@@ -90,7 +90,15 @@ pub async fn update_relayer(
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
-    relayer.validate_active_state()?;
+
+    if relayer.system_disabled || (relayer.paused && update_req.paused != Some(false)) {
+        let error_message = if relayer.system_disabled {
+            "Relayer is disabled"
+        } else {
+            "Relayer is paused"
+        };
+        return Err(ApiError::BadRequest(error_message.to_string()));
+    }
 
     let updated_relayer = state
         .relayer_repository
