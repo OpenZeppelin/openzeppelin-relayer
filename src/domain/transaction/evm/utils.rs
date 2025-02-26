@@ -74,12 +74,17 @@ pub async fn get_transaction_price_params(
         evm_relayer_transaction.relayer(),
     )?;
 
-    // TODO: Add balance
+    // Get balance from provider
+    let balance = evm_relayer_transaction
+        .provider()
+        .get_balance(&tx_data.from)
+        .await
+        .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
     Ok(TransactionPriceParams {
         gas_price,
         max_fee_per_gas,
         max_priority_fee_per_gas,
-        balance: None,
+        balance: Some(balance),
     })
 }
 

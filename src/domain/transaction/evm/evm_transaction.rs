@@ -88,6 +88,11 @@ impl EvmRelayerTransaction {
         &self.gas_price_service
     }
 
+    /// Returns a reference to the provider.
+    pub fn provider(&self) -> &EvmProvider {
+        &self.provider
+    }
+
     /// Returns a reference to the relayer model.
     pub fn relayer(&self) -> &RelayerRepoModel {
         &self.relayer
@@ -113,7 +118,6 @@ impl Transaction for EvmRelayerTransaction {
         // set the gas price
         let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
         debug!("Gas price: {:?}", price_params.gas_price);
-
         // sign the transaction
         let sig_result = self
             .signer
