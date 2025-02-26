@@ -46,7 +46,13 @@ pub trait SolanaProviderTrait: Send + Sync {
     async fn get_balance(&self, address: &str) -> Result<u64, SolanaProviderError>;
 
     /// Retrieves the latest blockhash as a 32-byte array.
-    async fn get_latest_blockhash(&self) -> Result<[u8; 32], SolanaProviderError>;
+    async fn get_latest_blockhash(&self) -> Result<Hash, SolanaProviderError>;
+
+    // Retrieves the latest blockhash with the specified commitment.
+    async fn get_latest_blockhash_with_commitment(
+        &self,
+        commitment: CommitmentConfig,
+    ) -> Result<(Hash, u64), SolanaProviderError>;
 
     /// Sends a transaction to the Solana network.
     async fn send_transaction(
@@ -132,7 +138,7 @@ impl SolanaProvider {
         let client = RpcClient::new_with_timeout_and_commitment(
             url.to_string(),
             Duration::from_secs(30),
-            CommitmentConfig::processed(),
+            CommitmentConfig::confirmed(),
         );
         Ok(Self { client })
     }
@@ -143,7 +149,7 @@ impl SolanaProvider {
         commitment: Option<CommitmentConfig>,
     ) -> Result<Self, ProviderError> {
         let timeout = timeout.unwrap_or_else(|| Duration::from_secs(30));
-        let commitment = commitment.unwrap_or_else(CommitmentConfig::processed);
+        let commitment = commitment.unwrap_or_else(CommitmentConfig::confirmed);
         let client =
             RpcClient::new_with_timeout_and_commitment(url.to_string(), timeout, commitment);
         Ok(Self { client })
@@ -181,11 +187,20 @@ impl SolanaProviderTrait for SolanaProvider {
     }
 
     /// Gets the latest blockhash.
-    async fn get_latest_blockhash(&self) -> Result<[u8; 32], SolanaProviderError> {
+    async fn get_latest_blockhash(&self) -> Result<Hash, SolanaProviderError> {
         self.client
             .get_latest_blockhash()
             .await
-            .map(|blockhash| blockhash.to_bytes())
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+    }
+
+    async fn get_latest_blockhash_with_commitment(
+        &self,
+        commitment: CommitmentConfig,
+    ) -> Result<(Hash, u64), SolanaProviderError> {
+        self.client
+            .get_latest_blockhash_with_commitment(commitment)
+            .await
             .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
     }
 
@@ -280,28 +295,17 @@ impl SolanaProviderTrait for SolanaProvider {
         // Derive the PDA for the token metadata
         let metadata_pda = Metadata::find_pda(&mint_pubkey).0;
 
-        // Get the metadata account data from the provider
-        let metadata_account = self
-            .get_account_from_pubkey(&metadata_pda)
-            .await
-            .map_err(|e| {
-                SolanaProviderError::RpcError(format!(
-                    "Failed to fetch metadata account {}: {}",
-                    metadata_pda, e
-                ))
-            })?;
-
-        // Deserialize the metadata from the account data
-        let metadata = Metadata::from_bytes(&metadata_account.data).map_err(|e| {
-            SolanaProviderError::RpcError(format!("Failed to deserialize metadata: {}", e))
-        })?;
-
-        // Remove trailing null bytes (padding) from the symbol
-        let normalized_symbol = metadata.symbol.trim_end_matches('\u{0}').to_string();
+        let symbol = match self.get_account_from_pubkey(&metadata_pda).await {
+            Ok(metadata_account) => match Metadata::from_bytes(&metadata_account.data) {
+                Ok(metadata) => metadata.symbol.trim_end_matches('\u{0}').to_string(),
+                Err(_) => String::new(),
+            },
+            Err(_) => String::new(), // Return empty symbol if metadata doesn't exist
+        };
 
         Ok(TokenMetadata {
             decimals,
-            symbol: normalized_symbol,
+            symbol,
             mint: pubkey.to_string(),
         })
     }
@@ -360,11 +364,10 @@ mod tests {
 
     // Helper function to obtain a recent blockhash from the provider.
     async fn get_recent_blockhash(provider: &SolanaProvider) -> Hash {
-        let blockhash_bytes = provider
+        provider
             .get_latest_blockhash()
             .await
-            .expect("Failed to get blockhash");
-        Hash::new_from_array(blockhash_bytes)
+            .expect("Failed to get blockhash")
     }
 
     #[tokio::test]

@@ -107,7 +107,8 @@ mod tests {
         domain::MockSolanaRpcMethods,
         models::{
             EncodedSerializedTransaction, FeeEstimateResult, GetFeaturesEnabledResult,
-            SignAndSendTransactionResult, SignTransactionResult,
+            PrepareTransactionResult, SignAndSendTransactionResult, SignTransactionResult,
+            TransferTransactionResult,
         },
     };
 
@@ -386,5 +387,111 @@ mod tests {
         let response = handler.handle_request(request).await;
 
         assert!(matches!(response, Err(SolanaRpcError::BadRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn test_transfer_transaction_success() {
+        let mut mock_rpc_methods = MockSolanaRpcMethods::new();
+        let mock_transaction = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+
+        mock_rpc_methods
+            .expect_transfer_transaction()
+            .with(predicate::eq(TransferTransactionRequestParams {
+                source: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
+                destination: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
+                amount: 10,
+                token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
+            }))
+            .returning(move |_| {
+                Ok(TransferTransactionResult {
+                    fee_in_lamports: "1005000".to_string(),
+                    fee_in_spl: "1005000".to_string(),
+                    fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
+                    transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
+                    valid_until_blockheight: 351207983,
+                })
+            })
+            .times(1);
+
+        let handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "transferTransaction".to_string(),
+            params: json!({
+                "source": "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
+                "destination": "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
+                "amount": 10,
+                "token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
+            }),
+        };
+
+        let response = handler.handle_request(request).await;
+
+        assert!(response.is_ok());
+        let json_response = response.unwrap();
+        match json_response.result {
+            Some(value) => {
+                let result = value.as_object().unwrap();
+                assert!(result.contains_key("fee_in_lamports"));
+                assert!(result.contains_key("fee_in_spl"));
+                assert!(result.contains_key("fee_token"));
+                assert!(result.contains_key("transaction"));
+                assert!(result.contains_key("valid_until_blockheight"));
+            }
+            None => panic!("Expected Some result, got None"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_success() {
+        let mut mock_rpc_methods = MockSolanaRpcMethods::new();
+        let mock_transaction = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+
+        mock_rpc_methods
+            .expect_prepare_transaction()
+            .with(predicate::eq(PrepareTransactionRequestParams {
+                transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
+                fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
+            }))
+            .returning(move |_| {
+                Ok(PrepareTransactionResult {
+                    fee_in_lamports: "1005000".to_string(),
+                    fee_in_spl: "1005000".to_string(),
+                    fee_token: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(),
+                    transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
+                    valid_until_blockheight: 351207983,
+                })
+            })
+            .times(1);
+
+        let handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "prepareTransaction".to_string(),
+            params: json!({
+                "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "fee_token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr".to_string(), // noboost
+            }),
+        };
+
+        let response = handler.handle_request(request).await;
+
+        assert!(response.is_ok());
+        let json_response = response.unwrap();
+        match json_response.result {
+            Some(value) => {
+                let result = value.as_object().unwrap();
+                assert!(result.contains_key("fee_in_lamports"));
+                assert!(result.contains_key("fee_in_spl"));
+                assert!(result.contains_key("fee_token"));
+                assert!(result.contains_key("transaction"));
+                assert!(result.contains_key("valid_until_blockheight"));
+            }
+            None => panic!("Expected Some result, got None"),
+        }
     }
 }

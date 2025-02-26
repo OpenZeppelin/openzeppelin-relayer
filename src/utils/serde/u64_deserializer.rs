@@ -25,6 +25,7 @@ impl de::Visitor<'_> for U64Visitor {
     }
 
     // Handle u64 inputs
+    #[allow(clippy::unnecessary_cast)]
     fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
     where
         E: de::Error,

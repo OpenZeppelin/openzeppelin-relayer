@@ -4,6 +4,7 @@ use solana_sdk::transaction::Transaction;
 use thiserror::Error;
 
 #[derive(Debug, Error, Deserialize, Serialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum SolanaEncodingError {
     #[error("Failed to serialize transaction: {0}")]
     Serialization(String),
@@ -68,7 +69,7 @@ pub struct FeeEstimateResult {
 // transferTransaction
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct TransferTransactionRequestParams {
-    pub amount: usize,
+    pub amount: u64,
     pub token: String,
     pub source: String,
     pub destination: String,

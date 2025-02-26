@@ -25,7 +25,7 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
-use log::{info, warn};
+use log::{error, info, warn};
 use solana_sdk::account::Account;
 
 use super::{SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl};
@@ -194,6 +194,7 @@ impl SolanaRelayerTrait for SolanaRelayer {
         match response {
             Ok(response) => Ok(response),
             Err(e) => {
+                error!("Error while processing RPC request: {}", e);
                 let error_response = match e {
                     SolanaRpcError::UnsupportedMethod(msg) => {
                         JsonRpcResponse::error(32000, "UNSUPPORTED_METHOD", &msg)
@@ -256,19 +257,22 @@ issues.",
                         "PREPARATION_ERROR",
                         "Failed to prepare the transfer transaction.",
                     ),
-                    SolanaRpcError::SigningError(_) => {
+                    SolanaRpcError::Signing(_) => {
                         JsonRpcResponse::error(-32005, "-32005", "Failed to sign the transaction.")
                     }
-                    SolanaRpcError::EncodingError(_) => JsonRpcResponse::error(
+                    SolanaRpcError::Encoding(_) => JsonRpcResponse::error(
                         -32601,
                         "INVALID_PARAMS",
                         "The transaction parameter is invalid or missing.",
                     ),
-                    SolanaRpcError::ProviderError(_) => JsonRpcResponse::error(
+                    SolanaRpcError::Provider(_) => JsonRpcResponse::error(
                         -32006,
                         "SEND_ERROR",
                         "Failed to submit the transaction to the blockchain.",
                     ),
+                    SolanaRpcError::Internal(msg) => {
+                        JsonRpcResponse::error(-32000, "INTERNAL_ERROR", &msg)
+                    }
                 };
                 Ok(error_response)
             }

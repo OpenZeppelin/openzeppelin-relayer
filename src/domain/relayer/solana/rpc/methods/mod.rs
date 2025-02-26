@@ -1,0 +1,183 @@
+//! # Solana RPC Methods Module
+//!
+//! This module defines the `SolanaRpcMethods` trait which provides an asynchronous interface
+//! for various Solana-specific RPC operations. These operations include fee estimation,
+//! transaction processing (transfer, prepare, sign, and send), token retrieval, and feature
+//! queries.
+mod fee_estimate;
+mod get_features_enabled;
+mod get_supported_tokens;
+mod prepare_transaction;
+mod sign_and_send_transaction;
+mod sign_transaction;
+#[cfg(test)]
+mod test_setup;
+mod transfer_transaction;
+mod utils;
+mod validations;
+#[cfg(test)]
+use mockall::automock;
+
+use std::sync::Arc;
+
+#[cfg(test)]
+pub use test_setup::*;
+pub use validations::*;
+
+use crate::{
+    models::RelayerRepoModel,
+    services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
+};
+
+use super::*;
+
+#[cfg(test)]
+use crate::services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait};
+use async_trait::async_trait;
+
+use crate::{
+    models::{
+        FeeEstimateRequestParams, FeeEstimateResult, GetFeaturesEnabledRequestParams,
+        GetFeaturesEnabledResult, GetSupportedTokensRequestParams, GetSupportedTokensResult,
+        PrepareTransactionRequestParams, PrepareTransactionResult,
+        SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
+        SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
+        TransferTransactionResult,
+    },
+    services::{JupiterService, SolanaProvider, SolanaSigner},
+};
+
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait SolanaRpcMethods: Send + Sync {
+    async fn fee_estimate(
+        &self,
+        request: FeeEstimateRequestParams,
+    ) -> Result<FeeEstimateResult, SolanaRpcError>;
+    async fn transfer_transaction(
+        &self,
+        request: TransferTransactionRequestParams,
+    ) -> Result<TransferTransactionResult, SolanaRpcError>;
+    async fn prepare_transaction(
+        &self,
+        request: PrepareTransactionRequestParams,
+    ) -> Result<PrepareTransactionResult, SolanaRpcError>;
+    async fn sign_transaction(
+        &self,
+        request: SignTransactionRequestParams,
+    ) -> Result<SignTransactionResult, SolanaRpcError>;
+    async fn sign_and_send_transaction(
+        &self,
+        request: SignAndSendTransactionRequestParams,
+    ) -> Result<SignAndSendTransactionResult, SolanaRpcError>;
+    async fn get_supported_tokens(
+        &self,
+        request: GetSupportedTokensRequestParams,
+    ) -> Result<GetSupportedTokensResult, SolanaRpcError>;
+    async fn get_features_enabled(
+        &self,
+        request: GetFeaturesEnabledRequestParams,
+    ) -> Result<GetFeaturesEnabledResult, SolanaRpcError>;
+}
+
+pub type DefaultProvider = SolanaProvider;
+pub type DefaultSigner = SolanaSigner;
+pub type DefaultJupiterService = JupiterService;
+
+#[cfg(test)]
+impl SolanaRpcMethodsImpl<MockSolanaProviderTrait, MockSolanaSignTrait, MockJupiterServiceTrait> {
+    pub fn new_mock(
+        relayer: RelayerRepoModel,
+        provider: Arc<MockSolanaProviderTrait>,
+        signer: Arc<MockSolanaSignTrait>,
+        jupiter_service: Arc<MockJupiterServiceTrait>,
+    ) -> Self {
+        Self {
+            relayer,
+            provider,
+            signer,
+            jupiter_service,
+        }
+    }
+}
+
+pub struct SolanaRpcMethodsImpl<P = DefaultProvider, S = DefaultSigner, J = DefaultJupiterService> {
+    pub(crate) relayer: RelayerRepoModel,
+    pub(crate) provider: Arc<P>,
+    pub(crate) signer: Arc<S>,
+    pub(crate) jupiter_service: Arc<J>,
+}
+
+// Default implementation
+impl SolanaRpcMethodsImpl<DefaultProvider, DefaultSigner, DefaultJupiterService> {
+    pub fn new(
+        relayer: RelayerRepoModel,
+        provider: Arc<DefaultProvider>,
+        signer: Arc<DefaultSigner>,
+        jupiter_service: Arc<DefaultJupiterService>,
+    ) -> Self {
+        Self {
+            relayer,
+            provider,
+            signer,
+            jupiter_service,
+        }
+    }
+}
+
+#[async_trait]
+impl<P, S, J> SolanaRpcMethods for SolanaRpcMethodsImpl<P, S, J>
+where
+    P: SolanaProviderTrait + Send + Sync,
+    S: SolanaSignTrait + Send + Sync,
+    J: JupiterServiceTrait + Send + Sync,
+{
+    async fn fee_estimate(
+        &self,
+        params: FeeEstimateRequestParams,
+    ) -> Result<FeeEstimateResult, SolanaRpcError> {
+        self.fee_estimate_impl(params).await
+    }
+
+    async fn prepare_transaction(
+        &self,
+        params: PrepareTransactionRequestParams,
+    ) -> Result<PrepareTransactionResult, SolanaRpcError> {
+        self.prepare_transaction_impl(params).await
+    }
+
+    async fn sign_transaction(
+        &self,
+        params: SignTransactionRequestParams,
+    ) -> Result<SignTransactionResult, SolanaRpcError> {
+        self.sign_transaction_impl(params).await
+    }
+
+    async fn sign_and_send_transaction(
+        &self,
+        params: SignAndSendTransactionRequestParams,
+    ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
+        self.sign_and_send_transaction_impl(params).await
+    }
+
+    async fn transfer_transaction(
+        &self,
+        params: TransferTransactionRequestParams,
+    ) -> Result<TransferTransactionResult, SolanaRpcError> {
+        self.transfer_transaction_impl(params).await
+    }
+
+    async fn get_supported_tokens(
+        &self,
+        params: GetSupportedTokensRequestParams,
+    ) -> Result<GetSupportedTokensResult, SolanaRpcError> {
+        self.get_supported_tokens_impl(params).await
+    }
+
+    async fn get_features_enabled(
+        &self,
+        params: GetFeaturesEnabledRequestParams,
+    ) -> Result<GetFeaturesEnabledResult, SolanaRpcError> {
+        self.get_features_enabled_impl(params).await
+    }
+}
