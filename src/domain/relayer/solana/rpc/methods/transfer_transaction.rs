@@ -1,4 +1,29 @@
-//! transferTransaction RPC method implementation.
+//! Creates a transfer transaction for a specified token, sender, and recipient.
+//!
+//! # Description
+//!
+//! This function constructs a partially signed transfer transaction using the provided
+//! parameters. In addition to the transfer, it calculates fee amounts both in SPL tokens
+//! and in lamports, and sets an expiration block height for the transaction.
+//!
+//! # Parameters
+//!
+//! * `amount` - The amount to transfer, specified in the smallest unit of the token.
+//! * `token` - A string representing the token mint address for both the transfer and the fee
+//!   payment.
+//! * `source` - A string representing the sender's public key.
+//! * `destination` - A string representing the recipient's public key.
+//!
+//! # Returns
+//!
+//! On success, returns a tuple containing:
+//!
+//! * `transaction` - A Base64-encoded partially signed transaction.
+//! * `fee_in_spl` - The fee amount in SPL tokens (smallest unit).
+//! * `fee_in_lamports` - The fee amount in lamports (SOL equivalent).
+//! * `fee_token` - The token mint address used for fee payments.
+//! * `valid_until_blockheight` - The block height until which the transaction remains valid.
+
 use std::str::FromStr;
 
 use solana_sdk::{pubkey::Pubkey, system_instruction};
@@ -19,31 +44,6 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
-    /// Creates a transfer transaction for a specified token, sender, and recipient.
-    ///
-    /// # Description
-    ///
-    /// This function constructs a partially signed transfer transaction using the provided
-    /// parameters. In addition to the transfer, it calculates fee amounts both in SPL tokens
-    /// and in lamports, and sets an expiration block height for the transaction.
-    ///
-    /// # Parameters
-    ///
-    /// * `amount` - The amount to transfer, specified in the smallest unit of the token.
-    /// * `token` - A string representing the token mint address for both the transfer and the fee
-    ///   payment.
-    /// * `source` - A string representing the sender's public key.
-    /// * `destination` - A string representing the recipient's public key.
-    ///
-    /// # Returns
-    ///
-    /// On success, returns a tuple containing:
-    ///
-    /// * `transaction` - A Base64-encoded partially signed transaction.
-    /// * `fee_in_spl` - The fee amount in SPL tokens (smallest unit).
-    /// * `fee_in_lamports` - The fee amount in lamports (SOL equivalent).
-    /// * `fee_token` - The token mint address used for fee payments.
-    /// * `valid_until_blockheight` - The block height until which the transaction remains valid.
     pub(crate) async fn transfer_transaction_impl(
         &self,
         params: TransferTransactionRequestParams,

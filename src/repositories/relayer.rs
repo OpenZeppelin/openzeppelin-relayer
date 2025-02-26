@@ -1,3 +1,12 @@
+//! This module defines the `RelayerRepository` trait and its in-memory implementation,
+//! `InMemoryRelayerRepository`. It provides functionality for managing relayers, including
+//! creating, updating, enabling, disabling, and listing relayers. The module also includes
+//! conversion logic for transforming configuration file data into repository models and
+//! implements pagination for listing relayers.
+//!
+//! The `RelayerRepository` trait is designed to be implemented by any storage backend,
+//! allowing for flexibility in how relayers are stored and managed. The in-memory
+//! implementation is useful for testing and development purposes.
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
     constants::{

@@ -41,34 +41,142 @@ pub use solana::*;
 pub use stellar::*;
 pub use util::*;
 
+/// The `Relayer` trait defines the core functionality required for a relayer
+/// in the system. Implementors of this trait are responsible for handling
+/// transaction requests, managing balances, and interacting with the network.
 #[async_trait]
 #[allow(dead_code)]
 pub trait Relayer {
+    /// Processes a transaction request and returns the result.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_request` - The transaction request to be processed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `TransactionRepoModel` on success, or a
+    /// `RelayerError` on failure.
     async fn process_transaction_request(
         &self,
         tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError>;
+
+    /// Retrieves the current balance of the relayer.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `BalanceResponse` on success, or a
+    /// `RelayerError` on failure.
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
+
+    /// Deletes all pending transactions.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing `true` if transactions were successfully deleted,
+    /// or a `RelayerError` on failure.
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
+
+    /// Signs data using the relayer's credentials.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The data to be signed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `SignDataResponse` on success, or a
+    /// `RelayerError` on failure.
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError>;
+
+    /// Signs typed data using the relayer's credentials.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The typed data to be signed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `SignDataResponse` on success, or a
+    /// `RelayerError` on failure.
     async fn sign_typed_data(
         &self,
         request: SignTypedDataRequest,
     ) -> Result<SignDataResponse, RelayerError>;
+
+    /// Executes a JSON-RPC request.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The JSON-RPC request to be executed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `JsonRpcResponse` on success, or a
+    /// `RelayerError` on failure.
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
+
+    /// Retrieves the current status of the relayer.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing `true` if the relayer is active, or a
+    /// `RelayerError` on failure.
     async fn get_status(&self) -> Result<bool, RelayerError>;
+
+    /// Initializes the relayer.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success, or a `RelayerError` on failure.
     async fn initialize_relayer(&self) -> Result<(), RelayerError>;
+
+    /// Validates that the relayer's balance meets the minimum required.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success, or a `RelayerError` on failure.
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
-// Solana Relayer Trait
-// Subset of methods for Solana relayer
+/// Solana Relayer Trait
+/// Subset of methods for Solana relayer
 #[async_trait]
 #[allow(dead_code)]
 pub trait SolanaRelayerTrait {
+    /// Retrieves the current balance of the relayer.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `BalanceResponse` on success, or a
+    /// `RelayerError` on failure.
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError>;
+
+    /// Executes a JSON-RPC request.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The JSON-RPC request to be executed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `JsonRpcResponse` on success, or a
+    /// `RelayerError` on failure.
     async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
+
+    /// Initializes the relayer.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success, or a `RelayerError` on failure.
     async fn initialize_relayer(&self) -> Result<(), RelayerError>;
+
+    /// Validates that the relayer's balance meets the minimum required.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success, or a `RelayerError` on failure.
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 

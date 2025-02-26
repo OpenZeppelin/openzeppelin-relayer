@@ -25,14 +25,57 @@ pub struct SolanaRpcHandler<T> {
 }
 
 impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
+    /// Creates a new `SolanaRpcHandler` with the specified RPC methods.
+    ///
+    /// # Arguments
+    ///
+    /// * `rpc_methods` - An implementation of the `SolanaRpcMethods` trait that provides the
+    ///   necessary methods for handling RPC requests.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new instance of `SolanaRpcHandler`
     pub fn new(rpc_methods: T) -> Self {
         Self { rpc_methods }
     }
 
+    /// Converts a `serde_json::Error` into a `SolanaRpcError`.
+    ///
+    /// This function is used to map JSON deserialization errors to a more
+    /// specific RPC error type.
+    ///
+    /// # Arguments
+    ///
+    /// * `result` - A `Result` containing either a successful value or a `serde_json::Error`.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing either the successful value or a `SolanaRpcError::BadRequest`.
     fn handle_error<E>(result: Result<E, serde_json::Error>) -> Result<E, SolanaRpcError> {
         result.map_err(|e| SolanaRpcError::BadRequest(e.to_string()))
     }
 
+    /// Handles an incoming JSON-RPC request and dispatches it to the appropriate method.
+    ///
+    /// This function processes the request by determining the method to call based on
+    /// the request's method name, deserializing the parameters, and invoking the corresponding
+    /// method on the `rpc_methods` implementation.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - A `JsonRpcRequest` containing the method name and parameters.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing either a `JsonRpcResponse` with the result of the method call
+    /// or a `SolanaRpcError` if an error occurred.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The method is unsupported.
+    /// * The parameters cannot be deserialized.
+    /// * The underlying method call fails.
     pub async fn handle_request(
         &self,
         request: JsonRpcRequest,

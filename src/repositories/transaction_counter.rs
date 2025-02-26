@@ -1,3 +1,9 @@
+//! This module provides an in-memory implementation of a transaction counter.
+//!
+//! The `InMemoryTransactionCounter` struct is used to track and manage transaction nonces
+//! for different relayers and addresses. It supports operations to get, increment, decrement,
+//! and set nonce values. This implementation uses a `DashMap` for concurrent access and
+//! modification of the nonce values.
 use dashmap::DashMap;
 
 use super::{TransactionCounterError, TransactionCounterTrait};

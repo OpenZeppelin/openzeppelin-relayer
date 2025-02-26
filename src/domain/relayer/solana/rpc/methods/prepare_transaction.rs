@@ -1,11 +1,33 @@
-//! prepareTransaction RPC method implementation.
-use std::str::FromStr;
-
+//! Prepares a transaction by adding relayer-specific instructions.
+//!
+//! # Description
+//!
+//! This function takes an existing Base64-encoded serialized transaction and adds
+//! relayer-specific instructions.
+//! The updated transaction will include additional data required by the relayer, and the
+//! function also provides updated fee information and an expiration block height.
+//!
+//! # Parameters
+//!
+//! * `transaction` - A Base64-encoded serialized transaction that the end user would like relayed.
+//! * `fee_token` - A string representing the token mint address to be used for fee payment.
+//!
+//! # Returns
+//!
+//! On success, returns a tuple containing:
+//!
+//! * `transaction` - A Base64-encoded transaction with the added relayer-specific instructions.
+//! * `fee_in_spl` - The fee amount in SPL tokens (in the smallest unit).
+//! * `fee_in_lamports` - The fee amount in lamports.
+//! * `fee_token` - The token mint address used for fee payments.
+//! * `valid_until_block_height` - The block height until which the transaction remains valid.use
+//!   std::str::FromStr;
 use futures::try_join;
 use solana_sdk::{
     commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
     transaction::Transaction,
 };
+use std::str::FromStr;
 
 use crate::{
     models::{
@@ -22,30 +44,6 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
-    /// Prepares a transaction by adding relayer-specific instructions.
-    ///
-    /// # Description
-    ///
-    /// This function takes an existing Base64-encoded serialized transaction and adds
-    /// relayer-specific instructions.
-    /// The updated transaction will include additional data required by the relayer, and the
-    /// function also provides updated fee information and an expiration block height.
-    ///
-    /// # Parameters
-    ///
-    /// * `transaction` - A Base64-encoded serialized transaction that the end user would like
-    ///   relayed.
-    /// * `fee_token` - A string representing the token mint address to be used for fee payment.
-    ///
-    /// # Returns
-    ///
-    /// On success, returns a tuple containing:
-    ///
-    /// * `transaction` - A Base64-encoded transaction with the added relayer-specific instructions.
-    /// * `fee_in_spl` - The fee amount in SPL tokens (in the smallest unit).
-    /// * `fee_in_lamports` - The fee amount in lamports.
-    /// * `fee_token` - The token mint address used for fee payments.
-    /// * `valid_until_block_height` - The block height until which the transaction remains valid.
     pub(crate) async fn prepare_transaction_impl(
         &self,
         params: PrepareTransactionRequestParams,
@@ -151,6 +149,8 @@ async fn validate_prepare_transaction<P: SolanaProviderTrait + Send + Sync>(
 
 #[cfg(test)]
 mod tests {
+
+    use std::str::FromStr;
 
     use crate::{
         constants::SOL_MINT,

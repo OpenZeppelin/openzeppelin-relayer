@@ -1,4 +1,21 @@
-//! signTransaction RPC method implementation.
+//! Signs a prepared transaction without submitting it to the blockchain.
+//!
+//! # Description
+//!
+//! This function is used to sign a prepared transaction (one that may have been modified by the
+//! relayer) to ensure its validity and authorization before submission. It returns the
+//! signed transaction along with the corresponding signature.
+//!
+//! # Parameters
+//!
+//! * `transaction` - A Base64-encoded prepared transaction that requires signing.
+//!
+//! # Returns
+//!
+//! On success, returns a tuple containing:
+//!
+//! * `transaction` - A Base64-encoded signed transaction.
+//! * `signature` - Signature of the submitted transaction.
 use std::str::FromStr;
 
 use futures::try_join;
@@ -17,24 +34,6 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
-    /// Signs a prepared transaction without submitting it to the blockchain.
-    ///
-    /// # Description
-    ///
-    /// This function is used to sign a prepared transaction (one that may have been modified by the
-    /// relayer) to ensure its validity and authorization before submission. It returns the
-    /// signed transaction along with the corresponding signature.
-    ///
-    /// # Parameters
-    ///
-    /// * `transaction` - A Base64-encoded prepared transaction that requires signing.
-    ///
-    /// # Returns
-    ///
-    /// On success, returns a tuple containing:
-    ///
-    /// * `transaction` - A Base64-encoded signed transaction.
-    /// * `signature` - Signature of the submitted transaction.
     pub(crate) async fn sign_transaction_impl(
         &self,
         params: SignTransactionRequestParams,

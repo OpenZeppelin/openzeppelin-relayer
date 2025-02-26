@@ -1,4 +1,4 @@
-/// Test setup for solana rpc methods
+//! Test setup for solana rpc methods
 use solana_sdk::{
     message::Message, pubkey::Pubkey, signature::Keypair, signer::Signer, system_instruction,
     transaction::Transaction,

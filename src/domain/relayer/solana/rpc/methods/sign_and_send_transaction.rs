@@ -1,4 +1,22 @@
-//! signAndSendTransaction RPC method implementation.
+//! Signs a prepared transaction and immediately submits it to the Solana blockchain.
+//!
+//! # Description
+//!
+//! This function combines the signing and submission steps into one operation. After validating
+//! and signing the provided transaction, it is immediately sent to the blockchain for
+//! execution. This is particularly useful when you want to reduce the number of
+//! client-server interactions.
+//!
+//! # Parameters
+//!
+//! * `transaction` - A Base64-encoded prepared transaction that needs to be signed and submitted.
+//!
+//! # Returns
+//!
+//! On success, returns a tuple containing:
+//!
+//! * `transaction` - A Base64-encoded signed transaction that has been submitted.
+//! * `signature` - Signature of the submitted transaction.
 use std::str::FromStr;
 
 use futures::try_join;
@@ -20,26 +38,6 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
-    /// Signs a prepared transaction and immediately submits it to the Solana blockchain.
-    ///
-    /// # Description
-    ///
-    /// This function combines the signing and submission steps into one operation. After validating
-    /// and signing the provided transaction, it is immediately sent to the blockchain for
-    /// execution. This is particularly useful when you want to reduce the number of
-    /// client-server interactions.
-    ///
-    /// # Parameters
-    ///
-    /// * `transaction` - A Base64-encoded prepared transaction that needs to be signed and
-    ///   submitted.
-    ///
-    /// # Returns
-    ///
-    /// On success, returns a tuple containing:
-    ///
-    /// * `transaction` - A Base64-encoded signed transaction that has been submitted.
-    /// * `signature` - Signature of the submitted transaction.
     pub(crate) async fn sign_and_send_transaction_impl(
         &self,
         params: SignAndSendTransactionRequestParams,

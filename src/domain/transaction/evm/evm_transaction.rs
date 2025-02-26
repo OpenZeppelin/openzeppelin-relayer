@@ -1,3 +1,8 @@
+//! This module defines the `EvmRelayerTransaction` struct and its associated
+//! functionality for handling Ethereum Virtual Machine (EVM) transactions.
+//! It includes methods for preparing, submitting, handling status, and
+//! managing notifications for transactions. The module leverages various
+//! services and repositories to perform these operations asynchronously.
 use async_trait::async_trait;
 use eyre::Result;
 use log::{debug, info};
@@ -13,11 +18,16 @@ use crate::{
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
     services::{EvmGasPriceService, EvmProvider, EvmSigner, Signer, TransactionCounterService},
 };
+/// Parameters for determining the price of a transaction.
 #[allow(dead_code)]
 pub struct TransactionPriceParams {
+    /// The gas price for the transaction.
     pub gas_price: Option<U256>,
+    /// The maximum priority fee per gas.
     pub max_priority_fee_per_gas: Option<U256>,
+    /// The maximum fee per gas.
     pub max_fee_per_gas: Option<U256>,
+    /// The balance available for the transaction.
     pub balance: Option<U256>,
 }
 
@@ -35,6 +45,22 @@ pub struct EvmRelayerTransaction {
 
 #[allow(dead_code, clippy::too_many_arguments)]
 impl EvmRelayerTransaction {
+    /// Creates a new `EvmRelayerTransaction`.
+    ///
+    /// # Arguments
+    ///
+    /// * `relayer` - The relayer model.
+    /// * `provider` - The EVM provider.
+    /// * `relayer_repository` - Storage for relayer repository.
+    /// * `transaction_repository` - Storage for transaction repository.
+    /// * `transaction_counter_service` - Service for managing transaction counters.
+    /// * `job_producer` - Producer for job queue.
+    /// * `gas_price_service` - Service for gas price management.
+    /// * `signer` - The EVM signer.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the new `EvmRelayerTransaction` or a `TransactionError`.
     pub fn new(
         relayer: RelayerRepoModel,
         provider: EvmProvider,
@@ -57,9 +83,12 @@ impl EvmRelayerTransaction {
         })
     }
 
+    /// Returns a reference to the gas price service.
     pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService> {
         &self.gas_price_service
     }
+
+    /// Returns a reference to the relayer model.
 
     pub fn relayer(&self) -> &RelayerRepoModel {
         &self.relayer
@@ -68,6 +97,15 @@ impl EvmRelayerTransaction {
 
 #[async_trait]
 impl Transaction for EvmRelayerTransaction {
+    /// Prepares a transaction for submission.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to prepare.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the updated transaction model or a `TransactionError`.
     async fn prepare_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -125,6 +163,15 @@ impl Transaction for EvmRelayerTransaction {
         Ok(updated_tx)
     }
 
+    /// Submits a transaction for processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to submit.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the updated transaction model or a `TransactionError`.
     async fn submit_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -155,6 +202,15 @@ impl Transaction for EvmRelayerTransaction {
         Ok(tx)
     }
 
+    /// Handles the status of a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to handle.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the updated transaction model or a `TransactionError`.
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
@@ -175,6 +231,15 @@ impl Transaction for EvmRelayerTransaction {
         Ok(tx)
     }
 
+    /// Cancels a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to cancel.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the transaction model or a `TransactionError`.
     async fn cancel_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -182,6 +247,15 @@ impl Transaction for EvmRelayerTransaction {
         Ok(tx)
     }
 
+    /// Replaces a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to replace.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the transaction model or a `TransactionError`.
     async fn replace_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -189,6 +263,15 @@ impl Transaction for EvmRelayerTransaction {
         Ok(tx)
     }
 
+    /// Signs a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to sign.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the transaction model or a `TransactionError`.
     async fn sign_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -196,6 +279,15 @@ impl Transaction for EvmRelayerTransaction {
         Ok(tx)
     }
 
+    /// Validates a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `_tx` - The transaction model to validate.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a boolean indicating validity or a `TransactionError`.
     async fn validate_transaction(
         &self,
         _tx: TransactionRepoModel,

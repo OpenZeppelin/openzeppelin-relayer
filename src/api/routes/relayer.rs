@@ -1,3 +1,6 @@
+//! This module defines the HTTP routes for relayer operations.
+//! It includes handlers for listing, retrieving, updating, and managing relayer transactions.
+//! The routes are integrated with the Actix-web framework and interact with the relayer controller.
 use crate::{
     api::controllers::relayer,
     domain::{JsonRpcRequest, RelayerUpdateRequest, SignDataRequest, SignTypedDataRequest},
@@ -6,7 +9,7 @@ use crate::{
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
 
-// list all relayers
+/// Lists all relayers with pagination support.
 #[get("/relayers")]
 async fn list_relayers(
     query: web::Query<PaginationQuery>,
@@ -15,7 +18,7 @@ async fn list_relayers(
     relayer::list_relayers(query.into_inner(), data).await
 }
 
-// get relayer details
+/// Retrieves details of a specific relayer by ID.
 #[get("/relayers/{relayer_id}")]
 async fn get_relayer(
     relayer_id: web::Path<String>,
@@ -24,7 +27,7 @@ async fn get_relayer(
     relayer::get_relayer(relayer_id.into_inner(), data).await
 }
 
-// update relayer
+/// Updates a relayer's information based on the provided update request.
 #[patch("/relayers/{relayer_id}")]
 async fn update_relayer(
     relayer_id: web::Path<String>,
@@ -34,7 +37,7 @@ async fn update_relayer(
     relayer::update_relayer(relayer_id.into_inner(), update_req.into_inner(), data).await
 }
 
-// get relayer status
+/// Fetches the current status of a specific relayer.
 #[post("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
@@ -43,7 +46,7 @@ async fn get_relayer_status(
     relayer::get_relayer_status(relayer_id.into_inner(), data).await
 }
 
-// get relayer balance
+/// Retrieves the balance of a specific relayer.
 #[get("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
@@ -52,7 +55,7 @@ async fn get_relayer_balance(
     relayer::get_relayer_balance(relayer_id.into_inner(), data).await
 }
 
-// send transaction
+/// Sends a transaction through the specified relayer.
 #[post("/relayers/{relayer_id}/transactions")]
 async fn send_relayer_transaction(
     relayer_id: web::Path<String>,
@@ -68,6 +71,7 @@ pub struct TransactionPath {
     transaction_id: String,
 }
 
+/// Retrieves a specific transaction by its ID.
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_relayer_transaction_by_id(
     path: web::Path<TransactionPath>,
@@ -77,6 +81,7 @@ async fn get_relayer_transaction_by_id(
     relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, data).await
 }
 
+/// Retrieves a transaction by its nonce value.
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_relayer_transaction_by_nonce(
     relayer_id: web::Path<String>,
@@ -86,6 +91,7 @@ async fn get_relayer_transaction_by_nonce(
     relayer::get_transaction_by_nonce(relayer_id.into_inner(), nonce.into_inner(), data).await
 }
 
+/// Lists all transactions for a specific relayer with pagination.
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_relayer_transactions(
     relayer_id: web::Path<String>,
@@ -95,6 +101,7 @@ async fn list_relayer_transactions(
     relayer::list_transactions(relayer_id.into_inner(), query.into_inner(), data).await
 }
 
+/// Deletes all pending transactions for a specific relayer.
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
@@ -103,6 +110,7 @@ async fn delete_pending_transactions(
     relayer::delete_pending_transactions(relayer_id.into_inner(), data).await
 }
 
+/// Cancels a specific transaction by its ID.
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_relayer_transaction(
     relayer_id: web::Path<String>,
@@ -112,6 +120,7 @@ async fn cancel_relayer_transaction(
     relayer::cancel_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
 }
 
+/// Replaces a specific transaction with a new one.
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_relayer_transaction(
     relayer_id: web::Path<String>,
@@ -121,6 +130,7 @@ async fn replace_relayer_transaction(
     relayer::replace_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
 }
 
+/// Signs data using the specified relayer.
 #[post("/relayers/{relayer_id}/sign")]
 async fn relayer_sign(
     relayer_id: web::Path<String>,
@@ -130,6 +140,7 @@ async fn relayer_sign(
     relayer::sign_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
+/// Signs typed data using the specified relayer.
 #[post("/relayers/{relayer_id}/sign-typed-data")]
 async fn relayer_sign_typed_data(
     relayer_id: web::Path<String>,
@@ -139,6 +150,7 @@ async fn relayer_sign_typed_data(
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
+/// Performs a JSON-RPC call using the specified relayer.
 #[post("/relayers/{relayer_id}/rpc")]
 async fn relayer_rpc(
     relayer_id: web::Path<String>,
@@ -148,6 +160,7 @@ async fn relayer_rpc(
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
+/// Initializes the routes for the relayer module.
 pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(list_relayers);
     cfg.service(get_relayer);

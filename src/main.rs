@@ -1,3 +1,4 @@
+//! Top-level crate documentation.
 //! # OpenZeppelin Relayer
 //!
 //! A blockchain transaction relayer service that supports multiple networks

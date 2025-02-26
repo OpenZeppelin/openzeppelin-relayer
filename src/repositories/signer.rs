@@ -1,3 +1,6 @@
+//! This module defines an in-memory repository for managing signer models.
+//! It provides asynchronous CRUD operations and supports pagination.
+//! The repository is thread-safe, using a `Mutex` to protect access to the underlying data store.
 use crate::{
     config::{SignerFileConfig, SignerFileConfigPassphrase, SignerFileConfigType},
     models::{RepositoryError, SignerPassphrase, SignerRepoModel, SignerType},

@@ -1,3 +1,29 @@
+/// This module defines the `EvmRelayer` struct and its associated functionality for
+/// interacting with Ethereum Virtual Machine (EVM) networks. The `EvmRelayer` is responsible
+/// for managing transactions, signing data, and ensuring the relayer's state is synchronized
+/// with the blockchain.
+///
+/// # Components
+///
+/// - `EvmRelayer`: The main struct that encapsulates the relayer's state and operations.
+/// - `RelayerRepoModel`: Represents the relayer's data model.
+/// - `EvmSigner`: Handles signing of data and transactions.
+/// - `EvmProvider`: Provides blockchain interaction capabilities, such as fetching balances
+///   and transaction counts.
+/// - `TransactionCounterService`: Manages the nonce for transactions to ensure they are
+///   processed in the correct order.
+/// - `JobProducer`: Produces jobs for processing transactions and sending notifications.
+///
+/// # Error Handling
+///
+/// The module uses the `RelayerError` enum to handle various errors that can occur during
+/// operations, such as provider errors, insufficient balance, and transaction failures.
+///
+/// # Usage
+///
+/// To use the `EvmRelayer`, create an instance using the `new` method, providing the necessary
+/// components. Then, call the appropriate methods to process transactions, sign data, and
+/// manage the relayer's state.
 use std::sync::Arc;
 
 use crate::{
@@ -35,6 +61,22 @@ pub struct EvmRelayer {
 
 #[allow(clippy::too_many_arguments)]
 impl EvmRelayer {
+    /// Constructs a new `EvmRelayer` instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `relayer` - The relayer's data model.
+    /// * `signer` - The EVM signer for signing data and transactions.
+    /// * `provider` - The EVM provider for blockchain interactions.
+    /// * `network` - The EVM network configuration.
+    /// * `relayer_repository` - The repository for relayer storage.
+    /// * `transaction_repository` - The repository for transaction storage.
+    /// * `transaction_counter_service` - The service for managing transaction nonces.
+    /// * `job_producer` - The job producer for creating transaction jobs.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the new `EvmRelayer` instance or a `RelayerError`
     pub fn new(
         relayer: RelayerRepoModel,
         signer: EvmSigner,
@@ -57,6 +99,11 @@ impl EvmRelayer {
         })
     }
 
+    /// Synchronizes the nonce with the blockchain.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `RelayerError` if the operation fails.
     async fn sync_nonce(&self) -> Result<(), RelayerError> {
         let on_chain_nonce = self
             .provider
@@ -74,6 +121,11 @@ impl EvmRelayer {
         Ok(())
     }
 
+    /// Validates the RPC connection to the blockchain provider.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `RelayerError` if the operation fails.
     async fn validate_rpc(&self) -> Result<(), RelayerError> {
         self.provider
             .health_check()
@@ -86,6 +138,15 @@ impl EvmRelayer {
 
 #[async_trait]
 impl Relayer for EvmRelayer {
+    /// Processes a transaction request and creates a job for it.
+    ///
+    /// # Arguments
+    ///
+    /// * `network_transaction` - The network transaction request to process.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `TransactionRepoModel` or a `RelayerError`.
     async fn process_transaction_request(
         &self,
         network_transaction: NetworkTransactionRequest,
@@ -107,6 +168,11 @@ impl Relayer for EvmRelayer {
         Ok(transaction)
     }
 
+    /// Retrieves the balance of the relayer's address.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `BalanceResponse` or a `RelayerError`.
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let balance: u128 = self
             .provider
@@ -124,22 +190,50 @@ impl Relayer for EvmRelayer {
         })
     }
 
+    /// Gets the status of the relayer.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a boolean indicating the status or a `RelayerError`.
     async fn get_status(&self) -> Result<bool, RelayerError> {
         println!("EVM get_status...");
         Ok(true)
     }
 
+    /// Deletes pending transactions.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a boolean indicating success or a `RelayerError`.
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
         println!("EVM delete_pending_transactions...");
         Ok(true)
     }
 
+    /// Signs data using the relayer's signer.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The request containing the data to sign.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `SignDataResponse` or a `RelayerError`.
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         let result = self.signer.sign_data(request).await?;
 
         Ok(result)
     }
 
+    /// Signs typed data using the relayer's signer.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The request containing the typed data to sign.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `SignDataResponse` or a `RelayerError`.
     async fn sign_typed_data(
         &self,
         request: SignTypedDataRequest,
@@ -149,6 +243,15 @@ impl Relayer for EvmRelayer {
         Ok(result)
     }
 
+    /// Handles a JSON-RPC request.
+    ///
+    /// # Arguments
+    ///
+    /// * `_request` - The JSON-RPC request to handle.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `JsonRpcResponse` or a `RelayerError`.
     async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
         println!("EVM rpc...");
         Ok(JsonRpcResponse {
@@ -159,6 +262,11 @@ impl Relayer for EvmRelayer {
         })
     }
 
+    /// Validates that the relayer's balance meets the minimum required balance.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `RelayerError` if the balance is insufficient.
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
         let balance: u128 = self
             .provider
@@ -183,6 +291,11 @@ impl Relayer for EvmRelayer {
         Ok(())
     }
 
+    /// Initializes the relayer by performing necessary checks and synchronizations.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `RelayerError` if any initialization step fails.
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         info!("Initializing relayer: {}", self.relayer.id);
         let nonce_sync_result = self.sync_nonce().await;

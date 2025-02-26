@@ -1,4 +1,18 @@
-//! getFeaturesEnabled RPC method implementation.
+//! Retrieves a list of features enabled by the relayer.
+//!
+//! # Deprecated
+//!
+//! This method is deprecated. It is recommended to use more fine-grained methods for feature
+//! detection.
+//!
+//! # Description
+//!
+//! This function returns a list of enabled features on the relayer.
+//!
+//! # Returns
+//!
+//! On success, returns a vector of strings where each string represents an enabled feature
+//! (e.g., "gasless").
 use crate::{
     models::{GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
@@ -12,21 +26,6 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
-    /// Retrieves a list of features enabled by the relayer.
-    ///
-    /// # Deprecated
-    ///
-    /// This method is deprecated. It is recommended to use more fine-grained methods for feature
-    /// detection.
-    ///
-    /// # Description
-    ///
-    /// This function returns a list of enabled features on the relayer.
-    ///
-    /// # Returns
-    ///
-    /// On success, returns a vector of strings where each string represents an enabled feature
-    /// (e.g., "gasless").
     pub(crate) async fn get_features_enabled_impl(
         &self,
         _params: GetFeaturesEnabledRequestParams,

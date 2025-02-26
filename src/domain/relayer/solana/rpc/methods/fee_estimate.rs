@@ -1,4 +1,23 @@
-//! feeEstimate RPC method implementation.
+//! Estimates the fee for an arbitrary transaction using a specified fee token.
+//!
+//! # Description
+//!
+//! This function simulates fee estimation for a transaction by executing it against the current
+//! blockchain state. It calculates the fee in the UI unit of the selected token (accounting
+//! for token decimals) and returns a conversion rate from SOL to the specified token.
+//!
+//! # Parameters
+//!
+//! * `transaction` - A Base64-encoded serialized transaction. This transaction can be signed or
+//!   unsigned.
+//! * `fee_token` - A string representing the token mint address to be used for fee payment.
+//!
+//! # Returns
+//!
+//! On success, returns a tuple containing:
+//!
+//! * `estimated_fee` - A string with the fee amount in the token's UI units.
+//! * `conversion_rate` - A string with the conversion rate from SOL to the specified token.use
 use futures::try_join;
 use solana_sdk::transaction::Transaction;
 

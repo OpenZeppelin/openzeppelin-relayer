@@ -1,3 +1,9 @@
+//! This module defines an in-memory transaction repository for managing
+//! transaction data. It provides asynchronous methods for creating, retrieving,
+//! updating, and deleting transactions, as well as querying transactions by
+//! various criteria such as relayer ID, status, and nonce. The repository
+//! is implemented using a `Mutex`-protected `HashMap` to store transaction
+//! data, ensuring thread-safe access in an asynchronous context.
 use crate::{
     models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
     repositories::*,

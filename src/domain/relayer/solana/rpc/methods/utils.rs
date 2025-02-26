@@ -1,3 +1,28 @@
+//! # Solana RPC Method Utilities
+//!
+//! This module contains utility functions and structures used by the Solana RPC methods
+//! implementation. It provides common functionality for fee estimation, transaction
+//! preparation, signing, and token operations.
+//!
+//! ## Key Components
+//!
+//! * `FeeQuote` - Data structure containing fee estimates in both SPL tokens and lamports
+//! * Transaction signing utilities for relayer operations
+//! * Fee estimation functions that handle both transaction fees and account creation costs
+//! * Transaction creation and signing helpers for common operations
+//! * Token transfer utilities that handle associated token account (ATA) creation when needed
+//!
+//! ## Usage
+//!
+//! These utilities are primarily used internally by the RPC method implementations to:
+//!
+//! 1. Calculate accurate fee estimates for transactions
+//! 2. Handle the conversion between SOL and other tokens for fee payments
+//! 3. Create, sign, and prepare transactions for submission
+//! 4. Support token transfers with automatic ATA creation
+//!
+//! The implementation leverages the Jupiter API for token price quotes and the Solana
+//! SDK for transaction manipulation.
 use std::str::FromStr;
 
 use super::*;
@@ -30,6 +55,29 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
+    /// Signs a transaction with the relayer's keypair and returns both the signed transaction and
+    /// signature.
+    ///
+    /// This method takes an unsigned (or partially signed) transaction and applies the relayer's
+    /// signature to the first signature slot. It's designed to be used by all RPC methods that
+    /// require a relayer-signed transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction` - A Solana transaction that needs the relayer's signature. This transaction
+    ///   must have at least one signature slot available (typically the first one).
+    ///
+    /// # Returns
+    ///
+    /// Returns a result containing:
+    /// * A tuple with the signed transaction and the signature on success
+    /// * A `SolanaRpcError` on failure (e.g., if signing fails)
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The signer service fails to sign the transaction data
+    /// * The transaction format is invalid
     pub(crate) fn relayer_sign_transaction(
         &self,
         mut transaction: Transaction,
@@ -41,6 +89,26 @@ where
         Ok((transaction, signature))
     }
 
+    /// Estimates the total fee that the fee payer will incur for a given transaction.
+    ///
+    /// This function calculates the base transaction fee and adds the cost of creating
+    /// associated token accounts (ATAs) if any are included in the transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction` - A reference to the transaction for which the fee is being estimated.
+    ///
+    /// # Returns
+    ///
+    /// Returns a result containing:
+    /// * The total fee in lamports on success
+    /// * A `SolanaRpcError` on failure
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The provider fails to calculate the total fee
+    /// * The provider fails to get the minimum balance for rent exemption
     pub(crate) async fn estimate_fee_payer_total_fee(
         &self,
         transaction: &Transaction,
@@ -73,6 +141,26 @@ where
         Ok(tx_fee + (ata_creations as u64 * account_creation_fee))
     }
 
+    /// Estimates the total lamport outflow from the relayer's account for a given transaction.
+    ///
+    /// This function iterates over the transaction's instructions and sums up the lamports
+    /// transferred from the relayer's account.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A reference to the transaction for which the lamport outflow is being estimated.
+    ///
+    /// # Returns
+    ///
+    /// Returns a result containing:
+    /// * The total lamport outflow on success
+    /// * A `SolanaRpcError` on failure
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The relayer's public key cannot be parsed
+    /// * The transaction contains invalid instructions
     pub(crate) async fn estimate_relayer_lampart_outflow(
         &self,
         tx: &Transaction,
@@ -111,6 +199,27 @@ where
         Ok(total_lamports_outflow)
     }
 
+    /// Retrieves a fee quote for a specified token and total fee amount.
+    ///
+    /// This function calculates the fee in both SPL tokens and lamports, using the Jupiter
+    /// service to get conversion rates if the token is not SOL.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The mint address of the token for which the fee quote is requested.
+    /// * `total_fee` - The total fee amount in lamports.
+    ///
+    /// # Returns
+    ///
+    /// Returns a result containing:
+    /// * A `FeeQuote` structure on success
+    /// * A `SolanaRpcError` on failure
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The token is not allowed by the relayer's policy
+    /// * The Jupiter service fails to provide a quote
     pub(crate) async fn get_fee_token_quote(
         &self,
         token: &str,
@@ -165,6 +274,26 @@ where
         })
     }
 
+    /// Creates and signs a transaction with the provided instructions.
+    ///
+    /// This function constructs a transaction using the given instructions, signs it with
+    /// the relayer's keypair, and returns the signed transaction along with the recent blockhash.
+    ///
+    /// # Arguments
+    ///
+    /// * `instructions` - A vector of Solana instructions to include in the transaction.
+    ///
+    /// # Returns
+    ///
+    /// Returns a result containing:
+    /// * A tuple with the signed transaction and the recent blockhash on success
+    /// * A `SolanaRpcError` on failure
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The provider fails to get the latest blockhash
+    /// * The transaction signing fails
     pub(crate) async fn create_and_sign_transaction(
         &self,
         instructions: Vec<Instruction>,
@@ -187,6 +316,31 @@ where
         Ok((signed_transaction, recent_blockhash))
     }
 
+    /// Handles a token transfer between two accounts, creating an associated token account (ATA)
+    /// for the destination if necessary.
+    ///
+    /// This function verifies the source account's balance, creates a destination ATA if it
+    /// doesn't exist, and prepares the necessary instructions for the token transfer.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The public key of the source account.
+    /// * `destination` - The public key of the destination account.
+    /// * `token_mint` - The mint address of the token being transferred.
+    /// * `amount` - The amount of tokens to transfer.
+    ///
+    /// # Returns
+    ///
+    /// Returns a result containing:
+    /// * A vector of instructions for the token transfer on success
+    /// * A `SolanaRpcError` on failure
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The source account has insufficient funds
+    /// * The token account is invalid
+    /// * The token is not allowed by the relayer's policy
     pub(crate) async fn handle_token_transfer(
         &self,
         source: &Pubkey,

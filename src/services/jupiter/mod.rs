@@ -1,7 +1,7 @@
-/// Jupiter API service module
-/// Jupiter API service is used to get quotes for token swaps
-/// Jupiter is not supported on devnet/testnet, so a mock service is used instead
-/// The mock service returns a quote with the same input and output amount
+//! Jupiter API service module
+//! Jupiter API service is used to get quotes for token swaps
+//! Jupiter is not supported on devnet/testnet, so a mock service is used instead
+//! The mock service returns a quote with the same input and output amount
 use crate::{
     constants::{JUPITER_API_URL, SOL_MINT},
     utils::field_as_string,

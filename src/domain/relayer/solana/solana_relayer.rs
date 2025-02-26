@@ -3,7 +3,7 @@
 //! This module implements a relayer for the Solana network. It defines a trait
 //! `SolanaRelayerTrait` for common operations such as sending JSON RPC requests,
 //! fetching balance information, signing transactions, etc. The module uses a
-//! [`SolanaProvider`](crate::services::SolanaProvider) for making RPC calls.
+//! SolanaProvider for making RPC calls.
 //!
 //! It integrates with other parts of the system including the job queue ([`JobProducer`]),
 //! in-memory repositories, and the application's domain models.

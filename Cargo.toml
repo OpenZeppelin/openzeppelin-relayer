@@ -89,5 +89,5 @@ name = "create_key"
 path = "helpers/create_key.rs"
 
 
-[lib]
-path = "src/lib.rs"
+# [lib]
+# path = "src/lib.rs"

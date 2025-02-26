@@ -1,4 +1,14 @@
-//! getSupportedTokens RPC method implementation.
+//! Retrieves a list of tokens supported by the relayer for fee payments.
+//!
+//! # Description
+//!
+//! This function queries the relayer for the tokens that are supported for fee payments. For
+//! each token, it returns metadata including the token symbol, mint address, and the number
+//! of decimal places supported.
+//!
+//! # Returns
+//!
+//! On success, returns a vector of [`GetSupportedTokensItem`] structures.
 use crate::{
     models::{GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
@@ -12,17 +22,6 @@ where
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
 {
-    /// Retrieves a list of tokens supported by the relayer for fee payments.
-    ///
-    /// # Description
-    ///
-    /// This function queries the relayer for the tokens that are supported for fee payments. For
-    /// each token, it returns metadata including the token symbol, mint address, and the number
-    /// of decimal places supported.
-    ///
-    /// # Returns
-    ///
-    /// On success, returns a vector of [`GetSupportedTokensItem`] structures.
     pub(crate) async fn get_supported_tokens_impl(
         &self,
         _params: GetSupportedTokensRequestParams,

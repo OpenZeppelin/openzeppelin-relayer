@@ -1,3 +1,6 @@
+//! This module provides services for estimating gas prices on the Ethereum Virtual Machine (EVM).
+//! It includes traits and implementations for calculating gas price multipliers based on
+//! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
     models::{evm::Speed, EvmTransactionData, TransactionError, U256},
     services::EvmProvider,
