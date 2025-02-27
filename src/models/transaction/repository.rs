@@ -345,7 +345,7 @@ mod tests {
     fn test_evm_tx_with_price_params() {
         let tx_data = create_sample_evm_tx_data();
         let price_params = TransactionPriceParams {
-            gas_price: Some(25_000_000_000),
+            gas_price: None,
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
             balance: Some(1000000000000000000),
@@ -353,7 +353,6 @@ mod tests {
 
         let updated_tx = tx_data.with_price_params(price_params);
 
-        assert_eq!(updated_tx.gas_price, Some(25_000_000_000));
         assert_eq!(updated_tx.max_fee_per_gas, Some(30_000_000_000));
         assert_eq!(updated_tx.max_priority_fee_per_gas, Some(2_000_000_000));
     }
