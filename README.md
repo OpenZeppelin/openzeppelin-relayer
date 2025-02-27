@@ -56,7 +56,7 @@ The project follows a standard Rust project layout:
   - `metrics/`: Metrics logic
   - `models/`: Data structures and types
   - `repositories/`: Configuration storage
-  - `services/`:Services logic
+  - `services/`: Services logic
   - `utils/`: Helper functions
 - `config/`: Configuration files
 - `tests/`: Integration tests
