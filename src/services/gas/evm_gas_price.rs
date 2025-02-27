@@ -51,12 +51,7 @@ impl IntoIterator for GasPrices {
             .into_iter()
             .map(|(speed, max_fee)| {
                 let max_priority_fee = U256::from(
-                    (self
-                        .max_priority_fee_per_gas
-                        .get(&speed)
-                        .copied()
-                        .unwrap_or(0.0)
-                        * 1e9) as u128,
+                    (self.max_priority_fee_per_gas.get(&speed).unwrap_or(&0.0) * 1e9) as u128,
                 );
                 (speed, max_fee, max_priority_fee)
             })
