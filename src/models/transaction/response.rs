@@ -20,8 +20,8 @@ pub struct EvmTransactionResponse {
     pub hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
-    pub sent_at: String,
-    pub confirmed_at: String,
+    pub sent_at: Option<String>,
+    pub confirmed_at: Option<String>,
     #[serde(deserialize_with = "deserialize_optional_u128", default)]
     pub gas_price: Option<u128>,
     #[serde(deserialize_with = "deserialize_u64")]
@@ -40,8 +40,8 @@ pub struct SolanaTransactionResponse {
     pub hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
-    pub sent_at: String,
-    pub confirmed_at: String,
+    pub sent_at: Option<String>,
+    pub confirmed_at: Option<String>,
     pub recent_blockhash: String,
     pub fee_payer: String,
 }
@@ -52,8 +52,8 @@ pub struct StellarTransactionResponse {
     pub hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
-    pub sent_at: String,
-    pub confirmed_at: String,
+    pub sent_at: Option<String>,
+    pub confirmed_at: Option<String>,
     pub source_account: String,
     #[serde(deserialize_with = "deserialize_u128")]
     pub fee: u128,
