@@ -21,18 +21,22 @@ git clone https://github.com/openzeppelin/openzeppelin-relayer
 cd openzeppelin-relayer
 ----
 
-. Modify the environment configuration file (`.env`) with your preferred verbosity level:
+. Modify the environment configuration file (`.env`) with your preferred verbosity level and set your API key:
 +
-1. Error
-2. Warn
-3. Info
-4. Debug
-5. Trace
+Verbosity levels:
+
++
+- Error
+- Warn
+- Info
+- Debug
+- Trace
 
 +
 [source,bash]
 ----
 RUST_LOG=info
+API_KEY=<enter your desired API key>
 ----
 
 . Create a new signer key and save it under `config/keys`.
@@ -97,6 +101,7 @@ By default docker compose command uses `Dockerfile.development` to build the ima
 DOCKERFILE=Dockerfile.production docker compose up -d
 ----
 
-== Examples
+== Using the relayer through the API
 
-TBD
+Please check our xref:api_reference.adoc[API guide] for a description and examples on using the Relayer.
+

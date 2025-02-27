@@ -301,6 +301,7 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_signature_from_bytes() {
@@ -348,7 +349,7 @@ mod tests {
             gas_price: None,
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
-            balance: Some(1000000000000000000),
+            balance: Some(U256::from_str("1000000000000000000").unwrap()),
         };
 
         let updated_tx = tx_data.with_price_params(price_params);

@@ -8,7 +8,17 @@ This relayer service enables interaction with blockchain networks through transa
 
 ## Features
 
-- TBD
+- **Multi-Chain Support**: Interact with multiple blockchain networks, including Solana and EVM-based chains.
+- **Transaction Relaying**: Submit transactions to supported blockchain networks efficiently.
+- **Transaction Signing**: Securely sign transactions using configurable key management.
+- **Transaction Fee Estimation**: Estimate transaction fees for better cost management.
+- **Solana Gasless Transactions**: Support for gasless transactions on Solana, enabling users to interact without transaction fees.
+- **Transaction Nonce Management**: Handle nonce management to ensure transaction order.
+- **Transaction Status Monitoring**: Track the status of submitted transactions.
+- **Extensible Architecture**: Easily add support for new blockchain networks.
+- **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
+- **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
+- **Docker Support**: Deploy the relayer using Docker for both development and production environments.
 
 ## Supported networks
 
@@ -19,7 +29,7 @@ This relayer service enables interaction with blockchain networks through transa
 
 ### Installation
 
-View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/quickstart) guide. (TBD - fix links)
+View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/quickstart) guide.
 
 ### Usage
 
@@ -29,11 +39,31 @@ View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0
 
 ### Technical Overview
 
-TBD
+The OpenZeppelin Relayer is built using Actix-web and provides HTTP endpoints for transaction submission, in-memory repository implementations, and configurable network policies.
 
 ### Project Structure
 
-TBD
+The project follows a standard Rust project layout:
+
+- `src/`: Source code
+  - `api/`: Route and controllers logic
+  - `config/`: Configuration logic
+  - `constants/`: Constant values used in the system
+  - `domain/`: Domain logic
+  - `init/`: Service initialization logic
+  - `jobs/`: Asynchronous processing logic(queueing)
+  - `logging/`: Logs File rotation logic
+  - `metrics/`: Metrics logic
+  - `models/`: Data structures and types
+  - `repositories/`: Configuration storage
+  - `services/`: Services logic
+  - `utils/`: Helper functions
+- `config/`: Configuration files
+- `tests/`: Integration tests
+- `docs/`: Documentation
+- `scripts/`: Utility scripts
+- `examples/`: Configuration examples
+- `helpers/`: Rust helper scripts
 
 ### Prerequisites
 

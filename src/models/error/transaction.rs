@@ -37,6 +37,9 @@ pub enum TransactionError {
 
     #[error("Signer error: {0}")]
     SignerError(String),
+
+    #[error("Insufficient balance: {0}")]
+    InsufficientBalance(String),
 }
 
 impl From<TransactionError> for ApiError {
@@ -53,6 +56,7 @@ impl From<TransactionError> for ApiError {
             TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
             TransactionError::SignerError(msg) => ApiError::InternalError(msg),
+            TransactionError::InsufficientBalance(msg) => ApiError::BadRequest(msg),
         }
     }
 }
