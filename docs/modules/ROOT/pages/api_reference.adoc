@@ -1,7 +1,7 @@
 = API Reference
 :description: API reference document, including usage examples
 
-This document provides information on the implemented API, along with usage examples. 
+This document provides information on the implemented API, along with usage examples.
 
 == Pre-requisites
 . API key
@@ -356,7 +356,7 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<solana_re
   "method": "signTransaction",
   "params": {
     "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/bKmYrYtPWWI7zwiXWqAC5iFnkAkRL2D8s6lPkoJJokBAgIAAQwCAAAAQEIPAAAAAAA="
-    
+
   },
   "id": 4
 }'
@@ -658,4 +658,3 @@ Example response:
     },
     "error": null
 }
-----

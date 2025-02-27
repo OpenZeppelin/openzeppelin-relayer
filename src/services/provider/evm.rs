@@ -2,7 +2,7 @@
 use alloy::{
     primitives::{TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
-    rpc::types::{TransactionInput, TransactionRequest},
+    rpc::types::{TransactionInput, TransactionReceipt, TransactionRequest},
     transports::http::{Client, Http},
 };
 use eyre::{eyre, Result};
@@ -46,11 +46,10 @@ impl EvmProvider {
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
     }
 
-    pub async fn get_gas_price(&self) -> Result<U256> {
+    pub async fn get_gas_price(&self) -> Result<u128> {
         self.provider
             .get_gas_price()
             .await
-            .map(|gas| U256::from(gas))
             .map_err(|e| eyre!("Failed to get gas price: {}", e))
     }
 
@@ -92,6 +91,17 @@ impl EvmProvider {
             .map_err(|e| eyre!("Health check failed: {}", e))?;
 
         Ok(result)
+    }
+
+    pub async fn get_transaction_receipt(
+        &self,
+        tx_hash: &str,
+    ) -> Result<Option<TransactionReceipt>> {
+        let tx_hash = tx_hash.parse()?;
+        self.provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))
     }
 }
 

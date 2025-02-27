@@ -104,4 +104,3 @@ DOCKERFILE=Dockerfile.production docker compose up -d
 == Using the relayer through the API
 
 Please check our xref:api_reference.adoc[API guide] for a description and examples on using the Relayer.
-
