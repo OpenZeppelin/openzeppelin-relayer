@@ -480,6 +480,32 @@ Result:
 === EVM
 
 
+[cols="1,1,1,2"]
+|===
+|Method  |Required Parameters |Result |Description
+
+|send transaction
+|`value`, `data`, `to`, `gas_limit`
+|
+|Submit transaction to blockchain.
+
+|list transactions
+|(none)
+|
+|List relayer transactions.
+
+|get transaction by id
+|`id`
+|
+|Retrieve transaction by id.
+
+|get transaction by nonce
+|`nonce`
+|
+|Retrieve transaction by nonce.
+|===
+
+
 ==== Send transaction
 Request: `POST http://localhost:8080/api/v1/relayers/<relayer_id>/transactions`
 
