@@ -19,7 +19,7 @@ use std::collections::HashMap;
 pub struct GasPrices {
     pub legacy_prices: Vec<(Speed, U256)>,
     pub max_priority_fee_per_gas: HashMap<Speed, f64>,
-    pub base_fee_per_gas: f64,
+    pub base_fee_per_gas: u128,
 }
 
 impl std::cmp::Eq for Speed {}
@@ -80,10 +80,10 @@ impl EvmGasPriceService {
         Self { provider }
     }
 
-    async fn get_current_base_fee(&self) -> Result<f64, TransactionError> {
+    async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
         let block = self.provider.get_block_by_number().await?;
         let base_fee = block.unwrap().header.base_fee_per_gas;
-        Ok(base_fee.unwrap_or(0) as f64)
+        Ok(base_fee.unwrap_or(0).into())
     }
 }
 
