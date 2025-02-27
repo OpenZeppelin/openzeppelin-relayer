@@ -639,6 +639,18 @@ impl EvmNamedNetwork {
             Aurora | AuroraTestnet => "ETH",
         }
     }
+
+    /// Returns the recommended number of confirmations needed for each network.
+    pub const fn required_confirmations(self) -> u64 {
+        use EvmNamedNetwork::*;
+
+        match self {
+            Mainnet => 12,
+            Sepolia | Holesky => 6,
+            // Default for all other networks
+            _ => 1,
+        }
+    }
 }
 
 impl fmt::Display for EvmNamedNetwork {

@@ -20,9 +20,10 @@ use super::evm::Speed;
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Pending,
-    Confirmed,
     Sent,
     Submitted,
+    Mined,
+    Confirmed,
     Failed,
 }
 

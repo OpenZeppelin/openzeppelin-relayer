@@ -13,12 +13,13 @@ use crate::{
     domain::{get_transaction_price_params, transaction::Transaction},
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, TransactionStatus, U256,
+        produce_transaction_update_notification_payload, EvmNetwork, NetworkTransactionData,
+        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus, U256,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
     services::{EvmGasPriceService, EvmProvider, EvmSigner, Signer, TransactionCounterService},
 };
+
 /// Parameters for determining the price of a transaction.
 #[allow(dead_code)]
 pub struct TransactionPriceParams {
@@ -82,6 +83,79 @@ impl EvmRelayerTransaction {
             gas_price_service,
             signer,
         })
+    }
+
+    /// Checks if a transaction has enough confirmations.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_block_number` - The block number where the transaction was mined.
+    /// * `current_block_number` - The current block number.
+    /// * `chain_id` - The chain ID of the network.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the transaction has enough confirmations, `false` otherwise.
+    fn has_enough_confirmations(
+        &self,
+        tx_block_number: u64,
+        current_block_number: u64,
+        chain_id: u64,
+    ) -> bool {
+        let network = EvmNetwork::from_id(chain_id);
+        let required_confirmations = network.required_confirmations();
+
+        current_block_number >= tx_block_number + required_confirmations
+    }
+
+    /// Checks transaction confirmation status.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_hash` - The transaction hash.
+    /// * `evm_data` - The EVM transaction data.
+    ///
+    /// # Returns
+    ///
+    /// A result containing either:
+    /// - `Ok(TransactionStatus::Confirmed)` if the transaction is confirmed with enough
+    ///   confirmations
+    /// - `Ok(TransactionStatus::Mined)` if the transaction is mined but doesn't have enough
+    ///   confirmations
+    /// - `Ok(TransactionStatus::Submitted)` if the transaction is not yet mined
+    /// - `Ok(TransactionStatus::Failed)` if the transaction has failed
+    /// - `Err(TransactionError)` if an error occurred
+    async fn check_transaction_confirmation_status(
+        &self,
+        tx_hash: &str,
+        evm_data: &crate::models::EvmTransactionData,
+    ) -> Result<TransactionStatus, TransactionError> {
+        // Check if transaction is mined
+        let receipt_result = self.provider.get_transaction_receipt(tx_hash).await?;
+
+        if receipt_result.is_none() {
+            info!("Transaction not yet mined: {}", tx_hash);
+            return Ok(TransactionStatus::Submitted);
+        }
+
+        let receipt = receipt_result.unwrap();
+
+        // If transaction failed, return Failed status
+        if !receipt.status() {
+            return Ok(TransactionStatus::Failed);
+        }
+
+        // Check confirmations
+        let last_block_number = self.provider.get_block_number().await?;
+        let tx_block_number = receipt.block_number.unwrap();
+
+        if !self.has_enough_confirmations(tx_block_number, last_block_number, evm_data.chain_id) {
+            info!("Transaction mined but not confirmed: {}", tx_hash);
+            return Ok(TransactionStatus::Mined);
+        }
+
+        // Transaction is confirmed
+        Ok(TransactionStatus::Confirmed)
     }
 
     /// Returns a reference to the gas price service.
@@ -261,41 +335,61 @@ impl Transaction for EvmRelayerTransaction {
                 "Transaction hash is missing".to_string(),
             ))?;
 
-        let receipt_result = self.provider.get_transaction_receipt(tx_hash).await?;
+        // Check confirmation status
+        let status = self
+            .check_transaction_confirmation_status(tx_hash, &evm_data)
+            .await?;
 
-        if receipt_result.is_none() {
-            info!("Transaction not yet mined: {}", tx_hash);
-            // Reschedule the status check
-            self.job_producer
-                .produce_check_transaction_status_job(
-                    TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                    Some(Utc::now().timestamp() + 5),
-                )
-                .await?;
-            return Ok(tx);
+        match status {
+            TransactionStatus::Submitted | TransactionStatus::Mined => {
+                // Reschedule the status check
+                self.job_producer
+                    .produce_check_transaction_status_job(
+                        TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                        Some(Utc::now().timestamp() + 5),
+                    )
+                    .await?;
+
+                // Update the transaction status if it's different
+                if tx.status != status {
+                    let updated_tx = self
+                        .transaction_repository
+                        .update_status(tx.id.clone(), status)
+                        .await?;
+
+                    self.send_transaction_update_notification(&updated_tx)
+                        .await?;
+
+                    return Ok(updated_tx);
+                }
+
+                return Ok(tx);
+            }
+            TransactionStatus::Confirmed | TransactionStatus::Failed => {
+                // Update transaction status
+                let updated_tx = self
+                    .transaction_repository
+                    .set_confirmed_at(tx.id.clone(), Utc::now().to_rfc3339())
+                    .await?;
+
+                let updated_tx = self
+                    .transaction_repository
+                    .update_status(updated_tx.id.clone(), status)
+                    .await?;
+
+                self.send_transaction_update_notification(&updated_tx)
+                    .await?;
+
+                return Ok(updated_tx);
+            }
+            _ => {
+                // For any unexpected status, return an error
+                return Err(TransactionError::UnexpectedError(format!(
+                    "Unexpected transaction status: {:?}",
+                    status
+                )));
+            }
         }
-
-        let receipt = receipt_result.unwrap();
-        let status = if receipt.status() {
-            TransactionStatus::Confirmed
-        } else {
-            TransactionStatus::Failed
-        };
-
-        let updated_tx = self
-            .transaction_repository
-            .set_confirmed_at(tx.id.clone(), Utc::now().to_rfc3339())
-            .await?;
-
-        let updated_tx: TransactionRepoModel = self
-            .transaction_repository
-            .update_status(updated_tx.id.clone(), status)
-            .await?;
-
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
-
-        Ok(updated_tx)
     }
 
     /// Cancels a transaction.

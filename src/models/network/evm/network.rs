@@ -200,6 +200,14 @@ impl EvmNetwork {
         }
     }
 
+    /// Returns the recommended number of confirmations needed for this network.
+    pub const fn required_confirmations(self) -> u64 {
+        match self.named() {
+            Some(named) => named.required_confirmations(),
+            None => 1, // Default for unknown networks
+        }
+    }
+
     pub const fn id(self) -> u64 {
         match *self.kind() {
             EvmNetworkKind::Named(named) => named as u64,
