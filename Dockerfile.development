@@ -17,14 +17,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Setting up build directories
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest-dev
 
-# Create a nonroot user and mimic those of a regular user on the linux host
-ARG UID=1000
-ARG GID=1000
-USER root
-
-RUN adduser -D -u $UID -g $GID defender
-USER defender
-
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 

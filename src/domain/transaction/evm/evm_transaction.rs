@@ -14,7 +14,7 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, TransactionStatus,
+        TransactionError, TransactionRepoModel, TransactionStatus, U256,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
     services::{EvmGasPriceService, EvmProvider, EvmSigner, Signer, TransactionCounterService},
@@ -29,7 +29,7 @@ pub struct TransactionPriceParams {
     /// The maximum fee per gas.
     pub max_fee_per_gas: Option<u128>,
     /// The balance available for the transaction.
-    pub balance: Option<u128>,
+    pub balance: Option<U256>,
 }
 
 #[allow(dead_code)]
@@ -87,6 +87,11 @@ impl EvmRelayerTransaction {
     /// Returns a reference to the gas price service.
     pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService> {
         &self.gas_price_service
+    }
+
+    /// Returns a reference to the provider.
+    pub fn provider(&self) -> &EvmProvider {
+        &self.provider
     }
 
     /// Returns a reference to the relayer model.

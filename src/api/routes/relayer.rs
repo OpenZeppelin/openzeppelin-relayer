@@ -38,7 +38,7 @@ async fn update_relayer(
 }
 
 /// Fetches the current status of a specific relayer.
-#[post("/relayers/{relayer_id}/status")]
+#[get("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
     data: web::ThinData<AppState>,
@@ -84,11 +84,11 @@ async fn get_relayer_transaction_by_id(
 /// Retrieves a transaction by its nonce value.
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_relayer_transaction_by_nonce(
-    relayer_id: web::Path<String>,
-    nonce: web::Path<u64>,
+    params: web::Path<(String, u64)>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
-    relayer::get_transaction_by_nonce(relayer_id.into_inner(), nonce.into_inner(), data).await
+    let params = params.into_inner();
+    relayer::get_transaction_by_nonce(params.0, params.1, data).await
 }
 
 /// Lists all transactions for a specific relayer with pagination.
@@ -166,8 +166,8 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(get_relayer);
     cfg.service(get_relayer_balance);
     cfg.service(update_relayer);
-    cfg.service(get_relayer_transaction_by_id);
     cfg.service(get_relayer_transaction_by_nonce);
+    cfg.service(get_relayer_transaction_by_id);
     cfg.service(send_relayer_transaction);
     cfg.service(list_relayer_transactions);
     cfg.service(get_relayer_status);

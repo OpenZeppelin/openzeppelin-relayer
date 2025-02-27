@@ -10,6 +10,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
+use itertools::Itertools;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -57,6 +58,7 @@ impl InMemoryTransactionRepository {
         // Sort and paginate
         let items = filtered
             .into_iter()
+            .sorted_by(|a, b| a.created_at.cmp(&b.created_at)) // Sort by created_at
             .skip(start)
             .take(query.per_page as usize)
             .collect();
