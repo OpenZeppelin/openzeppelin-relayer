@@ -2,7 +2,10 @@
 use alloy::{
     primitives::{TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
-    rpc::types::{TransactionInput, TransactionRequest},
+    rpc::types::{
+        Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
+        TransactionInput, TransactionRequest,
+    },
     transports::http::{Client, Http},
 };
 use eyre::{eyre, Result};
@@ -92,6 +95,27 @@ impl EvmProvider {
             .map_err(|e| eyre!("Health check failed: {}", e))?;
 
         Ok(result)
+    }
+
+    pub async fn get_fee_history(
+        &self,
+        block_count: u64,
+        newest_block: BlockNumberOrTag,
+        reward_percentiles: Vec<f64>,
+    ) -> Result<FeeHistory> {
+        let fee_history = self
+            .provider
+            .get_fee_history(block_count, newest_block, &reward_percentiles)
+            .await
+            .map_err(|e| eyre!("Failed to get fee history: {}", e))?;
+        Ok(fee_history)
+    }
+
+    pub async fn get_block_by_number(&self) -> Result<Option<BlockResponse>> {
+        self.provider
+            .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Full)
+            .await
+            .map_err(|e| eyre!("Failed to get block by number: {}", e))
     }
 }
 
