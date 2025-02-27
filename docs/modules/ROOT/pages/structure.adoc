@@ -8,16 +8,42 @@ This document provides detailed information about each directory in the OpenZepp
 === `src/` Directory
 The main source code directory contains the core implementation files organized into several modules:
 
-* `bootstrap/`: Application initialization and setup for `main.rs`
-** Handles service initialization and dependency injection
+* `api/`: Route and controllers logic
+** Manages HTTP routing and delegates incoming requests to controllers
 
-* `models/`: Core data structures and types
-* `services/`: Core business logic
+* `config/`: Configuration management
+** Handles system configuration and environment settings
+
+* `constants/`: Global constants
+** Provides static values used across the application
+
+* `domain/`: Business domain logic
+** Encapsulates core business rules and domain-specific functionality
+
+* `init/`: Service initialization
+** Bootstraps and initializes application services
+
+* `jobs/`: Asynchronous job processing
+** Manages background task queueing and execution
+
+* `logging/`: Logging and file rotation
+** Implements logging functionalities and log file management
+
+* `metrics/`: Metrics collection
+** Collects and reports application performance and usage metrics
+
+* `models/`: Core data models and types
+** Defines data structures and type definitions for the system
 
 * `repositories/`: Configuration storage
-** Handles loading and validating configuration files
-** Provides storage interfaces for networks.
-** Implements validation of configuration references
+** Provides interfaces for storing and retrieving configuration data
+
+* `services/`: Business service logic
+** Implements core business functionalities and service operations
+
+* `utils/`: Utility functions
+** Offers helper functions and common utilities for the application
+
 
 == Documentation
 
@@ -28,6 +54,43 @@ Project documentation:
 * API documentation
 * Configuration examples
 * Architecture diagrams
+* link:rust_docs/doc/openzeppelin_relayer/index.html[Technical Rust Documentation]
+
+
+== Configuration
+
+=== `config/` Directory
+
+Houses system configuration file and keys:
+
+* `config.json` configuration file
+* keystore files referenced from config.json file
+
+== Tests
+
+=== `test/` Directory
+
+Includes comprehensive testing suites to ensure system reliability:
+
+* End-to-end tests that simulate real-world user scenarios
+
+
+== Scripts
+
+=== `scripts/` Directory
+
+Utility scripts.
+
+
+== Examples
+
+=== `examples/` Directory
+
+Provides practical examples and sample configurations to help users get started:
+
+* Demonstrates typical service configurations for various environments
+* Acts as a quick-start guide for customizing and deploying the relayer
+* Serves as a reference for best practices in configuration and deployment
 
 == Development Tools
 
