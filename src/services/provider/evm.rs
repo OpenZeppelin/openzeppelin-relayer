@@ -4,7 +4,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder, RootProvider},
     rpc::types::{
         Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
-        TransactionInput, TransactionRequest,
+        TransactionInput, TransactionReceipt, TransactionRequest,
     },
     transports::http::{Client, Http},
 };
@@ -49,11 +49,10 @@ impl EvmProvider {
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
     }
 
-    pub async fn get_gas_price(&self) -> Result<U256> {
+    pub async fn get_gas_price(&self) -> Result<u128> {
         self.provider
             .get_gas_price()
             .await
-            .map(|gas| U256::from(gas))
             .map_err(|e| eyre!("Failed to get gas price: {}", e))
     }
 
@@ -116,6 +115,17 @@ impl EvmProvider {
             .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Full)
             .await
             .map_err(|e| eyre!("Failed to get block by number: {}", e))
+    }
+
+    pub async fn get_transaction_receipt(
+        &self,
+        tx_hash: &str,
+    ) -> Result<Option<TransactionReceipt>> {
+        let tx_hash = tx_hash.parse()?;
+        self.provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))
     }
 }
 

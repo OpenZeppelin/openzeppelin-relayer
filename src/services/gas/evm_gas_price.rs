@@ -2,7 +2,7 @@
 //! It includes traits and implementations for calculating gas price multipliers based on
 //! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
-    models::{evm::Speed, EvmTransactionData, TransactionError, U256},
+    models::{evm::Speed, EvmTransactionData, TransactionError},
     services::EvmProvider,
 };
 use alloy::rpc::types::BlockNumberOrTag;
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasPrices {
-    pub legacy_prices: Vec<(Speed, U256)>,
+    pub legacy_prices: Vec<(Speed, u128)>,
     pub max_priority_fee_per_gas: HashMap<Speed, f64>,
     pub base_fee_per_gas: u128,
 }
@@ -32,27 +32,26 @@ impl std::hash::Hash for Speed {
 
 // calculate the multiplier for the gas estimation
 impl Speed {
-    pub fn multiplier() -> [(Speed, f64); 4] {
+    pub fn multiplier() -> [(Speed, u128); 4] {
         [
-            (Speed::SafeLow, 1.0),
-            (Speed::Average, 1.25),
-            (Speed::Fast, 1.5),
-            (Speed::Fastest, 2.0),
+            (Speed::SafeLow, 100),
+            (Speed::Average, 125),
+            (Speed::Fast, 150),
+            (Speed::Fastest, 200),
         ]
     }
 }
 
 impl IntoIterator for GasPrices {
-    type Item = (Speed, U256, U256);
+    type Item = (Speed, u128, u128);
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.legacy_prices
             .into_iter()
             .map(|(speed, max_fee)| {
-                let max_priority_fee = U256::from(
-                    (self.max_priority_fee_per_gas.get(&speed).unwrap_or(&0.0) * 1e9) as u128,
-                );
+                let max_priority_fee =
+                    (self.max_priority_fee_per_gas.get(&speed).unwrap_or(&0.0) * 1e9) as u128;
                 (speed, max_fee, max_priority_fee)
             })
             .collect::<Vec<_>>()
@@ -63,10 +62,10 @@ impl IntoIterator for GasPrices {
 #[async_trait]
 #[allow(dead_code)]
 pub trait EvmGasPriceServiceTrait {
-    async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError>;
+    async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError>;
 
     async fn get_legacy_prices_from_json_rpc(&self)
-        -> Result<Vec<(Speed, U256)>, TransactionError>;
+        -> Result<Vec<(Speed, u128)>, TransactionError>;
 
     async fn get_eip1559_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError>;
 }
@@ -89,25 +88,24 @@ impl EvmGasPriceService {
 
 #[async_trait]
 impl EvmGasPriceServiceTrait for EvmGasPriceService {
-    async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError> {
+    async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError> {
         info!("Estimating gas for tx_data: {:?}", tx_data);
         let gas_estimation = self.provider.estimate_gas(tx_data).await.map_err(|err| {
             let msg = format!("Failed to estimate gas: {err}");
             TransactionError::NetworkConfiguration(msg)
         })?;
-        Ok(U256::from(gas_estimation))
+        Ok(gas_estimation)
     }
 
     async fn get_legacy_prices_from_json_rpc(
         &self,
-    ) -> Result<Vec<(Speed, U256)>, TransactionError> {
+    ) -> Result<Vec<(Speed, u128)>, TransactionError> {
         let base = self.provider.get_gas_price().await?;
-        let base_u128: u128 = base.to::<u128>();
         Ok(Speed::multiplier()
             .into_iter()
             .map(|(speed, multiplier)| {
-                let final_gas = ((base_u128 as f64) * multiplier).round() as u128;
-                (speed, U256::from(final_gas))
+                let final_gas = (base * multiplier) / 100;
+                (speed, final_gas)
             })
             .collect())
     }

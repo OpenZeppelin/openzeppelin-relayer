@@ -142,7 +142,7 @@ METRICS_ENABLED=true
 ----
 
 Make sure to, at least, choose your API key. Without it, you won't be able to interact with most of the API endpoints on the Relayer.
-If you change any of these value, you will need to restart the container to make them active. 
+If you change any of these value, you will need to restart the container to make them active.
 
 === Main configuration file (config.json)
 

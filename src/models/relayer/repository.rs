@@ -49,7 +49,7 @@ impl RelayerNetworkPolicy {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct RelayerEvmPolicy {
-    pub gas_price_cap: Option<u64>,
+    pub gas_price_cap: Option<u128>,
     pub whitelist_receivers: Option<Vec<String>>,
     pub eip1559_pricing: bool,
     pub private_transactions: bool,

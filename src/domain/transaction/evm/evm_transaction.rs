@@ -4,6 +4,7 @@
 //! managing notifications for transactions. The module leverages various
 //! services and repositories to perform these operations asynchronously.
 use async_trait::async_trait;
+use chrono::Utc;
 use eyre::Result;
 use log::{debug, info};
 use std::sync::Arc;
@@ -22,11 +23,11 @@ use crate::{
 #[allow(dead_code)]
 pub struct TransactionPriceParams {
     /// The gas price for the transaction.
-    pub gas_price: Option<U256>,
+    pub gas_price: Option<u128>,
     /// The maximum priority fee per gas.
-    pub max_priority_fee_per_gas: Option<U256>,
+    pub max_priority_fee_per_gas: Option<u128>,
     /// The maximum fee per gas.
-    pub max_fee_per_gas: Option<U256>,
+    pub max_fee_per_gas: Option<u128>,
     /// The balance available for the transaction.
     pub balance: Option<U256>,
 }
@@ -97,6 +98,30 @@ impl EvmRelayerTransaction {
     pub fn relayer(&self) -> &RelayerRepoModel {
         &self.relayer
     }
+
+    /// Helper method to send a transaction update notification if a notification ID is configured.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to send a notification for.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or a `TransactionError`.
+    async fn send_transaction_update_notification(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        if let Some(notification_id) = &self.relayer.notification_id {
+            self.job_producer
+                .produce_send_notification_job(
+                    produce_transaction_update_notification_payload(notification_id, tx),
+                    None,
+                )
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -114,15 +139,10 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Preparing transaction");
+        info!("Preparing transaction: {:?}", tx.id);
         // set the gas price
         let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
         debug!("Gas price: {:?}", price_params.gas_price);
-        // sign the transaction
-        let sig_result = self
-            .signer
-            .sign_transaction(tx.network_data.clone())
-            .await?;
 
         // increment the nonce
         let nonce = self
@@ -134,8 +154,17 @@ impl Transaction for EvmRelayerTransaction {
             .network_data
             .get_evm_transaction_data()?
             .with_price_params(price_params)
-            .with_nonce(Some(nonce))
-            .with_signed_transaction_data(sig_result.into_evm()?);
+            .with_nonce(nonce);
+
+        // sign the transaction
+        let sig_result = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Evm(updated_evm_data.clone()))
+            .await?;
+
+        let updated_evm_data =
+            updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+
         let updated_tx = self
             .transaction_repository
             .update_network_data(tx.id.clone(), NetworkTransactionData::Evm(updated_evm_data))
@@ -153,15 +182,9 @@ impl Transaction for EvmRelayerTransaction {
             .update_status(updated_tx.id.clone(), TransactionStatus::Sent)
             .await?;
 
-        if let Some(notification_id) = &self.relayer.notification_id {
-            self.job_producer
-                .produce_send_notification_job(
-                    produce_transaction_update_notification_payload(notification_id, &updated_tx),
-                    None,
-                )
-                .await?;
-        }
-        info!("updated_tx: {:?}", updated_tx);
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+
         Ok(updated_tx)
     }
 
@@ -178,30 +201,41 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("submitting transaction");
+        info!("submitting transaction for tx: {:?}", tx.id);
 
-        let updated = self
+        self.provider
+            .send_raw_transaction(
+                tx.network_data
+                    .get_evm_transaction_data()
+                    .unwrap()
+                    .raw
+                    .as_ref()
+                    .unwrap(),
+            )
+            .await?;
+
+        let updated_tx = self
             .transaction_repository
-            .update_status(tx.id.clone(), TransactionStatus::Submitted)
+            .set_sent_at(tx.id.clone(), Utc::now().to_rfc3339())
+            .await?;
+
+        let updated_tx = self
+            .transaction_repository
+            .update_status(updated_tx.id.clone(), TransactionStatus::Submitted)
             .await?;
 
         // after submitting the transaction, we need to handle the transaction status
         self.job_producer
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
                 None,
             )
             .await?;
 
-        if let Some(notification_id) = &self.relayer.notification_id {
-            self.job_producer
-                .produce_send_notification_job(
-                    produce_transaction_update_notification_payload(notification_id, &updated),
-                    None,
-                )
-                .await?;
-        }
-        Ok(tx)
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+
+        Ok(updated_tx)
     }
 
     /// Handles the status of a transaction.
@@ -217,20 +251,51 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let updated: TransactionRepoModel = self
-            .transaction_repository
-            .update_status(tx.id.clone(), TransactionStatus::Confirmed)
-            .await?;
+        info!("Checking transaction status for tx: {:?}", tx.id);
 
-        if let Some(notification_id) = &self.relayer.notification_id {
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+        let tx_hash = evm_data
+            .hash
+            .as_ref()
+            .ok_or(TransactionError::UnexpectedError(
+                "Transaction hash is missing".to_string(),
+            ))?;
+
+        let receipt_result = self.provider.get_transaction_receipt(tx_hash).await?;
+
+        if receipt_result.is_none() {
+            info!("Transaction not yet mined: {}", tx_hash);
+            // Reschedule the status check
             self.job_producer
-                .produce_send_notification_job(
-                    produce_transaction_update_notification_payload(notification_id, &updated),
-                    None,
+                .produce_check_transaction_status_job(
+                    TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                    Some(Utc::now().timestamp() + 5),
                 )
                 .await?;
+            return Ok(tx);
         }
-        Ok(tx)
+
+        let receipt = receipt_result.unwrap();
+        let status = if receipt.status() {
+            TransactionStatus::Confirmed
+        } else {
+            TransactionStatus::Failed
+        };
+
+        let updated_tx = self
+            .transaction_repository
+            .set_confirmed_at(tx.id.clone(), Utc::now().to_rfc3339())
+            .await?;
+
+        let updated_tx: TransactionRepoModel = self
+            .transaction_repository
+            .update_status(updated_tx.id.clone(), status)
+            .await?;
+
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+
+        Ok(updated_tx)
     }
 
     /// Cancels a transaction.

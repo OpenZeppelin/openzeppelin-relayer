@@ -1,7 +1,7 @@
 = API Reference
 :description: API reference document, including usage examples
 
-This document provides information on the implemented API, along with usage examples. 
+This document provides information on the implemented API, along with usage examples.
 
 == Pre-requisites
 . API key
@@ -28,10 +28,10 @@ The payload should follow the format:
   "jsonrpc": "2.0",
   "id": <id>,
   "method": "<method_name>",
-  "params": { 
+  "params": {
     <parameter_list>
   }
-} 
+}
 ----
 
 Where:
@@ -353,7 +353,7 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<solana_re
   "method": "signTransaction",
   "params": {
     "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/bKmYrYtPWWI7zwiXWqAC5iFnkAkRL2D8s6lPkoJJokBAgIAAQwCAAAAQEIPAAAAAAA="
-    
+
   },
   "id": 4
 }'
@@ -383,7 +383,7 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<solana_re
   "method": "signAndSendTransaction",
   "params": {
     "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/bKmYrYtPWWI7zwiXWqAC5iFnkAkRL2D8s6lPkoJJokBAgIAAQwCAAAAQEIPAAAAAAA="
-    
+
   },
   "id": 5
 }'
@@ -407,5 +407,3 @@ Result:
 
 [#evm_api_examples]
 ==== EVM example calls
-
-

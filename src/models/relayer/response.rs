@@ -26,7 +26,7 @@ pub enum NetworkPolicyResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct EvmPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas_price_cap: Option<u64>,
+    pub gas_price_cap: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whitelist_receivers: Option<Vec<String>>,
     pub eip1559_pricing: bool,

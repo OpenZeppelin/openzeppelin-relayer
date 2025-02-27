@@ -110,19 +110,18 @@ pub struct EvmTransactionData {
 
 impl EvmTransactionData {
     pub fn with_price_params(mut self, price_params: TransactionPriceParams) -> Self {
-        self.gas_price = price_params.gas_price.map(|price| price.to::<u128>());
-        self.max_fee_per_gas = price_params.max_fee_per_gas.map(|price| price.to::<u128>());
-        self.max_priority_fee_per_gas = price_params
-            .max_priority_fee_per_gas
-            .map(|price| price.to::<u128>());
+        self.gas_price = price_params.gas_price;
+        self.max_fee_per_gas = price_params.max_fee_per_gas;
+        self.max_priority_fee_per_gas = price_params.max_priority_fee_per_gas;
+
         self
     }
     pub fn with_gas_estimate(mut self, gas_limit: u64) -> Self {
         self.gas_limit = gas_limit;
         self
     }
-    pub fn with_nonce(mut self, nonce: Option<u64>) -> Self {
-        self.nonce = nonce;
+    pub fn with_nonce(mut self, nonce: u64) -> Self {
+        self.nonce = Some(nonce);
         self
     }
 
@@ -302,6 +301,7 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_signature_from_bytes() {
@@ -320,4 +320,281 @@ mod tests {
         assert_eq!(signature.v, 27);
         assert_eq!(signature.sig.len(), 130); // 65 bytes in hex
     }
+
+    // Create a helper function to generate a sample EvmTransactionData for testing
+    fn create_sample_evm_tx_data() -> EvmTransactionData {
+        EvmTransactionData {
+            gas_price: Some(20_000_000_000),
+            gas_limit: 21000,
+            nonce: Some(5),
+            value: U256::from(1000000000000000000u128), // 1 ETH
+            data: Some("0x".to_string()),
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed".to_string()),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        }
+    }
+
+    // Tests for EvmTransactionData methods
+    #[test]
+    fn test_evm_tx_with_price_params() {
+        let tx_data = create_sample_evm_tx_data();
+        let price_params = TransactionPriceParams {
+            gas_price: None,
+            max_fee_per_gas: Some(30_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            balance: Some(U256::from_str("1000000000000000000").unwrap()),
+        };
+
+        let updated_tx = tx_data.with_price_params(price_params);
+
+        assert_eq!(updated_tx.max_fee_per_gas, Some(30_000_000_000));
+        assert_eq!(updated_tx.max_priority_fee_per_gas, Some(2_000_000_000));
+    }
+
+    #[test]
+    fn test_evm_tx_with_gas_estimate() {
+        let tx_data = create_sample_evm_tx_data();
+        let new_gas_limit = 30000;
+
+        let updated_tx = tx_data.with_gas_estimate(new_gas_limit);
+
+        assert_eq!(updated_tx.gas_limit, new_gas_limit);
+    }
+
+    #[test]
+    fn test_evm_tx_with_nonce() {
+        let tx_data = create_sample_evm_tx_data();
+        let new_nonce = 10;
+
+        let updated_tx = tx_data.with_nonce(new_nonce);
+
+        assert_eq!(updated_tx.nonce, Some(new_nonce));
+    }
+
+    #[test]
+    fn test_evm_tx_with_signed_transaction_data() {
+        let tx_data = create_sample_evm_tx_data();
+
+        let signature = EvmTransactionDataSignature {
+            r: "r_value".to_string(),
+            s: "s_value".to_string(),
+            v: 27,
+            sig: "signature_value".to_string(),
+        };
+
+        let signed_tx_response = SignTransactionResponseEvm {
+            signature,
+            hash: "0xabcdef1234567890".to_string(),
+            raw: vec![1, 2, 3, 4, 5],
+        };
+
+        let updated_tx = tx_data.with_signed_transaction_data(signed_tx_response);
+
+        assert_eq!(updated_tx.signature.as_ref().unwrap().r, "r_value");
+        assert_eq!(updated_tx.signature.as_ref().unwrap().s, "s_value");
+        assert_eq!(updated_tx.signature.as_ref().unwrap().v, 27);
+        assert_eq!(updated_tx.hash, Some("0xabcdef1234567890".to_string()));
+        assert_eq!(updated_tx.raw, Some(vec![1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn test_evm_tx_to_address() {
+        // Test with valid address
+        let tx_data = create_sample_evm_tx_data();
+        let address_result = tx_data.to_address();
+        assert!(address_result.is_ok());
+        let address_option = address_result.unwrap();
+        assert!(address_option.is_some());
+        assert_eq!(
+            address_option.unwrap().to_string().to_lowercase(),
+            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed".to_lowercase()
+        );
+
+        // Test with None address (contract creation)
+        let mut contract_creation_tx = create_sample_evm_tx_data();
+        contract_creation_tx.to = None;
+        let address_result = contract_creation_tx.to_address();
+        assert!(address_result.is_ok());
+        assert!(address_result.unwrap().is_none());
+
+        // Test with empty address string
+        let mut empty_address_tx = create_sample_evm_tx_data();
+        empty_address_tx.to = Some("".to_string());
+        let address_result = empty_address_tx.to_address();
+        assert!(address_result.is_ok());
+        assert!(address_result.unwrap().is_none());
+
+        // Test with invalid address
+        let mut invalid_address_tx = create_sample_evm_tx_data();
+        invalid_address_tx.to = Some("0xINVALID".to_string());
+        let address_result = invalid_address_tx.to_address();
+        assert!(address_result.is_err());
+    }
+
+    #[test]
+    fn test_evm_tx_data_to_bytes() {
+        // Test with valid hex data
+        let mut tx_data = create_sample_evm_tx_data();
+        tx_data.data = Some("0x1234".to_string());
+        let bytes_result = tx_data.data_to_bytes();
+        assert!(bytes_result.is_ok());
+        assert_eq!(bytes_result.unwrap().as_ref(), &[0x12, 0x34]);
+
+        // Test with empty data
+        tx_data.data = Some("".to_string());
+        assert!(tx_data.data_to_bytes().is_ok());
+
+        // Test with None data
+        tx_data.data = None;
+        assert!(tx_data.data_to_bytes().is_ok());
+
+        // Test with invalid hex data
+        tx_data.data = Some("0xZZ".to_string());
+        assert!(tx_data.data_to_bytes().is_err());
+    }
+
+    // Tests for EvmTransactionDataTrait implementation
+    #[test]
+    fn test_evm_tx_is_legacy() {
+        let mut tx_data = create_sample_evm_tx_data();
+
+        // Legacy transaction has gas_price
+        assert!(tx_data.is_legacy());
+
+        // Not legacy if gas_price is None
+        tx_data.gas_price = None;
+        assert!(!tx_data.is_legacy());
+    }
+
+    #[test]
+    fn test_evm_tx_is_eip1559() {
+        let mut tx_data = create_sample_evm_tx_data();
+
+        // Not EIP-1559 initially
+        assert!(!tx_data.is_eip1559());
+
+        // Set EIP-1559 fields
+        tx_data.max_fee_per_gas = Some(30_000_000_000);
+        tx_data.max_priority_fee_per_gas = Some(2_000_000_000);
+        assert!(tx_data.is_eip1559());
+
+        // Not EIP-1559 if one field is missing
+        tx_data.max_priority_fee_per_gas = None;
+        assert!(!tx_data.is_eip1559());
+    }
+
+    #[test]
+    fn test_evm_tx_is_speed() {
+        let mut tx_data = create_sample_evm_tx_data();
+
+        // No speed initially
+        assert!(!tx_data.is_speed());
+
+        // Set speed
+        tx_data.speed = Some(Speed::Fast);
+        assert!(tx_data.is_speed());
+    }
+
+    // Tests for NetworkTransactionData methods
+    #[test]
+    fn test_network_tx_data_get_evm_transaction_data() {
+        let evm_tx_data = create_sample_evm_tx_data();
+        let network_data = NetworkTransactionData::Evm(evm_tx_data.clone());
+
+        // Should succeed for EVM data
+        let result = network_data.get_evm_transaction_data();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().chain_id, evm_tx_data.chain_id);
+
+        // Should fail for non-EVM data
+        let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            recent_blockhash: None,
+            fee_payer: "test".to_string(),
+            instructions: vec![],
+            hash: None,
+        });
+        assert!(solana_data.get_evm_transaction_data().is_err());
+    }
+
+    #[test]
+    fn test_network_tx_data_get_solana_transaction_data() {
+        let solana_tx_data = SolanaTransactionData {
+            recent_blockhash: Some("hash123".to_string()),
+            fee_payer: "payer123".to_string(),
+            instructions: vec!["instruction1".to_string()],
+            hash: None,
+        };
+        let network_data = NetworkTransactionData::Solana(solana_tx_data.clone());
+
+        // Should succeed for Solana data
+        let result = network_data.get_solana_transaction_data();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().fee_payer, solana_tx_data.fee_payer);
+
+        // Should fail for non-Solana data
+        let evm_data = NetworkTransactionData::Evm(create_sample_evm_tx_data());
+        assert!(evm_data.get_solana_transaction_data().is_err());
+    }
+
+    #[test]
+    fn test_network_tx_data_get_stellar_transaction_data() {
+        let stellar_tx_data = StellarTransactionData {
+            source_account: "account123".to_string(),
+            fee: 100,
+            sequence_number: 5,
+            operations: vec!["op1".to_string()],
+            hash: Some("hash123".to_string()),
+        };
+        let network_data = NetworkTransactionData::Stellar(stellar_tx_data.clone());
+
+        // Should succeed for Stellar data
+        let result = network_data.get_stellar_transaction_data();
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().source_account,
+            stellar_tx_data.source_account
+        );
+
+        // Should fail for non-Stellar data
+        let evm_data = NetworkTransactionData::Evm(create_sample_evm_tx_data());
+        assert!(evm_data.get_stellar_transaction_data().is_err());
+    }
+
+    // Test for TryFrom<NetworkTransactionData> for TxLegacy
+    #[test]
+    fn test_try_from_network_tx_data_for_tx_legacy() {
+        // Create a valid EVM transaction
+        let evm_tx_data = create_sample_evm_tx_data();
+        let network_data = NetworkTransactionData::Evm(evm_tx_data.clone());
+
+        // Should convert successfully
+        let result = TxLegacy::try_from(network_data);
+        assert!(result.is_ok());
+        let tx_legacy = result.unwrap();
+
+        // Verify fields
+        assert_eq!(tx_legacy.chain_id, Some(evm_tx_data.chain_id));
+        assert_eq!(tx_legacy.nonce, evm_tx_data.nonce.unwrap());
+        assert_eq!(tx_legacy.gas_limit, evm_tx_data.gas_limit);
+        assert_eq!(tx_legacy.gas_price, evm_tx_data.gas_price.unwrap());
+        assert_eq!(tx_legacy.value, evm_tx_data.value);
+
+        // Should fail for non-EVM data
+        let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            recent_blockhash: None,
+            fee_payer: "test".to_string(),
+            instructions: vec![],
+            hash: None,
+        });
+        assert!(TxLegacy::try_from(solana_data).is_err());
+    }
+
+    // Add more tests as needed...
 }
