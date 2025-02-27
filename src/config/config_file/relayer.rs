@@ -22,7 +22,7 @@ pub enum ConfigFileRelayerNetworkPolicy {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerEvmPolicy {
-    pub gas_price_cap: Option<u64>,
+    pub gas_price_cap: Option<u128>,
     pub whitelist_receivers: Option<Vec<String>>,
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: Option<bool>,
