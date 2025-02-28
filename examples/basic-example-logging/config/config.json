@@ -1,20 +1,31 @@
 {
   "relayers": [
     {
-      "id": "test-sepolia",
-      "name": "Test Sepolia",
+      "id": "sepolia-example",
+      "name": "Sepolia Example",
       "network": "sepolia",
       "paused": false,
-      "notification_id": "notification-test",
+      "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "evm"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
+      "signing_key": {
+        "type": "env",
+        "name": "WEBHOOK_SIGNING_KEY"
+      }
     }
   ],
   "signers": [
     {
       "id": "local-signer",
       "type": "local",
-      "path": "keys/local-signer.json",
+      "path": "config/keys/local-signer.json",
       "passphrase": {
         "type": "plain",
         "value": "test"
