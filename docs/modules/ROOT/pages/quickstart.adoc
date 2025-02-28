@@ -51,7 +51,7 @@ cargo run --example create_key -- \
 
 . Create a configuration file for your relayer and save it in `config/config.json`.
 +
-You can find a sample config file in `config/config.example.json`
+You can find a sample config file in `config/config.example.json` or refer to xref:index.adoc#configuration_references[Configuration References] section.
 
 +
 [source,bash]

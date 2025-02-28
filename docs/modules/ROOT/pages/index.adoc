@@ -91,10 +91,13 @@ cargo build
 
 === Local Execution
 
+
 [source,bash]
 ----
 cargo run
 ----
+
+NOTE: Before executing the command, ensure that the `.env` and `config.json` files are configured as detailed in the xref:index.adoc#configuration_references[Configuration References] section.
 
 === Docker Deployment
 
