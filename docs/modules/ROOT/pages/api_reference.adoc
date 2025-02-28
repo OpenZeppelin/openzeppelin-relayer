@@ -312,6 +312,8 @@ Result:
 
 ==== Fee estimate
 
+NOTE: The fee estimation method returns mocked values on devnet and testnet because the Jupiter service is available only on mainnet-beta.
+
 Request:
 [source,bash]
 ----
@@ -406,6 +408,9 @@ Result:
 
 
 ==== Prepare Transaction
+
+NOTE: The prepare transaction method returns a mocked value for the fee_in_spl response field on devnet and testnet, because the Jupiter service is available only on mainnet-beta.
+
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
@@ -441,6 +446,9 @@ Result:
 
 
 ==== Transfer Transaction
+
+NOTE: The transfer transaction method returns a mocked value for the fee_in_spl response field on devnet and testnet, because the Jupiter service is available only on mainnet-beta.
+
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
