@@ -1,43 +1,60 @@
 {
   "relayers": [
     {
-      "id": "test-mainnet",
-      "name": "Test Mainnet",
-      "network": "testnet",
+      "id": "sepolia-example",
+      "name": "Sepolia Example",
+      "network": "sepolia",
       "paused": false,
-      "notification_id": "notification-test",
+      "notification_id": "notification-example",
       "signer_id": "local-signer",
-      "network_type": "solana"
+      "network_type": "evm"
     },
     {
-      "id": "solana-testnet",
-      "name": "Solana Testnet",
+      "id": "solana-example",
+      "name": "Solana Example",
+      "network": "devnet",
       "paused": false,
-      "notification_id": "notification-test",
+      "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "solana",
-      "network": "testnet",
       "policies": {
-        "allowed_programs": [
-            "11111111111111111111111111111111",
-            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-            "BPFLoaderUpgradeab1e11111111111111111111111"
-          ]
+        "min_balance": 0,
+        "allowed_tokens": [
+          {
+            "mint": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
+            "max_allowed_fee": 100000000
+          },
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
       }
     },
     {
-      "id": "test-sepolia",
-      "name": "Test Sepolia",
-      "network": "sepolia",
+      "id": "solana-mainnet-example",
+      "name": "Solana Mainnet Example",
+      "network": "mainnet-beta",
       "paused": false,
-      "notification_id": "notification-test",
+      "notification_id": "notification-example",
       "signer_id": "local-signer",
-      "network_type": "evm"
+      "network_type": "solana",
+      "policies": {
+        "min_balance": 0,
+        "allowed_tokens": [
+          {
+            "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "max_allowed_fee": 100000000
+          },
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
     }
   ],
   "notifications": [
     {
-      "id": "notification-test",
+      "id": "notification-example",
       "type": "webhook",
       "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
       "signing_key": {
@@ -50,17 +67,11 @@
     {
       "id": "local-signer",
       "type": "local",
-      "path": "examples/basic-example/config/keys/local-signer.json",
+      "path": "config/keys/local-signer.example.json",
       "passphrase": {
         "type": "plain",
         "value": "test"
       }
-    }
-  ],
-  "networks": [
-    {
-      "id": "private-network",
-      "name": "Mainnet"
     }
   ]
 }

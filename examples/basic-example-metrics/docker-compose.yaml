@@ -14,7 +14,7 @@ services:
     environment:
       METRICS_PORT: 8081
       REDIS_URL: redis://redis:6379
-      CONFIG_PATH: config/config.json
+      CONFIG_FILE_PATH: config/config.json
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 30
       METRICS_ENABLED: true
