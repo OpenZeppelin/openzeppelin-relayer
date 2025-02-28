@@ -106,6 +106,9 @@ Create `config/config.json` file. You can use `config/config.example.json` as a 
 cp config/config.example.json config/config.json
 ```
 
+Refer to the [Configuration References](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
+
+
 Create `config/keys/local-signer.json` and make sure to update this file with the correct values. Check the sample file `config/keys/local-signer.example.json`.
 
 Create `.env` with correct values according to your needs from `.env.example` file.
