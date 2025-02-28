@@ -332,7 +332,7 @@ Supported networks
 
 |evm
 |mainnet
-|Ethereum Mainnet
+|Ethereum mainnet
 
 |evm
 |sepolia
