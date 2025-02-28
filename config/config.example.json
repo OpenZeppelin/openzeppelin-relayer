@@ -10,6 +10,22 @@
       "network_type": "solana"
     },
     {
+      "id": "solana-testnet",
+      "name": "Solana Testnet",
+      "paused": false,
+      "notification_id": "notification-test",
+      "signer_id": "local-signer",
+      "network_type": "solana",
+      "network": "testnet",
+      "policies": {
+        "allowed_programs": [
+            "11111111111111111111111111111111",
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            "BPFLoaderUpgradeab1e11111111111111111111111"
+          ]
+      }
+    },
+    {
       "id": "test-sepolia",
       "name": "Test Sepolia",
       "network": "sepolia",

@@ -1,6 +1,4 @@
 ---
-# Default UID: 1000
-# Default GID: 1000
 # Ports `8080` for relayer server, `6379`for redis server.
 
 services:
