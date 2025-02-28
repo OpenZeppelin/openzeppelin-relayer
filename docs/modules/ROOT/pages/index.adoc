@@ -398,6 +398,10 @@ These files should exist in `config/keys/`
 
 CAUTION: This software is in alpha stage. Use in production environments at your own risk.
 
+== Deployment Considerations
+
+NOTE: The OpenZeppelin Relayer is designed to function as a backend service and is not meant to be directly exposed to the public internet. To protect the service from unauthorized access, deploy it behind your own secure backend infrastructure—such as a reverse proxy or firewall—and restrict access to trusted internal components only. Direct exposure can increase the risk of exploitation and security breaches.
+
 == Support
 
 For support or inquiries, contact defender-support@openzeppelin.com
