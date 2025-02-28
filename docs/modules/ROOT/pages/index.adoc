@@ -396,7 +396,7 @@ Policies
 
 |evm
 |whitelist_receivers
-|unsigned 128
+|Vector<String>
 |A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional)
 |===
 
