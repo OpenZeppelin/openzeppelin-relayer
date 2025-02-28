@@ -17,27 +17,10 @@ x-api-key: <my api key>
 
 == Request format
 By default, the container listens on port `8080`. Calls should follow call the URL:
-`http://<server_address_or_IP>:8080/api/v1/relayers/<relayer_name>/rpc`
+`http://<server_address_or_IP>:8080/api/v1/relayers/<relayer_id>/rpc`
 
-NOTE: `relayer_name` is the name given to a relayer configuration in `./config/config.json` file.
+NOTE: `relayer_id` is the name given to a relayer configuration in `./config/config.json` file.
 
-The payload should follow the format:
-[source,json]
-----
-{
-  "jsonrpc": "2.0",
-  "id": <id>,
-  "method": "<method_name>",
-  "params": {
-    <parameter_list>
-  }
-}
-----
-
-Where:
-- `method_name` - method to invoke. Please check sections bellow for available methods
-- `id` - unique id, used to correlate request to response
-- `parameter_list` - list of parameters required by chosen method
 
 == Environments
 - Solana
@@ -54,7 +37,7 @@ These are a set of REST calls common to both Solana and EVM relayers.
 
 NOTE: We are assuming a base url of `http://localhost:8080/` for these examples.
 
-- List relayers
+==== List relayers
 
 Request: `GET http://localhost:8080/api/v1/relayers/`
 
@@ -79,13 +62,9 @@ Example response:
             "network_type": "evm",
             "signer_id": "local-signer",
             "policies": {
-                "Evm": {
-                    "gas_price_cap": null,
-                    "whitelist_receivers": null,
-                    "eip1559_pricing": false,
-                    "private_transactions": false,
-                    "min_balance": 1
-                }
+                "eip1559_pricing": false,
+                "private_transactions": false,
+                "min_balance": 1
             },
             "address": "0xc834dcdc9a074dbbadcc71584789ae4b463db116",
             "notification_id": "notification-example",
@@ -101,7 +80,7 @@ Example response:
 }
 ----
 
-- Get relayer details
+==== Get relayer details
 
 Request: `GET http://localhost:8080/api/v1/relayers/<relayer_id>`
 
@@ -137,11 +116,11 @@ Example response:
 }
 ----
 
-- Update Relayer
+==== Update Relayer
 
 Request: `PATCH http://localhost:8080/api/v1/relayers/<relayer_id>`
 
-Example requesti to pause a relayer:
+Example request to pause a relayer:
 [source,bash]
 ----
 curl --location --request PATCH 'http://localhost:8080/api/v1/relayers/<relayer_id>' \
@@ -165,13 +144,9 @@ Example response:
         "network_type": "evm",
         "signer_id": "local-signer",
         "policies": {
-            "Evm": {
-                "gas_price_cap": null,
-                "whitelist_receivers": null,
-                "eip1559_pricing": false,
-                "private_transactions": false,
-                "min_balance": 1
-            }
+            "eip1559_pricing": false,
+            "private_transactions": false,
+            "min_balance": 1
         },
         "address": "0xc834dcdc9a074dbbadcc71584789ae4b463db116",
         "notification_id": "notification-example",
@@ -181,12 +156,38 @@ Example response:
 }
 ----
 
-- Get relayer balance
+==== Get relayer balance
 Request: `GET http://localhost:8080/api/v1/relayers/<relayer_id>/balance`
+
+Example request to pause a relayer:
+[source,bash]
+----
+curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/balance' \
+--header 'x-api-key: example-123456'
+----
+
+Example response:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "balance": 1000000000000000,
+        "unit": "wei"
+    },
+    "error": null
+}
+----
+
 
 [#solana_api]
 === Solana
+
+The Solana API implementation conforms to the link:https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav[Paymaster Spec, window="_blank"].
+ 
 Solana API
+
+
 [cols="1,1,1,2"]
 |===
 |Method Name |Required Parameters |Result |Description
@@ -263,12 +264,11 @@ Key terminology
 |Array of features enabled by the relayer (e.g., bundle support, sponsorship).
 |===
 
-[#solana_api_examples]
-==== Solana example calls
 
 NOTE: We are assuming a base url of `http://localhost:8080/` for these examples.
 
-* Get supported tokens
+==== Get supported tokens
+
 Request:
 [source,bash]
 ----
@@ -310,7 +310,10 @@ Result:
 }
 ----
 
-* Fee estimate
+==== Fee estimate
+
+NOTE: The fee estimation method returns mocked values on devnet and testnet because the Jupiter service is available only on mainnet-beta.
+
 Request:
 [source,bash]
 ----
@@ -342,7 +345,9 @@ Result:
 }
 ----
 
-* Sign transaction
+==== Sign transaction
+
+Request:
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<solana_relayer_id>/rpc' \
@@ -372,7 +377,7 @@ Result:
 }
 ----
 
-* Sign and send transaction
+==== Sign and send transaction
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<solana_relayer_id>/rpc' \
@@ -383,7 +388,6 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<solana_re
   "method": "signAndSendTransaction",
   "params": {
     "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/bKmYrYtPWWI7zwiXWqAC5iFnkAkRL2D8s6lPkoJJokBAgIAAQwCAAAAQEIPAAAAAAA="
-
   },
   "id": 5
 }'
@@ -402,8 +406,263 @@ Result:
 }
 ----
 
+
+==== Prepare Transaction
+
+NOTE: The prepare transaction method returns a mocked value for the fee_in_spl response field on devnet and testnet, because the Jupiter service is available only on mainnet-beta.
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
+--header 'x-api-key: example-123456' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "jsonrpc": "2.0",
+  "method": "prepareTransaction",
+  "params": {
+    "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/bKmYrYtPWWI7zwiXWqAC5iFnkAkRL2D8s6lPkoJJokBAgIAAQwCAAAAQEIPAAAAAAA=",
+    "fee_token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr"
+    
+  },
+  "id": 6
+}'
+----
+
+Result:
+[source,json]
+----
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "fee_in_lamports": "5000",
+        "fee_in_spl": "5000",
+        "fee_token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
+        "transaction": "Ae7kEB+DOH8vhFDlV6SqTCcaf0mJI/Yrn1Zr/WFh8kEfdD0c99wJ1bYV3FDjt/qtwxRa5LxuVDlHR2CT+M5BIgYBAAEDpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuTJfv3pxOOfvB3SHRW0ArtL0kkx6rVqN+d+tGrRgLIMBAgIAAQwCAAAAQEIPAAAAAAA=",
+        "valid_until_blockheight": 351723643
+    },
+    "id": 6
+}
+----
+
+
+==== Transfer Transaction
+
+NOTE: The transfer transaction method returns a mocked value for the fee_in_spl response field on devnet and testnet, because the Jupiter service is available only on mainnet-beta.
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
+--header 'x-api-key: example-123456' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "jsonrpc": "2.0",
+  "method": "transferTransaction",
+  "params": {
+    "token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
+    "amount": 1,
+    "source": "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8",
+    "destination": "D6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8"
+    
+  },
+  "id": 7
+}'
+----
+
+Result:
+[source,json]
+----
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "fee_in_lamports": "5000",
+        "fee_in_spl": "5000",
+        "fee_token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
+        "transaction": "AaQ8y7r1eIuwrmhuIWSJ7iWVJ5gAhZaZ9vd2I9wQ0PFs79GPYejdVrsVgMLm3t1c7g/WsoYhoPdt83ST1xcwdggBAAIEpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEMsnnyKbZZ5yUtDsJ/8r0KO7Li3BEwZoWs+nOJzoXwvgbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCp6Sg5VQll/9TWSsqvRtRd9zGOW09XyQxIfWBiXYKbg3tDrlnF1KFvUS/T47LoVLV2lUyLS2zrfs8g57jdLLGvWwECBAEDAQAKDAEAAAAAAAAABg==",
+        "valid_until_blockheight": 351724045
+    },
+    "id": 7
+}
+----
+
 [#evm_api]
 === EVM
 
-[#evm_api_examples]
-==== EVM example calls
+
+[cols="1,1,1,2"]
+|===
+|Method  |Required Parameters |Result |Description
+
+|send transaction
+|`value`, `data`, `to`, `gas_limit`
+|
+|Submit transaction to blockchain.
+
+|list transactions
+|(none)
+|
+|List relayer transactions.
+
+|get transaction by id
+|`id`
+|
+|Retrieve transaction by id.
+
+|get transaction by nonce
+|`nonce`
+|
+|Retrieve transaction by nonce.
+|===
+
+
+==== Send transaction
+Request: `POST http://localhost:8080/api/v1/relayers/<relayer_id>/transactions`
+
+Example request to send transaction:
+[source,bash]
+----
+ curl --location --request POST 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
+--header 'x-api-key: example-123456' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "value": 1,
+    "data": "0x",
+    "to": "0xd9b55a2ba539031e3c18c9528b0dc3a7f603a93b",
+    "gas_limit": 21000,
+    "speed": "average"
+}'
+----
+
+Example response:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "id": "47f440b3-f4ce-4441-9489-55fc83be12cf",
+        "hash": null,
+        "status": "pending",
+        "created_at": "2025-02-26T13:24:35.560593+00:00",
+        "sent_at": null,
+        "confirmed_at": null,
+        "gas_price": null,
+        "gas_limit": 21000,
+        "nonce": 0,
+        "value": "0x1",
+        "from": "0xc834dcdc9a074dbbadcc71584789ae4b463db116",
+        "to": "0x5e87fD270D40C47266B7E3c822f4a9d21043012D",
+        "relayer_id": "sepolia-example"
+    },
+    "error": null
+}
+----
+
+
+==== List Transactions
+Request: `GET http://localhost:8080/api/v1/relayers/<relayer_id>/transactions`
+
+Example request to list relayer transactions:
+[source,bash]
+----
+curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
+--header 'x-api-key: example-123456'
+----
+
+Example response:
+[source,json]
+----
+{
+    "success": true,
+     "data": [
+        {
+            "id": "bfa362dc-a84a-4466-93d0-b8487bfd40cc",
+            "hash": "0xca349b67fad7b64239f4682a231c5398b0b52a93b626d1d67cb9ec037cdd290c",
+            "status": "confirmed",
+            "created_at": "2025-02-26T13:28:46.838812+00:00",
+            "sent_at": "2025-02-26T13:28:48.838812+00:00",
+            "confirmed_at": "2025-02-26T13:28:55.838812+00:00",
+            "gas_price": 12312313123,
+            "gas_limit": 21000,
+            "nonce": 8,
+            "value": "0x1",
+            "from": "0xc834dcdc9a074dbbadcc71584789ae4b463db116",
+            "to": "0x5e87fD270D40C47266B7E3c822f4a9d21043012D",
+            "relayer_id": "sepolia-example"
+        },
+    ],
+    "error": null,
+    "pagination": {
+        "current_page": 1,
+        "per_page": 10,
+        "total_items": 0
+    }
+}
+----
+
+
+==== Get transaction by id
+Request: `GET http://localhost:8080/api/v1/relayers/<relayer_id>/transactions/id`
+
+Example request fetch relayer transaction by id:
+[source,bash]
+----
+curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions/47f440b3-f4ce-4441-9489-55fc83be12cf' \
+--header 'x-api-key: example-123456'
+----
+
+Example response:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "id": "47f440b3-f4ce-4441-9489-55fc83be12cf",
+        "hash": "0xa5759c99e99a1fc3b6e66bca75688659d583ee2556c7d185862dc8fcdaa4d5d7",
+        "status": "confirmed",
+        "created_at": "2025-02-26T13:28:46.838812+00:00",
+        "sent_at": "2025-02-26T13:28:48.838812+00:00",
+        "confirmed_at": "2025-02-26T13:28:55.838812+00:00",
+        "gas_price": 35843464006,
+        "gas_limit": 21000,
+        "nonce": 0,
+        "value": "0x1",
+        "from": "0xc834dcdc9a074dbbadcc71584789ae4b463db116",
+        "to": "0x5e87fD270D40C47266B7E3c822f4a9d21043012D",
+        "relayer_id": "sepolia-example"
+    },
+    "error": null
+}
+----
+
+
+==== Get transaction by nonce
+Request: `GET http://localhost:8080/api/v1/relayers/<relayer_id>/transactions/by-nonce/0`
+
+Example request fetch relayer transaction by nonce:
+[source,bash]
+----
+curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions/by-nonce/0' \
+--header 'x-api-key: example-123456'
+----
+
+Example response:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "id": "47f440b3-f4ce-4441-9489-55fc83be12cf",
+        "hash": "0xa5759c99e99a1fc3b6e66bca75688659d583ee2556c7d185862dc8fcdaa4d5d7",
+        "status": "confirmed",
+        "created_at": "2025-02-26T13:28:46.838812+00:00",
+        "sent_at": "2025-02-26T13:28:48.838812+00:00",
+        "confirmed_at": "2025-02-26T13:28:55.838812+00:00",
+        "gas_price": 35843464006,
+        "gas_limit": 21000,
+        "nonce": 0,
+        "value": "0x1",
+        "from": "0xc834dcdc9a074dbbadcc71584789ae4b463db116",
+        "to": "0x5e87fD270D40C47266B7E3c822f4a9d21043012D",
+        "relayer_id": "sepolia-example"
+    },
+    "error": null
+}

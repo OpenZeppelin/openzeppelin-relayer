@@ -9,13 +9,17 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 
 **Features**
 
-- Transaction relaying
-- Transaction signing
-- Transaction fee estimation
-- Transaction gas estimation
-- Transaction nonce management
-- Transaction status monitoring
-- Transaction history
+- **Multi-Chain Support**: Interact with multiple blockchain networks, including Solana and EVM-based chains.
+- **Transaction Relaying**: Submit transactions to supported blockchain networks efficiently.
+- **Transaction Signing**: Securely sign transactions using configurable key management.
+- **Transaction Fee Estimation**: Estimate transaction fees for better cost management.
+- **Solana Gasless Transactions**: Support for gasless transactions on Solana, enabling users to interact without transaction fees.
+- **Transaction Nonce Management**: Handle nonce management to ensure transaction order.
+- **Transaction Status Monitoring**: Track the status of submitted transactions.
+- **Extensible Architecture**: Easily add support for new blockchain networks.
+- **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
+- **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
+- **Docker Support**: Deploy the relayer using Docker for both development and production environments.
 
 **Supported Networks**
 
@@ -33,17 +37,27 @@ The project follows a standard Rust project layout:
 
 
 * `src/`: Source code
-** Core implementation files
-* `models/`: Data structures and types
-** Type definitions and data models
-* `repositories/`: Configuration storage
-** Storage implementations
-* `services/`: Core business logic
-** Main service implementations
+** `api/`: Route and controllers logic
+** `config/`: Configuration logic
+** `constants/`: Constant values used in the system
+** `domain/`: Domain logic
+** `init/`: Service initialization logic
+** `jobs/`: Asynchronous processing logic (queueing)
+** `logging/`: Logs and file rotation logic
+** `metrics/`: Metrics logic
+** `models/`: Data structures and types
+** `repositories/`: Configuration storage
+** `services/`: Services logic
+** `utils/`: Helper functions
+* `config/`: Configuration files
+* `tests/`: Integration tests
 * `docs/`: Documentation
-** User guides and API docs
 * `scripts/`: Utility scripts
-** Development and deployment helpers
+* `examples/`: Configuration examples
+* `helpers/`: Rust helper scripts
+
+
+
 
 For detailed information about each directory and its contents, see xref:structure.adoc[Project Structure Details].
 
@@ -77,10 +91,13 @@ cargo build
 
 === Local Execution
 
+
 [source,bash]
 ----
 cargo run
 ----
+
+NOTE: Before executing the command, ensure that the `.env` and `config.json` files are configured as detailed in the xref:index.adoc#configuration_references[Configuration References] section.
 
 === Docker Deployment
 
@@ -380,6 +397,10 @@ These files should exist in `config/keys/`
 == Important Considerations
 
 CAUTION: This software is in alpha stage. Use in production environments at your own risk.
+
+== Deployment Considerations
+
+NOTE: The OpenZeppelin Relayer is designed to function as a backend service and is not meant to be directly exposed to the public internet. To protect the service from unauthorized access, deploy it behind your own secure backend infrastructure—such as a reverse proxy or firewall—and restrict access to trusted internal components only. Direct exposure can increase the risk of exploitation and security breaches.
 
 == Support
 
