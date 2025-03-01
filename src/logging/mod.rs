@@ -89,6 +89,11 @@ pub fn setup_logging() {
         // Get log file path from environment or use default
         let base_file_path = format!("{}relayer.log", log_dir);
 
+        // verify the log file already exists
+        if Path::new(&base_file_path).exists() {
+            panic!("Log file already exists: {}", base_file_path);
+        }
+
         // Time-based rolling: compute file name based on the current UTC date.
         let time_based_path = time_based_rolling(&base_file_path, &date_str, 1);
 

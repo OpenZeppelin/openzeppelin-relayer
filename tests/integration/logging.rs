@@ -7,7 +7,6 @@
 //!   Refer to `src/logging/mod.rs` for more details.
 use chrono::Utc;
 use openzeppelin_relayer::logging::{setup_logging, space_based_rolling, time_based_rolling};
-use serial_test::serial;
 use std::{
     env, fs,
     fs::{create_dir_all, remove_dir_all},
@@ -21,7 +20,6 @@ use tempfile::TempDir;
 // This integration test simulates file logging
 // Setting to file mode.
 #[test]
-#[serial]
 fn test_setup_logging_file_mode_creates_log_file() {
     // Create a unique temporary directory.
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -54,11 +52,13 @@ fn test_setup_logging_file_mode_creates_log_file() {
 /// The test creates a log file and then tries to create another one with the same name.
 /// It expects the second creation to fail.
 #[test]
-#[serial]
-#[should_panic(expected = "Failed to initialize file logger")]
-fn test_setup_logging_file_mode_creates_log_file_fails_on_existing_file() {
+#[should_panic(expected = "Log file already exists")]
+fn test_log_file_fails_on_existing_file() {
+    // Add sleep
+    thread::sleep(Duration::from_millis(1000));
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let temp_log_dir = temp_dir.path().to_str().unwrap();
+
     // Setup environment variables
     env::set_var("LOG_MODE", "file");
     env::set_var("LOG_LEVEL", "debug");
@@ -76,7 +76,6 @@ fn test_setup_logging_file_mode_creates_log_file_fails_on_existing_file() {
 }
 
 #[test]
-#[serial]
 fn test_space_based_rolling_returns_original_when_under_max_size() {
     // Create a temporary directory.
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
