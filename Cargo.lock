@@ -4496,7 +4496,7 @@ dependencies = [
  "spl-associated-token-account",
  "spl-token",
  "strum 0.26.3",
- "strum_macros 0.26.4",
+ "strum_macros 0.27.1",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.12",
