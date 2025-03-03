@@ -46,8 +46,7 @@ fn test_invalid_log_max_size() {
     env::set_var("LOG_FILE_PATH", format!("{}/", temp_log_dir));
     env::set_var("LOG_MAX_SIZE", "invalid_value");
 
-    // This code attempts to read and parse LOG_MAX_SIZE.
-    // It will panic if parsing fails. Initialize separate from lazy static.
+    // Initialize separate from lazy static.
     setup_logging();
 }
 
@@ -69,7 +68,7 @@ fn test_setup_logging_file_mode_creates_log_file() {
     let _ = remove_dir_all(temp_log_dir);
     create_dir_all(temp_log_dir).expect("Failed to create log directory");
 
-    // Now force the lazy_static to initialize logging.
+    // Force the lazy_static to initialize logging.
     *INIT_LOGGING;
 
     // Sleep for the logger to flush.
