@@ -10,7 +10,7 @@ use log::info;
 use simplelog::{Config, LevelFilter, SimpleLogger, WriteLogger};
 use std::{
     env,
-    fs::{create_dir_all, metadata, File},
+    fs::{create_dir_all, metadata, File, OpenOptions},
     path::Path,
 };
 
@@ -91,7 +91,10 @@ pub fn setup_logging() {
 
         // verify the log file already exists
         if Path::new(&base_file_path).exists() {
-            panic!("Log file already exists: {}", base_file_path);
+            info!(
+                "Base Log file already exists: {}. Proceeding to compute rolled log file path.",
+                base_file_path
+            );
         }
 
         // Time-based rolling: compute file name based on the current UTC date.
@@ -115,7 +118,6 @@ pub fn setup_logging() {
 
         // Open the log file. Append to it if it exists and is under threshold; otherwise, create
         // it.
-        use std::fs::OpenOptions;
         let log_file = if Path::new(&final_path).exists() {
             OpenOptions::new()
                 .append(true)
