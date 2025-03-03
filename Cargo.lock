@@ -4495,7 +4495,7 @@ dependencies = [
  "solana-sdk",
  "spl-associated-token-account",
  "spl-token",
- "strum 0.26.3",
+ "strum 0.27.1",
  "strum_macros 0.26.4",
  "sysinfo",
  "tempfile",
