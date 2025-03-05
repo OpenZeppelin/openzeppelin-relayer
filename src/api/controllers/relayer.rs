@@ -14,11 +14,10 @@ use crate::{
         Transaction,
     },
     models::{
-        ApiResponse, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
-        RelayerResponse, TransactionResponse,
+        ApiError, ApiResponse, AppState, NetworkTransactionRequest, NetworkType, PaginationMeta,
+        PaginationQuery, RelayerResponse, TransactionResponse,
     },
     repositories::{RelayerRepository, Repository},
-    ApiError, AppState,
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;

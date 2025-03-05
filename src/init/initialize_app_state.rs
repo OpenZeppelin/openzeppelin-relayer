@@ -4,11 +4,11 @@
 //! including setting up repositories, job queues, and other necessary components.
 use crate::{
     jobs::{self, Queue},
+    models::AppState,
     repositories::{
         InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
         InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
-    AppState,
 };
 use actix_web::web;
 use color_eyre::Result;

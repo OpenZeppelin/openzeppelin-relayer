@@ -14,7 +14,7 @@
 //! ```
 mod local_signer;
 use async_trait::async_trait;
-pub use local_signer::*;
+use local_signer::*;
 use solana_sdk::signature::Signature;
 
 use crate::{

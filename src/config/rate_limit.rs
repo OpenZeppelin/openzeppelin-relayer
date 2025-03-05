@@ -8,6 +8,7 @@ use actix_web::{
 };
 use governor::clock::{Clock, DefaultClock};
 use serde::{Deserialize, Serialize};
+use crate::constants::AUTHORIZATION_HEADER_NAME;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct ApiKeyRateLimit;
@@ -18,7 +19,7 @@ impl KeyExtractor for ApiKeyRateLimit {
 
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
         req.headers()
-            .get("x-api-key")
+            .get(AUTHORIZATION_HEADER_NAME)
             .and_then(|token| token.to_str().ok())
             .map(|token| token.trim().to_owned())
             .ok_or_else(|| {
