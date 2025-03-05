@@ -1,5 +1,6 @@
 //! This module provides rate limiting functionality using API keys.
 
+use crate::constants::AUTHORIZATION_HEADER_NAME;
 use actix_governor::{KeyExtractor, SimpleKeyExtractionError};
 use actix_web::{
     dev::ServiceRequest,
@@ -8,7 +9,6 @@ use actix_web::{
 };
 use governor::clock::{Clock, DefaultClock};
 use serde::{Deserialize, Serialize};
-use crate::constants::AUTHORIZATION_HEADER_NAME;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct ApiKeyRateLimit;

@@ -162,7 +162,7 @@ pub enum SolanaRpcMethod {
 }
 
 impl SolanaRpcMethod {
-    pub fn from_str(method: &str) -> Option<Self> {
+    pub fn from_string(method: &str) -> Option<Self> {
         match method {
             "feeEstimate" => Some(SolanaRpcMethod::FeeEstimate),
             "transferTransaction" => Some(SolanaRpcMethod::TransferTransaction),
