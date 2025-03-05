@@ -91,6 +91,7 @@ pub struct EvmTransactionDataSignature {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
     pub gas_limit: u64,

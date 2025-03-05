@@ -17,7 +17,10 @@ use crate::{
         TransactionError, TransactionRepoModel, TransactionStatus, U256,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
-    services::{EvmGasPriceService, EvmProvider, EvmSigner, Signer, TransactionCounterService},
+    services::{
+        EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
+        TransactionCounterService,
+    },
 };
 /// Parameters for determining the price of a transaction.
 #[allow(dead_code)]
@@ -140,8 +143,17 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction: {:?}", tx.id);
+
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
         // set the gas price
-        let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
+        let relayer = self.relayer();
+        let price_params: TransactionPriceParams = get_transaction_price_params(
+            &evm_data,
+            relayer,
+            &self.gas_price_service,
+            &self.provider,
+        )
+        .await?;
         debug!("Gas price: {:?}", price_params.gas_price);
 
         // increment the nonce

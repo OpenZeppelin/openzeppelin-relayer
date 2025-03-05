@@ -3,7 +3,7 @@
 //! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
     models::{evm::Speed, EvmTransactionData, TransactionError},
-    services::EvmProvider,
+    services::{EvmProvider, EvmProviderTrait},
 };
 use alloy::rpc::types::BlockNumberOrTag;
 use eyre::Result;
