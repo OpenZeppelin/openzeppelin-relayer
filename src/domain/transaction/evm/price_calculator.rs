@@ -13,12 +13,24 @@ pub async fn get_transaction_price_params(
     gas_price_service: &EvmGasPriceService,
     provider: &EvmProvider,
 ) -> Result<TransactionPriceParams, TransactionError> {
-    let (gas_price, max_fee_per_gas, max_priority_fee_per_gas) = if tx_data.is_legacy() {
+    // legacy transactions
+    if tx_data.is_legacy() {
         let gas_price = tx_data.gas_price.ok_or(TransactionError::NotSupported(
             "Gas price is required for legacy transactions".to_string(),
         ))?;
-        (Some(gas_price), None, None)
-    } else if tx_data.is_eip1559() {
+        return get_price_params_with_balance(
+            Some(gas_price),
+            None,
+            None,
+            relayer,
+            provider,
+            &tx_data.from,
+        )
+        .await;
+    }
+
+    // EIP1559 transactions
+    if tx_data.is_eip1559() {
         let max_fee = tx_data
             .max_fee_per_gas
             .ok_or(TransactionError::NotSupported(
@@ -30,49 +42,82 @@ pub async fn get_transaction_price_params(
                 .ok_or(TransactionError::NotSupported(
                     "Max priority fee per gas is required for EIP1559 transactions".to_string(),
                 ))?;
-        (None, Some(max_fee), Some(max_priority_fee))
-    } else if tx_data.is_speed() {
-        match &tx_data.speed {
-            Some(speed) => {
-                let eip1559_pricing = relayer.policies.get_evm_policy().eip1559_pricing;
+        return get_price_params_with_balance(
+            None,
+            Some(max_fee),
+            Some(max_priority_fee),
+            relayer,
+            provider,
+            &tx_data.from,
+        )
+        .await;
+    }
 
-                if eip1559_pricing {
-                    let prices = gas_price_service.get_eip1559_prices_from_json_rpc().await?;
-                    let (max_fee, max_priority_fee) = prices
-                        .into_iter()
-                        .find(|(s, _, _)| s == speed)
-                        .map(|(_, mf, mpf)| (mf, mpf))
-                        .ok_or(TransactionError::UnexpectedError(
-                            "Speed not supported for EIP1559".to_string(),
-                        ))?;
+    // speed-based transactions
+    if tx_data.is_speed() {
+        let speed = tx_data
+            .speed
+            .as_ref()
+            .ok_or(TransactionError::NotSupported(
+                "Speed is required".to_string(),
+            ))?;
 
-                    (None, Some(max_fee), Some(max_priority_fee))
-                } else {
-                    let prices = gas_price_service.get_legacy_prices_from_json_rpc().await?;
+        let eip1559_pricing = relayer.policies.get_evm_policy().eip1559_pricing;
 
-                    let gas_price = prices
-                        .into_iter()
-                        .find(|(s, _)| s == speed)
-                        .map(|(_, price)| price)
-                        .ok_or(TransactionError::NotSupported(
-                            "Speed not supported".to_string(),
-                        ))?;
+        if eip1559_pricing {
+            let prices = gas_price_service.get_prices_from_json_rpc().await?;
+            let (max_fee, max_priority_fee) = prices
+                .into_iter()
+                .find(|(s, _, _)| s == speed)
+                .map(|(_, mf, mpf)| (mf, mpf))
+                .ok_or(TransactionError::UnexpectedError(
+                    "Speed not supported for EIP1559".to_string(),
+                ))?;
 
-                    (Some(gas_price), None, None)
-                }
-            }
-            None => {
-                return Err(TransactionError::NotSupported(
-                    "Speed is required".to_string(),
-                ));
-            }
+            return get_price_params_with_balance(
+                None,
+                Some(max_fee),
+                Some(max_priority_fee),
+                relayer,
+                provider,
+                &tx_data.from,
+            )
+            .await;
+        } else {
+            let prices = gas_price_service.get_legacy_prices_from_json_rpc().await?;
+            let gas_price = prices
+                .into_iter()
+                .find(|(s, _)| s == speed)
+                .map(|(_, price)| price)
+                .ok_or(TransactionError::NotSupported(
+                    "Speed not supported".to_string(),
+                ))?;
+
+            return get_price_params_with_balance(
+                Some(gas_price),
+                None,
+                None,
+                relayer,
+                provider,
+                &tx_data.from,
+            )
+            .await;
         }
-    } else {
-        return Err(TransactionError::NotSupported(
-            "Invalid transaction type".to_string(),
-        ));
-    };
+    }
 
+    Err(TransactionError::NotSupported(
+        "Invalid transaction type".to_string(),
+    ))
+}
+
+async fn get_price_params_with_balance(
+    gas_price: Option<u128>,
+    max_fee_per_gas: Option<u128>,
+    max_priority_fee_per_gas: Option<u128>,
+    relayer: &RelayerRepoModel,
+    provider: &EvmProvider,
+    from_address: &str,
+) -> Result<TransactionPriceParams, TransactionError> {
     let (gas_price, max_fee_per_gas, max_priority_fee_per_gas) = apply_gas_price_cap(
         gas_price.unwrap_or_default(),
         max_fee_per_gas,
@@ -81,7 +126,7 @@ pub async fn get_transaction_price_params(
     )?;
 
     let balance = provider
-        .get_balance(&tx_data.from)
+        .get_balance(from_address)
         .await
         .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
@@ -99,7 +144,6 @@ fn apply_gas_price_cap(
     max_priority_fee_per_gas: Option<u128>,
     relayer: &RelayerRepoModel,
 ) -> Result<GasPriceCapResult, TransactionError> {
-    // Get gas price cap from relayer policies, default to u128::MAX if None
     let gas_price_cap = relayer
         .policies
         .get_evm_policy()

@@ -16,9 +16,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeedPrices {
+    pub safe_low: u128,
+    pub average: u128,
+    pub fast: u128,
+    pub fastest: u128,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasPrices {
-    pub legacy_prices: Vec<(Speed, u128)>,
-    pub max_priority_fee_per_gas: HashMap<Speed, f64>,
+    pub legacy_prices: SpeedPrices,
+    pub max_priority_fee_per_gas: SpeedPrices,
     pub base_fee_per_gas: u128,
 }
 
@@ -47,11 +54,25 @@ impl IntoIterator for GasPrices {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.legacy_prices
+        let speeds = [Speed::SafeLow, Speed::Average, Speed::Fast, Speed::Fastest];
+
+        speeds
             .into_iter()
-            .map(|(speed, max_fee)| {
-                let max_priority_fee =
-                    (self.max_priority_fee_per_gas.get(&speed).unwrap_or(&0.0) * 1e9) as u128;
+            .map(|speed| {
+                let max_fee = match speed {
+                    Speed::SafeLow => self.legacy_prices.safe_low,
+                    Speed::Average => self.legacy_prices.average,
+                    Speed::Fast => self.legacy_prices.fast,
+                    Speed::Fastest => self.legacy_prices.fastest,
+                };
+
+                let max_priority_fee = match speed {
+                    Speed::SafeLow => self.max_priority_fee_per_gas.safe_low,
+                    Speed::Average => self.max_priority_fee_per_gas.average,
+                    Speed::Fast => self.max_priority_fee_per_gas.fast,
+                    Speed::Fastest => self.max_priority_fee_per_gas.fastest,
+                };
+
                 (speed, max_fee, max_priority_fee)
             })
             .collect::<Vec<_>>()
@@ -67,7 +88,9 @@ pub trait EvmGasPriceServiceTrait {
     async fn get_legacy_prices_from_json_rpc(&self)
         -> Result<Vec<(Speed, u128)>, TransactionError>;
 
-    async fn get_eip1559_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError>;
+    async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError>;
+
+    async fn get_current_base_fee(&self) -> Result<u128, TransactionError>;
 }
 
 pub struct EvmGasPriceService {
@@ -77,12 +100,6 @@ pub struct EvmGasPriceService {
 impl EvmGasPriceService {
     pub fn new(provider: EvmProvider) -> Self {
         Self { provider }
-    }
-
-    async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
-        let block = self.provider.get_block_by_number().await?;
-        let base_fee = block.unwrap().header.base_fee_per_gas;
-        Ok(base_fee.unwrap_or(0).into())
     }
 }
 
@@ -110,7 +127,13 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
             .collect())
     }
 
-    async fn get_eip1559_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError> {
+    async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
+        let block = self.provider.get_block_by_number().await?;
+        let base_fee = block.unwrap().header.base_fee_per_gas;
+        Ok(base_fee.unwrap_or(0).into())
+    }
+
+    async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError> {
         const HISTORICAL_BLOCKS: u64 = 4;
 
         // Define speed percentiles
@@ -181,6 +204,38 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
                 Some((speed, priority_fee))
             })
             .collect();
+
+        // Convert max_priority_fees to SpeedPrices
+        let max_priority_fees = SpeedPrices {
+            safe_low: (max_priority_fees.get(&Speed::SafeLow).unwrap_or(&0.0) * 1e9) as u128,
+            average: (max_priority_fees.get(&Speed::Average).unwrap_or(&0.0) * 1e9) as u128,
+            fast: (max_priority_fees.get(&Speed::Fast).unwrap_or(&0.0) * 1e9) as u128,
+            fastest: (max_priority_fees.get(&Speed::Fastest).unwrap_or(&0.0) * 1e9) as u128,
+        };
+
+        // Convert legacy_prices to SpeedPrices
+        let legacy_prices = SpeedPrices {
+            safe_low: legacy_prices
+                .iter()
+                .find(|(s, _)| *s == Speed::SafeLow)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            average: legacy_prices
+                .iter()
+                .find(|(s, _)| *s == Speed::Average)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            fast: legacy_prices
+                .iter()
+                .find(|(s, _)| *s == Speed::Fast)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            fastest: legacy_prices
+                .iter()
+                .find(|(s, _)| *s == Speed::Fastest)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+        };
 
         Ok(GasPrices {
             legacy_prices,
