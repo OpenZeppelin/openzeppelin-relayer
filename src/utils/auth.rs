@@ -17,3 +17,49 @@ pub fn check_authorization_header(req: &ServiceRequest, expected_key: &str) -> b
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::test::TestRequest;
+
+    #[test]
+    fn test_check_authorization_header_success() {
+        let req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key"),
+            ))
+            .to_srv_request();
+
+        assert!(check_authorization_header(&req, "test_key"));
+    }
+
+    #[test]
+    fn test_check_authorization_header_missing_header() {
+        let req = TestRequest::default().to_srv_request();
+
+        assert!(!check_authorization_header(&req, "test_key"));
+    }
+
+    #[test]
+    fn test_check_authorization_header_invalid_prefix() {
+        let req = TestRequest::default()
+            .insert_header((AUTHORIZATION_HEADER_NAME, "InvalidPrefix test_key"))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(&req, "test_key"));
+    }
+
+    #[test]
+    fn test_check_authorization_header_invalid_key() {
+        let req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "invalid_key"),
+            ))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(&req, "test_key"));
+    }
+}
