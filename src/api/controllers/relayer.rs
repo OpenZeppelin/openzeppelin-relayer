@@ -40,10 +40,13 @@ pub async fn list_relayers(
 ) -> Result<HttpResponse, ApiError> {
     let relayers = state.relayer_repository.list_paginated(query).await?;
 
-    info!("Relayers: {:?}", relayers);
+    let mapped_relayers: Vec<RelayerResponse> =
+        relayers.items.into_iter().map(|r| r.into()).collect();
+
+    info!("Relayers: {:?}", mapped_relayers);
 
     Ok(HttpResponse::Ok().json(ApiResponse::paginated(
-        relayers.items,
+        mapped_relayers,
         PaginationMeta {
             total_items: relayers.total,
             current_page: relayers.page,

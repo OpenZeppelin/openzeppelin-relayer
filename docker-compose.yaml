@@ -1,14 +1,9 @@
 ---
-# Default UID: 1000
-# Default GID: 1000
 # Ports `8080` for relayer server, `6379`for redis server.
 
 services:
   relayer:
     build:
-      args:
-        UID: ${DOCKER_UID:-1000}
-        GID: ${DOCKER_GID:-1000}
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile.development}
     ports:
@@ -44,7 +39,6 @@ services:
       - redis
     restart: on-failure:5
     mem_swappiness: 0
-    user: ${DOCKER_UID:-1000}:${DOCKER_GID:-1000}
     security_opt:
       - no-new-privileges
     volumes:
