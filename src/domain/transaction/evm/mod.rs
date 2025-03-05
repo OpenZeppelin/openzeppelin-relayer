@@ -3,6 +3,5 @@
 mod evm_transaction;
 pub use evm_transaction::*;
 
-/// Utility functions for EVM transactions.
-mod utils;
-pub use utils::*;
+mod price_calculator;
+pub use price_calculator::*;
