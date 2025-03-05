@@ -129,8 +129,8 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
 
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
         let block = self.provider.get_block_by_number().await?;
-        let base_fee = block.unwrap().header.base_fee_per_gas;
-        Ok(base_fee.unwrap_or(0).into())
+        let base_fee = block.header.base_fee_per_gas.unwrap_or(0);
+        Ok(base_fee.into())
     }
 
     async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError> {

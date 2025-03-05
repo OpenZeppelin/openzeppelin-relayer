@@ -38,7 +38,7 @@ pub trait EvmProviderTrait: Send + Sync {
         newest_block: BlockNumberOrTag,
         reward_percentiles: Vec<f64>,
     ) -> Result<FeeHistory>;
-    async fn get_block_by_number(&self) -> Result<Option<BlockResponse>>;
+    async fn get_block_by_number(&self) -> Result<BlockResponse>;
     async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>>;
 }
 
@@ -143,11 +143,12 @@ impl EvmProviderTrait for EvmProvider {
         Ok(fee_history)
     }
 
-    async fn get_block_by_number(&self) -> Result<Option<BlockResponse>> {
+    async fn get_block_by_number(&self) -> Result<BlockResponse> {
         self.provider
             .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Full)
             .await
-            .map_err(|e| eyre!("Failed to get block by number: {}", e))
+            .map_err(|e| eyre!("Failed to get block by number: {}", e))?
+            .ok_or_else(|| eyre!("Block not found"))
     }
 
     async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>> {
