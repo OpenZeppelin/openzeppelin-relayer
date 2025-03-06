@@ -94,8 +94,7 @@ Run the following commands to install pre-commit hooks:
 - Install the nightly toolchain:
 
   ```sh
-  rustup toolchain install nightly
-  rustup component add rustfmt --toolchain nightly
+  rustup component add rustfmt
   ```
 
 ### Config files

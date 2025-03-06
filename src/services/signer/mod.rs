@@ -140,7 +140,7 @@ impl SignerFactory {
                 NetworkSigner::Solana(solana_signer)
             }
             NetworkType::Stellar => {
-                return Err(SignerFactoryError::UnsupportedType("Vault".into()))
+                return Err(SignerFactoryError::UnsupportedType("Vault".into()));
             }
         };
 

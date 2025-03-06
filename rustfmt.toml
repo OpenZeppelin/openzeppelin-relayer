@@ -1,32 +1,18 @@
-# Enable nightly features
-unstable_features = true
-
 # Basic formatting
 max_width = 100
 tab_spaces = 4
 hard_tabs = false
-edition = "2021"
+edition = "2024"
 
 # Code organization
 reorder_imports = true
 reorder_modules = true
-imports_layout = "Mixed"
-imports_granularity = "Crate"
 
 # Formatting preferences
-format_strings = true
-format_macro_matchers = true
-format_macro_bodies = true
-wrap_comments = true
-comment_width = 100
-indent_style = "Block"
 merge_derives = true
 
 # Function and control flow formatting
 fn_params_layout = "Tall"
-brace_style = "SameLineWhere"
-control_brace_style = "AlwaysSameLine"
-trailing_comma = "Vertical"
 
 # Code style preferences
 use_try_shorthand = true
