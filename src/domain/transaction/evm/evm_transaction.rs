@@ -24,6 +24,7 @@ use crate::{
 };
 /// Parameters for determining the price of a transaction.
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct TransactionPriceParams {
     /// The gas price for the transaction.
     pub gas_price: Option<u128>,
