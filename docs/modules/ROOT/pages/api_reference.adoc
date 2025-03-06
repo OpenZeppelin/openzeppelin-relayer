@@ -184,7 +184,7 @@ Example response:
 === Solana
 
 The Solana API implementation conforms to the link:https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav[Paymaster Spec, window="_blank"].
- 
+
 Solana API
 
 
@@ -422,7 +422,7 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-exa
   "params": {
     "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDpNhTBS0w2fqEkg0sAghld4KIZNFW3kt5Co2TA75icpEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/bKmYrYtPWWI7zwiXWqAC5iFnkAkRL2D8s6lPkoJJokBAgIAAQwCAAAAQEIPAAAAAAA=",
     "fee_token": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr"
-    
+
   },
   "id": 6
 }'
@@ -462,7 +462,7 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-exa
     "amount": 1,
     "source": "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8",
     "destination": "D6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8"
-    
+
   },
   "id": 7
 }'
