@@ -15,9 +15,8 @@ use actix_web::web::ThinData;
 
 use crate::{
     domain::{RelayerFactory, RelayerFactoryTrait},
-    models::{RelayerError, RelayerRepoModel},
+    models::{ApiError, AppState, RelayerError, RelayerRepoModel},
     repositories::Repository,
-    ApiError, AppState,
 };
 
 use super::NetworkRelayer;
@@ -112,7 +111,7 @@ pub async fn get_network_relayer_by_model(
 /// # Returns
 ///
 /// * `Result<T, RelayerError>` - Always returns a `RelayerError::NotSupported`.
-pub fn solana_not_supported<T>() -> Result<T, RelayerError> {
+pub fn solana_not_supported_relayer<T>() -> Result<T, RelayerError> {
     Err(RelayerError::NotSupported(
         "Endpoint is not supported for Solana relayers".to_string(),
     ))
