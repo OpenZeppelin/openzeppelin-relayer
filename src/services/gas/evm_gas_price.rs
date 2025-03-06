@@ -80,13 +80,27 @@ impl IntoIterator for GasPrices {
     }
 }
 
+impl IntoIterator for SpeedPrices {
+    type Item = (Speed, u128);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        vec![
+            (Speed::SafeLow, self.safe_low),
+            (Speed::Average, self.average),
+            (Speed::Fast, self.fast),
+            (Speed::Fastest, self.fastest),
+        ]
+        .into_iter()
+    }
+}
+
 #[async_trait]
 #[allow(dead_code)]
 pub trait EvmGasPriceServiceTrait {
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError>;
 
-    async fn get_legacy_prices_from_json_rpc(&self)
-        -> Result<Vec<(Speed, u128)>, TransactionError>;
+    async fn get_legacy_prices_from_json_rpc(&self) -> Result<SpeedPrices, TransactionError>;
 
     async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError>;
 
@@ -114,17 +128,38 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
         Ok(gas_estimation)
     }
 
-    async fn get_legacy_prices_from_json_rpc(
-        &self,
-    ) -> Result<Vec<(Speed, u128)>, TransactionError> {
+    async fn get_legacy_prices_from_json_rpc(&self) -> Result<SpeedPrices, TransactionError> {
         let base = self.provider.get_gas_price().await?;
-        Ok(Speed::multiplier()
+        let prices: Vec<(Speed, u128)> = Speed::multiplier()
             .into_iter()
             .map(|(speed, multiplier)| {
                 let final_gas = (base * multiplier) / 100;
                 (speed, final_gas)
             })
-            .collect())
+            .collect();
+
+        Ok(SpeedPrices {
+            safe_low: prices
+                .iter()
+                .find(|(s, _)| *s == Speed::SafeLow)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            average: prices
+                .iter()
+                .find(|(s, _)| *s == Speed::Average)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            fast: prices
+                .iter()
+                .find(|(s, _)| *s == Speed::Fast)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            fastest: prices
+                .iter()
+                .find(|(s, _)| *s == Speed::Fastest)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+        })
     }
 
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
@@ -211,30 +246,6 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
             average: (max_priority_fees.get(&Speed::Average).unwrap_or(&0.0) * 1e9) as u128,
             fast: (max_priority_fees.get(&Speed::Fast).unwrap_or(&0.0) * 1e9) as u128,
             fastest: (max_priority_fees.get(&Speed::Fastest).unwrap_or(&0.0) * 1e9) as u128,
-        };
-
-        // Convert legacy_prices to SpeedPrices
-        let legacy_prices = SpeedPrices {
-            safe_low: legacy_prices
-                .iter()
-                .find(|(s, _)| *s == Speed::SafeLow)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
-            average: legacy_prices
-                .iter()
-                .find(|(s, _)| *s == Speed::Average)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
-            fast: legacy_prices
-                .iter()
-                .find(|(s, _)| *s == Speed::Fast)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
-            fastest: legacy_prices
-                .iter()
-                .find(|(s, _)| *s == Speed::Fastest)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
         };
 
         Ok(GasPrices {
