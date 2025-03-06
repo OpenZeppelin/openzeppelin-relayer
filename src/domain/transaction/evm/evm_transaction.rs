@@ -14,7 +14,7 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, TransactionStatus, U256,
+        TransactionError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
     services::{
@@ -22,19 +22,8 @@ use crate::{
         TransactionCounterService,
     },
 };
-/// Parameters for determining the price of a transaction.
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct TransactionPriceParams {
-    /// The gas price for the transaction.
-    pub gas_price: Option<u128>,
-    /// The maximum priority fee per gas.
-    pub max_priority_fee_per_gas: Option<u128>,
-    /// The maximum fee per gas.
-    pub max_fee_per_gas: Option<u128>,
-    /// The balance available for the transaction.
-    pub balance: Option<U256>,
-}
+
+use super::price_params_builder::TransactionPriceParams;
 
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction {
