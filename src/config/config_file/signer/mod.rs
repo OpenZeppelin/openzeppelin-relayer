@@ -6,6 +6,7 @@
 //! - AWS KMS integration [NOT IMPLEMENTED]
 //! - HashiCorp Vault integration [NOT IMPLEMENTED]
 use super::ConfigFileError;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -15,9 +16,9 @@ pub use local::*;
 mod vault;
 pub use vault::*;
 
-pub trait SignerConfigKeystore {
-    fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError>;
-    fn get_passphrase(&self) -> Result<String, ConfigFileError>;
+#[async_trait]
+pub trait KeyLoaderTrait {
+    async fn load_key(&self) -> Result<Vec<u8>, ConfigFileError>;
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -25,6 +26,23 @@ pub trait SignerConfigKeystore {
 pub enum PlainOrEnvConfigValue {
     Env { name: String },
     Plain { value: String },
+}
+
+impl PlainOrEnvConfigValue {
+    fn get_value(&self) -> Result<String, ConfigFileError> {
+        match self {
+            PlainOrEnvConfigValue::Env { name } => {
+                let value = std::env::var(name).map_err(|_| {
+                    ConfigFileError::MissingEnvVar(format!(
+                        "Environment variable {} not found",
+                        name
+                    ))
+                })?;
+                Ok(value)
+            }
+            PlainOrEnvConfigValue::Plain { value } => Ok(value.clone()),
+        }
+    }
 }
 
 pub trait SignerConfigValidate {

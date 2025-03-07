@@ -1,10 +1,14 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
 use crate::{
-    config::Config,
-    models::{AppState, NotificationRepoModel, RelayerRepoModel, SignerRepoModel},
+    config::{Config, KeyLoaderTrait, SignerConfig as ConfigFileSignerConfig},
+    models::{
+        AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
+        SignerConfig, SignerRepoModel, TestSignerConfig, VaultSignerConfig,
+    },
     repositories::Repository,
     services::{Signer, SignerFactory},
+    utils::unsafe_generate_random_private_key,
 };
 
 use actix_web::web::ThinData;
@@ -13,8 +17,34 @@ use futures::future::try_join_all;
 
 async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
-        let signer_repo_model = SignerRepoModel::try_from(signer.clone())
-            .wrap_err("Failed to convert signer config")?;
+        let signer_repo_model = match &signer.config {
+            ConfigFileSignerConfig::Test(_) => SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::Test(TestSignerConfig {
+                    raw_key: unsafe_generate_random_private_key(),
+                }),
+            },
+            ConfigFileSignerConfig::Local(local_signer) => SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::Local(LocalSignerConfig {
+                    raw_key: local_signer.load_key().await?,
+                }),
+            },
+            ConfigFileSignerConfig::AwsKms(_) => SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
+            },
+            ConfigFileSignerConfig::Vault(vault_config) => SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::Vault(VaultSignerConfig {
+                    address: vault_config.address.clone(),
+                    namespace: vault_config.namespace.clone(),
+                    role_id: vault_config.role_id.clone(),
+                    secret_id: vault_config.secret_id.clone(),
+                    key_name: vault_config.key_name.clone(),
+                }),
+            },
+        };
 
         app_state
             .signer_repository

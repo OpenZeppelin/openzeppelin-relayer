@@ -253,12 +253,10 @@ mod tests {
                 SignerFileConfig {
                     id: "test-1".to_string(),
                     config: SignerConfig::Local(LocalSignerFileConfig {
-                        path: Some(
-                            "examples/basic-example/config/keys/local-signer.json".to_string(),
-                        ),
-                        passphrase: Some(PlainOrEnvConfigValue::Plain {
+                        path: "examples/basic-example/config/keys/local-signer.json".to_string(),
+                        passphrase: PlainOrEnvConfigValue::Plain {
                             value: "test".to_string(),
-                        }),
+                        },
                     }),
                 },
                 SignerFileConfig {
