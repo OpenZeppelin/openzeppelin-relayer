@@ -81,6 +81,14 @@ Beginner focused information can be found below in [Open a Pull Request](#openin
      cargo test integration
      ```
 
+    > Note: If you run into any issues with the tests, run the tests with `RUST_TEST_THREADS=1` to avoid any racing conditions between tests.
+
+   - (optional) Run tests with coverage:
+
+     ```sh
+     RUST_TEST_THREADS=1 cargo llvm-cov --locked --html --open
+     ```
+
 3. **Configure Pre commit Hooks**:
 
    - Install & Configure Pre-Commit hooks

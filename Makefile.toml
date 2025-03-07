@@ -1,7 +1,7 @@
 [tasks.rust-antora]
 description = "Build Antora site and copy rust_docs"
 script = [
-  "cargo doc --bins --target-dir docs/modules/ROOT/pages/rust_docs --no-deps --locked",
+  "cargo doc --target-dir docs/modules/ROOT/pages/rust_docs --no-deps --locked",
   "cd docs",
   "npx antora antora-playbook.yml",
   "bash ../scripts/rust_antora.sh"

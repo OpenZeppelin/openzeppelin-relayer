@@ -84,7 +84,7 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
             "Received {} request.method and params: {:?}",
             request.method, request.params
         );
-        let method = SolanaRpcMethod::from_str(request.method.as_str()).ok_or_else(|| {
+        let method = SolanaRpcMethod::from_string(request.method.as_str()).ok_or_else(|| {
             error!("Unsupported method: {}", request.method);
             SolanaRpcError::UnsupportedMethod(request.method.clone())
         })?;

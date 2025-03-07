@@ -1,5 +1,6 @@
 //! This module provides rate limiting functionality using API keys.
 
+use crate::constants::AUTHORIZATION_HEADER_NAME;
 use actix_governor::{KeyExtractor, SimpleKeyExtractionError};
 use actix_web::{
     dev::ServiceRequest,
@@ -18,7 +19,7 @@ impl KeyExtractor for ApiKeyRateLimit {
 
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
         req.headers()
-            .get("x-api-key")
+            .get(AUTHORIZATION_HEADER_NAME)
             .and_then(|token| token.to_str().ok())
             .map(|token| token.trim().to_owned())
             .ok_or_else(|| {

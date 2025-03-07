@@ -229,7 +229,7 @@ impl Transaction for NetworkTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
             NetworkTransaction::Evm(relayer) => relayer.cancel_transaction(tx).await,
-            NetworkTransaction::Solana(_) => solana_not_supported(),
+            NetworkTransaction::Solana(_) => solana_not_supported_transaction(),
             NetworkTransaction::Stellar(relayer) => relayer.cancel_transaction(tx).await,
         }
     }
@@ -249,7 +249,7 @@ impl Transaction for NetworkTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
             NetworkTransaction::Evm(relayer) => relayer.replace_transaction(tx).await,
-            NetworkTransaction::Solana(_) => solana_not_supported(),
+            NetworkTransaction::Solana(_) => solana_not_supported_transaction(),
             NetworkTransaction::Stellar(relayer) => relayer.replace_transaction(tx).await,
         }
     }

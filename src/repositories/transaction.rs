@@ -126,7 +126,7 @@ impl InMemoryTransactionRepository {
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.sent_at = sent_at;
+        tx.sent_at = Some(sent_at);
         self.update(tx_id, tx).await
     }
 
@@ -136,7 +136,7 @@ impl InMemoryTransactionRepository {
         confirmed_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.confirmed_at = confirmed_at;
+        tx.confirmed_at = Some(confirmed_at);
         self.update(tx_id, tx).await
     }
 }
@@ -251,8 +251,8 @@ mod tests {
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Pending,
             created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
-            sent_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
-            confirmed_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+            sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+            confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: Some(1000000000),
@@ -432,11 +432,11 @@ mod tests {
             .unwrap();
 
         // Verify the sent_at timestamp was updated
-        assert_eq!(updated.sent_at, new_sent_at);
+        assert_eq!(updated.sent_at, Some(new_sent_at.clone()));
 
         // Also verify by getting the transaction directly
         let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
-        assert_eq!(stored.sent_at, new_sent_at);
+        assert_eq!(stored.sent_at, Some(new_sent_at.clone()));
     }
 
     #[actix_web::test]
@@ -455,11 +455,11 @@ mod tests {
             .unwrap();
 
         // Verify the confirmed_at timestamp was updated
-        assert_eq!(updated.confirmed_at, new_confirmed_at);
+        assert_eq!(updated.confirmed_at, Some(new_confirmed_at.clone()));
 
         // Also verify by getting the transaction directly
         let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
-        assert_eq!(stored.confirmed_at, new_confirmed_at);
+        assert_eq!(stored.confirmed_at, Some(new_confirmed_at.clone()));
     }
 
     #[actix_web::test]

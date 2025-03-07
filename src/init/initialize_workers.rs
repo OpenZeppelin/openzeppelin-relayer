@@ -13,7 +13,7 @@ use crate::{
         notification_handler, transaction_request_handler, transaction_status_handler,
         transaction_submission_handler, BackoffRetryPolicy,
     },
-    AppState,
+    models::AppState,
 };
 
 // Review and fine tune configuration for the workers

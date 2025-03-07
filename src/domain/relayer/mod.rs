@@ -194,7 +194,7 @@ impl Relayer for NetworkRelayer {
     ) -> Result<TransactionRepoModel, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.process_transaction_request(tx_request).await,
-            NetworkRelayer::Solana(_) => solana_not_supported(),
+            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => {
                 relayer.process_transaction_request(tx_request).await
             }
@@ -212,7 +212,7 @@ impl Relayer for NetworkRelayer {
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
-            NetworkRelayer::Solana(_) => solana_not_supported(),
+            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.delete_pending_transactions().await,
         }
     }
@@ -220,7 +220,7 @@ impl Relayer for NetworkRelayer {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.sign_data(request).await,
-            NetworkRelayer::Solana(_) => solana_not_supported(),
+            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_data(request).await,
         }
     }
@@ -231,7 +231,7 @@ impl Relayer for NetworkRelayer {
     ) -> Result<SignDataResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.sign_typed_data(request).await,
-            NetworkRelayer::Solana(_) => solana_not_supported(),
+            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_typed_data(request).await,
         }
     }
@@ -247,7 +247,7 @@ impl Relayer for NetworkRelayer {
     async fn get_status(&self) -> Result<bool, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
-            NetworkRelayer::Solana(_) => solana_not_supported(),
+            NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
         }
     }

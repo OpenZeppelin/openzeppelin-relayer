@@ -14,7 +14,7 @@
 //! ```
 mod local_signer;
 use async_trait::async_trait;
-pub use local_signer::*;
+use local_signer::*;
 use solana_sdk::signature::Signature;
 
 use crate::{
@@ -82,7 +82,7 @@ impl SolanaSignerFactory {
             SignerType::Test => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerType::Local => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerType::AwsKms => {
-                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
+                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
             SignerType::Vault => return Err(SignerFactoryError::UnsupportedType("Vault".into())),
         };
