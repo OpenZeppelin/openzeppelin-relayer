@@ -56,7 +56,7 @@ pub async fn get_transaction_price_params(
             None => {
                 return Err(TransactionError::NotSupported(
                     "Speed is required".to_string(),
-                ))
+                ));
             }
         };
         (Some(gas_price), None, None)

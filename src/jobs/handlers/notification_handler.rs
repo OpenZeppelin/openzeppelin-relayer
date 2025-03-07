@@ -12,9 +12,9 @@ use log::info;
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     jobs::{handle_result, Job, NotificationSend},
+    models::AppState,
     repositories::Repository,
     services::WebhookNotificationService,
-    AppState,
 };
 
 /// Handles incoming notification jobs from the queue.
@@ -42,7 +42,7 @@ pub async fn notification_handler(
     )
 }
 
-pub async fn handle_request(
+async fn handle_request(
     request: NotificationSend,
     context: Data<ThinData<AppState>>,
 ) -> Result<()> {

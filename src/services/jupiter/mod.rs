@@ -76,6 +76,12 @@ impl MainnetJupiterService {
     }
 }
 
+impl Default for MainnetJupiterService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl JupiterServiceTrait for MainnetJupiterService {
     /// Get a quote for a given input and output mint
@@ -126,6 +132,12 @@ pub struct MockJupiterService {}
 impl MockJupiterService {
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+impl Default for MockJupiterService {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

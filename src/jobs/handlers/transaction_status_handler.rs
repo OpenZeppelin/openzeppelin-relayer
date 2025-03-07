@@ -14,7 +14,7 @@ use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionStatusCheck},
-    AppState,
+    models::AppState,
 };
 
 pub async fn transaction_status_handler(
@@ -34,7 +34,7 @@ pub async fn transaction_status_handler(
     )
 }
 
-pub async fn handle_request(
+async fn handle_request(
     status_request: TransactionStatusCheck,
     state: Data<ThinData<AppState>>,
 ) -> Result<()> {

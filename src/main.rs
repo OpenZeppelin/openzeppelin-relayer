@@ -35,30 +35,22 @@ use actix_web::{
 };
 use color_eyre::{eyre::WrapErr, Result};
 use config::Config;
-use logging::setup_logging;
 use metrics::middleware::MetricsMiddleware;
 
 use actix_web::HttpResponse;
 
 use config::ApiKeyRateLimit;
 use dotenvy::dotenv;
-use init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file};
 use log::info;
 use std::env;
 
-mod api;
-mod config;
-mod constants;
-mod domain;
-mod init;
-mod jobs;
-mod logging;
-mod metrics;
-mod models;
-mod repositories;
-mod services;
-mod utils;
-pub use models::{ApiError, AppState};
+use openzeppelin_relayer::{
+    api, config,
+    init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file},
+    logging::setup_logging,
+    metrics,
+    utils::check_authorization_header,
+};
 
 fn load_config_file(config_file_path: &str) -> Result<Config> {
     config::load_config(config_file_path).wrap_err("Failed to load config file")
@@ -108,14 +100,8 @@ async fn main() -> Result<()> {
           let config = Arc::clone(&server_config);
             App::new()
             .wrap_fn(move |req, srv| {
-                // Check for x-api-key header
-                let expected_key = config.api_key.clone();
-                if let Some(header_value) = req.headers().get("x-api-key") {
-                    if let Ok(key) = header_value.to_str() {
-                        if key == expected_key {
-                            return srv.call(req);
-                        }
-                    }
+                if check_authorization_header(&req, &config.api_key) {
+                    return srv.call(req);
                 }
                 Box::pin(async move {
                     Ok(req.into_response(
@@ -173,4 +159,53 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::test::TestRequest;
+    use openzeppelin_relayer::constants::{
+        AUTHORIZATION_HEADER_NAME, AUTHORIZATION_HEADER_VALUE_PREFIX,
+    };
+
+    #[test]
+    fn test_check_authorization_header_success() {
+        let req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key"),
+            ))
+            .to_srv_request();
+
+        assert!(check_authorization_header(&req, "test_key"));
+    }
+
+    #[test]
+    fn test_check_authorization_header_missing_header() {
+        let req = TestRequest::default().to_srv_request();
+
+        assert!(!check_authorization_header(&req, "test_key"));
+    }
+
+    #[test]
+    fn test_check_authorization_header_invalid_prefix() {
+        let req = TestRequest::default()
+            .insert_header((AUTHORIZATION_HEADER_NAME, "InvalidPrefix test_key"))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(&req, "test_key"));
+    }
+
+    #[test]
+    fn test_check_authorization_header_invalid_key() {
+        let req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "invalid_key"),
+            ))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(&req, "test_key"));
+    }
 }

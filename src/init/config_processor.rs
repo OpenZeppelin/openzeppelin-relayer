@@ -2,12 +2,11 @@
 //! repositories.
 use crate::{
     config::{Config, SignerConfigKeystore},
-    models::{NotificationRepoModel, RelayerRepoModel, SignerRepoModel, SignerType},
+    models::{AppState, NotificationRepoModel, RelayerRepoModel, SignerRepoModel, SignerType},
     repositories::Repository,
     services::{Signer, SignerFactory},
 };
 
-use crate::AppState;
 use actix_web::web::ThinData;
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
