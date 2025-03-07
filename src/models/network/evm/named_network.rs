@@ -725,4 +725,79 @@ mod tests {
         );
         assert_eq!(EvmNamedNetwork::Polygon.native_currency_symbol(), "POL");
     }
+
+    #[test]
+    fn is_optimism_check() {
+        for net in [
+            EvmNamedNetwork::Optimism,
+            EvmNamedNetwork::OptimismSepolia,
+            EvmNamedNetwork::Base,
+            EvmNamedNetwork::BaseSepolia,
+            EvmNamedNetwork::UnichainSepolia,
+        ] {
+            assert!(net.is_optimism());
+        }
+        assert!(!EvmNamedNetwork::Mainnet.is_optimism());
+        assert!(!EvmNamedNetwork::Arbitrum.is_optimism());
+    }
+
+    #[test]
+    fn is_arbitrum_check() {
+        for net in [
+            EvmNamedNetwork::Arbitrum,
+            EvmNamedNetwork::ArbitrumTestnet,
+            EvmNamedNetwork::ArbitrumSepolia,
+            EvmNamedNetwork::ArbitrumNova,
+        ] {
+            assert!(net.is_arbitrum());
+        }
+        assert!(!EvmNamedNetwork::Mainnet.is_arbitrum());
+        assert!(!EvmNamedNetwork::Optimism.is_arbitrum());
+    }
+
+    #[test]
+    fn average_blocktime_values() {
+        assert_eq!(
+            EvmNamedNetwork::Mainnet.average_blocktime(),
+            Some(Duration::from_millis(12000))
+        );
+        assert_eq!(
+            EvmNamedNetwork::Optimism.average_blocktime(),
+            Some(Duration::from_millis(2000))
+        );
+        assert_eq!(EvmNamedNetwork::ZkSyncTestnet.average_blocktime(), None);
+    }
+
+    #[test]
+    fn is_legacy_check() {
+        assert!(EvmNamedNetwork::BinanceSmartChain.is_legacy());
+        assert!(EvmNamedNetwork::Celo.is_legacy());
+        assert!(!EvmNamedNetwork::Mainnet.is_legacy());
+        assert!(!EvmNamedNetwork::Polygon.is_legacy());
+    }
+
+    #[test]
+    fn is_deprecated_check() {
+        assert!(EvmNamedNetwork::Sepolia.is_deprecated());
+        assert!(EvmNamedNetwork::ArbitrumTestnet.is_deprecated());
+        assert!(!EvmNamedNetwork::Mainnet.is_deprecated());
+        assert!(!EvmNamedNetwork::Optimism.is_deprecated());
+    }
+
+    #[test]
+    fn explorer_urls_check() {
+        let mainnet = EvmNamedNetwork::Mainnet.explorer_urls().unwrap();
+        assert!(mainnet.contains(&"https://api.etherscan.io/api"));
+        assert!(mainnet.contains(&"https://etherscan.io"));
+        assert_eq!(EvmNamedNetwork::MoonbeamDev.explorer_urls(), None);
+    }
+
+    #[test]
+    fn public_rpc_urls_check() {
+        assert!(EvmNamedNetwork::Sepolia
+            .public_rpc_urls()
+            .unwrap()
+            .contains(&"https://eth-sepolia.api.onfinality.io/public"));
+        assert_eq!(EvmNamedNetwork::MoonbeamDev.public_rpc_urls(), None);
+    }
 }
