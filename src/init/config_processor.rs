@@ -1,11 +1,8 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
 use crate::{
-    config::{Config, SignerConfigKeystore},
-    models::{
-        AppState, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel, SignerConfig,
-        SignerRepoModel, TestSignerConfig,
-    },
+    config::Config,
+    models::{AppState, NotificationRepoModel, RelayerRepoModel, SignerRepoModel},
     repositories::Repository,
     services::{Signer, SignerFactory},
 };
@@ -16,24 +13,8 @@ use futures::future::try_join_all;
 
 async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
-        let mut signer_repo_model = SignerRepoModel::try_from(signer.clone())
+        let signer_repo_model = SignerRepoModel::try_from(signer.clone())
             .wrap_err("Failed to convert signer config")?;
-
-        if matches!(signer_repo_model.config, SignerConfig::Local(_)) {
-            let raw_key = signer.load_keystore()?;
-
-            signer_repo_model.config = SignerConfig::Local(LocalSignerConfig {
-                raw_key: Some(raw_key),
-            });
-        }
-
-        if matches!(signer_repo_model.config, SignerConfig::Test(_)) {
-            let raw_key = signer.load_keystore()?;
-
-            signer_repo_model.config = SignerConfig::Test(TestSignerConfig {
-                raw_key: Some(raw_key),
-            });
-        }
 
         app_state
             .signer_repository

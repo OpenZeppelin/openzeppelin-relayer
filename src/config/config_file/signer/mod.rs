@@ -12,6 +12,14 @@ use std::collections::HashSet;
 mod local;
 pub use local::*;
 
+mod vault;
+pub use vault::*;
+
+pub trait SignerConfigKeystore {
+    fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError>;
+    fn get_passphrase(&self) -> Result<String, ConfigFileError>;
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PlainOrEnvConfigValue {
@@ -21,12 +29,6 @@ pub enum PlainOrEnvConfigValue {
 
 pub trait SignerConfigValidate {
     fn validate(&self) -> Result<(), ConfigFileError>;
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct VaultSignerFileConfig {
-    pub secret: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

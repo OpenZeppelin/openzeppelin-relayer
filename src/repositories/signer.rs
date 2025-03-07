@@ -117,28 +117,6 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
     }
 }
 
-impl TryFrom<SignerFileConfig> for SignerRepoModel {
-    type Error = ConversionError;
-
-    fn try_from(config: SignerFileConfig) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: config.id,
-            config: match config.config {
-                ConfigFileSignerConfig::Test(_) => {
-                    // raw_key is not loaded here, it will be loaded later
-                    SignerConfig::Test(TestSignerConfig { raw_key: None })
-                }
-                ConfigFileSignerConfig::Local(_) => {
-                    // raw_key is not loaded here, it will be loaded later
-                    SignerConfig::Local(LocalSignerConfig { raw_key: None })
-                }
-                ConfigFileSignerConfig::AwsKms(_) => SignerConfig::AwsKms(AwsKmsSignerConfig {}),
-                ConfigFileSignerConfig::Vault(_) => SignerConfig::Vault(VaultSignerConfig {}),
-            },
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::models::{LocalSignerConfig, SignerConfig};
@@ -148,7 +126,7 @@ mod tests {
     fn create_test_signer(id: String) -> SignerRepoModel {
         SignerRepoModel {
             id: id.clone(),
-            config: SignerConfig::Local(LocalSignerConfig { raw_key: None }),
+            config: SignerConfig::Local(LocalSignerConfig { raw_key: vec![] }),
         }
     }
 

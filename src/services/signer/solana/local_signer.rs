@@ -29,9 +29,8 @@ impl LocalSigner {
             .config
             .get_local()
             .expect("local config not found");
-        let raw_key = config.raw_key.as_ref().expect("keystore not found");
 
-        let keypair = Keypair::from_seed(raw_key).expect("invalid keypair");
+        let keypair = Keypair::from_seed(&config.raw_key).expect("invalid keypair");
 
         Self {
             local_signer_client: keypair,
@@ -82,7 +81,7 @@ mod tests {
         let model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: Some(valid_seed()),
+                raw_key: valid_seed(),
             }),
         };
         LocalSigner::new(&model)
@@ -97,22 +96,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "keystore not found")]
-    fn test_new_local_signer_missing_keystore() {
-        let model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig { raw_key: None }),
-        };
-        LocalSigner::new(&model);
-    }
-
-    #[test]
     #[should_panic(expected = "invalid keypair")]
     fn test_new_local_signer_invalid_keypair() {
         let model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: Some(vec![1u8; 10]),
+                raw_key: vec![1u8; 10],
             }),
         };
         let _ = LocalSigner::new(&model);

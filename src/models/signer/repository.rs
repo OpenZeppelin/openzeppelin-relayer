@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+use crate::{
+    config::{SignerConfig as ConfigFileSignerConfig, SignerConfigKeystore, SignerFileConfig},
+    repositories::ConversionError,
+    utils::unsafe_generate_random_private_key,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SignerType {
@@ -17,12 +23,12 @@ pub struct SignerRepoModel {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TestSignerConfig {
-    pub raw_key: Option<Vec<u8>>,
+    pub raw_key: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalSignerConfig {
-    pub raw_key: Option<Vec<u8>>,
+    pub raw_key: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,5 +72,27 @@ impl SignerConfig {
             SignerConfig::Test(config) => Some(config),
             _ => None,
         }
+    }
+}
+
+impl TryFrom<SignerFileConfig> for SignerRepoModel {
+    type Error = ConversionError;
+
+    fn try_from(config: SignerFileConfig) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: config.id,
+            config: match config.config {
+                ConfigFileSignerConfig::Test(config) => SignerConfig::Test(TestSignerConfig {
+                    raw_key: unsafe_generate_random_private_key(),
+                }),
+                ConfigFileSignerConfig::Local(config) => SignerConfig::Local(LocalSignerConfig {
+                    raw_key: config
+                        .load_keystore()
+                        .map_err(|e| ConversionError::InvalidConfig(e.to_string()))?,
+                }),
+                ConfigFileSignerConfig::AwsKms(_) => SignerConfig::AwsKms(AwsKmsSignerConfig {}),
+                ConfigFileSignerConfig::Vault(_) => SignerConfig::Vault(VaultSignerConfig {}),
+            },
+        })
     }
 }

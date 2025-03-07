@@ -38,10 +38,9 @@ impl LocalSigner {
             .config
             .get_local()
             .expect("local config not found");
-        let raw_key = config.raw_key.as_ref().expect("keystore not found");
 
         // transforms the key into alloy wallet
-        let key_bytes = FixedBytes::from_slice(raw_key);
+        let key_bytes = FixedBytes::from_slice(config.raw_key.as_slice());
         let local_signer_client =
             AlloyLocalSignerClient::from_bytes(&key_bytes).expect("failed to create signer");
 
@@ -130,7 +129,7 @@ mod tests {
         SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: Some(vec![1u8; 32]),
+                raw_key: vec![1u8; 32],
             }),
         }
     }

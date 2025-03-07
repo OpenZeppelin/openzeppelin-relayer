@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use oz_keystore::LocalClient;
 use serde::{Deserialize, Serialize};
 
-use crate::{config::ConfigFileError, utils::unsafe_generate_random_private_key};
+use crate::config::ConfigFileError;
 
-use super::{PlainOrEnvConfigValue, SignerConfig, SignerConfigValidate, SignerFileConfig};
+use super::{PlainOrEnvConfigValue, SignerConfigKeystore, SignerConfigValidate};
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -89,37 +89,18 @@ impl SignerConfigValidate for LocalSignerFileConfig {
 }
 
 #[async_trait]
-pub trait SignerConfigKeystore {
-    fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError>;
-    fn get_passphrase(&self) -> Result<String, ConfigFileError>;
-}
-
-#[async_trait]
-impl SignerConfigKeystore for SignerFileConfig {
+impl SignerConfigKeystore for LocalSignerFileConfig {
     fn load_keystore(&self) -> Result<Vec<u8>, ConfigFileError> {
-        match &self.config {
-            SignerConfig::Test(_) => {
-                // generate temporary key
-                let key_raw = unsafe_generate_random_private_key();
-                Ok(key_raw)
-            }
-            SignerConfig::Local(local_config) => {
-                let path = local_config.path.as_ref().ok_or_else(|| {
-                    ConfigFileError::MissingField("Signer path is required for local signer".into())
-                })?;
-                let passphrase = self.get_passphrase()?;
-                let key_raw = LocalClient::load(Path::new(path).to_path_buf(), passphrase);
-                Ok(key_raw)
-            }
-            _ => Err(ConfigFileError::InternalError("Not supported".into())),
-        }
+        let path = self.path.as_ref().ok_or_else(|| {
+            ConfigFileError::MissingField("Signer path is required for local signer".into())
+        })?;
+        let passphrase = self.get_passphrase()?;
+        let key_raw = LocalClient::load(Path::new(path).to_path_buf(), passphrase);
+        Ok(key_raw)
     }
 
     fn get_passphrase(&self) -> Result<String, ConfigFileError> {
-        let config = self.config.get_local().ok_or_else(|| {
-            ConfigFileError::MissingField("Local signer config is required".into())
-        })?;
-        match &config.passphrase {
+        match &self.passphrase {
             Some(passphrase) => match passphrase {
                 PlainOrEnvConfigValue::Env { name } => {
                     let passphrase = std::env::var(name).map_err(|_| {
