@@ -22,7 +22,10 @@ use crate::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
         SignTypedDataRequest,
     },
-    models::{Address, NetworkTransactionData, SignerRepoModel, SignerType, TransactionRepoModel},
+    models::{
+        Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
+        TransactionRepoModel,
+    },
 };
 use eyre::Result;
 
@@ -78,13 +81,15 @@ impl SolanaSignerFactory {
     pub fn create_solana_signer(
         signer_model: &SignerRepoModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
-        let signer = match signer_model.signer_type {
-            SignerType::Test => SolanaSigner::Local(LocalSigner::new(signer_model)),
-            SignerType::Local => SolanaSigner::Local(LocalSigner::new(signer_model)),
-            SignerType::AwsKms => {
+        let signer = match signer_model.config {
+            SignerConfig::Test(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::Local(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
-            SignerType::Vault => return Err(SignerFactoryError::UnsupportedType("Vault".into())),
+            SignerConfig::Vault(_) => {
+                return Err(SignerFactoryError::UnsupportedType("Vault".into()))
+            }
         };
 
         Ok(signer)

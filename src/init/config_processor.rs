@@ -2,7 +2,10 @@
 //! repositories.
 use crate::{
     config::{Config, SignerConfigKeystore},
-    models::{AppState, NotificationRepoModel, RelayerRepoModel, SignerRepoModel, SignerType},
+    models::{
+        AppState, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel, SignerConfig,
+        SignerRepoModel, TestSignerConfig,
+    },
     repositories::Repository,
     services::{Signer, SignerFactory},
 };
@@ -16,12 +19,20 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
         let mut signer_repo_model = SignerRepoModel::try_from(signer.clone())
             .wrap_err("Failed to convert signer config")?;
 
-        if matches!(
-            signer_repo_model.signer_type,
-            SignerType::Local | SignerType::Test
-        ) {
-            let raw_key = signer.load_keystore().await?;
-            signer_repo_model.raw_key = Some(raw_key);
+        if matches!(signer_repo_model.config, SignerConfig::Local(_)) {
+            let raw_key = signer.load_keystore()?;
+
+            signer_repo_model.config = SignerConfig::Local(LocalSignerConfig {
+                raw_key: Some(raw_key),
+            });
+        }
+
+        if matches!(signer_repo_model.config, SignerConfig::Test(_)) {
+            let raw_key = signer.load_keystore()?;
+
+            signer_repo_model.config = SignerConfig::Test(TestSignerConfig {
+                raw_key: Some(raw_key),
+            });
         }
 
         app_state

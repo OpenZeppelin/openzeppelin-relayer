@@ -25,7 +25,11 @@ pub struct LocalSigner {
 
 impl LocalSigner {
     pub fn new(signer_model: &SignerRepoModel) -> Self {
-        let raw_key = signer_model.raw_key.as_ref().expect("keystore not found");
+        let config = signer_model
+            .config
+            .get_local()
+            .expect("local config not found");
+        let raw_key = config.raw_key.as_ref().expect("keystore not found");
 
         let keypair = Keypair::from_seed(raw_key).expect("invalid keypair");
 
@@ -64,7 +68,7 @@ impl Signer for LocalSigner {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::SignerType;
+    use crate::models::{LocalSignerConfig, SignerConfig, SignerType};
 
     use super::*;
     use solana_sdk::signature::Signer; // For Keypair::pubkey()
@@ -76,11 +80,10 @@ mod tests {
 
     fn create_testing_signer() -> LocalSigner {
         let model = SignerRepoModel {
-            raw_key: Some(valid_seed()),
             id: "test".to_string(),
-            signer_type: SignerType::Local,
-            passphrase: None,
-            path: None,
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: Some(valid_seed()),
+            }),
         };
         LocalSigner::new(&model)
     }
@@ -97,11 +100,8 @@ mod tests {
     #[should_panic(expected = "keystore not found")]
     fn test_new_local_signer_missing_keystore() {
         let model = SignerRepoModel {
-            raw_key: None,
             id: "test".to_string(),
-            signer_type: SignerType::Local,
-            passphrase: None,
-            path: None,
+            config: SignerConfig::Local(LocalSignerConfig { raw_key: None }),
         };
         LocalSigner::new(&model);
     }
@@ -110,11 +110,10 @@ mod tests {
     #[should_panic(expected = "invalid keypair")]
     fn test_new_local_signer_invalid_keypair() {
         let model = SignerRepoModel {
-            raw_key: Some(vec![1u8; 10]),
             id: "test".to_string(),
-            signer_type: SignerType::Local,
-            passphrase: None,
-            path: None,
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: Some(vec![1u8; 10]),
+            }),
         };
         let _ = LocalSigner::new(&model);
     }

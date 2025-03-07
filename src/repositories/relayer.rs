@@ -243,6 +243,8 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
 pub enum ConversionError {
     #[error("Invalid network type: {0}")]
     InvalidNetworkType(String),
+    #[error("Invalid config: {0}")]
+    InvalidConfig(String),
 }
 
 impl TryFrom<RelayerFileConfig> for RelayerRepoModel {

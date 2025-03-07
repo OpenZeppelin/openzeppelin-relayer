@@ -34,7 +34,11 @@ pub struct LocalSigner {
 
 impl LocalSigner {
     pub fn new(signer_model: &SignerRepoModel) -> Self {
-        let raw_key = signer_model.raw_key.as_ref().expect("keystore not found");
+        let config = signer_model
+            .config
+            .get_local()
+            .expect("local config not found");
+        let raw_key = config.raw_key.as_ref().expect("keystore not found");
 
         // transforms the key into alloy wallet
         let key_bytes = FixedBytes::from_slice(raw_key);
@@ -117,7 +121,7 @@ impl DataSignerTrait for LocalSigner {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{EvmTransactionData, U256};
+    use crate::models::{EvmTransactionData, LocalSignerConfig, SignerConfig, U256};
 
     use super::*;
     use std::str::FromStr;
@@ -125,10 +129,9 @@ mod tests {
     fn create_test_signer_model() -> SignerRepoModel {
         SignerRepoModel {
             id: "test".to_string(),
-            signer_type: SignerType::Local,
-            path: None,
-            raw_key: Some(vec![1u8; 32]),
-            passphrase: None,
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: Some(vec![1u8; 32]),
+            }),
         }
     }
 

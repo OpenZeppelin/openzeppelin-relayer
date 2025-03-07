@@ -2,8 +2,11 @@
 //! It provides asynchronous CRUD operations and supports pagination.
 //! The repository is thread-safe, using a `Mutex` to protect access to the underlying data store.
 use crate::{
-    config::{SignerFileConfig, SignerFileConfigPassphrase, SignerFileConfigType},
-    models::{RepositoryError, SignerPassphrase, SignerRepoModel, SignerType},
+    config::{SignerConfig as ConfigFileSignerConfig, SignerFileConfig},
+    models::{
+        AwsKmsSignerConfig, LocalSignerConfig, RepositoryError, SignerConfig, SignerRepoModel,
+        TestSignerConfig, VaultSignerConfig,
+    },
     repositories::*,
 };
 use async_trait::async_trait;
@@ -120,24 +123,17 @@ impl TryFrom<SignerFileConfig> for SignerRepoModel {
     fn try_from(config: SignerFileConfig) -> Result<Self, Self::Error> {
         Ok(Self {
             id: config.id,
-            signer_type: match config.r#type {
-                SignerFileConfigType::Test => SignerType::Test,
-                SignerFileConfigType::Local => SignerType::Local,
-                SignerFileConfigType::AwsKms => SignerType::AwsKms,
-                SignerFileConfigType::Vault => SignerType::Vault,
-            },
-            path: config.path,
-            raw_key: None,
-            passphrase: match config.passphrase {
-                Some(passphrase) => match passphrase {
-                    SignerFileConfigPassphrase::Env { name } => {
-                        Some(SignerPassphrase::Env { name })
-                    }
-                    SignerFileConfigPassphrase::Plain { value } => {
-                        Some(SignerPassphrase::Plain { value })
-                    }
-                },
-                None => None,
+            config: match config.config {
+                ConfigFileSignerConfig::Test(_) => {
+                    // raw_key is not loaded here, it will be loaded later
+                    SignerConfig::Test(TestSignerConfig { raw_key: None })
+                }
+                ConfigFileSignerConfig::Local(_) => {
+                    // raw_key is not loaded here, it will be loaded later
+                    SignerConfig::Local(LocalSignerConfig { raw_key: None })
+                }
+                ConfigFileSignerConfig::AwsKms(_) => SignerConfig::AwsKms(AwsKmsSignerConfig {}),
+                ConfigFileSignerConfig::Vault(_) => SignerConfig::Vault(VaultSignerConfig {}),
             },
         })
     }
@@ -145,17 +141,14 @@ impl TryFrom<SignerFileConfig> for SignerRepoModel {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{LocalSignerConfig, SignerConfig};
+
     use super::*;
 
     fn create_test_signer(id: String) -> SignerRepoModel {
         SignerRepoModel {
             id: id.clone(),
-            signer_type: SignerType::Local,
-            path: Some("examples/basic-example/keys/local-signer.json".to_string()),
-            passphrase: Some(SignerPassphrase::Plain {
-                value: "test".to_string(),
-            }),
-            raw_key: None,
+            config: SignerConfig::Local(LocalSignerConfig { raw_key: None }),
         }
     }
 

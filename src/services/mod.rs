@@ -16,5 +16,9 @@ pub use transaction_counter::*;
 
 mod gas;
 pub use gas::*;
+
 mod jupiter;
 pub use jupiter::*;
+
+mod hashicorp_vault;
+pub use hashicorp_vault::*;

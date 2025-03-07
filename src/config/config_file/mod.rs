@@ -135,7 +135,7 @@ impl Config {
                     ))
                 })?;
 
-            if signer_config.r#type == SignerFileConfigType::Test {
+            if let SignerConfig::Test(_) = signer_config.config {
                 // ensure that only testnets are used with test signers
                 match relayer.network_type {
                     ConfigFileNetworkType::Evm => {
@@ -252,17 +252,18 @@ mod tests {
             signers: vec![
                 SignerFileConfig {
                     id: "test-1".to_string(),
-                    path: Some("examples/basic-example/config/keys/local-signer.json".to_string()),
-                    r#type: SignerFileConfigType::Local,
-                    passphrase: Some(SignerFileConfigPassphrase::Plain {
-                        value: "test".to_string(),
+                    config: SignerConfig::Local(LocalSignerFileConfig {
+                        path: Some(
+                            "examples/basic-example/config/keys/local-signer.json".to_string(),
+                        ),
+                        passphrase: Some(PlainOrEnvConfigValue::Plain {
+                            value: "test".to_string(),
+                        }),
                     }),
                 },
                 SignerFileConfig {
                     id: "test-type".to_string(),
-                    path: None,
-                    r#type: SignerFileConfigType::Test,
-                    passphrase: None,
+                    config: SignerConfig::Test(TestSignerFileConfig {}),
                 },
             ],
             notifications: vec![NotificationFileConfig {

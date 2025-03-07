@@ -21,7 +21,10 @@ use crate::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
         SignTypedDataRequest,
     },
-    models::{Address, NetworkTransactionData, SignerRepoModel, SignerType, TransactionRepoModel},
+    models::{
+        Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
+        TransactionRepoModel,
+    },
 };
 use eyre::Result;
 
@@ -85,13 +88,15 @@ impl EvmSignerFactory {
     pub fn create_evm_signer(
         signer_model: &SignerRepoModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
-        let signer = match signer_model.signer_type {
-            SignerType::Test => EvmSigner::Local(LocalSigner::new(signer_model)),
-            SignerType::Local => EvmSigner::Local(LocalSigner::new(signer_model)),
-            SignerType::AwsKms => {
+        let signer = match signer_model.config {
+            SignerConfig::Test(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::Local(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
-            SignerType::Vault => return Err(SignerFactoryError::UnsupportedType("Vault".into())),
+            SignerConfig::Vault(_) => {
+                return Err(SignerFactoryError::UnsupportedType("Vault".into()))
+            }
         };
 
         Ok(signer)
