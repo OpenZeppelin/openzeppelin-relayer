@@ -21,7 +21,7 @@ const MAX_BASE_FEE_MULTIPLIER: f64 = 10.0;
 pub async fn get_transaction_price_params(
     tx_data: &EvmTransactionData,
     relayer: &RelayerRepoModel,
-    gas_price_service: &EvmGasPriceService,
+    gas_price_service: &EvmGasPriceService<EvmProvider>,
     provider: &EvmProvider,
 ) -> Result<TransactionPriceParams, TransactionError> {
     match () {
@@ -98,7 +98,7 @@ async fn handle_eip1559_transaction(
 async fn handle_speed_transaction(
     tx_data: &EvmTransactionData,
     relayer: &RelayerRepoModel,
-    gas_price_service: &EvmGasPriceService,
+    gas_price_service: &EvmGasPriceService<EvmProvider>,
     provider: &EvmProvider,
 ) -> Result<TransactionPriceParams, TransactionError> {
     let speed = tx_data
@@ -118,7 +118,7 @@ async fn handle_speed_transaction(
 /// Handles EIP1559 speed-based transaction gas price calculation
 async fn handle_eip1559_speed(
     speed: &Speed,
-    gas_price_service: &EvmGasPriceService,
+    gas_price_service: &EvmGasPriceService<EvmProvider>,
     relayer: &RelayerRepoModel,
     provider: &EvmProvider,
     from_address: &str,
@@ -149,7 +149,7 @@ async fn handle_eip1559_speed(
 /// Handles legacy speed-based transaction gas price calculation
 async fn handle_legacy_speed(
     speed: &Speed,
-    gas_price_service: &EvmGasPriceService,
+    gas_price_service: &EvmGasPriceService<EvmProvider>,
     relayer: &RelayerRepoModel,
     provider: &EvmProvider,
     from_address: &str,

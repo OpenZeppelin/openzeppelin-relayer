@@ -3,7 +3,7 @@
 //! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
     models::{evm::Speed, EvmTransactionData, TransactionError},
-    services::{EvmProvider, EvmProviderTrait},
+    services::EvmProviderTrait,
 };
 use alloy::rpc::types::BlockNumberOrTag;
 use eyre::Result;
@@ -14,6 +14,9 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+#[cfg(test)]
+use mockall::automock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeedPrices {
@@ -96,6 +99,7 @@ impl IntoIterator for SpeedPrices {
 }
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait EvmGasPriceServiceTrait {
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError>;
@@ -107,18 +111,18 @@ pub trait EvmGasPriceServiceTrait {
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError>;
 }
 
-pub struct EvmGasPriceService {
-    provider: EvmProvider,
+pub struct EvmGasPriceService<P: EvmProviderTrait> {
+    provider: P,
 }
 
-impl EvmGasPriceService {
-    pub fn new(provider: EvmProvider) -> Self {
+impl<P: EvmProviderTrait> EvmGasPriceService<P> {
+    pub fn new(provider: P) -> Self {
         Self { provider }
     }
 }
 
 #[async_trait]
-impl EvmGasPriceServiceTrait for EvmGasPriceService {
+impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError> {
         info!("Estimating gas for tx_data: {:?}", tx_data);
         let gas_estimation = self.provider.estimate_gas(tx_data).await.map_err(|err| {
@@ -253,5 +257,232 @@ impl EvmGasPriceServiceTrait for EvmGasPriceService {
             max_priority_fee_per_gas: max_priority_fees,
             base_fee_per_gas: base_fee,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::rpc::types::FeeHistory;
+
+    use crate::{models::U256, services::provider::evm::MockEvmProviderTrait};
+    use alloy::rpc::types::{Block as BlockResponse, Header};
+
+    use super::*;
+
+    impl Default for EvmTransactionData {
+        fn default() -> Self {
+            Self {
+                from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+                to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
+                gas_price: Some(1000000000),
+                value: U256::from(0),
+                data: Some("0x".to_string()),
+                nonce: Some(1),
+                chain_id: 1,
+                gas_limit: 21000,
+                hash: None,
+                signature: None,
+                speed: None,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                raw: None,
+            }
+        }
+    }
+
+    #[test]
+    fn test_speed_multiplier() {
+        let multipliers = Speed::multiplier();
+        assert_eq!(multipliers.len(), 4);
+        assert_eq!(multipliers[0], (Speed::SafeLow, 100));
+        assert_eq!(multipliers[1], (Speed::Average, 125));
+        assert_eq!(multipliers[2], (Speed::Fast, 150));
+        assert_eq!(multipliers[3], (Speed::Fastest, 200));
+    }
+
+    #[test]
+    fn test_gas_prices_into_iterator() {
+        let gas_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 10,
+                average: 20,
+                fast: 30,
+                fastest: 40,
+            },
+            max_priority_fee_per_gas: SpeedPrices {
+                safe_low: 1,
+                average: 2,
+                fast: 3,
+                fastest: 4,
+            },
+            base_fee_per_gas: 100,
+        };
+
+        let prices: Vec<(Speed, u128, u128)> = gas_prices.into_iter().collect();
+        assert_eq!(prices.len(), 4);
+        assert_eq!(prices[0], (Speed::SafeLow, 10, 1));
+        assert_eq!(prices[1], (Speed::Average, 20, 2));
+        assert_eq!(prices[2], (Speed::Fast, 30, 3));
+        assert_eq!(prices[3], (Speed::Fastest, 40, 4));
+    }
+
+    #[test]
+    fn test_speed_prices_into_iterator() {
+        let speed_prices = SpeedPrices {
+            safe_low: 10,
+            average: 20,
+            fast: 30,
+            fastest: 40,
+        };
+
+        let prices: Vec<(Speed, u128)> = speed_prices.into_iter().collect();
+        assert_eq!(prices.len(), 4);
+        assert_eq!(prices[0], (Speed::SafeLow, 10));
+        assert_eq!(prices[1], (Speed::Average, 20));
+        assert_eq!(prices[2], (Speed::Fast, 30));
+        assert_eq!(prices[3], (Speed::Fastest, 40));
+    }
+
+    #[tokio::test]
+    async fn test_get_legacy_prices_from_json_rpc() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let base_gas_price = 10_000_000_000u128; // 10 gwei base price
+
+        // Mock the provider's get_gas_price method
+        mock_provider
+            .expect_get_gas_price()
+            .times(1)
+            .returning(move || Box::pin(async move { Ok(base_gas_price) }));
+
+        // Create the actual service with mocked provider
+        let service = EvmGasPriceService::new(mock_provider);
+
+        // Test the actual implementation
+        let prices = service.get_legacy_prices_from_json_rpc().await.unwrap();
+
+        // Verify each speed level has correct multiplier applied
+        assert_eq!(prices.safe_low, 10_000_000_000); // 10 gwei * 100%
+        assert_eq!(prices.average, 12_500_000_000); // 10 gwei * 125%
+        assert_eq!(prices.fast, 15_000_000_000); // 10 gwei * 150%
+        assert_eq!(prices.fastest, 20_000_000_000); // 10 gwei * 200%
+
+        // Verify against Speed::multiplier()
+        let multipliers = Speed::multiplier();
+        for (speed, multiplier) in multipliers.iter() {
+            let price = match speed {
+                Speed::SafeLow => prices.safe_low,
+                Speed::Average => prices.average,
+                Speed::Fast => prices.fast,
+                Speed::Fastest => prices.fastest,
+            };
+            assert_eq!(
+                price,
+                base_gas_price * multiplier / 100,
+                "Price for {:?} should be {}% of base price",
+                speed,
+                multiplier
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_current_base_fee() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let expected_base_fee = 10_000_000_000u128;
+
+        // Mock the provider's get_block_by_number method
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(move || {
+                Box::pin(async move {
+                    Ok(BlockResponse {
+                        header: Header {
+                            inner: alloy::consensus::Header {
+                                base_fee_per_gas: Some(expected_base_fee as u64),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                })
+            });
+
+        let service = EvmGasPriceService::new(mock_provider);
+        let result = service.get_current_base_fee().await.unwrap();
+        assert_eq!(result, expected_base_fee);
+    }
+
+    #[tokio::test]
+    async fn test_get_prices_from_json_rpc() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let base_gas_price = 10_000_000_000u128;
+        let base_fee = 5_000_000_000u128;
+
+        // Mock get_gas_price for legacy prices
+        mock_provider
+            .expect_get_gas_price()
+            .times(1)
+            .returning(move || Box::pin(async move { Ok(base_gas_price) }));
+
+        // Mock get_block_by_number for base fee
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(move || {
+                Box::pin(async move {
+                    Ok(BlockResponse {
+                        header: Header {
+                            inner: alloy::consensus::Header {
+                                base_fee_per_gas: Some(base_fee as u64),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+                })
+            });
+
+        // Mock get_fee_history
+        mock_provider
+            .expect_get_fee_history()
+            .times(1)
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Ok(FeeHistory {
+                        oldest_block: 100,
+                        base_fee_per_gas: vec![5_000_000_000],
+                        gas_used_ratio: vec![0.5],
+                        reward: Some(vec![vec![
+                            1_000_000_000,
+                            2_000_000_000,
+                            3_000_000_000,
+                            4_000_000_000,
+                        ]]),
+                        base_fee_per_blob_gas: vec![],
+                        blob_gas_used_ratio: vec![],
+                    })
+                })
+            });
+
+        let service = EvmGasPriceService::new(mock_provider);
+        let prices = service.get_prices_from_json_rpc().await.unwrap();
+
+        // Test legacy prices
+        assert_eq!(prices.legacy_prices.safe_low, 10_000_000_000);
+        assert_eq!(prices.legacy_prices.average, 12_500_000_000);
+        assert_eq!(prices.legacy_prices.fast, 15_000_000_000);
+        assert_eq!(prices.legacy_prices.fastest, 20_000_000_000);
+
+        // Test base fee
+        assert_eq!(prices.base_fee_per_gas, 5_000_000_000);
+
+        // Test priority fees
+        assert_eq!(prices.max_priority_fee_per_gas.safe_low, 1_000_000_000);
+        assert_eq!(prices.max_priority_fee_per_gas.average, 2_000_000_000);
+        assert_eq!(prices.max_priority_fee_per_gas.fast, 3_000_000_000);
+        assert_eq!(prices.max_priority_fee_per_gas.fastest, 4_000_000_000);
     }
 }

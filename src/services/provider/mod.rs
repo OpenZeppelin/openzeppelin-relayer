@@ -1,7 +1,7 @@
 use serde::Serialize;
 use thiserror::Error;
 
-mod evm;
+pub mod evm;
 pub use evm::*;
 
 mod solana;

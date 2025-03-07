@@ -44,7 +44,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
-    gas_price_service: Arc<EvmGasPriceService>,
+    gas_price_service: Arc<EvmGasPriceService<EvmProvider>>,
     signer: EvmSigner,
 }
 
@@ -73,7 +73,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
-        gas_price_service: Arc<EvmGasPriceService>,
+        gas_price_service: Arc<EvmGasPriceService<EvmProvider>>,
         signer: EvmSigner,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
@@ -89,7 +89,7 @@ impl EvmRelayerTransaction {
     }
 
     /// Returns a reference to the gas price service.
-    pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService> {
+    pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService<EvmProvider>> {
         &self.gas_price_service
     }
 
