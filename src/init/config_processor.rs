@@ -7,13 +7,14 @@ use crate::{
         SignerConfig, SignerRepoModel, TestSignerConfig, VaultSignerConfig,
     },
     repositories::Repository,
-    services::{Signer, SignerFactory},
+    services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
     utils::unsafe_generate_random_private_key,
 };
 
 use actix_web::web::ThinData;
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
+use reqwest::Client;
 
 async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
@@ -34,16 +35,27 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                 id: signer.id.clone(),
                 config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
             },
-            ConfigFileSignerConfig::Vault(vault_config) => SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::Vault(VaultSignerConfig {
+            ConfigFileSignerConfig::Vault(vault_config) => {
+                let config = VaultConfig {
                     address: vault_config.address.clone(),
                     namespace: vault_config.namespace.clone(),
                     role_id: vault_config.role_id.clone(),
                     secret_id: vault_config.secret_id.clone(),
-                    key_name: vault_config.key_name.clone(),
-                }),
-            },
+                };
+
+                let client = Client::new();
+                let vault_service = VaultService { config, client };
+                let raw_key = vault_service
+                    .retrieve_secret(&vault_config.key_name)
+                    .await?;
+
+                SignerRepoModel {
+                    id: signer.id.clone(),
+                    config: SignerConfig::Vault(VaultSignerConfig {
+                        raw_key: raw_key.into_bytes(),
+                    }),
+                }
+            }
         };
 
         app_state

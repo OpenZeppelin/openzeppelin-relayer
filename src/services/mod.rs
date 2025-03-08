@@ -22,3 +22,6 @@ pub use jupiter::*;
 
 mod hashicorp_vault;
 pub use hashicorp_vault::*;
+
+mod vault;
+pub use vault::*;

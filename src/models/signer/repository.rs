@@ -30,11 +30,7 @@ pub struct AwsKmsSignerConfig {}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultSignerConfig {
-    pub address: String,
-    pub namespace: Option<String>,
-    pub role_id: String,
-    pub secret_id: String,
-    pub key_name: String,
+    pub raw_key: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]

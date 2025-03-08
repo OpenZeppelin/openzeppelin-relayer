@@ -128,7 +128,7 @@ impl SignerFileConfig {
                 return Err(ConfigFileError::InternalError("Not implemented".into()));
             }
             SignerConfig::Vault(_) => {
-                return Err(ConfigFileError::InternalError("Not implemented".into()));
+                return Ok(()); // TODO
             }
         }
     }

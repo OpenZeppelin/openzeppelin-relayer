@@ -67,10 +67,22 @@
     {
       "id": "local-signer",
       "type": "local",
-      "path": "config/keys/local-signer.example.json",
-      "passphrase": {
-        "type": "plain",
-        "value": "test"
+      "config": {
+        "path": "config/keys/local-signer.example.json",
+        "passphrase": {
+          "type": "plain",
+          "value": "test"
+        }
+      }
+    },
+    {
+      "id": "local-vault-signer",
+      "type": "vault",
+      "config": {
+        "address": "http://localhost:8200",
+        "role_id": "316a9cd5-e24b-ad4b-f00e-a22739ad10bb",
+        "secret_id": "500d6f8d-5fa9-c3f0-d253-6c99cb743c34",
+        "key_name": "my-app"
       }
     }
   ]
