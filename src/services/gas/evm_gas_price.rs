@@ -2,7 +2,7 @@
 //! It includes traits and implementations for calculating gas price multipliers based on
 //! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
-    models::{evm::Speed, EvmTransactionData, TransactionError},
+    models::{evm::Speed, EvmNetwork, EvmTransactionData, TransactionError},
     services::EvmProviderTrait,
 };
 use alloy::rpc::types::BlockNumberOrTag;
@@ -113,11 +113,16 @@ pub trait EvmGasPriceServiceTrait {
 
 pub struct EvmGasPriceService<P: EvmProviderTrait> {
     provider: P,
+    network: EvmNetwork,
 }
 
 impl<P: EvmProviderTrait> EvmGasPriceService<P> {
-    pub fn new(provider: P) -> Self {
-        Self { provider }
+    pub fn new(provider: P, network: EvmNetwork) -> Self {
+        Self { provider, network }
+    }
+
+    pub fn network(&self) -> &EvmNetwork {
+        &self.network
     }
 }
 
@@ -264,7 +269,10 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
 mod tests {
     use alloy::rpc::types::FeeHistory;
 
-    use crate::{models::U256, services::provider::evm::MockEvmProviderTrait};
+    use crate::{
+        models::{EvmNamedNetwork, U256},
+        services::provider::evm::MockEvmProviderTrait,
+    };
     use alloy::rpc::types::{Block as BlockResponse, Header};
 
     use super::*;
@@ -355,7 +363,10 @@ mod tests {
             .returning(move || Box::pin(async move { Ok(base_gas_price) }));
 
         // Create the actual service with mocked provider
-        let service = EvmGasPriceService::new(mock_provider);
+        let service = EvmGasPriceService::new(
+            mock_provider,
+            EvmNetwork::from_named(EvmNamedNetwork::Mainnet),
+        );
 
         // Test the actual implementation
         let prices = service.get_legacy_prices_from_json_rpc().await.unwrap();
@@ -409,7 +420,10 @@ mod tests {
                 })
             });
 
-        let service = EvmGasPriceService::new(mock_provider);
+        let service = EvmGasPriceService::new(
+            mock_provider,
+            EvmNetwork::from_named(EvmNamedNetwork::Mainnet),
+        );
         let result = service.get_current_base_fee().await.unwrap();
         assert_eq!(result, expected_base_fee);
     }
@@ -467,7 +481,10 @@ mod tests {
                 })
             });
 
-        let service = EvmGasPriceService::new(mock_provider);
+        let service = EvmGasPriceService::new(
+            mock_provider,
+            EvmNetwork::from_named(EvmNamedNetwork::Mainnet),
+        );
         let prices = service.get_prices_from_json_rpc().await.unwrap();
 
         // Test legacy prices

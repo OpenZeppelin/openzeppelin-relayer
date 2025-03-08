@@ -156,7 +156,6 @@ impl Transaction for EvmRelayerTransaction {
         )
         .await?;
         debug!("Gas price: {:?}", price_params.gas_price);
-
         // increment the nonce
         let nonce = self
             .transaction_counter_service

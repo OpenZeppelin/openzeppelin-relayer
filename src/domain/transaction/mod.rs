@@ -364,7 +364,8 @@ impl RelayerTransactionFactory {
                     relayer.address.clone(),
                     transaction_counter_store,
                 );
-                let gas_price_service = Arc::new(EvmGasPriceService::new(evm_provider.clone()));
+                let gas_price_service =
+                    Arc::new(EvmGasPriceService::new(evm_provider.clone(), network));
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
