@@ -10,6 +10,15 @@
       "network_type": "evm"
     },
     {
+      "id": "sepolia-vault",
+      "name": "Sepolia Vault",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "cloud-vault-signer",
+      "network_type": "evm"
+    },
+    {
       "id": "solana-example",
       "name": "Solana Example",
       "network": "devnet",
@@ -36,7 +45,7 @@
       "network": "mainnet-beta",
       "paused": false,
       "notification_id": "notification-example",
-      "signer_id": "local-signer",
+      "signer_id": "cloud-vault-signer",
       "network_type": "solana",
       "policies": {
         "min_balance": 0,

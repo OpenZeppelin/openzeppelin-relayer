@@ -6,7 +6,7 @@ use crate::{
     config::{Config, SignerConfig as ConfigFileSignerConfig},
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
-        SignerConfig, SignerRepoModel, TestSignerConfig, VaultSignerConfig,
+        SignerConfig, SignerRepoModel,
     },
     repositories::Repository,
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
@@ -23,7 +23,7 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
         let signer_repo_model = match &signer.config {
             ConfigFileSignerConfig::Test(_) => SignerRepoModel {
                 id: signer.id.clone(),
-                config: SignerConfig::Test(TestSignerConfig {
+                config: SignerConfig::Test(LocalSignerConfig {
                     raw_key: unsafe_generate_random_private_key(),
                 }),
             },
@@ -31,7 +31,6 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                 let passphrase = local_signer.passphrase.get_value()?;
                 let raw_key =
                     LocalClient::load(Path::new(&local_signer.path).to_path_buf(), passphrase);
-
                 SignerRepoModel {
                     id: signer.id.clone(),
                     config: SignerConfig::Local(LocalSignerConfig { raw_key }),
@@ -51,15 +50,14 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
 
                 let client = Client::new();
                 let vault_service = VaultService { config, client };
-                let raw_key = vault_service
+                let secret = vault_service
                     .retrieve_secret(&vault_config.key_name)
                     .await?;
+                let raw_key = hex::decode(&secret)?;
 
                 SignerRepoModel {
                     id: signer.id.clone(),
-                    config: SignerConfig::Vault(VaultSignerConfig {
-                        raw_key: raw_key.into_bytes(),
-                    }),
+                    config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
                 }
             }
             ConfigFileSignerConfig::VaultCloud(vault_cloud_config) => {
@@ -72,13 +70,11 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                 );
 
                 let response = client.get_secret(&vault_cloud_config.key_name).await?;
-                let raw_key = response.secret.static_version.value;
+                let raw_key = hex::decode(&response.secret.static_version.value)?;
 
                 SignerRepoModel {
                     id: signer.id.clone(),
-                    config: SignerConfig::Vault(VaultSignerConfig {
-                        raw_key: raw_key.into_bytes(),
-                    }),
+                    config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
                 }
             }
         };

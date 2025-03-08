@@ -21,7 +21,6 @@ use crate::{
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
-use log::info;
 
 /// Lists all relayers with pagination support.
 ///
@@ -41,8 +40,6 @@ pub async fn list_relayers(
 
     let mapped_relayers: Vec<RelayerResponse> =
         relayers.items.into_iter().map(|r| r.into()).collect();
-
-    info!("Relayers: {:?}", mapped_relayers);
 
     Ok(HttpResponse::Ok().json(ApiResponse::paginated(
         mapped_relayers,
