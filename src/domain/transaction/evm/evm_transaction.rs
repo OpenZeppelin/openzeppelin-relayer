@@ -10,7 +10,7 @@ use log::{debug, info};
 use std::sync::Arc;
 
 use crate::{
-    domain::{get_transaction_price_params, transaction::Transaction},
+    domain::{transaction::Transaction, PriceCalculator},
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
@@ -148,7 +148,7 @@ impl Transaction for EvmRelayerTransaction {
         let evm_data = tx.network_data.get_evm_transaction_data()?;
         // set the gas price
         let relayer = self.relayer();
-        let price_params: TransactionPriceParams = get_transaction_price_params(
+        let price_params: TransactionPriceParams = PriceCalculator::get_transaction_price_params(
             &evm_data,
             relayer,
             &self.gas_price_service,

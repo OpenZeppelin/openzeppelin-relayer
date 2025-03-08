@@ -269,34 +269,10 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
 mod tests {
     use alloy::rpc::types::FeeHistory;
 
-    use crate::{
-        models::{EvmNamedNetwork, U256},
-        services::provider::evm::MockEvmProviderTrait,
-    };
+    use crate::{models::EvmNamedNetwork, services::provider::evm::MockEvmProviderTrait};
     use alloy::rpc::types::{Block as BlockResponse, Header};
 
     use super::*;
-
-    impl Default for EvmTransactionData {
-        fn default() -> Self {
-            Self {
-                from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
-                to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
-                gas_price: Some(1000000000),
-                value: U256::from(0),
-                data: Some("0x".to_string()),
-                nonce: Some(1),
-                chain_id: 1,
-                gas_limit: 21000,
-                hash: None,
-                signature: None,
-                speed: None,
-                max_fee_per_gas: None,
-                max_priority_fee_per_gas: None,
-                raw: None,
-            }
-        }
-    }
 
     #[test]
     fn test_speed_multiplier() {
