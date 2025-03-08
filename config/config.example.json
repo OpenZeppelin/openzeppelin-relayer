@@ -84,6 +84,18 @@
         "secret_id": "500d6f8d-5fa9-c3f0-d253-6c99cb743c34",
         "key_name": "my-app"
       }
+    },
+    {
+      "id": "cloud-vault-signer",
+      "type": "vault_cloud",
+      "config": {
+        "client_id": "eHTMPga29JCcWKXoMc0Fmh3oiPjHrMqv",
+        "client_secret": "0ov2c4_P8rqkRmD-Tps-lybSyyjSbanshQMHD8zCqmEX0W9LRpucO9oLlX8-X6Hf",
+        "key_name": "test",
+        "org_id": "470c0b6d-dcf8-4d57-98c8-1a123d2d61a3",
+        "project_id": "44998acd-e314-4216-a083-f2d7d82d7349",
+        "app_name": "relayer-test"
+      }
     }
   ]
 }

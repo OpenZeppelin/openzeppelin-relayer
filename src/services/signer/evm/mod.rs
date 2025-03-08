@@ -44,6 +44,8 @@ pub trait DataSignerTrait: Send + Sync {
 
 pub enum EvmSigner {
     Local(LocalSigner),
+    Vault(LocalSigner),
+    VaultCloud(LocalSigner),
 }
 
 #[async_trait]
@@ -51,6 +53,8 @@ impl Signer for EvmSigner {
     async fn address(&self) -> Result<Address, SignerError> {
         match self {
             Self::Local(signer) => signer.address().await,
+            Self::Vault(signer) => signer.address().await,
+            Self::VaultCloud(signer) => signer.address().await,
         }
     }
 
@@ -60,6 +64,8 @@ impl Signer for EvmSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_transaction(transaction).await,
+            Self::Vault(signer) => signer.sign_transaction(transaction).await,
+            Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -69,6 +75,8 @@ impl DataSignerTrait for EvmSigner {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_data(request).await,
+            Self::Vault(signer) => signer.sign_data(request).await,
+            Self::VaultCloud(signer) => signer.sign_data(request).await,
         }
     }
 
@@ -78,6 +86,8 @@ impl DataSignerTrait for EvmSigner {
     ) -> Result<SignDataResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_typed_data(request).await,
+            Self::Vault(signer) => signer.sign_typed_data(request).await,
+            Self::VaultCloud(signer) => signer.sign_typed_data(request).await,
         }
     }
 }
@@ -94,9 +104,8 @@ impl EvmSignerFactory {
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
-            SignerConfig::Vault(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Vault".into()))
-            }
+            SignerConfig::Vault(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
         };
 
         Ok(signer)

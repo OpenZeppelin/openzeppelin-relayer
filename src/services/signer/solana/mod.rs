@@ -35,6 +35,8 @@ use mockall::automock;
 
 pub enum SolanaSigner {
     Local(LocalSigner),
+    Vault(LocalSigner),
+    VaultCloud(LocalSigner),
 }
 
 #[async_trait]
@@ -42,6 +44,8 @@ impl Signer for SolanaSigner {
     async fn address(&self) -> Result<Address, SignerError> {
         match self {
             Self::Local(signer) => signer.address().await,
+            Self::Vault(signer) => signer.address().await,
+            Self::VaultCloud(signer) => signer.address().await,
         }
     }
 
@@ -51,6 +55,8 @@ impl Signer for SolanaSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Local(signer) => signer.sign_transaction(transaction).await,
+            Self::Vault(signer) => signer.sign_transaction(transaction).await,
+            Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -65,12 +71,16 @@ impl SolanaSignTrait for SolanaSigner {
     fn pubkey(&self) -> Result<Address, SignerError> {
         match self {
             Self::Local(signer) => signer.pubkey(),
+            Self::Vault(signer) => signer.pubkey(),
+            Self::VaultCloud(signer) => signer.pubkey(),
         }
     }
 
     fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         match self {
             Self::Local(signer) => Ok(signer.sign(message)?),
+            Self::Vault(signer) => Ok(signer.sign(message)?),
+            Self::VaultCloud(signer) => Ok(signer.sign(message)?),
         }
     }
 }
@@ -87,9 +97,8 @@ impl SolanaSignerFactory {
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
-            SignerConfig::Vault(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Vault".into()))
-            }
+            SignerConfig::Vault(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::VaultCloud(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
         };
 
         Ok(signer)

@@ -1,7 +1,9 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
+use std::path::Path;
+
 use crate::{
-    config::{Config, KeyLoaderTrait, SignerConfig as ConfigFileSignerConfig},
+    config::{Config, SignerConfig as ConfigFileSignerConfig},
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
         SignerConfig, SignerRepoModel, TestSignerConfig, VaultSignerConfig,
@@ -10,10 +12,10 @@ use crate::{
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
     utils::unsafe_generate_random_private_key,
 };
-
 use actix_web::web::ThinData;
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
+use oz_keystore::{HashicorpCloudClient, LocalClient};
 use reqwest::Client;
 
 async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
@@ -25,12 +27,16 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                     raw_key: unsafe_generate_random_private_key(),
                 }),
             },
-            ConfigFileSignerConfig::Local(local_signer) => SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::Local(LocalSignerConfig {
-                    raw_key: local_signer.load_key().await?,
-                }),
-            },
+            ConfigFileSignerConfig::Local(local_signer) => {
+                let passphrase = local_signer.passphrase.get_value()?;
+                let raw_key =
+                    LocalClient::load(Path::new(&local_signer.path).to_path_buf(), passphrase);
+
+                SignerRepoModel {
+                    id: signer.id.clone(),
+                    config: SignerConfig::Local(LocalSignerConfig { raw_key }),
+                }
+            }
             ConfigFileSignerConfig::AwsKms(_) => SignerRepoModel {
                 id: signer.id.clone(),
                 config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
@@ -48,6 +54,25 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                 let raw_key = vault_service
                     .retrieve_secret(&vault_config.key_name)
                     .await?;
+
+                SignerRepoModel {
+                    id: signer.id.clone(),
+                    config: SignerConfig::Vault(VaultSignerConfig {
+                        raw_key: raw_key.into_bytes(),
+                    }),
+                }
+            }
+            ConfigFileSignerConfig::VaultCloud(vault_cloud_config) => {
+                let client = HashicorpCloudClient::new(
+                    vault_cloud_config.client_id.clone(),
+                    vault_cloud_config.client_secret.clone(),
+                    vault_cloud_config.org_id.clone(),
+                    vault_cloud_config.project_id.clone(),
+                    vault_cloud_config.app_name.clone(),
+                );
+
+                let response = client.get_secret(&vault_cloud_config.key_name).await?;
+                let raw_key = response.secret.static_version.value;
 
                 SignerRepoModel {
                     id: signer.id.clone(),

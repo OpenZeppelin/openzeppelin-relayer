@@ -8,14 +8,11 @@
 //!
 //! * Validation of signer file paths and passphrases
 //! * Support for environment variable-based passphrase retrieval
-//! * Integration with the oz_keystore's LocalClient for secure keystore loading
-use async_trait::async_trait;
-use oz_keystore::LocalClient;
 use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigFileError;
 
-use super::{KeyLoaderTrait, PlainOrEnvConfigValue, SignerConfigValidate};
+use super::{PlainOrEnvConfigValue, SignerConfigValidate};
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -85,14 +82,5 @@ impl SignerConfigValidate for LocalSignerFileConfig {
         self.validate_passphrase()?;
 
         Ok(())
-    }
-}
-
-#[async_trait]
-impl KeyLoaderTrait for LocalSignerFileConfig {
-    async fn load_key(&self) -> Result<Vec<u8>, ConfigFileError> {
-        let passphrase = self.passphrase.get_value()?;
-        let key_raw = LocalClient::load(Path::new(&self.path).to_path_buf(), passphrase);
-        Ok(key_raw)
     }
 }

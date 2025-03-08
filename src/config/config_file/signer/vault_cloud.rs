@@ -6,19 +6,22 @@ use super::SignerConfigValidate;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Validate)]
 #[serde(deny_unknown_fields)]
-pub struct VaultSignerFileConfig {
-    #[validate(url)]
-    pub address: String,
-    pub namespace: Option<String>,
-    #[validate(length(min = 1, message = "Vault role ID cannot be empty"))]
-    pub role_id: String,
-    #[validate(length(min = 1, message = "Vault secret ID cannot be empty"))]
-    pub secret_id: String,
-    #[validate(length(min = 1, message = "Vault key name cannot be empty"))]
+pub struct VaultCloudSignerFileConfig {
+    #[validate(length(min = 1, message = "Client ID cannot be empty"))]
+    pub client_id: String,
+    #[validate(length(min = 1, message = "Client secret cannot be empty"))]
+    pub client_secret: String,
+    #[validate(length(min = 1, message = "Organization ID cannot be empty"))]
+    pub org_id: String,
+    #[validate(length(min = 1, message = "Project ID cannot be empty"))]
+    pub project_id: String,
+    #[validate(length(min = 1, message = "Application name cannot be empty"))]
+    pub app_name: String,
+    #[validate(length(min = 1, message = "Key name cannot be empty"))]
     pub key_name: String,
 }
 
-impl SignerConfigValidate for VaultSignerFileConfig {
+impl SignerConfigValidate for VaultCloudSignerFileConfig {
     fn validate(&self) -> Result<(), ConfigFileError> {
         // Use the validator crate's validate method
         match validator::Validate::validate(self) {

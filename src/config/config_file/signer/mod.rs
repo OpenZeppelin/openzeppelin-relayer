@@ -6,7 +6,6 @@
 //! - AWS KMS integration [NOT IMPLEMENTED]
 //! - HashiCorp Vault integration [NOT IMPLEMENTED]
 use super::ConfigFileError;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -16,10 +15,8 @@ pub use local::*;
 mod vault;
 pub use vault::*;
 
-#[async_trait]
-pub trait KeyLoaderTrait {
-    async fn load_key(&self) -> Result<Vec<u8>, ConfigFileError>;
-}
+mod vault_cloud;
+pub use vault_cloud::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -29,7 +26,7 @@ pub enum PlainOrEnvConfigValue {
 }
 
 impl PlainOrEnvConfigValue {
-    fn get_value(&self) -> Result<String, ConfigFileError> {
+    pub fn get_value(&self) -> Result<String, ConfigFileError> {
         match self {
             PlainOrEnvConfigValue::Env { name } => {
                 let value = std::env::var(name).map_err(|_| {
@@ -64,6 +61,8 @@ pub enum SignerConfig {
     Local(LocalSignerFileConfig),
     AwsKms(AwsKmsSignerFileConfig),
     Vault(VaultSignerFileConfig),
+    #[serde(rename = "vault_cloud")]
+    VaultCloud(VaultCloudSignerFileConfig),
 }
 
 impl SignerConfig {
@@ -77,6 +76,13 @@ impl SignerConfig {
     pub fn get_vault(&self) -> Option<&VaultSignerFileConfig> {
         match self {
             SignerConfig::Vault(vault) => Some(vault),
+            _ => None,
+        }
+    }
+
+    pub fn get_vault_cloud(&self) -> Option<&VaultCloudSignerFileConfig> {
+        match self {
+            SignerConfig::VaultCloud(vault_cloud) => Some(vault_cloud),
             _ => None,
         }
     }
@@ -120,16 +126,13 @@ impl SignerFileConfig {
         }
 
         match &self.config {
-            SignerConfig::Test(_) => {
-                return Ok(());
-            }
+            SignerConfig::Test(_) => Ok(()),
             SignerConfig::Local(local_config) => local_config.validate(),
             SignerConfig::AwsKms(_) => {
-                return Err(ConfigFileError::InternalError("Not implemented".into()));
+                Err(ConfigFileError::InternalError("Not implemented".into()))
             }
-            SignerConfig::Vault(_) => {
-                return Ok(()); // TODO
-            }
+            SignerConfig::Vault(vault_config) => vault_config.validate(),
+            SignerConfig::VaultCloud(vault_cloud_config) => vault_cloud_config.validate(),
         }
     }
 }

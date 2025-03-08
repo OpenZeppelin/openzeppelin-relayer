@@ -65,6 +65,7 @@ bs58 = "0.5"
 spl-associated-token-account = "6.0.0"
 itertools = "0.14.0"
 secrecy = "0.10"
+validator = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
