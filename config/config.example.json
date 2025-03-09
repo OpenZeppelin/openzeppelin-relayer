@@ -45,7 +45,7 @@
       "network": "mainnet-beta",
       "paused": false,
       "notification_id": "notification-example",
-      "signer_id": "cloud-vault-signer",
+      "signer_id": "vault-transit-signer",
       "network_type": "solana",
       "policies": {
         "min_balance": 0,
@@ -104,6 +104,16 @@
         "org_id": "470c0b6d-dcf8-4d57-98c8-1a123d2d61a3",
         "project_id": "44998acd-e314-4216-a083-f2d7d82d7349",
         "app_name": "relayer-test"
+      }
+    },
+    {
+      "id": "vault-transit-signer",
+      "type": "vault_transit",
+      "config": {
+        "pubkey": "ydnLGTcbkJFTUUAhfGM2G2Lv602PPaEY2e3Pm7cYjXE=",
+        "token": "hvs.byQGINuPGNOZnmOCS8Z936iZ",
+        "key_name": "solana",
+        "address": "http://localhost:8200"
       }
     }
   ]

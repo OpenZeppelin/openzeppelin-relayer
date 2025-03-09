@@ -101,11 +101,14 @@ impl EvmSignerFactory {
         let signer = match signer_model.config {
             SignerConfig::Test(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
             SignerConfig::Local(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::Vault(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
-            SignerConfig::Vault(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::VaultTransit(_) => {
+                return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()));
+            }
         };
 
         Ok(signer)

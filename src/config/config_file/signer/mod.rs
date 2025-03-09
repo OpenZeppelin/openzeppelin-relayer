@@ -18,6 +18,9 @@ pub use vault::*;
 mod vault_cloud;
 pub use vault_cloud::*;
 
+mod vault_transit;
+pub use vault_transit::*;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PlainOrEnvConfigValue {
@@ -63,6 +66,8 @@ pub enum SignerConfig {
     Vault(VaultSignerFileConfig),
     #[serde(rename = "vault_cloud")]
     VaultCloud(VaultCloudSignerFileConfig),
+    #[serde(rename = "vault_transit")]
+    VaultTransit(VaultTransitSignerFileConfig),
 }
 
 impl SignerConfig {
@@ -83,6 +88,13 @@ impl SignerConfig {
     pub fn get_vault_cloud(&self) -> Option<&VaultCloudSignerFileConfig> {
         match self {
             SignerConfig::VaultCloud(vault_cloud) => Some(vault_cloud),
+            _ => None,
+        }
+    }
+
+    pub fn get_vault_transit(&self) -> Option<&VaultTransitSignerFileConfig> {
+        match self {
+            SignerConfig::VaultTransit(vault_transit) => Some(vault_transit),
             _ => None,
         }
     }
@@ -133,6 +145,7 @@ impl SignerFileConfig {
             }
             SignerConfig::Vault(vault_config) => vault_config.validate(),
             SignerConfig::VaultCloud(vault_cloud_config) => vault_cloud_config.validate(),
+            SignerConfig::VaultTransit(vault_transit_config) => vault_transit_config.validate(),
         }
     }
 }

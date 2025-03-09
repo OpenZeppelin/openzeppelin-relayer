@@ -6,7 +6,7 @@ use crate::{
     config::{Config, SignerConfig as ConfigFileSignerConfig},
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
-        SignerConfig, SignerRepoModel,
+        SignerConfig, SignerRepoModel, VaultTransitSignerConfig,
     },
     repositories::Repository,
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
@@ -77,6 +77,16 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                     config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
                 }
             }
+            ConfigFileSignerConfig::VaultTransit(vault_transit_config) => SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
+                    key_name: vault_transit_config.key_name.clone(),
+                    address: vault_transit_config.address.clone(),
+                    namespace: vault_transit_config.namespace.clone(),
+                    token: vault_transit_config.token.clone(),
+                    pubkey: vault_transit_config.pubkey.clone(),
+                }),
+            },
         };
 
         app_state

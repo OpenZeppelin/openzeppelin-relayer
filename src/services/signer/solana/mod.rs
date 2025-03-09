@@ -12,10 +12,12 @@
 //!   ├── AwsKmsSigner (AWS KMS backend) [NOT SUPPORTED]
 //!   └── VaultSigner (HashiCorp Vault backend) [NOT SUPPORTED]
 //! ```
-mod local_signer;
 use async_trait::async_trait;
+mod local_signer;
 use local_signer::*;
+mod vault_transit_signer;
 use solana_sdk::signature::Signature;
+use vault_transit_signer::*;
 
 use crate::{
     domain::{
@@ -37,6 +39,7 @@ pub enum SolanaSigner {
     Local(LocalSigner),
     Vault(LocalSigner),
     VaultCloud(LocalSigner),
+    VaultTransit(VaultTransitSigner),
 }
 
 #[async_trait]
@@ -46,6 +49,7 @@ impl Signer for SolanaSigner {
             Self::Local(signer) => signer.address().await,
             Self::Vault(signer) => signer.address().await,
             Self::VaultCloud(signer) => signer.address().await,
+            Self::VaultTransit(signer) => signer.address().await,
         }
     }
 
@@ -57,30 +61,35 @@ impl Signer for SolanaSigner {
             Self::Local(signer) => signer.sign_transaction(transaction).await,
             Self::Vault(signer) => signer.sign_transaction(transaction).await,
             Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
+            Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
 
+#[async_trait]
 #[cfg_attr(test, automock)]
 pub trait SolanaSignTrait: Send + Sync {
     fn pubkey(&self) -> Result<Address, SignerError>;
-    fn sign(&self, message: &[u8]) -> Result<Signature, SignerError>;
+    async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError>;
 }
 
+#[async_trait]
 impl SolanaSignTrait for SolanaSigner {
     fn pubkey(&self) -> Result<Address, SignerError> {
         match self {
             Self::Local(signer) => signer.pubkey(),
             Self::Vault(signer) => signer.pubkey(),
             Self::VaultCloud(signer) => signer.pubkey(),
+            Self::VaultTransit(signer) => signer.pubkey(),
         }
     }
 
-    fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
+    async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         match self {
-            Self::Local(signer) => Ok(signer.sign(message)?),
-            Self::Vault(signer) => Ok(signer.sign(message)?),
-            Self::VaultCloud(signer) => Ok(signer.sign(message)?),
+            Self::Local(signer) => Ok(signer.sign(message).await?),
+            Self::Vault(signer) => Ok(signer.sign(message).await?),
+            Self::VaultCloud(signer) => Ok(signer.sign(message).await?),
+            Self::VaultTransit(signer) => Ok(signer.sign(message).await?),
         }
     }
 }
@@ -94,11 +103,14 @@ impl SolanaSignerFactory {
         let signer = match signer_model.config {
             SignerConfig::Test(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerConfig::Local(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::Vault(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::VaultCloud(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::VaultTransit(_) => {
+                SolanaSigner::VaultTransit(VaultTransitSigner::new(signer_model))
+            }
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
-            SignerConfig::Vault(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::VaultCloud(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
         };
 
         Ok(signer)

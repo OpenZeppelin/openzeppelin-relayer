@@ -38,13 +38,14 @@ impl LocalSigner {
     }
 }
 
+#[async_trait]
 impl SolanaSignTrait for LocalSigner {
     fn pubkey(&self) -> Result<Address, SignerError> {
         let address: Address = Address::Solana(self.local_signer_client.pubkey().to_string());
         Ok(address)
     }
 
-    fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
+    async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         Ok(self.local_signer_client.sign_message(message))
     }
 }
@@ -107,24 +108,24 @@ mod tests {
         let _ = LocalSigner::new(&model);
     }
 
-    #[test]
-    fn test_sign_returns_valid_signature() {
+    #[tokio::test]
+    async fn test_sign_returns_valid_signature() {
         let local_signer = create_testing_signer();
         let message = b"Test message";
 
-        let result = local_signer.sign(message);
+        let result = local_signer.sign(message).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_sign_different_messages() {
+    #[tokio::test]
+    async fn test_sign_different_messages() {
         let local_signer = create_testing_signer();
 
         let msg1 = b"Test message 1";
         let msg2 = b"Test message 2";
 
-        let sig1 = local_signer.sign(msg1).unwrap();
-        let sig2 = local_signer.sign(msg2).unwrap();
+        let sig1 = local_signer.sign(msg1).await.unwrap();
+        let sig2 = local_signer.sign(msg2).await.unwrap();
 
         assert_ne!(sig1, sig2);
     }
