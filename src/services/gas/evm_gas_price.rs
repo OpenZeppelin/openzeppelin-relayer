@@ -109,6 +109,8 @@ pub trait EvmGasPriceServiceTrait {
     async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError>;
 
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError>;
+
+    fn network(&self) -> &EvmNetwork;
 }
 
 pub struct EvmGasPriceService<P: EvmProviderTrait> {
@@ -262,6 +264,10 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
             max_priority_fee_per_gas: max_priority_fees,
             base_fee_per_gas: base_fee,
         })
+    }
+
+    fn network(&self) -> &EvmNetwork {
+        &self.network
     }
 }
 

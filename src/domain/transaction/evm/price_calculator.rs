@@ -119,24 +119,27 @@ impl PriceCalculator {
         }
     }
 
-    async fn handle_eip1559_speed<P: EvmProviderTrait>(
+    async fn handle_eip1559_speed<P: EvmGasPriceServiceTrait>(
         speed: &Speed,
-        gas_price_service: &EvmGasPriceService<P>,
+        gas_price_service: &P,
     ) -> Result<PriceParams, TransactionError> {
         let prices = gas_price_service.get_prices_from_json_rpc().await?;
         let (max_fee, max_priority_fee) = prices
+            .clone()
             .into_iter()
             .find(|(s, _, _)| s == speed)
-            .map(|(_, max_priority_fee_wei, base_fee_wei)| {
+            .map(|(_speed, _max_fee, max_priority_fee_wei)| {
                 let network = gas_price_service.network();
-                let max_fee =
-                    calculate_max_fee_per_gas(base_fee_wei, max_priority_fee_wei, network);
+                let max_fee = calculate_max_fee_per_gas(
+                    prices.base_fee_per_gas,
+                    max_priority_fee_wei,
+                    network,
+                );
                 (max_fee, max_priority_fee_wei)
             })
             .ok_or(TransactionError::UnexpectedError(
                 "Speed not supported for EIP1559".to_string(),
             ))?;
-
         Ok(PriceParams {
             gas_price: None,
             max_fee_per_gas: Some(max_fee),
@@ -196,6 +199,7 @@ impl PriceCalculator {
     }
 }
 
+#[derive(Debug, Clone)]
 struct PriceParams {
     gas_price: Option<u128>,
     max_fee_per_gas: Option<u128>,
@@ -231,7 +235,8 @@ fn calculate_max_fee_per_gas(
 mod tests {
     use super::*;
     use crate::models::{EvmNamedNetwork, EvmNetwork, RelayerEvmPolicy, U256};
-    use crate::services::{EvmProviderTrait, MockEvmProviderTrait};
+    use crate::services::gas::MockEvmGasPriceServiceTrait;
+    use crate::services::{EvmProviderTrait, GasPrices, MockEvmProviderTrait, SpeedPrices};
     use alloy::rpc::types::{
         Block as BlockResponse, BlockNumberOrTag, FeeHistory, TransactionReceipt,
         TransactionRequest,
@@ -466,5 +471,106 @@ mod tests {
         assert!(result.is_ok());
         let params = result.unwrap();
         assert_eq!(params.gas_price, Some(10000000000)); // Should be capped
+    }
+
+    #[test]
+    fn test_get_base_fee_multiplier() {
+        // Test with mainnet (12s block time)
+        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let multiplier = get_base_fee_multiplier(&mainnet);
+        // Expected blocks in 90s with 12s block time = 7.5 blocks
+        // 1.125^7.5 ≈ 2.4
+        assert!(multiplier > 2.3 && multiplier < 2.5);
+
+        // Test with Optimism (2s block time)
+        let optimism = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        let multiplier = get_base_fee_multiplier(&optimism);
+        // Expected blocks in 90s with 2s block time = 45 blocks
+        // Should be capped at MAX_BASE_FEE_MULTIPLIER (10.0)
+        assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
+
+        // Test with custom network (no block time specified)
+        let custom = EvmNetwork::from_id(999999);
+        let multiplier = get_base_fee_multiplier(&custom);
+        // Should use mainnet default (12s)
+        assert!(multiplier > 2.3 && multiplier < 2.5);
+    }
+
+    #[test]
+    fn test_calculate_max_fee_per_gas() {
+        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let base_fee = 100_000_000_000u128; // 100 Gwei
+        let priority_fee = 2_000_000_000u128; // 2 Gwei
+
+        let max_fee = calculate_max_fee_per_gas(base_fee, priority_fee, &network);
+
+        // With mainnet's multiplier (~2.4):
+        // base_fee * multiplier + priority_fee ≈ 100 * 2.4 + 2 ≈ 242 Gwei
+        assert!(max_fee > 240_000_000_000 && max_fee < 244_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_handle_eip1559_speed() {
+        let mut mock_gas_price_service = MockEvmGasPriceServiceTrait::new();
+
+        // Mock the gas price service's get_prices_from_json_rpc method
+        let test_data = [
+            (Speed::SafeLow, 1_000_000_000),
+            (Speed::Average, 2_000_000_000),
+            (Speed::Fast, 3_000_000_000),
+            (Speed::Fastest, 4_000_000_000),
+        ];
+        // Create mock prices
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 10_000_000_000,
+                average: 12_500_000_000,
+                fast: 15_000_000_000,
+                fastest: 20_000_000_000,
+            },
+            max_priority_fee_per_gas: SpeedPrices {
+                safe_low: 1_000_000_000,
+                average: 2_000_000_000,
+                fast: 3_000_000_000,
+                fastest: 4_000_000_000,
+            },
+            base_fee_per_gas: 50_000_000_000,
+        };
+
+        // Mock get_prices_from_json_rpc
+        mock_gas_price_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+
+        // Mock the network method
+        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        mock_gas_price_service
+            .expect_network()
+            .return_const(network);
+
+        for (speed, expected_priority_fee) in test_data {
+            let result =
+                PriceCalculator::handle_eip1559_speed(&speed, &mock_gas_price_service).await;
+            assert!(result.is_ok());
+            let params = result.unwrap();
+            println!("speed: {:?}", speed);
+            println!("params: {:?}", params);
+            // Verify max_priority_fee matches expected value
+            assert_eq!(params.max_priority_fee_per_gas, Some(expected_priority_fee));
+
+            // Verify max_fee calculation
+            // max_fee = base_fee * multiplier + priority_fee
+            // ≈ (50 * 2.4 + priority_fee_in_gwei) Gwei
+            let max_fee = params.max_fee_per_gas.unwrap();
+            let expected_base_portion = 120_000_000_000; // 50 * 2.4 ≈ 120 Gwei
+            assert!(max_fee > expected_base_portion + expected_priority_fee - 1_000_000_000); // Allow 1 Gwei margin
+            assert!(max_fee < expected_base_portion + expected_priority_fee + 1_000_000_000);
+
+            // Verify no legacy gas price is set
+            assert!(params.gas_price.is_none());
+        }
     }
 }
