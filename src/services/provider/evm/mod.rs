@@ -1,4 +1,9 @@
-// TODO improve and add missing methods
+//! EVM Provider implementation for interacting with EVM-compatible blockchain networks.
+//!
+//! This module provides functionality to interact with EVM-based blockchains through RPC calls.
+//! It implements common operations like getting balances, sending transactions, and querying
+//! blockchain state.
+
 use alloy::{
     primitives::{TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
@@ -16,34 +21,92 @@ use crate::models::{EvmTransactionData, TransactionError, U256};
 #[cfg(test)]
 use mockall::automock;
 
+/// Provider implementation for EVM-compatible blockchain networks.
+///
+/// Wraps an HTTP RPC provider to interact with EVM chains like Ethereum, Polygon, etc.
 #[derive(Clone)]
 pub struct EvmProvider {
     provider: RootProvider<Http<Client>>,
 }
 
+/// Trait defining the interface for EVM blockchain interactions.
+///
+/// This trait provides methods for common blockchain operations like querying balances,
+/// sending transactions, and getting network state.
 #[async_trait]
 #[cfg_attr(test, automock)]
 #[allow(dead_code)]
 pub trait EvmProviderTrait: Send + Sync {
+    /// Gets the balance of an address in the native currency.
+    ///
+    /// # Arguments
+    /// * `address` - The address to query the balance for
     async fn get_balance(&self, address: &str) -> Result<U256>;
+
+    /// Gets the current block number of the chain.
     async fn get_block_number(&self) -> Result<u64>;
+
+    /// Estimates the gas required for a transaction.
+    ///
+    /// # Arguments
+    /// * `tx` - The transaction data to estimate gas for
     async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64>;
+
+    /// Gets the current gas price from the network.
     async fn get_gas_price(&self) -> Result<u128>;
+
+    /// Sends a transaction to the network.
+    ///
+    /// # Arguments
+    /// * `tx` - The transaction request to send
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<String>;
+
+    /// Sends a raw signed transaction to the network.
+    ///
+    /// # Arguments
+    /// * `tx` - The raw transaction bytes to send
     async fn send_raw_transaction(&self, tx: &[u8]) -> Result<String>;
+
+    /// Performs a health check by attempting to get the latest block number.
     async fn health_check(&self) -> Result<bool>;
+
+    /// Gets the transaction count (nonce) for an address.
+    ///
+    /// # Arguments
+    /// * `address` - The address to query the transaction count for
     async fn get_transaction_count(&self, address: &str) -> Result<u64>;
+
+    /// Gets the fee history for a range of blocks.
+    ///
+    /// # Arguments
+    /// * `block_count` - Number of blocks to get fee history for
+    /// * `newest_block` - The newest block to start from
+    /// * `reward_percentiles` - Percentiles to sample reward data from
     async fn get_fee_history(
         &self,
         block_count: u64,
         newest_block: BlockNumberOrTag,
         reward_percentiles: Vec<f64>,
     ) -> Result<FeeHistory>;
+
+    /// Gets the latest block from the network.
     async fn get_block_by_number(&self) -> Result<BlockResponse>;
+
+    /// Gets a transaction receipt by its hash.
+    ///
+    /// # Arguments
+    /// * `tx_hash` - The transaction hash to query
     async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>>;
 }
 
 impl EvmProvider {
+    /// Creates a new EVM provider instance.
+    ///
+    /// # Arguments
+    /// * `url` - The RPC endpoint URL to connect to
+    ///
+    /// # Returns
+    /// * `Result<Self>` - A new provider instance or an error
     pub fn new(url: &str) -> Result<Self> {
         let rpc_url = url.parse()?;
         let provider = ProviderBuilder::new().on_http(rpc_url);
