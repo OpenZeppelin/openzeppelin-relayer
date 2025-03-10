@@ -9,7 +9,6 @@ on:
   push:
     branches:
       - main
-      - PLAT-6353-codecov-flags
 
 # run concurrency group for the workflow
 concurrency:
@@ -187,11 +186,11 @@ jobs:
       #     --locked
 
   test:
-    # if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
-    #   == 'true' }}
+    if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
+      == 'true' }}
     permissions:
       contents: read
-    # needs: changed_files
+    needs: changed_files
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
