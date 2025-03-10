@@ -1,3 +1,39 @@
+//! Gas price calculation module for Ethereum transactions.
+//!
+//! This module provides functionality for calculating gas prices for different types of Ethereum transactions:
+//! - Legacy transactions (using `gas_price`)
+//! - EIP1559 transactions (using `max_fee_per_gas` and `max_priority_fee_per_gas`)
+//! - Speed-based transactions (automatically choosing between legacy and EIP1559 based on network support)
+//!
+//! The module implements various pricing strategies and safety mechanisms:
+//! - Gas price caps to protect against excessive fees
+//! - Dynamic base fee calculations for EIP1559 transactions
+//! - Speed-based multipliers for different transaction priorities (SafeLow, Average, Fast, Fastest)
+//! - Network-specific block time considerations for fee estimations
+//!
+//! # Example
+//! ```no_run
+//! # use your_crate::{PriceCalculator, EvmTransactionData, RelayerRepoModel, EvmGasPriceService};
+//! # async fn example<P: EvmProviderTrait>(
+//! #     tx_data: &EvmTransactionData,
+//! #     relayer: &RelayerRepoModel,
+//! #     gas_price_service: &EvmGasPriceService<P>,
+//! #     provider: &P
+//! # ) -> Result<(), TransactionError> {
+//! let price_params = PriceCalculator::get_transaction_price_params(
+//!     tx_data,
+//!     relayer,
+//!     gas_price_service,
+//!     provider
+//! ).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The module uses EIP1559-specific constants for calculating appropriate gas fees:
+//! - Base fee increase factor: 12.5% per block
+//! - Maximum base fee multiplier: 10x
+//! - Time window for fee calculation: 90 seconds
 use super::TransactionPriceParams;
 use crate::{
     models::{
@@ -13,14 +49,24 @@ type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
 const MINUTE_AND_HALF_MS: f64 = 90000.0;
 const BASE_FEE_INCREASE_FACTOR: f64 = 1.125; // 12.5% increase per block
 const MAX_BASE_FEE_MULTIPLIER: f64 = 10.0;
-
-/// Calculates gas prices for different transaction types:
-/// - Legacy transactions (gas_price)
-/// - EIP1559 transactions (max_fee_per_gas, max_priority_fee_per_gas)
-/// - Speed-based transactions (automatically chooses between legacy and EIP1559)
 pub struct PriceCalculator;
 
 impl PriceCalculator {
+    /// Calculates transaction price parameters based on the transaction type and network conditions.
+    ///
+    /// This function determines the appropriate gas pricing strategy based on the transaction type:
+    /// - For legacy transactions: calculates gas_price
+    /// - For EIP1559 transactions: calculates max_fee_per_gas and max_priority_fee_per_gas
+    /// - For speed-based transactions: automatically chooses between legacy and EIP1559 based on network support
+    ///
+    /// # Arguments
+    /// * `tx_data` - Transaction data containing type and pricing information
+    /// * `relayer` - Relayer configuration including pricing policies and caps
+    /// * `gas_price_service` - Service for fetching current gas prices from the network
+    /// * `provider` - Network provider for accessing blockchain data
+    ///
+    /// # Returns
+    /// * `Result<TransactionPriceParams, TransactionError>` - Calculated price parameters or error
     pub async fn get_transaction_price_params<P: EvmProviderTrait>(
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
@@ -63,6 +109,13 @@ impl PriceCalculator {
         })
     }
 
+    /// Handles gas price calculation for legacy transactions.
+    ///
+    /// # Arguments
+    /// * `tx_data` - Transaction data containing the gas price
+    ///
+    /// # Returns
+    /// * `Result<PriceParams, TransactionError>` - Price parameters for legacy transaction
     fn handle_legacy_transaction(
         tx_data: &EvmTransactionData,
     ) -> Result<PriceParams, TransactionError> {
@@ -77,6 +130,7 @@ impl PriceCalculator {
         })
     }
 
+    /// Handles gas price calculation for EIP1559 transactions.
     fn handle_eip1559_transaction(
         tx_data: &EvmTransactionData,
     ) -> Result<PriceParams, TransactionError> {
@@ -100,6 +154,10 @@ impl PriceCalculator {
         })
     }
 
+    /// Handles gas price calculation for speed-based transactions.
+    ///
+    /// Determines whether to use legacy or EIP1559 pricing based on network configuration
+    /// and calculates appropriate gas prices based on the requested speed.
     async fn handle_speed_transaction<P: EvmProviderTrait>(
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
@@ -119,6 +177,10 @@ impl PriceCalculator {
         }
     }
 
+    /// Calculates EIP1559 gas prices based on the requested speed.
+    ///
+    /// Uses the gas price service to fetch current network conditions and calculates
+    /// appropriate max fee and priority fee based on the speed setting.
     async fn handle_eip1559_speed<P: EvmGasPriceServiceTrait>(
         speed: &Speed,
         gas_price_service: &P,
@@ -147,6 +209,10 @@ impl PriceCalculator {
         })
     }
 
+    /// Calculates legacy gas prices based on the requested speed.
+    ///
+    /// Uses the gas price service to fetch current gas prices and applies
+    /// speed-based multipliers for legacy transactions.
     async fn handle_legacy_speed<P: EvmProviderTrait>(
         speed: &Speed,
         gas_price_service: &EvmGasPriceService<P>,
@@ -167,6 +233,10 @@ impl PriceCalculator {
         })
     }
 
+    /// Applies gas price caps to the calculated prices.
+    ///
+    /// Ensures that gas prices don't exceed the configured maximum limits and
+    /// maintains proper relationships between different price parameters.
     fn apply_gas_price_cap(
         gas_price: u128,
         max_fee_per_gas: Option<u128>,
@@ -211,7 +281,7 @@ fn get_base_fee_multiplier(network: &EvmNetwork) -> f64 {
     let block_interval_ms = network
         .average_blocktime()
         .map(|d| d.as_millis() as f64)
-        .unwrap_or(12000.0); // Fallback to mainnet block time if not specified
+        .unwrap();
 
     let n_blocks = MINUTE_AND_HALF_MS / block_interval_ms;
     f64::min(
