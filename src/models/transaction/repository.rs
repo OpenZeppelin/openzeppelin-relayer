@@ -134,6 +134,7 @@ impl EvmTransactionData {
     }
 }
 
+#[cfg(test)]
 impl Default for EvmTransactionData {
     fn default() -> Self {
         Self {

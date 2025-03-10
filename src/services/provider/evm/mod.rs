@@ -10,10 +10,11 @@ use alloy::{
 };
 use async_trait::async_trait;
 use eyre::{eyre, Result};
-#[cfg(test)]
-use mockall::automock;
 
 use crate::models::{EvmTransactionData, TransactionError, U256};
+
+#[cfg(test)]
+use mockall::automock;
 
 #[derive(Clone)]
 pub struct EvmProvider {

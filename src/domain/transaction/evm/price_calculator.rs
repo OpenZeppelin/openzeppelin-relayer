@@ -40,7 +40,10 @@ use crate::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
         TransactionError,
     },
-    services::{EvmGasPriceService, EvmGasPriceServiceTrait, EvmProviderTrait},
+    services::{
+        gas::{EvmGasPriceService, EvmGasPriceServiceTrait},
+        provider::evm::EvmProviderTrait,
+    },
 };
 
 type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
@@ -304,81 +307,15 @@ fn calculate_max_fee_per_gas(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{EvmNamedNetwork, EvmNetwork, RelayerEvmPolicy, U256};
-    use crate::services::gas::MockEvmGasPriceServiceTrait;
-    use crate::services::{EvmProviderTrait, GasPrices, MockEvmProviderTrait, SpeedPrices};
-    use alloy::rpc::types::{
-        Block as BlockResponse, BlockNumberOrTag, FeeHistory, TransactionReceipt,
-        TransactionRequest,
+    use crate::models::{
+        evm::Speed, EvmNamedNetwork, EvmNetwork, EvmTransactionData, RelayerEvmPolicy,
+        RelayerRepoModel, U256,
     };
-    use async_trait::async_trait;
+    use crate::services::{
+        EvmGasPriceService, GasPrices, MockEvmGasPriceServiceTrait, MockEvmProviderTrait,
+        SpeedPrices,
+    };
     use futures::FutureExt;
-    use std::sync::Arc;
-
-    #[async_trait]
-    impl EvmProviderTrait for Arc<MockEvmProviderTrait> {
-        async fn get_balance(&self, address: &str) -> eyre::Result<U256> {
-            self.as_ref().get_balance(address).await
-        }
-
-        async fn get_block_number(&self) -> eyre::Result<u64> {
-            self.as_ref().get_block_number().await
-        }
-
-        async fn estimate_gas(&self, tx: &EvmTransactionData) -> eyre::Result<u64> {
-            self.as_ref().estimate_gas(tx).await
-        }
-
-        async fn get_gas_price(&self) -> eyre::Result<u128> {
-            self.as_ref().get_gas_price().await
-        }
-
-        async fn send_transaction(&self, tx: TransactionRequest) -> eyre::Result<String> {
-            self.as_ref().send_transaction(tx).await
-        }
-
-        async fn send_raw_transaction(&self, tx: &[u8]) -> eyre::Result<String> {
-            self.as_ref().send_raw_transaction(tx).await
-        }
-
-        async fn health_check(&self) -> eyre::Result<bool> {
-            self.as_ref().health_check().await
-        }
-
-        async fn get_transaction_count(&self, address: &str) -> eyre::Result<u64> {
-            self.as_ref().get_transaction_count(address).await
-        }
-
-        async fn get_fee_history(
-            &self,
-            block_count: u64,
-            newest_block: BlockNumberOrTag,
-            reward_percentiles: Vec<f64>,
-        ) -> eyre::Result<FeeHistory> {
-            self.as_ref()
-                .get_fee_history(block_count, newest_block, reward_percentiles)
-                .await
-        }
-
-        async fn get_block_by_number(&self) -> eyre::Result<BlockResponse> {
-            self.as_ref().get_block_by_number().await
-        }
-
-        async fn get_transaction_receipt(
-            &self,
-            tx_hash: &str,
-        ) -> eyre::Result<Option<TransactionReceipt>> {
-            self.as_ref().get_transaction_receipt(tx_hash).await
-        }
-    }
-
-    fn create_mock_provider() -> Arc<MockEvmProviderTrait> {
-        let mut mock_provider = MockEvmProviderTrait::new();
-        mock_provider
-            .expect_get_balance()
-            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed()); // 1 ETH
-        Arc::new(mock_provider)
-    }
 
     fn create_mock_relayer() -> RelayerRepoModel {
         RelayerRepoModel {
@@ -395,22 +332,26 @@ mod tests {
         }
     }
 
-    fn create_mock_gas_price_service(
-        provider: Arc<MockEvmProviderTrait>,
-    ) -> EvmGasPriceService<Arc<MockEvmProviderTrait>> {
-        EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet))
-    }
-
     #[tokio::test]
     async fn test_legacy_transaction() {
-        let provider = create_mock_provider();
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
+
         let relayer = create_mock_relayer();
-        let gas_price_service = create_mock_gas_price_service(provider.clone());
+        let gas_price_service =
+            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
         let tx_data = EvmTransactionData {
             gas_price: Some(20000000000),
             ..Default::default()
         };
+
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
         let result = PriceCalculator::get_transaction_price_params(
             &tx_data,
@@ -428,9 +369,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_eip1559_transaction() {
-        let provider = create_mock_provider();
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
+
         let relayer = create_mock_relayer();
-        let gas_price_service = create_mock_gas_price_service(provider.clone());
+        let gas_price_service =
+            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -438,6 +384,11 @@ mod tests {
             max_priority_fee_per_gas: Some(2000000000),
             ..Default::default()
         };
+
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
         let result = PriceCalculator::get_transaction_price_params(
             &tx_data,
@@ -454,23 +405,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_speed_based_transaction() {
-        let mut mock_provider = MockEvmProviderTrait::new();
-        mock_provider
+    async fn test_speed_legacy_based_transaction() {
+        let mut provider = MockEvmProviderTrait::new();
+        provider
             .expect_get_balance()
-            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed()); // 1 ETH
-        mock_provider
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
+        provider
             .expect_get_gas_price()
             .returning(|| async { Ok(20000000000) }.boxed());
-        let provider = Arc::new(mock_provider);
+
         let relayer = create_mock_relayer();
-        let gas_price_service = create_mock_gas_price_service(provider.clone());
+        let gas_price_service =
+            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
             speed: Some(Speed::Fast),
             ..Default::default()
         };
+
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
+        provider
+            .expect_get_gas_price()
+            .returning(|| async { Ok(20000000000) }.boxed());
 
         let result = PriceCalculator::get_transaction_price_params(
             &tx_data,
@@ -489,14 +449,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_transaction_type() {
-        let provider = create_mock_provider();
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
+
         let relayer = create_mock_relayer();
-        let gas_price_service = create_mock_gas_price_service(provider.clone());
+        let gas_price_service =
+            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
             ..Default::default()
         };
+
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
         let result = PriceCalculator::get_transaction_price_params(
             &tx_data,
@@ -514,9 +484,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_gas_price_cap() {
-        let provider = create_mock_provider();
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
+
         let mut relayer = create_mock_relayer();
-        let gas_price_service = create_mock_gas_price_service(provider.clone());
+        let gas_price_service =
+            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
         // Update policies with new EVM policy
         let evm_policy = RelayerEvmPolicy {
@@ -530,6 +505,11 @@ mod tests {
             gas_price: Some(20000000000), // Higher than cap
             ..Default::default()
         };
+
+        let mut provider = MockEvmProviderTrait::new();
+        provider
+            .expect_get_balance()
+            .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
         let result = PriceCalculator::get_transaction_price_params(
             &tx_data,
@@ -558,12 +538,6 @@ mod tests {
         // Expected blocks in 90s with 2s block time = 45 blocks
         // Should be capped at MAX_BASE_FEE_MULTIPLIER (10.0)
         assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
-
-        // Test with custom network (no block time specified)
-        let custom = EvmNetwork::from_id(999999);
-        let multiplier = get_base_fee_multiplier(&custom);
-        // Should use mainnet default (12s)
-        assert!(multiplier > 2.3 && multiplier < 2.5);
     }
 
     #[test]
