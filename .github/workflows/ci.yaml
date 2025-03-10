@@ -237,10 +237,10 @@ jobs:
         env:
           LLVM_PROFILE_FILE: integration-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
-        run: cargo hack llvm-cov --no-report --feature-powerset --locked --test integration
+        run: cargo hack llvm-cov --no-report --feature-powerset --locked --test integrations
  
       - name: Generate Integration Coverage Report
-        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path integration-lcov.info --test integration
+        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path integration-lcov.info --test integrations
 
       # Properties tests coverage
       - name: Run Properties Tests
@@ -252,13 +252,35 @@ jobs:
       - name: Generate Properties Coverage Report
         run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path properties-lcov.info --test properties
 
-      - name: Upload to CodeCov
+      # Upload unit coverage
+      - name: Upload Unit Coverage to Codecov
         uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574  # v5.4.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          name: coverage
-          files: lcov.info
-          fail_ci_if_error: true
+          name: unit-coverage
+          files: unit-lcov.info
+          flags: unittests
+          fail_ci_if_error: false
+
+      # Upload integration coverage
+      - name: Upload Integration Coverage to Codecov
+        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574  # v5.4.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: integration-coverage
+          files: integration-lcov.info
+          flags: integration
+          fail_ci_if_error: false
+
+      # Upload properties coverage
+      - name: Upload Properties Coverage to Codecov
+        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574  # v5.4.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          name: properties-coverage
+          files: properties-lcov.info
+          flags: properties
+          fail_ci_if_error: false
 
   docker-scan:
     runs-on: ubuntu-latest
