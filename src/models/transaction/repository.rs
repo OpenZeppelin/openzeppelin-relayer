@@ -21,10 +21,20 @@ use super::evm::Speed;
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Pending,
-    Confirmed,
     Sent,
     Submitted,
+    Mined,
+    Confirmed,
     Failed,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TransactionUpdateRequest {
+    pub status: Option<TransactionStatus>,
+    pub sent_at: Option<String>,
+    pub confirmed_at: Option<String>,
+    pub network_data: Option<NetworkTransactionData>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +45,7 @@ pub struct TransactionRepoModel {
     pub created_at: String,
     pub sent_at: Option<String>,
     pub confirmed_at: Option<String>,
+    pub valid_until: Option<String>,
     pub network_data: NetworkTransactionData,
     pub network_type: NetworkType,
 }
@@ -213,6 +224,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     created_at: now,
                     sent_at: None,
                     confirmed_at: None,
+                    valid_until: evm_request.valid_until.clone(),
                     network_type: NetworkType::Evm,
                     network_data: NetworkTransactionData::Evm(EvmTransactionData {
                         gas_price: evm_request.gas_price,
@@ -239,6 +251,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 created_at: now,
                 sent_at: None,
                 confirmed_at: None,
+                valid_until: None,
                 network_type: NetworkType::Solana,
                 network_data: NetworkTransactionData::Solana(SolanaTransactionData {
                     recent_blockhash: None,
@@ -254,6 +267,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 created_at: now,
                 sent_at: None,
                 confirmed_at: None,
+                valid_until: None,
                 network_type: NetworkType::Stellar,
                 network_data: NetworkTransactionData::Stellar(StellarTransactionData {
                     source_account: stellar_request.source_account.clone(),
@@ -649,6 +663,4 @@ mod tests {
         });
         assert!(TxLegacy::try_from(solana_data).is_err());
     }
-
-    // Add more tests as needed...
 }

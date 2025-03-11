@@ -5,7 +5,9 @@
 //! is implemented using a `Mutex`-protected `HashMap` to store transaction
 //! data, ensuring thread-safe access in an asynchronous context.
 use crate::{
-    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus},
+    models::{
+        NetworkTransactionData, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+    },
     repositories::*,
 };
 use async_trait::async_trait;
@@ -108,6 +110,34 @@ impl InMemoryTransactionRepository {
         let mut tx = self.get_by_id(tx_id.clone()).await?;
         tx.status = status;
         self.update(tx_id, tx).await
+    }
+
+    pub async fn partial_update(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if let Some(status) = update.status {
+                tx.status = status;
+            }
+            if let Some(sent_at) = update.sent_at {
+                tx.sent_at = Some(sent_at);
+            }
+            if let Some(confirmed_at) = update.confirmed_at {
+                tx.confirmed_at = Some(confirmed_at);
+            }
+            if let Some(network_data) = update.network_data {
+                tx.network_data = network_data;
+            }
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {} not found",
+                tx_id
+            )))
+        }
     }
 
     pub async fn update_network_data(
@@ -253,6 +283,36 @@ mod tests {
             created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
             sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+            valid_until: None,
+            network_type: NetworkType::Evm,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                gas_price: Some(1000000000),
+                gas_limit: 21000,
+                nonce: Some(1),
+                value: U256::from_str("1000000000000000000").unwrap(),
+                data: Some("Ox".to_string()),
+                from: "0x".to_string(),
+                to: Some("0x".to_string()),
+                chain_id: 1,
+                signature: None,
+                hash: Some(format!("0x{}", id)),
+                speed: Some(Speed::Fast),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                raw: None,
+            }),
+        }
+    }
+
+    fn create_test_transaction_pending_state(id: &str) -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: id.to_string(),
+            relayer_id: "relayer-1".to_string(),
+            status: TransactionStatus::Pending,
+            created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: Some(1000000000),
@@ -681,5 +741,60 @@ mod tests {
         let result = repo.list_paginated(query).await.unwrap();
         assert_eq!(result.items.len(), 0);
         assert_eq!(result.total, 10);
+    }
+
+    #[tokio::test]
+    async fn test_partial_update() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("test-tx-id");
+        repo.create(tx.clone()).await.unwrap();
+
+        // Test updating only status
+        let update1 = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Sent),
+            sent_at: None,
+            confirmed_at: None,
+            network_data: None,
+        };
+        let updated_tx1 = repo
+            .partial_update("test-tx-id".to_string(), update1)
+            .await
+            .unwrap();
+        assert_eq!(updated_tx1.status, TransactionStatus::Sent);
+        assert_eq!(updated_tx1.sent_at, None);
+
+        // Test updating multiple fields
+        let update2 = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            sent_at: Some("2023-01-01T12:00:00Z".to_string()),
+            confirmed_at: Some("2023-01-01T12:05:00Z".to_string()),
+            network_data: None,
+        };
+        let updated_tx2 = repo
+            .partial_update("test-tx-id".to_string(), update2)
+            .await
+            .unwrap();
+        assert_eq!(updated_tx2.status, TransactionStatus::Confirmed);
+        assert_eq!(
+            updated_tx2.sent_at,
+            Some("2023-01-01T12:00:00Z".to_string())
+        );
+        assert_eq!(
+            updated_tx2.confirmed_at,
+            Some("2023-01-01T12:05:00Z".to_string())
+        );
+
+        // Test updating non-existent transaction
+        let update3 = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            sent_at: None,
+            confirmed_at: None,
+            network_data: None,
+        };
+        let result = repo
+            .partial_update("non-existent-id".to_string(), update3)
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RepositoryError::NotFound(_)));
     }
 }

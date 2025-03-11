@@ -204,8 +204,13 @@ impl EvmNamedNetwork {
 
             UnichainSepolia => 1_000,
 
-            Linea | Sepolia | Holesky | MantleTestnet | Moonbase | MoonbeamDev | ZkSync
-            | ZkSyncTestnet | PolygonZkEvm | PolygonZkEvmTestnet | LineaSepolia => return None,
+            Sepolia | Holesky | Linea | LineaSepolia => 12_000,
+
+            MantleTestnet => 2_000,
+
+            Moonbase | MoonbeamDev => 10_000,
+
+            ZkSync | ZkSyncTestnet | PolygonZkEvm | PolygonZkEvmTestnet => 5_000,
         }))
     }
 
@@ -639,6 +644,18 @@ impl EvmNamedNetwork {
             Aurora | AuroraTestnet => "ETH",
         }
     }
+
+    /// Returns the recommended number of confirmations needed for each network.
+    pub const fn required_confirmations(self) -> u64 {
+        use EvmNamedNetwork::*;
+
+        match self {
+            Mainnet => 12,
+            Sepolia | Holesky => 6,
+            // TODO: Add more networks
+            _ => 1,
+        }
+    }
 }
 
 impl fmt::Display for EvmNamedNetwork {
@@ -724,5 +741,80 @@ mod tests {
             "BNB"
         );
         assert_eq!(EvmNamedNetwork::Polygon.native_currency_symbol(), "POL");
+    }
+
+    #[test]
+    fn is_optimism_check() {
+        for net in [
+            EvmNamedNetwork::Optimism,
+            EvmNamedNetwork::OptimismSepolia,
+            EvmNamedNetwork::Base,
+            EvmNamedNetwork::BaseSepolia,
+            EvmNamedNetwork::UnichainSepolia,
+        ] {
+            assert!(net.is_optimism());
+        }
+        assert!(!EvmNamedNetwork::Mainnet.is_optimism());
+        assert!(!EvmNamedNetwork::Arbitrum.is_optimism());
+    }
+
+    #[test]
+    fn is_arbitrum_check() {
+        for net in [
+            EvmNamedNetwork::Arbitrum,
+            EvmNamedNetwork::ArbitrumTestnet,
+            EvmNamedNetwork::ArbitrumSepolia,
+            EvmNamedNetwork::ArbitrumNova,
+        ] {
+            assert!(net.is_arbitrum());
+        }
+        assert!(!EvmNamedNetwork::Mainnet.is_arbitrum());
+        assert!(!EvmNamedNetwork::Optimism.is_arbitrum());
+    }
+
+    #[test]
+    fn average_blocktime_values() {
+        assert_eq!(
+            EvmNamedNetwork::Mainnet.average_blocktime(),
+            Some(Duration::from_millis(12000))
+        );
+        assert_eq!(
+            EvmNamedNetwork::Optimism.average_blocktime(),
+            Some(Duration::from_millis(2000))
+        );
+        assert_eq!(EvmNamedNetwork::ZkSyncTestnet.average_blocktime(), None);
+    }
+
+    #[test]
+    fn is_legacy_check() {
+        assert!(EvmNamedNetwork::BinanceSmartChain.is_legacy());
+        assert!(EvmNamedNetwork::Celo.is_legacy());
+        assert!(!EvmNamedNetwork::Mainnet.is_legacy());
+        assert!(!EvmNamedNetwork::Polygon.is_legacy());
+    }
+
+    #[test]
+    fn is_deprecated_check() {
+        assert!(EvmNamedNetwork::Sepolia.is_deprecated());
+        assert!(EvmNamedNetwork::ArbitrumTestnet.is_deprecated());
+        assert!(!EvmNamedNetwork::Mainnet.is_deprecated());
+        assert!(!EvmNamedNetwork::Optimism.is_deprecated());
+    }
+
+    #[test]
+    fn explorer_urls_check() {
+        let mainnet = EvmNamedNetwork::Mainnet.explorer_urls().unwrap();
+        assert!(mainnet.contains(&"https://api.etherscan.io/api"));
+        assert!(mainnet.contains(&"https://etherscan.io"));
+        assert_eq!(EvmNamedNetwork::MoonbeamDev.explorer_urls(), None);
+    }
+
+    #[test]
+    fn public_rpc_urls_check() {
+        assert!(EvmNamedNetwork::Sepolia
+            .public_rpc_urls()
+            .unwrap()
+            .contains(&"https://eth-sepolia.api.onfinality.io/public"));
+        assert_eq!(EvmNamedNetwork::MoonbeamDev.public_rpc_urls(), None);
     }
 }
