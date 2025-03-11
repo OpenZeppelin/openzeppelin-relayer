@@ -647,7 +647,7 @@ impl EvmNamedNetwork {
         match self {
             Mainnet => 12,
             Sepolia | Holesky => 6,
-            // Default for all other networks
+            // TODO: Add more networks
             _ => 1,
         }
     }
