@@ -1,5 +1,5 @@
 use alloy::{
-    consensus::{SignableTransaction, TxLegacy},
+    consensus::{SignableTransaction, TxEip1559, TxLegacy},
     network::{EthereumWallet, TransactionBuilder, TxSigner},
     rpc::types::Transaction,
     signers::{
@@ -8,7 +8,7 @@ use alloy::{
     },
 };
 
-use alloy::primitives::{address, Address as AlloyAddress, FixedBytes, U256};
+use alloy::primitives::{address, Address as AlloyAddress, Bytes, FixedBytes, TxKind, U256};
 
 use async_trait::async_trait;
 
@@ -18,8 +18,8 @@ use crate::{
         SignTransactionResponseEvm, SignTypedDataRequest,
     },
     models::{
-        Address, EvmTransactionDataSignature, NetworkTransactionData, SignerError, SignerRepoModel,
-        SignerType, TransactionRepoModel,
+        Address, EvmTransactionData, EvmTransactionDataSignature, EvmTransactionDataTrait,
+        NetworkTransactionData, SignerError, SignerRepoModel, SignerType, TransactionRepoModel,
     },
     services::Signer,
 };
@@ -64,25 +64,66 @@ impl Signer for LocalSigner {
         &self,
         transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
-        let mut unsigned_tx = TxLegacy::try_from(transaction)?;
+        match transaction {
+            NetworkTransactionData::Evm(ref evm_data) => {
+                if evm_data.is_eip1559() {
+                    println!("EIP-1559 transaction");
+                    println!("transaction: {:?}", transaction);
+                    // Handle EIP-1559 transaction
+                    let mut unsigned_tx = TxEip1559::try_from(transaction)?;
 
-        let signature = self
-            .local_signer_client
-            .sign_transaction(&mut unsigned_tx)
-            .await
-            .map_err(|e| SignerError::SigningError(format!("Failed to sign transaction: {e}")))?;
+                    let signature = self
+                        .local_signer_client
+                        .sign_transaction(&mut unsigned_tx)
+                        .await
+                        .map_err(|e| {
+                            SignerError::SigningError(format!(
+                                "Failed to sign EIP-1559 transaction: {e}"
+                            ))
+                        })?;
 
-        let signed_tx = unsigned_tx.into_signed(signature);
-        let signature_bytes = signature.as_bytes();
+                    let signed_tx = unsigned_tx.into_signed(signature);
+                    let signature_bytes = signature.as_bytes();
 
-        let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
-        signed_tx.rlp_encode(&mut raw);
+                    let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
+                    signed_tx.rlp_encode(&mut raw);
 
-        Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
-            hash: signed_tx.hash().to_string(),
-            signature: EvmTransactionDataSignature::from(&signature_bytes),
-            raw,
-        }))
+                    Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
+                        hash: signed_tx.hash().to_string(),
+                        signature: EvmTransactionDataSignature::from(&signature_bytes),
+                        raw,
+                    }))
+                } else {
+                    // Handle legacy transaction
+                    let mut unsigned_tx = TxLegacy::try_from(transaction.clone())?;
+
+                    let signature = self
+                        .local_signer_client
+                        .sign_transaction(&mut unsigned_tx)
+                        .await
+                        .map_err(|e| {
+                            SignerError::SigningError(format!(
+                                "Failed to sign legacy transaction: {e}"
+                            ))
+                        })?;
+
+                    let signed_tx = unsigned_tx.into_signed(signature);
+                    let signature_bytes = signature.as_bytes();
+
+                    let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
+                    signed_tx.rlp_encode(&mut raw);
+
+                    Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
+                        hash: signed_tx.hash().to_string(),
+                        signature: EvmTransactionDataSignature::from(&signature_bytes),
+                        raw,
+                    }))
+                }
+            }
+            _ => Err(SignerError::SigningError(
+                "Not an EVM transaction".to_string(),
+            )),
+        }
     }
 }
 
