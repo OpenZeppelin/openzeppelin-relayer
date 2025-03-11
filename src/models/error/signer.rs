@@ -1,6 +1,8 @@
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::services::VaultError;
+
 use super::TransactionError;
 
 #[derive(Error, Debug, Serialize)]
@@ -20,6 +22,9 @@ pub enum SignerError {
 
     #[error("Invalid transaction: {0}")]
     InvalidTransaction(#[from] TransactionError),
+
+    #[error("Vault error: {0}")]
+    VaultError(#[from] VaultError),
 }
 
 #[derive(Error, Debug, Serialize)]

@@ -28,8 +28,10 @@ pub struct VaultTransitSignerConfig {
     pub key_name: String,
     pub address: String,
     pub namespace: Option<String>,
-    pub token: String,
+    pub role_id: String,
+    pub secret_id: String,
     pub pubkey: String,
+    pub mount_point: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

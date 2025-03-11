@@ -6,11 +6,12 @@
 //! # Architecture
 //!
 //! ```text
-//! EvmSigner
-//!   ├── TestSigner (Temporary testing private key)
-//!   ├── LocalSigner (encrypted JSON keystore)
-//!   ├── AwsKmsSigner (AWS KMS backend) [NOT SUPPORTED]
-//!   └── VaultSigner (HashiCorp Vault backend) [NOT SUPPORTED]
+//! SolanaSigner
+//!   ├── Local (Raw Key Signer)
+//!   ├── Vault (HashiCorp Vault backend)
+//!   ├── VaultCloud (HashiCorp Cloud Vault backend)
+//!   └── VaultTransit (HashiCorp Vault Transit signer, most secure)
+
 //! ```
 use async_trait::async_trait;
 mod local_signer;
@@ -28,6 +29,7 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
+    services::{VaultConfig, VaultService},
 };
 use eyre::Result;
 
@@ -100,13 +102,25 @@ impl SolanaSignerFactory {
     pub fn create_solana_signer(
         signer_model: &SignerRepoModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
-        let signer = match signer_model.config {
+        let signer = match &signer_model.config {
             SignerConfig::Test(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerConfig::Local(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerConfig::Vault(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
             SignerConfig::VaultCloud(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::VaultTransit(_) => {
-                SolanaSigner::VaultTransit(VaultTransitSigner::new(signer_model))
+            SignerConfig::VaultTransit(vault_transit_signer_config) => {
+                let vault_service = VaultService::new(VaultConfig {
+                    address: vault_transit_signer_config.address.clone(),
+                    namespace: vault_transit_signer_config.namespace.clone(),
+                    role_id: vault_transit_signer_config.role_id.clone(),
+                    secret_id: vault_transit_signer_config.secret_id.clone(),
+                    mount_path: "transit".to_string(),
+                    token_ttl: None,
+                });
+
+                return Ok(SolanaSigner::VaultTransit(VaultTransitSigner::new(
+                    signer_model,
+                    vault_service,
+                )));
             }
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));

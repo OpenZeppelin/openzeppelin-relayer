@@ -8,6 +8,7 @@
 use super::ConfigFileError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use validator::Validate;
 
 mod local;
 pub use local::*;
@@ -48,6 +49,34 @@ impl PlainOrEnvConfigValue {
 pub trait SignerConfigValidate {
     fn validate(&self) -> Result<(), ConfigFileError>;
 }
+
+pub trait ValidatableSignerConfig: SignerConfigValidate + Validate {
+    // Default implementation that uses validator::Validate
+    fn validate_with_validator(&self) -> Result<(), ConfigFileError> {
+        match Validate::validate(self) {
+            Ok(_) => Ok(()),
+            Err(errors) => {
+                // Convert validator::ValidationErrors to your ConfigFileError
+                let error_message = errors
+                    .field_errors()
+                    .iter()
+                    .map(|(field, errors)| {
+                        let messages: Vec<String> = errors
+                            .iter()
+                            .map(|error| error.message.clone().unwrap_or_default().to_string())
+                            .collect();
+                        format!("{}: {}", field, messages.join(", "))
+                    })
+                    .collect::<Vec<String>>()
+                    .join("; ");
+
+                Err(ConfigFileError::InvalidFormat(error_message))
+            }
+        }
+    }
+}
+
+impl<T> ValidatableSignerConfig for T where T: SignerConfigValidate + Validate {}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -143,9 +172,13 @@ impl SignerFileConfig {
             SignerConfig::AwsKms(_) => {
                 Err(ConfigFileError::InternalError("Not implemented".into()))
             }
-            SignerConfig::Vault(vault_config) => vault_config.validate(),
-            SignerConfig::VaultCloud(vault_cloud_config) => vault_cloud_config.validate(),
-            SignerConfig::VaultTransit(vault_transit_config) => vault_transit_config.validate(),
+            SignerConfig::Vault(vault_config) => vault_config.validate_with_validator(),
+            SignerConfig::VaultCloud(vault_cloud_config) => {
+                vault_cloud_config.validate_with_validator()
+            }
+            SignerConfig::VaultTransit(vault_transit_config) => {
+                vault_transit_config.validate_with_validator()
+            }
         }
     }
 }

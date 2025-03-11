@@ -16,7 +16,6 @@ use actix_web::web::ThinData;
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use oz_keystore::{HashicorpCloudClient, LocalClient};
-use reqwest::Client;
 
 async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
@@ -46,10 +45,14 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                     namespace: vault_config.namespace.clone(),
                     role_id: vault_config.role_id.clone(),
                     secret_id: vault_config.secret_id.clone(),
+                    mount_path: vault_config
+                        .mount_point
+                        .clone()
+                        .unwrap_or("secret".to_string()),
+                    token_ttl: None,
                 };
 
-                let client = Client::new();
-                let vault_service = VaultService { config, client };
+                let vault_service = VaultService::new(config);
                 let secret = vault_service
                     .retrieve_secret(&vault_config.key_name)
                     .await?;
@@ -83,8 +86,10 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
                     key_name: vault_transit_config.key_name.clone(),
                     address: vault_transit_config.address.clone(),
                     namespace: vault_transit_config.namespace.clone(),
-                    token: vault_transit_config.token.clone(),
+                    role_id: vault_transit_config.role_id.clone(),
+                    secret_id: vault_transit_config.secret_id.clone(),
                     pubkey: vault_transit_config.pubkey.clone(),
+                    mount_point: vault_transit_config.mount_point.clone(),
                 }),
             },
         };
