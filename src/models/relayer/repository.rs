@@ -51,7 +51,7 @@ impl RelayerNetworkPolicy {
 pub struct RelayerEvmPolicy {
     pub gas_price_cap: Option<u128>,
     pub whitelist_receivers: Option<Vec<String>>,
-    pub eip1559_pricing: bool,
+    pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
 }
@@ -61,7 +61,7 @@ impl Default for RelayerEvmPolicy {
         Self {
             gas_price_cap: None,
             whitelist_receivers: None,
-            eip1559_pricing: false,
+            eip1559_pricing: None,
             private_transactions: false,
             min_balance: DEFAULT_EVM_MIN_BALANCE,
         }

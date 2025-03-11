@@ -65,7 +65,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
             RelayerNetworkPolicy::Evm(evm) => NetworkPolicyResponse::Evm(EvmPolicyResponse {
                 gas_price_cap: evm.gas_price_cap,
                 whitelist_receivers: evm.whitelist_receivers,
-                eip1559_pricing: evm.eip1559_pricing,
+                eip1559_pricing: evm.eip1559_pricing.unwrap(),
                 min_balance: evm.min_balance,
                 private_transactions: evm.private_transactions,
             }),
