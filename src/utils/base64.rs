@@ -1,4 +1,4 @@
-// encode and decode helper functions
+// base64 encode and decode helper functions
 
 use base64::Engine;
 

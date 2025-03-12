@@ -213,13 +213,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_with_mock() {
-        let mut mock_vault_service = MockVaultServiceTrait::new();
+        let mock_vault_service = MockVaultServiceTrait::new();
         let key_name = "test-key";
-        let test_message = b"hello world";
-
-        let mock_sig_bytes = [1u8; 64];
-        let mock_sig_base64 = base64::engine::general_purpose::STANDARD.encode(&mock_sig_bytes);
-        let mock_vault_signature = format!("vault:v1:{}", mock_sig_base64);
 
         let signer = VaultTransitSigner::new_for_testing(
             key_name.to_string(),

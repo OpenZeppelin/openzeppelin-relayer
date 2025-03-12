@@ -1,3 +1,25 @@
+//! # Vault Service Module
+//!
+//! This module provides integration with HashiCorp Vault for secure secret management
+//! and cryptographic operations.
+//!
+//! ## Features
+//!
+//! - Token-based authentication using AppRole method
+//! - Automatic token caching and renewal
+//! - Secret retrieval from KV2 secrets engine
+//! - Message signing via Vault's Transit engine
+//! - Namespace support for Vault Enterprise
+//!
+//! ## Architecture
+//!
+//! ```text
+//! VaultService (implements VaultServiceTrait)
+//!   ├── Authentication (AppRole)
+//!   ├── Token Caching
+//!   ├── KV2 Secret Operations
+//!   └── Transit Signing Operations
+//! ```
 use async_trait::async_trait;
 use core::fmt;
 use log::{debug, warn};
@@ -60,7 +82,7 @@ struct TokenCache {
     expiry: Instant,
 }
 
-// Global token cache - now a HashMap keyed by VaultCacheKey
+// Global token cache - HashMap keyed by VaultCacheKey
 static TOKEN_CACHE: Lazy<RwLock<HashMap<VaultCacheKey, TokenCache>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
@@ -113,7 +135,6 @@ impl VaultConfig {
 #[cfg_attr(test, automock)]
 pub trait VaultServiceTrait: Send + Sync {
     async fn retrieve_secret(&self, key_name: &str) -> Result<String, VaultError>;
-    async fn list_secrets(&self, path: &str) -> Result<Vec<String>, VaultError>;
     async fn sign(&self, key_name: &str, message: &[u8]) -> Result<String, VaultError>;
 }
 
@@ -172,27 +193,22 @@ impl VaultService {
 
     // Create and authenticate a new vault client
     async fn create_authenticated_client(&self) -> Result<Arc<VaultClient>, VaultError> {
-        // Build client settings
         let mut auth_settings_builder = VaultClientSettingsBuilder::default();
         let address = &self.config.address;
         auth_settings_builder.address(address).verify(true);
 
-        // Add namespace if configured
         if let Some(namespace) = &self.config.namespace {
             auth_settings_builder.namespace(Some(namespace.clone()));
         }
 
-        // Build settings
         let auth_settings = auth_settings_builder.build().map_err(|e| {
             VaultError::ConfigError(format!("Failed to build Vault client settings: {}", e))
         })?;
 
-        // Create client without authentication
         let client = VaultClient::new(auth_settings).map_err(|e| {
             VaultError::ConfigError(format!("Failed to create Vault client: {}", e))
         })?;
 
-        // Authenticate and get the token
         let token = login(
             &client,
             "approle",
@@ -202,7 +218,6 @@ impl VaultService {
         .await
         .map_err(|e| VaultError::AuthenticationFailed(e.to_string()))?;
 
-        // Create a new client with the token
         let mut transit_settings_builder = VaultClientSettingsBuilder::default();
 
         transit_settings_builder
@@ -210,7 +225,6 @@ impl VaultService {
             .token(&token.client_token.clone())
             .verify(true);
 
-        // Add namespace if configured
         if let Some(namespace) = &self.config.namespace {
             transit_settings_builder.namespace(Some(namespace.clone()));
         }
@@ -219,7 +233,6 @@ impl VaultService {
             VaultError::ConfigError(format!("Failed to build Vault client settings: {}", e))
         })?;
 
-        // Create authenticated client
         let client = Arc::new(VaultClient::new(transit_settings).map_err(|e| {
             VaultError::ConfigError(format!(
                 "Failed to create authenticated Vault client: {}",
@@ -234,15 +247,12 @@ impl VaultService {
 #[async_trait]
 impl VaultServiceTrait for VaultService {
     async fn retrieve_secret(&self, key_name: &str) -> Result<String, VaultError> {
-        // Get cached or new authenticated client
         let client = self.get_client().await?;
 
-        // Retrieve the secret using KV2 engine
         let secret: serde_json::Value = kv2::read(&*client, &self.config.mount_path, key_name)
             .await
             .map_err(|e| VaultError::ClientError(e.to_string()))?;
 
-        // Extract the value from the secret
         let value = secret["value"]
             .as_str()
             .ok_or_else(|| {
@@ -253,23 +263,9 @@ impl VaultServiceTrait for VaultService {
         Ok(value)
     }
 
-    async fn list_secrets(&self, path: &str) -> Result<Vec<String>, VaultError> {
-        // Get cached or new authenticated client
-        let client = self.get_client().await?;
-
-        // List secrets at the given path
-        let keys = kv2::list(&*client, &self.config.mount_path, path)
-            .await
-            .map_err(|e| VaultError::ClientError(e.to_string()))?;
-
-        Ok(keys)
-    }
-
     async fn sign(&self, key_name: &str, message: &[u8]) -> Result<String, VaultError> {
-        // Get cached or new authenticated client
         let client = self.get_client().await?;
 
-        // Sign message using Transit engine
         let vault_signature = transit::data::sign(
             &*client,
             &self.config.mount_path,
@@ -288,106 +284,87 @@ impl VaultServiceTrait for VaultService {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use mockito::{mock, server_url};
-//     use tokio::test;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     #[test]
-//     async fn test_retrieve_secret_success() {
-//         // Create a mock server
-//         let mock_server = mockito::Server::new();
+    #[test]
+    fn test_vault_config_new() {
+        let config = VaultConfig::new(
+            "https://vault.example.com".to_string(),
+            "test-role-id".to_string(),
+            "test-secret-id".to_string(),
+            Some("test-namespace".to_string()),
+            "test-mount-path".to_string(),
+            Some(60),
+        );
 
-//         // Mock AppRole login endpoint
-//         let login_mock = mock_server.mock("POST", "/v1/auth/approle/login")
-//             .with_status(200)
-//             .with_header("content-type", "application/json")
-//             .with_body(r#"{"auth":{"client_token":"mock-token"}}"#)
-//             .create();
+        assert_eq!(config.address, "https://vault.example.com");
+        assert_eq!(config.role_id, "test-role-id");
+        assert_eq!(config.secret_id, "test-secret-id");
+        assert_eq!(config.namespace, Some("test-namespace".to_string()));
+        assert_eq!(config.mount_path, "test-mount-path");
+        assert_eq!(config.token_ttl, Some(60));
+    }
 
-//         // Mock secret retrieval endpoint
-//         let secret_mock = mock_server.mock("GET", "/v1/secret/data/test-secret")
-//             .match_header("authorization", "Bearer mock-token")
-//             .with_status(200)
-//             .with_header("content-type", "application/json")
-//             .with_body(r#"{"data":{"data":{"value":"test-value"}}}"#)
-//             .create();
+    #[test]
+    fn test_vault_cache_key() {
+        let config1 = VaultConfig {
+            address: "https://vault1.example.com".to_string(),
+            namespace: Some("namespace1".to_string()),
+            role_id: "role1".to_string(),
+            secret_id: "secret1".to_string(),
+            mount_path: "transit".to_string(),
+            token_ttl: None,
+        };
 
-//         // Create test configuration
-//         let config = VaultConfig::new(
-//             mock_server.url(),
-//             "mock-role-id".to_string(),
-//             "mock-secret-id".to_string(),
-//             None,
-//             Some("secret".to_string()),
-//             Some(300), // 5 minutes TTL for testing
-//         );
+        let config2 = VaultConfig {
+            address: "https://vault1.example.com".to_string(),
+            namespace: Some("namespace1".to_string()),
+            role_id: "role1".to_string(),
+            secret_id: "secret1".to_string(),
+            mount_path: "different-mount".to_string(),
+            token_ttl: None,
+        };
 
-//         // Create service with mocked client
-//         let service = VaultService::new(config);
+        let config3 = VaultConfig {
+            address: "https://vault2.example.com".to_string(),
+            namespace: Some("namespace1".to_string()),
+            role_id: "role1".to_string(),
+            secret_id: "secret1".to_string(),
+            mount_path: "transit".to_string(),
+            token_ttl: None,
+        };
 
-//         // Test retrieving a secret
-//         let secret = service.retrieve_secret("test-secret").await;
+        assert_eq!(config1.cache_key(), config1.cache_key());
+        assert_eq!(config1.cache_key(), config2.cache_key());
+        assert_ne!(config1.cache_key(), config3.cache_key());
+    }
 
-//         // Verify the mock was called
-//         login_mock.assert();
-//         secret_mock.assert();
+    #[test]
+    fn test_vault_cache_key_display() {
+        let key_with_namespace = VaultCacheKey {
+            address: "https://vault.example.com".to_string(),
+            role_id: "role-123".to_string(),
+            secret_id: "secret-456".to_string(),
+            namespace: Some("my-namespace".to_string()),
+        };
 
-//         // Check the result
-//         assert!(secret.is_ok());
-//         assert_eq!(secret.unwrap(), "test-value");
-//     }
+        let key_without_namespace = VaultCacheKey {
+            address: "https://vault.example.com".to_string(),
+            role_id: "role-123".to_string(),
+            secret_id: "secret-456".to_string(),
+            namespace: None,
+        };
 
-//     #[test]
-//     async fn test_token_caching() {
-//         // Create a mock server
-//         let mock_server = mockito::Server::new();
+        assert_eq!(
+            key_with_namespace.to_string(),
+            "https://vault.example.com|role-123|secret-456|my-namespace"
+        );
 
-//         // Mock AppRole login endpoint - should be called only once
-//         let login_mock = mock_server.mock("POST", "/v1/auth/approle/login")
-//             .expect(1) // This is key - we expect only ONE call
-//             .with_status(200)
-//             .with_header("content-type", "application/json")
-//             .with_body(r#"{"auth":{"client_token":"mock-token"}}"#)
-//             .create();
-
-//         // Mock secret retrieval endpoint - will be called twice
-//         let secret_mock = mock_server.mock("GET", "/v1/secret/data/test-secret")
-//             .expect(2) // We expect TWO calls with the same token
-//             .match_header("authorization", "Bearer mock-token")
-//             .with_status(200)
-//             .with_header("content-type", "application/json")
-//             .with_body(r#"{"data":{"data":{"value":"test-value"}}}"#)
-//             .create();
-
-//         // Create test configuration with short TTL
-//         let config = VaultConfig::new(
-//             mock_server.url(),
-//             "mock-role-id".to_string(),
-//             "mock-secret-id".to_string(),
-//             None,
-//             Some("secret".to_string()),
-//             Some(300), // 5 minutes TTL for testing
-//         );
-
-//         // Create service
-//         let service = VaultService::new(config);
-
-//         // First call - should authenticate
-//         let secret1 = service.retrieve_secret("test-secret").await;
-//         assert!(secret1.is_ok());
-//         assert_eq!(secret1.unwrap(), "test-value");
-
-//         // Second call - should use cached token
-//         let secret2 = service.retrieve_secret("test-secret").await;
-//         assert!(secret2.is_ok());
-//         assert_eq!(secret2.unwrap(), "test-value");
-
-//         // Verify the login mock was called exactly once
-//         login_mock.assert();
-//         secret_mock.assert();
-//     }
-
-//     // Additional tests for error cases and token expiration...
-// }
+        assert_eq!(
+            key_without_namespace.to_string(),
+            "https://vault.example.com|role-123|secret-456|"
+        );
+    }
+}
