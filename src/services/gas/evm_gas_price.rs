@@ -40,6 +40,8 @@ impl std::hash::Hash for Speed {
     }
 }
 
+const GWEI: f64 = 1e9;
+
 // calculate the multiplier for the gas estimation
 impl Speed {
     pub fn multiplier() -> [(Speed, u128); 4] {
@@ -210,7 +212,12 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
                         reward_percentiles,
                     )
                     .await
-                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))
+                    .map_err(|e| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Failed to fetch fee history data: {}",
+                            e
+                        ))
+                    })
             }
         )?;
 
@@ -230,7 +237,7 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
                             .filter_map(|block_rewards| {
                                 let reward = block_rewards[*idx];
                                 if reward > 0 {
-                                    Some(reward as f64 / 1e9)
+                                    Some(reward as f64 / GWEI)
                                 } else {
                                     None
                                 }
@@ -253,10 +260,10 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
 
         // Convert max_priority_fees to SpeedPrices
         let max_priority_fees = SpeedPrices {
-            safe_low: (max_priority_fees.get(&Speed::SafeLow).unwrap_or(&0.0) * 1e9) as u128,
-            average: (max_priority_fees.get(&Speed::Average).unwrap_or(&0.0) * 1e9) as u128,
-            fast: (max_priority_fees.get(&Speed::Fast).unwrap_or(&0.0) * 1e9) as u128,
-            fastest: (max_priority_fees.get(&Speed::Fastest).unwrap_or(&0.0) * 1e9) as u128,
+            safe_low: (max_priority_fees.get(&Speed::SafeLow).unwrap_or(&0.0) * GWEI) as u128,
+            average: (max_priority_fees.get(&Speed::Average).unwrap_or(&0.0) * GWEI) as u128,
+            fast: (max_priority_fees.get(&Speed::Fast).unwrap_or(&0.0) * GWEI) as u128,
+            fastest: (max_priority_fees.get(&Speed::Fastest).unwrap_or(&0.0) * GWEI) as u128,
         };
 
         Ok(GasPrices {

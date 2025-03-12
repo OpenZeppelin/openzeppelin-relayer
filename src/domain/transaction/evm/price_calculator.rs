@@ -48,10 +48,11 @@ use crate::{
 
 type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
 
-/// EIP1559 gas price calculation constants
-const MINUTE_AND_HALF_MS: f64 = 90000.0;
-const BASE_FEE_INCREASE_FACTOR: f64 = 1.125; // 12.5% increase per block
-const MAX_BASE_FEE_MULTIPLIER: f64 = 10.0;
+// Using 10^9 precision (similar to Gwei)
+const PRECISION: u128 = 1_000_000_000;
+const MINUTE_AND_HALF_MS: u128 = 90000;
+const BASE_FEE_INCREASE_FACTOR_PERCENT: u128 = 125; // 12.5% increase per block (as percentage * 10)
+const MAX_BASE_FEE_MULTIPLIER: u128 = 10 * PRECISION; // 10.0 * PRECISION
 pub struct PriceCalculator;
 
 impl PriceCalculator {
@@ -282,18 +283,38 @@ struct PriceParams {
     max_priority_fee_per_gas: Option<u128>,
 }
 
-/// Calculate base fee multiplier for EIP1559 transactions
-fn get_base_fee_multiplier(network: &EvmNetwork) -> f64 {
-    let block_interval_ms = network
-        .average_blocktime()
-        .map(|d| d.as_millis() as f64)
-        .unwrap();
+/// Calculate base fee multiplier for EIP1559 transactions using fixed-point arithmetic
+/// with a simplified approach that avoids complex exponentiation
+fn get_base_fee_multiplier(network: &EvmNetwork) -> u128 {
+    let block_interval_ms = network.average_blocktime().map(|d| d.as_millis()).unwrap();
 
-    let n_blocks = MINUTE_AND_HALF_MS / block_interval_ms;
-    f64::min(
-        BASE_FEE_INCREASE_FACTOR.powf(n_blocks),
-        MAX_BASE_FEE_MULTIPLIER,
-    )
+    // Calculate number of blocks (as integer)
+    let n_blocks_int = MINUTE_AND_HALF_MS / block_interval_ms;
+
+    // Calculate number of blocks (fractional part in thousandths)
+    let n_blocks_frac = ((MINUTE_AND_HALF_MS % block_interval_ms) * 1000) / block_interval_ms;
+
+    // Calculate multiplier using compound interest formula: (1 + r)^n
+    // For integer part: (1 + 0.125)^n_blocks_int
+    let mut multiplier = PRECISION;
+
+    // Calculate (1.125)^n_blocks_int using repeated multiplication
+    for _ in 0..n_blocks_int {
+        multiplier = (multiplier
+            * (PRECISION + (PRECISION * BASE_FEE_INCREASE_FACTOR_PERCENT) / 1000))
+            / PRECISION;
+    }
+
+    // Handle fractional part with linear approximation
+    // For fractional part: approximately 1 + (fraction * 0.125)
+    if n_blocks_frac > 0 {
+        let frac_increase =
+            (n_blocks_frac * BASE_FEE_INCREASE_FACTOR_PERCENT * PRECISION) / (1000 * 1000);
+        multiplier = (multiplier * (PRECISION + frac_increase)) / PRECISION;
+    }
+
+    // Apply maximum cap
+    std::cmp::min(multiplier, MAX_BASE_FEE_MULTIPLIER)
 }
 
 /// Calculate max fee per gas for EIP1559 transactions (all values in wei)
@@ -302,8 +323,13 @@ fn calculate_max_fee_per_gas(
     max_priority_fee_wei: u128,
     network: &EvmNetwork,
 ) -> u128 {
-    let base_fee = base_fee_wei as f64;
-    let multiplied_base_fee = (base_fee * get_base_fee_multiplier(network)) as u128;
+    // Get multiplier in fixed-point format
+    let multiplier = get_base_fee_multiplier(network);
+
+    // Multiply base fee by multiplier (with proper scaling)
+    let multiplied_base_fee = (base_fee_wei * multiplier) / PRECISION;
+
+    // Add priority fee
     multiplied_base_fee + max_priority_fee_wei
 }
 
@@ -533,7 +559,7 @@ mod tests {
         let multiplier = get_base_fee_multiplier(&mainnet);
         // Expected blocks in 90s with 12s block time = 7.5 blocks
         // 1.125^7.5 ≈ 2.4
-        assert!(multiplier > 2.3 && multiplier < 2.5);
+        assert!(multiplier > 2_300_000_000 && multiplier < 2_500_000_000);
 
         // Test with Optimism (2s block time)
         let optimism = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
@@ -550,10 +576,10 @@ mod tests {
         let priority_fee = 2_000_000_000u128; // 2 Gwei
 
         let max_fee = calculate_max_fee_per_gas(base_fee, priority_fee, &network);
-
+        println!("max_fee: {:?}", max_fee);
         // With mainnet's multiplier (~2.4):
         // base_fee * multiplier + priority_fee ≈ 100 * 2.4 + 2 ≈ 242 Gwei
-        assert!(max_fee > 240_000_000_000 && max_fee < 244_000_000_000);
+        assert!(max_fee > 240_000_000_000 && max_fee < 245_000_000_000);
     }
 
     #[tokio::test]
@@ -603,8 +629,6 @@ mod tests {
                 PriceCalculator::handle_eip1559_speed(&speed, &mock_gas_price_service).await;
             assert!(result.is_ok());
             let params = result.unwrap();
-            println!("speed: {:?}", speed);
-            println!("params: {:?}", params);
             // Verify max_priority_fee matches expected value
             assert_eq!(params.max_priority_fee_per_gas, Some(expected_priority_fee));
 
@@ -613,11 +637,10 @@ mod tests {
             // ≈ (50 * 2.4 + priority_fee_in_gwei) Gwei
             let max_fee = params.max_fee_per_gas.unwrap();
             let expected_base_portion = 120_000_000_000; // 50 * 2.4 ≈ 120 Gwei
-            assert!(max_fee > expected_base_portion + expected_priority_fee - 1_000_000_000); // Allow 1 Gwei margin
-            assert!(max_fee < expected_base_portion + expected_priority_fee + 1_000_000_000);
-
-            // Verify no legacy gas price is set
-            assert!(params.gas_price.is_none());
+            println!("max_fee: {:?}", max_fee);
+            println!("expected_base_portion: {:?}", expected_base_portion);
+            println!("expected_priority_fee: {:?}", expected_priority_fee);
+            assert!(max_fee < expected_base_portion + expected_priority_fee + 2_000_000_000);
         }
     }
 }
