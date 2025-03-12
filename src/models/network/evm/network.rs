@@ -200,6 +200,14 @@ impl EvmNetwork {
         }
     }
 
+    /// Returns the recommended number of confirmations needed for this network.
+    pub const fn required_confirmations(self) -> u64 {
+        match self.named() {
+            Some(named) => named.required_confirmations(),
+            None => 1, // Default for unknown networks
+        }
+    }
+
     pub const fn id(self) -> u64 {
         match *self.kind() {
             EvmNetworkKind::Named(named) => named as u64,
@@ -319,5 +327,89 @@ mod tests {
     #[should_panic(expected = "Invalid network")]
     fn test_from_network_str_invalid() {
         EvmNetwork::from_network_str("invalid-network").unwrap();
+    }
+
+    #[test]
+    fn test_eq_with_u64() {
+        let network = EvmNetwork::from_id(10);
+        assert_eq!(network, 10u64);
+        assert_ne!(network, 11u64);
+    }
+
+    #[test]
+    fn test_partial_cmp_with_u64() {
+        let network = EvmNetwork::from_id(10);
+        assert!(network < 20u64);
+        assert!(network > 5u64);
+        assert_eq!(network.partial_cmp(&10u64), Some(std::cmp::Ordering::Equal));
+    }
+
+    #[test]
+    fn test_is_ethereum() {
+        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        assert!(network.is_ethereum());
+        assert!(!network.is_optimism());
+        assert!(!network.is_arbitrum());
+        assert!(!network.is_testnet());
+    }
+
+    #[test]
+    fn test_is_arbitrum() {
+        let network = EvmNetwork::from_named(EvmNamedNetwork::Arbitrum);
+        assert!(network.is_arbitrum());
+        assert!(!network.is_optimism());
+        assert!(!network.is_ethereum());
+    }
+
+    #[test]
+    fn test_is_optimism() {
+        let network = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        assert!(network.is_optimism());
+        assert!(!network.is_arbitrum());
+        assert!(!network.is_ethereum());
+    }
+
+    #[test]
+    fn test_is_testnet() {
+        let sepolia = EvmNetwork::from_named(EvmNamedNetwork::Sepolia);
+        assert!(sepolia.is_testnet());
+        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        assert!(!mainnet.is_testnet());
+    }
+
+    #[test]
+    fn test_average_blocktime_known() {
+        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        assert!(mainnet.average_blocktime().is_some());
+    }
+
+    #[test]
+    fn test_average_blocktime_unknown() {
+        let custom = EvmNetwork::from_id(1234567);
+        assert!(custom.average_blocktime().is_none());
+    }
+
+    #[test]
+    fn test_is_legacy() {
+        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        assert!(!mainnet.is_legacy());
+        let custom = EvmNetwork::from_id(1234);
+        assert!(!custom.is_legacy());
+    }
+
+    #[test]
+    fn test_explorer_urls() {
+        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        assert!(mainnet.explorer_urls().is_some());
+        let custom = EvmNetwork::from_id(9999);
+        assert!(custom.explorer_urls().is_none());
+    }
+
+    #[test]
+    fn test_public_rpc_urls() {
+        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        assert!(mainnet.public_rpc_urls().is_some());
+        let custom = EvmNetwork::from_id(9999);
+        assert!(custom.public_rpc_urls().is_none());
     }
 }
