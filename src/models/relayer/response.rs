@@ -29,7 +29,8 @@ pub struct EvmPolicyResponse {
     pub gas_price_cap: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whitelist_receivers: Option<Vec<String>>,
-    pub eip1559_pricing: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
 }
@@ -65,7 +66,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
             RelayerNetworkPolicy::Evm(evm) => NetworkPolicyResponse::Evm(EvmPolicyResponse {
                 gas_price_cap: evm.gas_price_cap,
                 whitelist_receivers: evm.whitelist_receivers,
-                eip1559_pricing: evm.eip1559_pricing.unwrap(),
+                eip1559_pricing: evm.eip1559_pricing,
                 min_balance: evm.min_balance,
                 private_transactions: evm.private_transactions,
             }),
