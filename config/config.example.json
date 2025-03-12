@@ -24,7 +24,7 @@
       "network": "devnet",
       "paused": false,
       "notification_id": "notification-example",
-      "signer_id": "local-signer",
+      "signer_id": "local-vault-signer",
       "network_type": "solana",
       "policies": {
         "min_balance": 0,
@@ -45,7 +45,7 @@
       "network": "mainnet-beta",
       "paused": false,
       "notification_id": "notification-example",
-      "signer_id": "vault-transit-signer",
+      "signer_id": "local-signer",
       "network_type": "solana",
       "policies": {
         "min_balance": 0,
@@ -89,8 +89,8 @@
       "type": "vault",
       "config": {
         "address": "http://localhost:8200",
-        "role_id": "316a9cd5-e24b-ad4b-f00e-a22739ad10bb",
-        "secret_id": "500d6f8d-5fa9-c3f0-d253-6c99cb743c34",
+        "role_id": "1d0c83bb-8454-e852-6aff-fc9ccd8dee00",
+        "secret_id": "7e9d16e2-a78c-31dc-411b-10df097a60bd",
         "key_name": "my-app"
       }
     },
@@ -104,16 +104,6 @@
         "org_id": "470c0b6d-dcf8-4d57-98c8-1a123d2d61a3",
         "project_id": "44998acd-e314-4216-a083-f2d7d82d7349",
         "app_name": "relayer-test"
-      }
-    },
-    {
-      "id": "vault-transit-signer",
-      "type": "vault_transit",
-      "config": {
-        "pubkey": "ydnLGTcbkJFTUUAhfGM2G2Lv602PPaEY2e3Pm7cYjXE=",
-        "token": "hvs.byQGINuPGNOZnmOCS8Z936iZ",
-        "key_name": "solana",
-        "address": "http://localhost:8200"
       }
     }
   ]
