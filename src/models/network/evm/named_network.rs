@@ -204,8 +204,13 @@ impl EvmNamedNetwork {
 
             UnichainSepolia => 1_000,
 
-            Linea | Sepolia | Holesky | MantleTestnet | Moonbase | MoonbeamDev | ZkSync
-            | ZkSyncTestnet | PolygonZkEvm | PolygonZkEvmTestnet | LineaSepolia => return None,
+            Sepolia | Holesky | Linea | LineaSepolia => 12_000,
+
+            MantleTestnet => 2_000,
+
+            Moonbase | MoonbeamDev => 10_000,
+
+            ZkSync | ZkSyncTestnet | PolygonZkEvm | PolygonZkEvmTestnet => 5_000,
         }))
     }
 
@@ -777,7 +782,6 @@ mod tests {
             EvmNamedNetwork::Optimism.average_blocktime(),
             Some(Duration::from_millis(2000))
         );
-        assert_eq!(EvmNamedNetwork::ZkSyncTestnet.average_blocktime(), None);
     }
 
     #[test]

@@ -29,7 +29,8 @@ pub struct EvmPolicyResponse {
     pub gas_price_cap: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whitelist_receivers: Option<Vec<String>>,
-    pub eip1559_pricing: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
 }

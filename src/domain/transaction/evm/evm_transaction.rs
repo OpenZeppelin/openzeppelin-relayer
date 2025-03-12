@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::{
     constants::DEFAULT_TX_VALID_TIMESPAN,
-    domain::{get_transaction_price_params, transaction::Transaction},
+    domain::{transaction::Transaction, PriceCalculator},
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, EvmNetwork, NetworkTransactionData,
@@ -19,11 +19,15 @@ use crate::{
         TransactionUpdateRequest, U256,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
-    services::{EvmGasPriceService, EvmProvider, EvmSigner, Signer, TransactionCounterService},
+    services::{
+        EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
+        TransactionCounterService,
+    },
 };
 
 /// Parameters for determining the price of a transaction.
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct TransactionPriceParams {
     /// The gas price for the transaction.
     pub gas_price: Option<u128>,
@@ -43,7 +47,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
-    gas_price_service: Arc<EvmGasPriceService>,
+    gas_price_service: Arc<EvmGasPriceService<EvmProvider>>,
     signer: EvmSigner,
 }
 
@@ -72,7 +76,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
-        gas_price_service: Arc<EvmGasPriceService>,
+        gas_price_service: Arc<EvmGasPriceService<EvmProvider>>,
         signer: EvmSigner,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
@@ -226,7 +230,7 @@ impl EvmRelayerTransaction {
     }
 
     /// Returns a reference to the gas price service.
-    pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService> {
+    pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService<EvmProvider>> {
         &self.gas_price_service
     }
 
@@ -304,10 +308,17 @@ impl Transaction for EvmRelayerTransaction {
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction: {:?}", tx.id);
 
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
         // set the gas price
-        let price_params: TransactionPriceParams = get_transaction_price_params(self, &tx).await?;
+        let relayer = self.relayer();
+        let price_params: TransactionPriceParams = PriceCalculator::get_transaction_price_params(
+            &evm_data,
+            relayer,
+            &self.gas_price_service,
+            &self.provider,
+        )
+        .await?;
         debug!("Gas price: {:?}", price_params.gas_price);
-
         // increment the nonce
         let nonce = self
             .transaction_counter_service

@@ -102,6 +102,7 @@ pub struct EvmTransactionDataSignature {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
     pub gas_limit: u64,
@@ -141,6 +142,28 @@ impl EvmTransactionData {
         self.hash = Some(sig.hash);
         self.raw = Some(sig.raw);
         self
+    }
+}
+
+#[cfg(test)]
+impl Default for EvmTransactionData {
+    fn default() -> Self {
+        Self {
+            from: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".to_string(), // Standard Hardhat test address
+            to: Some("0x70997970C51812dc3A010C7d01b50e0d17dc79C8".to_string()), // Standard Hardhat test address
+            gas_price: Some(20000000000),
+            value: U256::from(1000000000000000000u128), // 1 ETH
+            data: Some("0x".to_string()),
+            nonce: Some(1),
+            chain_id: 1,
+            gas_limit: 21000,
+            hash: None,
+            signature: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        }
     }
 }
 
