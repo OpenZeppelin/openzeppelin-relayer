@@ -25,6 +25,9 @@ pub enum SignerError {
 
     #[error("Vault error: {0}")]
     VaultError(#[from] VaultError),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 #[derive(Error, Debug, Serialize)]

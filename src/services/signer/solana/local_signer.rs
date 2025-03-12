@@ -61,17 +61,21 @@ impl Signer for LocalSigner {
         &self,
         _transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
-        // TODO: not implemented
-        Ok(SignTransactionResponse::Solana(vec![]))
+        Err(SignerError::NotImplemented(
+            "sign_transaction is not implemented".to_string(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{LocalSignerConfig, SignerConfig, SignerType};
+    use crate::{
+        models::{LocalSignerConfig, SignerConfig, SignerType, SolanaTransactionData},
+        services::Signer,
+    };
 
     use super::*;
-    use solana_sdk::signature::Signer; // For Keypair::pubkey()
+    use solana_sdk::signature::Signer as SolanaSigner;
 
     // Returns a valid 32-byte seed (all bytes set to 1)
     fn valid_seed() -> Vec<u8> {
@@ -128,5 +132,69 @@ mod tests {
         let sig2 = local_signer.sign(msg2).await.unwrap();
 
         assert_ne!(sig1, sig2);
+    }
+
+    #[test]
+    fn test_pubkey_returns_correct_address() {
+        let local_signer = create_testing_signer();
+
+        let result = local_signer.pubkey();
+
+        assert!(result.is_ok());
+
+        let expected_pubkey = local_signer.local_signer_client.pubkey().to_string();
+
+        match result.unwrap() {
+            Address::Solana(pubkey) => {
+                assert_eq!(pubkey, expected_pubkey);
+            }
+            _ => panic!("Expected Address::Solana variant"),
+        }
+    }
+
+    #[test]
+    fn test_pubkey_matches_keypair_pubkey() {
+        let seed = valid_seed();
+        let model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: seed.clone(),
+            }),
+        };
+
+        let local_signer = LocalSigner::new(&model);
+
+        let pubkey_result = local_signer.pubkey();
+        assert!(pubkey_result.is_ok());
+
+        let direct_keypair = Keypair::from_seed(&seed).expect("invalid keypair");
+        let expected_pubkey = direct_keypair.pubkey().to_string();
+
+        match pubkey_result.unwrap() {
+            Address::Solana(pubkey) => {
+                assert_eq!(pubkey, expected_pubkey);
+            }
+            _ => panic!("Expected Address::Solana variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_not_implemented() {
+        let local_signer = create_testing_signer();
+        let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            fee_payer: "test".to_string(),
+            hash: None,
+            recent_blockhash: None,
+            instructions: vec![],
+        });
+
+        let result = local_signer.sign_transaction(transaction_data).await;
+
+        match result {
+            Err(SignerError::NotImplemented(msg)) => {
+                assert_eq!(msg, "sign_transaction is not implemented".to_string());
+            }
+            _ => panic!("Expected SignerError::NotImplemented"),
+        }
     }
 }
