@@ -88,7 +88,7 @@ pub struct AwsKmsSignerFileConfig {}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase", content = "config")]
-pub enum SignerConfig {
+pub enum SignerFileConfigEnum {
     Test(TestSignerFileConfig),
     Local(LocalSignerFileConfig),
     AwsKms(AwsKmsSignerFileConfig),
@@ -99,45 +99,45 @@ pub enum SignerConfig {
     VaultTransit(VaultTransitSignerFileConfig),
 }
 
-impl SignerConfig {
+impl SignerFileConfigEnum {
     pub fn get_local(&self) -> Option<&LocalSignerFileConfig> {
         match self {
-            SignerConfig::Local(local) => Some(local),
+            SignerFileConfigEnum::Local(local) => Some(local),
             _ => None,
         }
     }
 
     pub fn get_vault(&self) -> Option<&VaultSignerFileConfig> {
         match self {
-            SignerConfig::Vault(vault) => Some(vault),
+            SignerFileConfigEnum::Vault(vault) => Some(vault),
             _ => None,
         }
     }
 
     pub fn get_vault_cloud(&self) -> Option<&VaultCloudSignerFileConfig> {
         match self {
-            SignerConfig::VaultCloud(vault_cloud) => Some(vault_cloud),
+            SignerFileConfigEnum::VaultCloud(vault_cloud) => Some(vault_cloud),
             _ => None,
         }
     }
 
     pub fn get_vault_transit(&self) -> Option<&VaultTransitSignerFileConfig> {
         match self {
-            SignerConfig::VaultTransit(vault_transit) => Some(vault_transit),
+            SignerFileConfigEnum::VaultTransit(vault_transit) => Some(vault_transit),
             _ => None,
         }
     }
 
     pub fn get_test(&self) -> Option<&TestSignerFileConfig> {
         match self {
-            SignerConfig::Test(test) => Some(test),
+            SignerFileConfigEnum::Test(test) => Some(test),
             _ => None,
         }
     }
 
     pub fn get_aws_kms(&self) -> Option<&AwsKmsSignerFileConfig> {
         match self {
-            SignerConfig::AwsKms(aws_kms) => Some(aws_kms),
+            SignerFileConfigEnum::AwsKms(aws_kms) => Some(aws_kms),
             _ => None,
         }
     }
@@ -148,7 +148,7 @@ impl SignerConfig {
 pub struct SignerFileConfig {
     pub id: String,
     #[serde(flatten)]
-    pub config: SignerConfig,
+    pub config: SignerFileConfigEnum,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -167,16 +167,18 @@ impl SignerFileConfig {
         }
 
         match &self.config {
-            SignerConfig::Test(_) => Ok(()),
-            SignerConfig::Local(local_config) => local_config.validate(),
-            SignerConfig::AwsKms(_) => {
+            SignerFileConfigEnum::Test(_) => Ok(()),
+            SignerFileConfigEnum::Local(local_config) => local_config.validate(),
+            SignerFileConfigEnum::AwsKms(_) => {
                 Err(ConfigFileError::InternalError("Not implemented".into()))
             }
-            SignerConfig::Vault(vault_config) => SignerConfigValidate::validate(vault_config),
-            SignerConfig::VaultCloud(vault_cloud_config) => {
+            SignerFileConfigEnum::Vault(vault_config) => {
+                SignerConfigValidate::validate(vault_config)
+            }
+            SignerFileConfigEnum::VaultCloud(vault_cloud_config) => {
                 SignerConfigValidate::validate(vault_cloud_config)
             }
-            SignerConfig::VaultTransit(vault_transit_config) => {
+            SignerFileConfigEnum::VaultTransit(vault_transit_config) => {
                 SignerConfigValidate::validate(vault_transit_config)
             }
         }
@@ -451,13 +453,16 @@ mod tests {
     fn test_signers_file_config_new() {
         let signer = SignerFileConfig {
             id: "test-signer".to_string(),
-            config: SignerConfig::Test(TestSignerFileConfig {}),
+            config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
         };
 
         let config = SignersFileConfig::new(vec![signer.clone()]);
         assert_eq!(config.signers.len(), 1);
         assert_eq!(config.signers[0].id, "test-signer");
-        assert!(matches!(config.signers[0].config, SignerConfig::Test(_)));
+        assert!(matches!(
+            config.signers[0].config,
+            SignerFileConfigEnum::Test(_)
+        ));
     }
 
     #[test]
@@ -466,8 +471,8 @@ mod tests {
             "type": "test",
             "config": {}
         });
-        let parsed: SignerConfig = serde_json::from_value(test_config).unwrap();
-        assert!(matches!(parsed, SignerConfig::Test(_)));
+        let parsed: SignerFileConfigEnum = serde_json::from_value(test_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::Test(_)));
 
         let local_config = json!({
             "type": "local",
@@ -479,8 +484,8 @@ mod tests {
                 }
             }
         });
-        let parsed: SignerConfig = serde_json::from_value(local_config).unwrap();
-        assert!(matches!(parsed, SignerConfig::Local(_)));
+        let parsed: SignerFileConfigEnum = serde_json::from_value(local_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::Local(_)));
 
         let vault_config = json!({
             "type": "vault",
@@ -491,8 +496,8 @@ mod tests {
                 "key_name": "test-key"
             }
         });
-        let parsed: SignerConfig = serde_json::from_value(vault_config).unwrap();
-        assert!(matches!(parsed, SignerConfig::Vault(_)));
+        let parsed: SignerFileConfigEnum = serde_json::from_value(vault_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::Vault(_)));
 
         let vault_cloud_config = json!({
             "type": "vault_cloud",
@@ -505,8 +510,8 @@ mod tests {
                 "key_name": "cloud-key"
             }
         });
-        let parsed: SignerConfig = serde_json::from_value(vault_cloud_config).unwrap();
-        assert!(matches!(parsed, SignerConfig::VaultCloud(_)));
+        let parsed: SignerFileConfigEnum = serde_json::from_value(vault_cloud_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::VaultCloud(_)));
 
         let vault_transit_config = json!({
             "type": "vault_transit",
@@ -518,20 +523,20 @@ mod tests {
                 "pubkey": "test-pubkey"
             }
         });
-        let parsed: SignerConfig = serde_json::from_value(vault_transit_config).unwrap();
-        assert!(matches!(parsed, SignerConfig::VaultTransit(_)));
+        let parsed: SignerFileConfigEnum = serde_json::from_value(vault_transit_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::VaultTransit(_)));
 
         let aws_kms_config = json!({
             "type": "awskms",
             "config": {}
         });
-        let parsed: SignerConfig = serde_json::from_value(aws_kms_config).unwrap();
-        assert!(matches!(parsed, SignerConfig::AwsKms(_)));
+        let parsed: SignerFileConfigEnum = serde_json::from_value(aws_kms_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::AwsKms(_)));
     }
 
     #[test]
     fn test_get_methods_for_signer_config() {
-        let test_config = SignerConfig::Test(TestSignerFileConfig {});
+        let test_config = SignerFileConfigEnum::Test(TestSignerFileConfig {});
         assert!(test_config.get_test().is_some());
         assert!(test_config.get_local().is_none());
         assert!(test_config.get_vault().is_none());
@@ -539,7 +544,7 @@ mod tests {
         assert!(test_config.get_vault_transit().is_none());
         assert!(test_config.get_aws_kms().is_none());
 
-        let local_config = SignerConfig::Local(LocalSignerFileConfig {
+        let local_config = SignerFileConfigEnum::Local(LocalSignerFileConfig {
             path: "test-path".to_string(),
             passphrase: PlainOrEnvConfigValue::Plain {
                 value: "test-passphrase".to_string(),
@@ -552,7 +557,7 @@ mod tests {
         assert!(local_config.get_vault_transit().is_none());
         assert!(local_config.get_aws_kms().is_none());
 
-        let vault_config = SignerConfig::Vault(VaultSignerFileConfig {
+        let vault_config = SignerFileConfigEnum::Vault(VaultSignerFileConfig {
             address: "https://vault.example.com".to_string(),
             namespace: None,
             role_id: "role-123".to_string(),
@@ -567,7 +572,7 @@ mod tests {
         assert!(vault_config.get_vault_transit().is_none());
         assert!(vault_config.get_aws_kms().is_none());
 
-        let vault_cloud_config = SignerConfig::VaultCloud(VaultCloudSignerFileConfig {
+        let vault_cloud_config = SignerFileConfigEnum::VaultCloud(VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
             client_secret: "secret-abc".to_string(),
             org_id: "org-456".to_string(),
@@ -582,15 +587,16 @@ mod tests {
         assert!(vault_cloud_config.get_vault_transit().is_none());
         assert!(vault_cloud_config.get_aws_kms().is_none());
 
-        let vault_transit_config = SignerConfig::VaultTransit(VaultTransitSignerFileConfig {
-            key_name: "transit-key".to_string(),
-            address: "https://vault.example.com".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
-            pubkey: "test-pubkey".to_string(),
-            mount_point: None,
-            namespace: None,
-        });
+        let vault_transit_config =
+            SignerFileConfigEnum::VaultTransit(VaultTransitSignerFileConfig {
+                key_name: "transit-key".to_string(),
+                address: "https://vault.example.com".to_string(),
+                role_id: "role-123".to_string(),
+                secret_id: "secret-456".to_string(),
+                pubkey: "test-pubkey".to_string(),
+                mount_point: None,
+                namespace: None,
+            });
         assert!(vault_transit_config.get_test().is_none());
         assert!(vault_transit_config.get_local().is_none());
         assert!(vault_transit_config.get_vault().is_none());
@@ -598,7 +604,7 @@ mod tests {
         assert!(vault_transit_config.get_vault_transit().is_some());
         assert!(vault_transit_config.get_aws_kms().is_none());
 
-        let aws_kms_config = SignerConfig::AwsKms(AwsKmsSignerFileConfig {});
+        let aws_kms_config = SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {});
         assert!(aws_kms_config.get_test().is_none());
         assert!(aws_kms_config.get_local().is_none());
         assert!(aws_kms_config.get_vault().is_none());

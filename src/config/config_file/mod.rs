@@ -135,7 +135,7 @@ impl Config {
                     ))
                 })?;
 
-            if let SignerConfig::Test(_) = signer_config.config {
+            if let SignerFileConfigEnum::Test(_) = signer_config.config {
                 // ensure that only testnets are used with test signers
                 match relayer.network_type {
                     ConfigFileNetworkType::Evm => {
@@ -252,7 +252,7 @@ mod tests {
             signers: vec![
                 SignerFileConfig {
                     id: "test-1".to_string(),
-                    config: SignerConfig::Local(LocalSignerFileConfig {
+                    config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
                         path: "examples/basic-example/config/keys/local-signer.json".to_string(),
                         passphrase: PlainOrEnvConfigValue::Plain {
                             value: "test".to_string(),
@@ -261,7 +261,7 @@ mod tests {
                 },
                 SignerFileConfig {
                     id: "test-type".to_string(),
-                    config: SignerConfig::Test(TestSignerFileConfig {}),
+                    config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
                 },
             ],
             notifications: vec![NotificationFileConfig {

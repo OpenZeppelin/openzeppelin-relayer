@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::{
-    config::{Config, SignerConfig as ConfigFileSignerConfig, SignerFileConfig},
+    config::{Config, SignerFileConfig, SignerFileConfigEnum},
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
         SignerConfig, SignerRepoModel, VaultTransitSignerConfig,
@@ -28,13 +28,13 @@ use oz_keystore::{HashicorpCloudClient, LocalClient};
 /// - Vault Transit signers that use HashiCorp Vault's Transit engine for signing
 async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
     let signer_repo_model = match &signer.config {
-        ConfigFileSignerConfig::Test(_) => SignerRepoModel {
+        SignerFileConfigEnum::Test(_) => SignerRepoModel {
             id: signer.id.clone(),
             config: SignerConfig::Test(LocalSignerConfig {
                 raw_key: unsafe_generate_random_private_key(),
             }),
         },
-        ConfigFileSignerConfig::Local(local_signer) => {
+        SignerFileConfigEnum::Local(local_signer) => {
             let passphrase = local_signer.passphrase.get_value()?;
             let raw_key =
                 LocalClient::load(Path::new(&local_signer.path).to_path_buf(), passphrase);
@@ -43,11 +43,11 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 config: SignerConfig::Local(LocalSignerConfig { raw_key }),
             }
         }
-        ConfigFileSignerConfig::AwsKms(_) => SignerRepoModel {
+        SignerFileConfigEnum::AwsKms(_) => SignerRepoModel {
             id: signer.id.clone(),
             config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
         },
-        ConfigFileSignerConfig::Vault(vault_config) => {
+        SignerFileConfigEnum::Vault(vault_config) => {
             let config = VaultConfig {
                 address: vault_config.address.clone(),
                 namespace: vault_config.namespace.clone(),
@@ -71,7 +71,7 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
             }
         }
-        ConfigFileSignerConfig::VaultCloud(vault_cloud_config) => {
+        SignerFileConfigEnum::VaultCloud(vault_cloud_config) => {
             let client = HashicorpCloudClient::new(
                 vault_cloud_config.client_id.clone(),
                 vault_cloud_config.client_secret.clone(),
@@ -88,7 +88,7 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
             }
         }
-        ConfigFileSignerConfig::VaultTransit(vault_transit_config) => SignerRepoModel {
+        SignerFileConfigEnum::VaultTransit(vault_transit_config) => SignerRepoModel {
             id: signer.id.clone(),
             config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
                 key_name: vault_transit_config.key_name.clone(),
@@ -221,7 +221,7 @@ mod tests {
     async fn test_process_signer_test() {
         let signer = SignerFileConfig {
             id: "test-signer".to_string(),
-            config: ConfigFileSignerConfig::Test(TestSignerFileConfig {}),
+            config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
         };
 
         let result = process_signer(&signer).await;
@@ -248,7 +248,7 @@ mod tests {
     async fn test_process_signer_vault_transit() -> Result<()> {
         let signer = SignerFileConfig {
             id: "vault-transit-signer".to_string(),
-            config: ConfigFileSignerConfig::VaultTransit(VaultTransitSignerFileConfig {
+            config: SignerFileConfigEnum::VaultTransit(VaultTransitSignerFileConfig {
                 key_name: "test-transit-key".to_string(),
                 address: "https://vault.example.com".to_string(),
                 namespace: Some("test-namespace".to_string()),
@@ -290,7 +290,7 @@ mod tests {
     async fn test_process_signer_aws_kms() -> Result<()> {
         let signer = SignerFileConfig {
             id: "aws-kms-signer".to_string(),
-            config: ConfigFileSignerConfig::AwsKms(AwsKmsSignerFileConfig {}),
+            config: SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {}),
         };
 
         let result = process_signer(&signer).await;
