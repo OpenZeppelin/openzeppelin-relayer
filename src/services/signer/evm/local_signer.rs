@@ -66,8 +66,6 @@ impl Signer for LocalSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         let evm_data = transaction.get_evm_transaction_data()?;
         if evm_data.is_eip1559() {
-            println!("EIP-1559 transaction");
-            println!("transaction: {:?}", transaction);
             // Handle EIP-1559 transaction
             let mut unsigned_tx = TxEip1559::try_from(transaction)?;
 
@@ -290,7 +288,6 @@ mod tests {
                 // Verify signature components
                 assert_eq!(signed_tx.signature.r.len(), 64); // 32 bytes in hex
                 assert_eq!(signed_tx.signature.s.len(), 64); // 32 bytes in hex
-                println!("signed_tx.signature.v: {:?}", signed_tx.signature.v);
                 assert!(signed_tx.signature.v == 0 || signed_tx.signature.v == 1);
                 // EIP-1559 v values
             }
