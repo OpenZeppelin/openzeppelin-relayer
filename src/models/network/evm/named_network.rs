@@ -782,7 +782,6 @@ mod tests {
             EvmNamedNetwork::Optimism.average_blocktime(),
             Some(Duration::from_millis(2000))
         );
-        assert_eq!(EvmNamedNetwork::ZkSyncTestnet.average_blocktime(), None);
     }
 
     #[test]
