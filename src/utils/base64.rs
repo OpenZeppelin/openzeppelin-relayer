@@ -8,3 +8,19 @@ pub fn base64_encode(message: &[u8]) -> String {
 pub fn base64_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64::engine::general_purpose::STANDARD.decode(data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_base64_encode() {
+        assert_eq!(base64_encode(b"Hello, world!"), "SGVsbG8sIHdvcmxkIQ==");
+    }
+
+    #[test]
+    fn test_base64_decode() {
+        let decoded = base64_decode("SGVsbG8sIHdvcmxkIQ==").unwrap();
+        assert_eq!(decoded, b"Hello, world!");
+    }
+}
