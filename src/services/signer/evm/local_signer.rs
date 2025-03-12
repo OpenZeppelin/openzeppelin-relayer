@@ -80,7 +80,14 @@ impl Signer for LocalSigner {
                 })?;
 
             let signed_tx = unsigned_tx.into_signed(signature);
-            let signature_bytes = signature.as_bytes();
+            let mut signature_bytes = signature.as_bytes();
+
+            // Adjust v value for EIP-1559 (27/28 -> 0/1)
+            if signature_bytes[64] == 27 {
+                signature_bytes[64] = 0;
+            } else if signature_bytes[64] == 28 {
+                signature_bytes[64] = 1;
+            }
 
             let mut raw = Vec::with_capacity(signed_tx.eip2718_encoded_length());
             signed_tx.eip2718_encode(&mut raw);
@@ -251,6 +258,63 @@ mod tests {
 
         let result = signer.sign_transaction(tx).await.unwrap();
         match result {
+            SignTransactionResponse::Evm(signed_tx) => {
+                assert!(!signed_tx.hash.is_empty());
+                assert!(!signed_tx.raw.is_empty());
+                assert!(!signed_tx.signature.sig.is_empty());
+            }
+            _ => panic!("Expected EVM transaction response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_eip1559_transaction() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let mut tx = create_test_transaction();
+
+        // Convert to EIP-1559 transaction by setting max_fee_per_gas and max_priority_fee_per_gas
+        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
+            evm_tx.gas_price = None;
+            evm_tx.max_fee_per_gas = Some(30_000_000_000);
+            evm_tx.max_priority_fee_per_gas = Some(2_000_000_000);
+        }
+
+        let result = signer.sign_transaction(tx).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            SignTransactionResponse::Evm(signed_tx) => {
+                assert!(!signed_tx.hash.is_empty());
+                assert!(!signed_tx.raw.is_empty());
+                assert!(!signed_tx.signature.sig.is_empty());
+                // Verify signature components
+                assert_eq!(signed_tx.signature.r.len(), 64); // 32 bytes in hex
+                assert_eq!(signed_tx.signature.s.len(), 64); // 32 bytes in hex
+                println!("signed_tx.signature.v: {:?}", signed_tx.signature.v);
+                assert!(signed_tx.signature.v == 0 || signed_tx.signature.v == 1);
+                // EIP-1559 v values
+            }
+            _ => panic!("Expected EVM transaction response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_eip1559_transaction_with_contract_creation() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let mut tx = create_test_transaction();
+
+        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
+            evm_tx.to = None;
+            evm_tx.data = Some("0x6080604000".to_string()); // Minimal valid hex string for test
+            evm_tx.gas_price = None;
+            evm_tx.max_fee_per_gas = Some(30_000_000_000);
+            evm_tx.max_priority_fee_per_gas = Some(2_000_000_000);
+        }
+
+        let result = signer.sign_transaction(tx).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
             SignTransactionResponse::Evm(signed_tx) => {
                 assert!(!signed_tx.hash.is_empty());
                 assert!(!signed_tx.raw.is_empty());
