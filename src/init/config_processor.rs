@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::{
-    config::{Config, SignerConfig as ConfigFileSignerConfig},
+    config::{Config, SignerConfig as ConfigFileSignerConfig, SignerFileConfig},
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
         SignerConfig, SignerRepoModel, VaultTransitSignerConfig,
@@ -17,82 +17,104 @@ use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use oz_keystore::{HashicorpCloudClient, LocalClient};
 
+/// Process a signer configuration from the config file and convert it into a `SignerRepoModel`.
+///
+/// This function handles different types of signers including:
+/// - Test signers with randomly generated keys
+/// - Local signers with keys loaded from keystore files
+/// - AWS KMS signers
+/// - Vault signers that retrieve private keys from HashiCorp Vault
+/// - Vault Cloud signers that retrieve private keys from HashiCorp Cloud
+/// - Vault Transit signers that use HashiCorp Vault's Transit engine for signing
+async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
+    let signer_repo_model = match &signer.config {
+        ConfigFileSignerConfig::Test(_) => SignerRepoModel {
+            id: signer.id.clone(),
+            config: SignerConfig::Test(LocalSignerConfig {
+                raw_key: unsafe_generate_random_private_key(),
+            }),
+        },
+        ConfigFileSignerConfig::Local(local_signer) => {
+            let passphrase = local_signer.passphrase.get_value()?;
+            let raw_key =
+                LocalClient::load(Path::new(&local_signer.path).to_path_buf(), passphrase);
+            SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::Local(LocalSignerConfig { raw_key }),
+            }
+        }
+        ConfigFileSignerConfig::AwsKms(_) => SignerRepoModel {
+            id: signer.id.clone(),
+            config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
+        },
+        ConfigFileSignerConfig::Vault(vault_config) => {
+            let config = VaultConfig {
+                address: vault_config.address.clone(),
+                namespace: vault_config.namespace.clone(),
+                role_id: vault_config.role_id.clone(),
+                secret_id: vault_config.secret_id.clone(),
+                mount_path: vault_config
+                    .mount_point
+                    .clone()
+                    .unwrap_or("secret".to_string()),
+                token_ttl: None,
+            };
+
+            let vault_service = VaultService::new(config);
+            let secret = vault_service
+                .retrieve_secret(&vault_config.key_name)
+                .await?;
+            let raw_key = hex::decode(&secret)?;
+
+            SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
+            }
+        }
+        ConfigFileSignerConfig::VaultCloud(vault_cloud_config) => {
+            let client = HashicorpCloudClient::new(
+                vault_cloud_config.client_id.clone(),
+                vault_cloud_config.client_secret.clone(),
+                vault_cloud_config.org_id.clone(),
+                vault_cloud_config.project_id.clone(),
+                vault_cloud_config.app_name.clone(),
+            );
+
+            let response = client.get_secret(&vault_cloud_config.key_name).await?;
+            let raw_key = hex::decode(&response.secret.static_version.value)?;
+
+            SignerRepoModel {
+                id: signer.id.clone(),
+                config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
+            }
+        }
+        ConfigFileSignerConfig::VaultTransit(vault_transit_config) => SignerRepoModel {
+            id: signer.id.clone(),
+            config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
+                key_name: vault_transit_config.key_name.clone(),
+                address: vault_transit_config.address.clone(),
+                namespace: vault_transit_config.namespace.clone(),
+                role_id: vault_transit_config.role_id.clone(),
+                secret_id: vault_transit_config.secret_id.clone(),
+                pubkey: vault_transit_config.pubkey.clone(),
+                mount_point: vault_transit_config.mount_point.clone(),
+            }),
+        },
+    };
+
+    Ok(signer_repo_model)
+}
+
+/// Process all signers from the config file and store them in the repository.
+///
+/// For each signer in the config file:
+/// 1. Process it using `process_signer`
+/// 2. Store the resulting model in the repository
+///
+/// This function processes signers in parallel using futures.
 async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
-        let signer_repo_model = match &signer.config {
-            ConfigFileSignerConfig::Test(_) => SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::Test(LocalSignerConfig {
-                    raw_key: unsafe_generate_random_private_key(),
-                }),
-            },
-            ConfigFileSignerConfig::Local(local_signer) => {
-                let passphrase = local_signer.passphrase.get_value()?;
-                let raw_key =
-                    LocalClient::load(Path::new(&local_signer.path).to_path_buf(), passphrase);
-                SignerRepoModel {
-                    id: signer.id.clone(),
-                    config: SignerConfig::Local(LocalSignerConfig { raw_key }),
-                }
-            }
-            ConfigFileSignerConfig::AwsKms(_) => SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
-            },
-            ConfigFileSignerConfig::Vault(vault_config) => {
-                let config = VaultConfig {
-                    address: vault_config.address.clone(),
-                    namespace: vault_config.namespace.clone(),
-                    role_id: vault_config.role_id.clone(),
-                    secret_id: vault_config.secret_id.clone(),
-                    mount_path: vault_config
-                        .mount_point
-                        .clone()
-                        .unwrap_or("secret".to_string()),
-                    token_ttl: None,
-                };
-
-                let vault_service = VaultService::new(config);
-                let secret = vault_service
-                    .retrieve_secret(&vault_config.key_name)
-                    .await?;
-                let raw_key = hex::decode(&secret)?;
-
-                SignerRepoModel {
-                    id: signer.id.clone(),
-                    config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
-                }
-            }
-            ConfigFileSignerConfig::VaultCloud(vault_cloud_config) => {
-                let client = HashicorpCloudClient::new(
-                    vault_cloud_config.client_id.clone(),
-                    vault_cloud_config.client_secret.clone(),
-                    vault_cloud_config.org_id.clone(),
-                    vault_cloud_config.project_id.clone(),
-                    vault_cloud_config.app_name.clone(),
-                );
-
-                let response = client.get_secret(&vault_cloud_config.key_name).await?;
-                let raw_key = hex::decode(&response.secret.static_version.value)?;
-
-                SignerRepoModel {
-                    id: signer.id.clone(),
-                    config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
-                }
-            }
-            ConfigFileSignerConfig::VaultTransit(vault_transit_config) => SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
-                    key_name: vault_transit_config.key_name.clone(),
-                    address: vault_transit_config.address.clone(),
-                    namespace: vault_transit_config.namespace.clone(),
-                    role_id: vault_transit_config.role_id.clone(),
-                    secret_id: vault_transit_config.secret_id.clone(),
-                    pubkey: vault_transit_config.pubkey.clone(),
-                    mount_point: vault_transit_config.mount_point.clone(),
-                }),
-            },
-        };
+        let signer_repo_model = process_signer(signer).await?;
 
         app_state
             .signer_repository
@@ -108,6 +130,13 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
     Ok(())
 }
 
+/// Process all notification configurations from the config file and store them in the repository.
+///
+/// For each notification in the config file:
+/// 1. Convert it to a repository model
+/// 2. Store the resulting model in the repository
+///
+/// This function processes notifications in parallel using futures.
 async fn process_notifications(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
     let notification_futures = config_file.notifications.iter().map(|notification| async {
         let notification_repo_model = NotificationRepoModel::try_from(notification.clone())
@@ -127,6 +156,16 @@ async fn process_notifications(config_file: &Config, app_state: &ThinData<AppSta
     Ok(())
 }
 
+/// Process all relayer configurations from the config file and store them in the repository.
+///
+/// For each relayer in the config file:
+/// 1. Convert it to a repository model
+/// 2. Retrieve the associated signer
+/// 3. Create a signer service
+/// 4. Get the signer's address and add it to the relayer model
+/// 5. Store the resulting model in the repository
+///
+/// This function processes relayers in parallel using futures.
 async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
     let signers = app_state.signer_repository.list_all().await?;
 
@@ -158,9 +197,118 @@ async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) 
     Ok(())
 }
 
+/// Process a complete configuration file by initializing all repositories.
+///
+/// This function processes the entire configuration file in the following order:
+/// 1. Process signers
+/// 2. Process notifications
+/// 3. Process relayers
 pub async fn process_config_file(config_file: Config, app_state: ThinData<AppState>) -> Result<()> {
     process_signers(&config_file, &app_state).await?;
     process_notifications(&config_file, &app_state).await?;
     process_relayers(&config_file, &app_state).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        AwsKmsSignerFileConfig, TestSignerFileConfig, VaultTransitSignerFileConfig,
+    };
+
+    #[tokio::test]
+    async fn test_process_signer_test() {
+        let signer = SignerFileConfig {
+            id: "test-signer".to_string(),
+            config: ConfigFileSignerConfig::Test(TestSignerFileConfig {}),
+        };
+
+        let result = process_signer(&signer).await;
+
+        assert!(
+            result.is_ok(),
+            "Failed to process test signer: {:?}",
+            result.err()
+        );
+        let model = result.unwrap();
+
+        assert_eq!(model.id, "test-signer");
+
+        match model.config {
+            SignerConfig::Test(config) => {
+                assert!(!config.raw_key.is_empty());
+                assert_eq!(config.raw_key.len(), 32);
+            }
+            _ => panic!("Expected Test config"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_signer_vault_transit() -> Result<()> {
+        let signer = SignerFileConfig {
+            id: "vault-transit-signer".to_string(),
+            config: ConfigFileSignerConfig::VaultTransit(VaultTransitSignerFileConfig {
+                key_name: "test-transit-key".to_string(),
+                address: "https://vault.example.com".to_string(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: "test-role".to_string(),
+                secret_id: "test-secret".to_string(),
+                pubkey: "test-pubkey".to_string(),
+                mount_point: Some("transit".to_string()),
+            }),
+        };
+
+        let result = process_signer(&signer).await;
+
+        assert!(
+            result.is_ok(),
+            "Failed to process vault transit signer: {:?}",
+            result.err()
+        );
+        let model = result.unwrap();
+
+        assert_eq!(model.id, "vault-transit-signer");
+
+        match model.config {
+            SignerConfig::VaultTransit(config) => {
+                assert_eq!(config.key_name, "test-transit-key");
+                assert_eq!(config.address, "https://vault.example.com");
+                assert_eq!(config.namespace, Some("test-namespace".to_string()));
+                assert_eq!(config.role_id, "test-role");
+                assert_eq!(config.secret_id, "test-secret");
+                assert_eq!(config.pubkey, "test-pubkey");
+                assert_eq!(config.mount_point, Some("transit".to_string()));
+            }
+            _ => panic!("Expected VaultTransit config"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_signer_aws_kms() -> Result<()> {
+        let signer = SignerFileConfig {
+            id: "aws-kms-signer".to_string(),
+            config: ConfigFileSignerConfig::AwsKms(AwsKmsSignerFileConfig {}),
+        };
+
+        let result = process_signer(&signer).await;
+
+        assert!(
+            result.is_ok(),
+            "Failed to process AWS KMS signer: {:?}",
+            result.err()
+        );
+        let model = result.unwrap();
+
+        assert_eq!(model.id, "aws-kms-signer");
+
+        match model.config {
+            SignerConfig::AwsKms(_) => {}
+            _ => panic!("Expected AwsKms config"),
+        }
+
+        Ok(())
+    }
 }
