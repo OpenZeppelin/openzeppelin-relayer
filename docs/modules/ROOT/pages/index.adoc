@@ -167,21 +167,39 @@ This file should exist in `config/config.json`
 
 There are 3 important sections in this file:
 
+- signers
+- relayers
+- notifications
+
+==== Signers
+
 * `signers` array, which must contain, at least, one valid signer configuration:
+
+Example:
 [source,json]
 ----
 "signers": [
   {
     "id": "my_id",
     "type": "local",
-    "path": "config/keys/local-signer.json",
-    "passphrase": {
-      "type": "plain",
-      "value": "test"
+    "config": {
+      "path": "config/keys/local-signer.json",
+      "passphrase": {
+        "type": "plain",
+        "value": "test"
+      }
     }
   }
 ]
 ----
+
+Supported signer types:
+
+- `test`: temporary key only for testing
+- `local`: keystore file signer
+- `vault`: vault secret signer
+- `vault_cloud`: hosted vault secret signer
+- `vault_transit`: vault transit signer
 
 Available configuration fields
 [cols="1,1,2"]
@@ -196,6 +214,16 @@ Available configuration fields
 |String
 |Type of signer (see `supported signer types`)
 
+|config
+|Map
+|signer type related config
+|===
+
+`local` type config: 
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
 |path
 |String
 |path to the signer json file. Should be under the `./config` directory
@@ -209,6 +237,99 @@ Available configuration fields
 |Passphrase value, env variable name, ...
 |===
 
+`vault` type config: 
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| address
+| String
+| Specifies the Vault API endpoint.
+
+| role_id
+| String
+| The Vault AppRole role identifier.
+
+| secret_id
+| String
+| The Vault AppRole secret identifier.
+
+| key_name
+| String
+| The name of the cryptographic key within Vault’s Secret engine that is used for signing operations.
+
+| mount_point
+| String
+| The mount point for the Secrets engine in Vault. Defaults to `secret` if not explicitly specified. Optional.
+|===
+
+`vault_cloud` type config: 
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| client_id
+| String
+| The client identifier used to authenticate with Vault Cloud.
+
+| client_secret
+| String
+| The client secret for Vault Cloud authentication.
+
+| org_id
+| String
+| The organization ID for your Vault Cloud account.
+
+| project_id
+| String
+| The project ID that uniquely identifies your Vault Cloud project.
+
+| app_name
+| String
+| The name of the application integrating with Vault Cloud.
+
+| key_name
+| String
+| The name of the cryptographic key used for signing or encryption operations in Vault Cloud.
+|===
+
+
+`vault_transit` type config: 
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| address
+| String
+| Specifies the Vault API endpoint.
+
+| role_id
+| String
+| The Vault AppRole role identifier.
+
+| secret_id
+| String
+| The Vault AppRole secret identifier.
+
+| key_name
+| String
+| The name of the cryptographic key within Vault’s Transit engine that is used for signing operations.
+
+| mount_point
+| String
+| The mount point for the Transit secrets engine in Vault. Defaults to `transit` if not explicitly specified. Optional.
+
+| namespace
+| String
+| The Vault namespace for API calls. This is used only in Vault Enterprise environments. Optional.
+
+|pubkey
+|String
+|Public key of the cryptographic key within Vault’s Transit engine that is used for signing operations 
+|===
+
+
+==== Notifications
 
 * `notifications` array, which should contain, at least, one valid configuration:
 [source,json]
@@ -250,6 +371,8 @@ Available configuration fields
 |String
 |Signing key value, env variable name, ...
 |===
+
+==== Relayers
 
 * `relayers` array, containing at least one valid relayer configuration:
 [source,json]
@@ -411,10 +534,6 @@ Example for allowed_tokens:
   }
 ]
 ----
-
-=== Key signers
-
-These files should exist in `config/keys/`
 
 == Important Considerations
 

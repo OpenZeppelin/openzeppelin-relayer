@@ -25,10 +25,12 @@
     {
       "id": "local-signer",
       "type": "local",
-      "path": "config/keys/local-signer.json",
-      "passphrase": {
-        "type": "plain",
-        "value": "test"
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "plain",
+          "value": "test"
+        }
       }
     }
   ]
