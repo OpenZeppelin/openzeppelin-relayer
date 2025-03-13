@@ -221,8 +221,8 @@ impl VaultService {
         let mut transit_settings_builder = VaultClientSettingsBuilder::default();
 
         transit_settings_builder
-            .address(&self.config.address.clone())
-            .token(&token.client_token.clone())
+            .address(self.config.address.clone())
+            .token(token.client_token.clone())
             .verify(true);
 
         if let Some(namespace) = &self.config.namespace {

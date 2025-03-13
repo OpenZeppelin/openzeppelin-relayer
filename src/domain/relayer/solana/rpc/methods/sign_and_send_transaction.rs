@@ -166,8 +166,8 @@ mod tests {
         let expected_signature = Signature::new_unique();
 
         signer.expect_sign().returning(move |_| {
-            let signature = expected_signature.clone();
-            Box::pin(async move { Ok(signature.clone()) })
+            let signature = expected_signature;
+            Box::pin(async move { Ok(signature) })
         });
 
         provider
@@ -257,8 +257,8 @@ mod tests {
         let expected_signature = Signature::new_unique();
 
         signer.expect_sign().returning(move |_| {
-            let signature = expected_signature.clone();
-            Box::pin(async move { Ok(signature.clone()) })
+            let signature = expected_signature;
+            Box::pin(async move { Ok(signature) })
         });
 
         provider
@@ -316,8 +316,8 @@ mod tests {
 
         let expected_signature = Signature::new_unique();
         signer.expect_sign().returning(move |_| {
-            let signature = expected_signature.clone();
-            Box::pin(async move { Ok(signature.clone()) })
+            let signature = expected_signature;
+            Box::pin(async move { Ok(signature) })
         });
 
         provider
@@ -389,8 +389,8 @@ mod tests {
 
         let expected_signature = Signature::new_unique();
         signer.expect_sign().returning(move |_| {
-            let signature = expected_signature.clone();
-            Box::pin(async move { Ok(signature.clone()) })
+            let signature = expected_signature;
+            Box::pin(async move { Ok(signature) })
         });
 
         provider
@@ -456,8 +456,8 @@ mod tests {
 
         let signature = Signature::new_unique();
         signer.expect_sign().returning(move |_| {
-            let signature = signature.clone();
-            Box::pin(async move { Ok(signature.clone()) })
+            let signature = signature;
+            Box::pin(async move { Ok(signature) })
         });
 
         provider

@@ -436,7 +436,7 @@ mod tests {
         let transaction = Transaction::new_unsigned(message);
         signer.expect_sign().returning(move |_| {
             let signature = Signature::new_unique();
-            let signature_clone = signature.clone();
+            let signature_clone = signature;
             Box::pin(async move { Ok(signature_clone) })
         });
 
@@ -854,7 +854,7 @@ mod tests {
 
         let expected_signature = Signature::new_unique();
         signer.expect_sign().returning(move |_| {
-            let signature_clone = expected_signature.clone();
+            let signature_clone = expected_signature;
             Box::pin(async move { Ok(signature_clone) })
         });
 

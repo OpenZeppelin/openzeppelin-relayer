@@ -350,10 +350,9 @@ mod tests {
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| {
-            let signature = signature.clone();
-            Box::pin(async move { Ok(signature.clone()) })
-        });
+        signer
+            .expect_sign()
+            .returning(move |_| Box::pin(async move { Ok(signature) }));
         provider
             .expect_get_latest_blockhash_with_commitment()
             .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
@@ -425,8 +424,8 @@ mod tests {
         });
 
         signer.expect_sign().returning(move |_| {
-            let signature = expected_signature.clone();
-            Box::pin(async move { Ok(signature.clone()) })
+            let signature = expected_signature;
+            Box::pin(async move { Ok(signature) })
         });
         provider
             .expect_get_latest_blockhash_with_commitment()

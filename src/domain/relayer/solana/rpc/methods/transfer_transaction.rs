@@ -210,7 +210,7 @@ mod tests {
         let signature = Signature::new_unique();
 
         signer.expect_sign().returning(move |_| {
-            let signature_clone = signature.clone();
+            let signature_clone = signature;
             Box::pin(async move { Ok(signature_clone) })
         });
 
@@ -285,7 +285,7 @@ mod tests {
         let signature = Signature::new_unique();
 
         signer.expect_sign().returning(move |_| {
-            let signature_clone = signature.clone();
+            let signature_clone = signature;
             Box::pin(async move { Ok(signature_clone) })
         });
 
@@ -393,7 +393,7 @@ mod tests {
         let signature = Signature::new_unique();
 
         signer.expect_sign().returning(move |_| {
-            let signature_clone = signature.clone();
+            let signature_clone = signature;
             Box::pin(async move { Ok(signature_clone) })
         });
 
@@ -586,7 +586,7 @@ mod tests {
 
         let signature = Signature::new_unique();
         signer.expect_sign().returning(move |_| {
-            let signature_clone = signature.clone();
+            let signature_clone = signature;
             Box::pin(async move { Ok(signature_clone) })
         });
 
