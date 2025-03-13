@@ -50,7 +50,17 @@ Enable the KV-v2 secrets engine at the `secret` path:
 vault secrets enable -path=secret kv-v2
 ```
 
-### Step 5: Create a Vault Policy
+### Step 5: Create secret
+
+Create secret with private key value:
+
+```bash
+vault kv put secret/my-app value=REPLACE_WITH_PRIVATE_KEY
+```
+
+Note: For Solana, we can use this [tool](https://cyphr.me/ed25519_tool/ed.html) for development purposes to generate a key.
+
+### Step 6: Create a Vault Policy
 
 Create a policy that grants your service permissions to manage secrets. Save the following policy as `secret-policy` in Vault:
 
@@ -70,7 +80,7 @@ This policy allows:
 - Data operations (create, read, update, delete) on `secret/data/*`
 - Listing of secrets via the metadata endpoint `secret/metadata/*`
 
-### Step 6: Enable AppRole Authentication
+### Step 7: Enable AppRole Authentication
 
 Enable the AppRole authentication method in Vault, which allows your service to authenticate using a RoleID and SecretID:
 
@@ -78,7 +88,7 @@ Enable the AppRole authentication method in Vault, which allows your service to 
 vault auth enable approle
 ```
 
-### Step 7: Create an AppRole
+### Step 8: Create an AppRole
 
 Create an AppRole and attach the `secret-policy` to it:
 
@@ -89,7 +99,7 @@ vault write auth/approle/role/my-role \
   token_max_ttl=4h
 ```
 
-### Step 8: Retrieve the RoleID and SecretID
+### Step 9: Retrieve the RoleID and SecretID
 
 Retrieve the RoleID for your AppRole(store these values as they are needed for next step):
 
@@ -105,14 +115,14 @@ vault write -f auth/approle/role/my-role/secret-id
 
 Use these credentials within your application to authenticate with Vault and access secrets securely.
 
-### Step 9: Configure Your Service to Use Vault
+### Step 10: Configure Your Service to Use Vault
 
 Update your OpenZeppelin Relayer service configuration to utilize the Vault credentials obtained via AppRole authentication.
 
 Update `examples/vault-secret-signer/config/config.json` file. Replace `role_id` and `secret_id` placeholder values with values from step 9.
 
 
-### Step 10: Start Relayer and Redis services
+### Step 11: Start Relayer and Redis services
 
 Start remaining docker-compose service with command:
 
