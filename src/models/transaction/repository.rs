@@ -137,6 +137,10 @@ impl EvmTransactionData {
         self.nonce = Some(nonce);
         self
     }
+    pub fn with_speed(mut self, speed: Speed) -> Self {
+        self.speed = Some(speed);
+        self
+    }
 
     pub fn with_signed_transaction_data(mut self, sig: SignTransactionResponseEvm) -> Self {
         self.signature = Some(sig.signature);

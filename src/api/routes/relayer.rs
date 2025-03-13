@@ -113,11 +113,11 @@ async fn delete_pending_transactions(
 /// Cancels a specific transaction by its ID.
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_relayer_transaction(
-    relayer_id: web::Path<String>,
-    transaction_id: web::Path<String>,
+    path: web::Path<TransactionPath>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
-    relayer::cancel_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
+    let path = path.into_inner();
+    relayer::cancel_transaction(path.relayer_id, path.transaction_id, data).await
 }
 
 /// Replaces a specific transaction with a new one.

@@ -11,14 +11,14 @@ use std::sync::Arc;
 
 use crate::{
     constants::DEFAULT_TX_VALID_TIMESPAN,
-    domain::{transaction::Transaction, PriceCalculator},
+    domain::{make_noop, transaction::Transaction, PriceCalculator},
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, EvmNetwork, NetworkTransactionData,
-        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest, U256,
+        evm::Speed, produce_transaction_update_notification_payload, EvmNetwork,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest, U256,
     },
-    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
+    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage, Repository},
     services::{
         EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
         TransactionCounterService,
@@ -27,7 +27,7 @@ use crate::{
 
 /// Parameters for determining the price of a transaction.
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 pub struct TransactionPriceParams {
     /// The gas price for the transaction.
     pub gas_price: Option<u128>,
@@ -409,7 +409,7 @@ impl Transaction for EvmRelayerTransaction {
         self.send_transaction_update_notification(&updated_tx)
             .await?;
 
-        Ok(updated_tx)
+        Ok(tx)
     }
 
     /// Handles the status of a transaction.
@@ -476,7 +476,112 @@ impl Transaction for EvmRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        Ok(tx)
+        info!("Cancelling transaction: {:?}", tx.id);
+        info!("Transaction status: {:?}", tx.status);
+        // Check if the transaction can be cancelled
+        if tx.status != TransactionStatus::Pending
+            && tx.status != TransactionStatus::Sent
+            && tx.status != TransactionStatus::Submitted
+        {
+            return Err(TransactionError::ValidationError(format!(
+                "Cannot cancel transaction with status: {:?}",
+                tx.status
+            )));
+        }
+
+        // If the transaction is in Pending state, we can just delete it from the database
+        // since it was never sent to the network
+        if tx.status == TransactionStatus::Pending {
+            info!("Transaction is in Pending state, deleting it from the database");
+
+            // Store a copy of the transaction for notification purposes
+            let tx_copy = tx.clone();
+
+            // Delete the transaction from the database
+            Repository::delete_by_id(&*self.transaction_repository, tx.id.clone()).await?;
+
+            // Send notification if configured
+            self.send_transaction_update_notification(&tx_copy).await?;
+
+            info!("Transaction deleted successfully: {:?}", tx.id);
+            return Ok(tx_copy);
+        }
+
+        // For transactions in Sent state, we need to send a cancellation transaction
+        let mut evm_data = tx.network_data.get_evm_transaction_data()?;
+        // in order to cancel the transaction, we need to calculate average gas price
+        // and use it to create a "noop" transaction
+        let price_params: TransactionPriceParams = Default::default();
+
+        // clean the price params
+        evm_data = evm_data.with_price_params(price_params);
+        // set the speed to average
+        evm_data = evm_data.with_speed(Speed::Average);
+        // Get the nonce from the transaction
+        let nonce = evm_data.nonce.ok_or_else(|| {
+            TransactionError::UnexpectedError("Transaction nonce is missing".to_string())
+        })?;
+
+        // Create a new transaction with the same nonce but higher gas price to replace the original
+        // This is the standard way to cancel a transaction in EVM networks
+        let relayer = self.relayer();
+
+        // Calculate gas price for cancellation (higher than original)
+        let price_params: TransactionPriceParams = PriceCalculator::get_transaction_price_params(
+            &evm_data,
+            relayer,
+            &self.gas_price_service,
+            &self.provider,
+        )
+        .await?;
+
+        // Create a "noop" transaction with higher gas price
+        let mut cancel_tx_data = make_noop(
+            &self.provider,
+            relayer.address.clone(),
+            price_params,
+            EvmNetwork::from_id(evm_data.chain_id),
+        )
+        .await?;
+
+        // Set the nonce to match the original transaction
+        cancel_tx_data.nonce = Some(nonce);
+
+        // Sign the cancellation transaction
+        let sig_result = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Evm(cancel_tx_data.clone()))
+            .await?;
+
+        let signed_cancel_tx_data =
+            cancel_tx_data.with_signed_transaction_data(sig_result.into_evm()?);
+
+        // Update the original transaction status to "Failed"
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            network_data: Some(NetworkTransactionData::Evm(signed_cancel_tx_data)),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        // Submit the cancellation transaction
+        let evm_data_for_raw = updated_tx.network_data.get_evm_transaction_data()?;
+        let raw_tx = evm_data_for_raw.raw.as_ref().ok_or_else(|| {
+            TransactionError::InvalidType("Raw transaction data is missing".to_string())
+        })?;
+
+        self.provider.send_raw_transaction(raw_tx).await?;
+        info!("Transaction sent successfully: {:?}", tx.id);
+        // Send notification if configured
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+
+        info!("Transaction cancelled successfully: {:?}", tx.id);
+        Ok(updated_tx)
     }
 
     /// Replaces a transaction.
