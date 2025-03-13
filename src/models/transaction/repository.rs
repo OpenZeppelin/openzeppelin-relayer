@@ -6,8 +6,9 @@ use crate::{
     },
 };
 use alloy::{
-    consensus::TxLegacy,
+    consensus::{TxEip1559, TxLegacy},
     primitives::{Address as AlloyAddress, Bytes, TxKind},
+    rpc::types::AccessList,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -314,6 +315,36 @@ impl TryFrom<NetworkTransactionData> for TxLegacy {
                     gas_price: tx.gas_price.unwrap_or(0),
                     to: tx_kind,
                     value: tx.value,
+                    input: tx.data_to_bytes()?,
+                })
+            }
+            _ => Err(SignerError::SigningError(
+                "Not an EVM transaction".to_string(),
+            )),
+        }
+    }
+}
+
+impl TryFrom<NetworkTransactionData> for TxEip1559 {
+    type Error = SignerError;
+
+    fn try_from(tx: NetworkTransactionData) -> Result<Self, Self::Error> {
+        match tx {
+            NetworkTransactionData::Evm(tx) => {
+                let tx_kind = match tx.to_address()? {
+                    Some(addr) => TxKind::Call(addr),
+                    None => TxKind::Create,
+                };
+
+                Ok(Self {
+                    chain_id: tx.chain_id,
+                    nonce: tx.nonce.unwrap_or(0),
+                    gas_limit: tx.gas_limit,
+                    max_fee_per_gas: tx.max_fee_per_gas.unwrap_or(0),
+                    max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or(0),
+                    to: tx_kind,
+                    value: tx.value,
+                    access_list: AccessList::default(),
                     input: tx.data_to_bytes()?,
                 })
             }
