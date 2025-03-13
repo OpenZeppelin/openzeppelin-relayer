@@ -95,11 +95,11 @@ vault write auth/approle/role/my-role \
 
 ### Step 9: Retrieve the RoleID, SecretID and Public Key
 
-Retrieve Public key(store these values as they are needed for next step):
+Retrieve Public key(store these values as they are needed for next step) by opening vault UI(localhost:8200). 
 
-```bash
-vault read transit/export/my_signing_key/1
-```
+Sign in with token `dev-only-token`. Navigate to http://localhost:8200/ui/vault/secrets/transit/show/my_signing_key?tab=versions and copy public key value from version dropdown menu.
+
+
 
 Retrieve the RoleID for your AppRole:
 
