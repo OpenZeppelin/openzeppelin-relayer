@@ -1,8 +1,8 @@
-# Using HashiCorp Vault Transit for Secure Transaction Signing in OpenZeppelin Relayer
+# Using HashiCorp Vault for Secret Key Management in OpenZeppelin Relayer
 
-This example demonstrates how to use HashiCorp Vault's Transit engine to securely sign transactions in OpenZeppelin Relayer. It includes a Docker Compose setup with Vault running in development mode and provides detailed instructions for configuring the Transit engine with AppRole authentication.
+This example demonstrates how to use HashiCorp Vault for securely storing private keys for OpenZeppelin Relayer. It includes a Docker Compose setup with Vault in development mode and instructions for configuring the KV-v2 secrets engine with AppRole authentication.
 
-> **Note:** This example uses Vault in development mode, which is not suitable for production. For production deployments, use a properly configured and sealed Vault instance with appropriate security measures.
+> **Note:** This example uses Vault in development mode which is not suitable for production environments. For production deployments, use a properly configured and sealed Vault instance with appropriate security measures.
 
 ## Getting Started
 
@@ -42,39 +42,35 @@ export VAULT_ADDR='http://0.0.0.0:8200'
 export VAULT_TOKEN='dev-only-token'  # This is the default token for dev mode defined in docker-compose fi;e
 ```
 
-### Step 4: Enable the Transit Engine
+### Step 4: Enable the KV-v2 Secrets Engine
 
-Enable the Transit engine at transit path
+Enable the KV-v2 secrets engine at the `secret` path:
 
 ```bash
-vault secrets enable transit
+vault secrets enable -path=secret kv-v2
 ```
 
-### Step 5: Create an Ed25519 Signing Key
+### Step 5: Create a Vault Policy
 
 Create a policy that grants your service permissions to manage secrets. Save the following policy as `secret-policy` in Vault:
 
 ```bash
-vault write -f transit/keys/my_signing_key type=ed25519 exportable=true
-```
-
-### Step 6: Create a Vault Policy
-
-Create a policy that grants your service permissions to sign and verify using generated key. Save the following policy as `transit-sign-policy` in Vault:
-
-```bash
-vault policy write transit-sign-policy -<<EOF
-path "transit/sign/my_signing_key" {
-capabilities = ["update"]
+vault policy write secret-policy - <<EOF
+path "secret/data/*" {
+  capabilities = ["create", "read", "update", "delete"]
 }
 
-path "transit/verify/my_signing_key" {
-capabilities = ["update"]
+path "secret/metadata/*" {
+  capabilities = ["list"]
 }
 EOF
 ```
 
-### Step 7: Enable AppRole Authentication
+This policy allows:
+- Data operations (create, read, update, delete) on `secret/data/*`
+- Listing of secrets via the metadata endpoint `secret/metadata/*`
+
+### Step 6: Enable AppRole Authentication
 
 Enable the AppRole authentication method in Vault, which allows your service to authenticate using a RoleID and SecretID:
 
@@ -82,26 +78,20 @@ Enable the AppRole authentication method in Vault, which allows your service to 
 vault auth enable approle
 ```
 
-### Step 8: Create an AppRole
+### Step 7: Create an AppRole
 
-Create an AppRole and attach the `transit-sign-policy` to it:
+Create an AppRole and attach the `secret-policy` to it:
 
 ```bash
 vault write auth/approle/role/my-role \
-  policies="transit-sign-policy" \
+  policies="secret-policy" \
   token_ttl=1h \
   token_max_ttl=4h
 ```
 
-### Step 9: Retrieve the RoleID, SecretID and Public Key
+### Step 8: Retrieve the RoleID and SecretID
 
-Retrieve Public key(store these values as they are needed for next step):
-
-```bash
-vault read transit/export/my_signing_key/1
-```
-
-Retrieve the RoleID for your AppRole:
+Retrieve the RoleID for your AppRole(store these values as they are needed for next step):
 
 ```bash
 vault read auth/approle/role/my-role/role-id
@@ -113,19 +103,20 @@ Then, generate a SecretID for your AppRole:
 vault write -f auth/approle/role/my-role/secret-id
 ```
 
+Use these credentials within your application to authenticate with Vault and access secrets securely.
 
-### Step 10: Configure Your Service to Use Vault
+### Step 9: Configure Your Service to Use Vault
 
 Update your OpenZeppelin Relayer service configuration to utilize the Vault credentials obtained via AppRole authentication.
 
-Update `examples/vault-transit/config/config.json` file. Replace `role_id`,  `secret_id` and `pubkey` placeholder values with values from step 9.
+Update `examples/vault-secret-signer/config/config.json` file. Replace `role_id` and `secret_id` placeholder values with values from step 9.
 
 
 ### Step 10: Start Relayer and Redis services
 
 Start remaining docker-compose service with command:
 
-```bash
+```
 docker compose up -d
 ```
 
@@ -133,6 +124,7 @@ docker compose up -d
 ### Additional Resources
 
 - [HashiCorp Vault Documentation](https://www.vaultproject.io/docs/)
+- [KV Secrets Engine - Version 2](https://www.vaultproject.io/docs/secrets/kv/kv-v2)
 - [AppRole Authentication](https://www.vaultproject.io/docs/auth/approle)
 
 ## Troubleshooting
