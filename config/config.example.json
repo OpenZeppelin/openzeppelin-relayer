@@ -10,21 +10,12 @@
       "network_type": "evm"
     },
     {
-      "id": "sepolia-vault",
-      "name": "Sepolia Vault",
-      "network": "sepolia",
-      "paused": false,
-      "notification_id": "notification-example",
-      "signer_id": "cloud-vault-signer",
-      "network_type": "evm"
-    },
-    {
       "id": "solana-example",
       "name": "Solana Example",
       "network": "devnet",
       "paused": false,
       "notification_id": "notification-example",
-      "signer_id": "local-vault-signer",
+      "signer_id": "local-signer",
       "network_type": "solana",
       "policies": {
         "min_balance": 0,
@@ -76,34 +67,10 @@
     {
       "id": "local-signer",
       "type": "local",
-      "config": {
-        "path": "config/keys/local-signer.example.json",
-        "passphrase": {
-          "type": "plain",
-          "value": "test"
-        }
-      }
-    },
-    {
-      "id": "local-vault-signer",
-      "type": "vault",
-      "config": {
-        "address": "http://localhost:8200",
-        "role_id": "1d0c83bb-8454-e852-6aff-fc9ccd8dee00",
-        "secret_id": "7e9d16e2-a78c-31dc-411b-10df097a60bd",
-        "key_name": "my-app"
-      }
-    },
-    {
-      "id": "cloud-vault-signer",
-      "type": "vault_cloud",
-      "config": {
-        "client_id": "eHTMPga29JCcWKXoMc0Fmh3oiPjHrMqv",
-        "client_secret": "0ov2c4_P8rqkRmD-Tps-lybSyyjSbanshQMHD8zCqmEX0W9LRpucO9oLlX8-X6Hf",
-        "key_name": "test",
-        "org_id": "470c0b6d-dcf8-4d57-98c8-1a123d2d61a3",
-        "project_id": "44998acd-e314-4216-a083-f2d7d82d7349",
-        "app_name": "relayer-test"
+      "path": "config/keys/local-signer.example.json",
+      "passphrase": {
+        "type": "plain",
+        "value": "test"
       }
     }
   ]
