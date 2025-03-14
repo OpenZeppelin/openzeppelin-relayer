@@ -131,6 +131,9 @@ impl InMemoryTransactionRepository {
             if let Some(network_data) = update.network_data {
                 tx.network_data = network_data;
             }
+            if let Some(noop_count) = update.noop_count {
+                tx.noop_count = Some(noop_count);
+            }
             Ok(tx.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
@@ -301,6 +304,8 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 raw: None,
             }),
+            noop_count: Some(0),
+            original_tx_id: None,
         }
     }
 
@@ -330,6 +335,8 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 raw: None,
             }),
+            noop_count: Some(0),
+            original_tx_id: None,
         }
     }
 
@@ -755,6 +762,7 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             network_data: None,
+            noop_count: None,
         };
         let updated_tx1 = repo
             .partial_update("test-tx-id".to_string(), update1)
@@ -769,6 +777,7 @@ mod tests {
             sent_at: Some("2023-01-01T12:00:00Z".to_string()),
             confirmed_at: Some("2023-01-01T12:05:00Z".to_string()),
             network_data: None,
+            noop_count: None,
         };
         let updated_tx2 = repo
             .partial_update("test-tx-id".to_string(), update2)
@@ -790,6 +799,7 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             network_data: None,
+            noop_count: None,
         };
         let result = repo
             .partial_update("non-existent-id".to_string(), update3)

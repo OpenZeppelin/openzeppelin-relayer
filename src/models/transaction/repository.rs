@@ -35,6 +35,7 @@ pub struct TransactionUpdateRequest {
     pub sent_at: Option<String>,
     pub confirmed_at: Option<String>,
     pub network_data: Option<NetworkTransactionData>,
+    pub noop_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +49,8 @@ pub struct TransactionRepoModel {
     pub valid_until: Option<String>,
     pub network_data: NetworkTransactionData,
     pub network_type: NetworkType,
+    pub noop_count: Option<u32>,
+    pub original_tx_id: Option<String>,
 }
 
 impl TransactionRepoModel {
@@ -137,11 +140,6 @@ impl EvmTransactionData {
         self.nonce = Some(nonce);
         self
     }
-    pub fn with_speed(mut self, speed: Speed) -> Self {
-        self.speed = Some(speed);
-        self
-    }
-
     pub fn with_signed_transaction_data(mut self, sig: SignTransactionResponseEvm) -> Self {
         self.signature = Some(sig.signature);
         self.hash = Some(sig.hash);
@@ -246,6 +244,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                         max_priority_fee_per_gas: evm_request.max_priority_fee_per_gas,
                         raw: None,
                     }),
+                    noop_count: None,
+                    original_tx_id: None,
                 })
             }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
@@ -263,6 +263,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     instructions: solana_request.instructions.clone(),
                     hash: None,
                 }),
+                noop_count: None,
+                original_tx_id: None,
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
@@ -280,6 +282,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     operations: vec![], // TODO
                     hash: Some("0x".to_string()),
                 }),
+                noop_count: None,
+                original_tx_id: None,
             }),
         }
     }

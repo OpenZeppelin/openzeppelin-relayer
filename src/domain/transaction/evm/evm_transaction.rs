@@ -15,8 +15,8 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         evm::Speed, produce_transaction_update_notification_payload, EvmNetwork,
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest, U256,
+        EvmTransactionData, NetworkTransactionData, RelayerRepoModel, TransactionError,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest, U256,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage, Repository},
     services::{
@@ -89,6 +89,62 @@ impl EvmRelayerTransaction {
             gas_price_service,
             signer,
         })
+    }
+
+    /// Prepares a cancellation transaction with higher gas price to replace the original transaction
+    ///
+    /// # Arguments
+    ///
+    /// * `evm_data` - The original transaction's EVM data
+    /// * `relayer` - The relayer model
+    ///
+    /// # Returns
+    ///
+    /// A result containing the prepared cancellation transaction data or a `TransactionError`
+    async fn prepare_cancel_transaction(
+        &self,
+        evm_data: &mut EvmTransactionData,
+        relayer: &RelayerRepoModel,
+    ) -> Result<EvmTransactionData, TransactionError> {
+        // Get the nonce from the transaction
+        let nonce = evm_data.nonce.ok_or_else(|| {
+            TransactionError::UnexpectedError("Transaction nonce is missing".to_string())
+        })?;
+
+        // clean the price params and set speed to average for the cancellation
+        evm_data.gas_price = None;
+        evm_data.max_fee_per_gas = None;
+        evm_data.max_priority_fee_per_gas = None;
+        evm_data.speed = Some(Speed::Average);
+
+        // Calculate gas price for cancellation (higher than original)
+        let price_params: TransactionPriceParams = PriceCalculator::get_transaction_price_params(
+            evm_data,
+            relayer,
+            &self.gas_price_service,
+            &self.provider,
+        )
+        .await?;
+
+        // Create a "noop" transaction with higher gas price
+        let mut cancel_tx_data = make_noop(
+            &self.provider,
+            relayer.address.clone(),
+            price_params,
+            EvmNetwork::from_id(evm_data.chain_id),
+        )
+        .await?;
+
+        // Set the nonce to match the original transaction
+        cancel_tx_data.nonce = Some(nonce);
+
+        // Sign the cancellation transaction
+        let sig_result = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Evm(cancel_tx_data.clone()))
+            .await?;
+
+        Ok(cancel_tx_data.with_signed_transaction_data(sig_result.into_evm()?))
     }
 
     /// Helper function to check if a transaction has enough confirmations
@@ -289,6 +345,41 @@ impl EvmRelayerTransaction {
             .await?;
         Ok(updated_tx)
     }
+
+    /// Updates the status of the original transaction when its noop transaction is confirmed
+    ///
+    /// # Arguments
+    ///
+    /// * `noop_tx` - The noop transaction that was confirmed
+    ///
+    /// # Returns
+    ///
+    /// A result containing the updated original transaction or a `TransactionError`
+    async fn handle_noop_confirmation(
+        &self,
+        noop_tx: &TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        if let Some(original_tx_id) = &noop_tx.original_tx_id {
+            let update = TransactionUpdateRequest {
+                status: Some(TransactionStatus::Failed),
+                confirmed_at: Some(Utc::now().to_rfc3339()),
+                ..Default::default()
+            };
+
+            let updated_tx = self
+                .transaction_repository
+                .partial_update(original_tx_id.clone(), update)
+                .await?;
+
+            self.send_transaction_update_notification(&updated_tx)
+                .await?;
+            Ok(updated_tx)
+        } else {
+            Err(TransactionError::UnexpectedError(
+                "Noop transaction has no original transaction ID".to_string(),
+            ))
+        }
+    }
 }
 
 #[async_trait]
@@ -429,38 +520,80 @@ impl Transaction for EvmRelayerTransaction {
 
         let status = self.check_transaction_status(&tx).await?;
 
-        match status {
-            TransactionStatus::Submitted | TransactionStatus::Mined => {
-                self.job_producer
-                    .produce_check_transaction_status_job(
-                        TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                        Some(Utc::now().timestamp() + 5),
-                    )
-                    .await?;
-
-                if tx.status != status {
-                    return self.update_transaction_status(tx, status, None).await;
+        // Handle noop transactions separately
+        if tx.original_tx_id.is_some() {
+            match status {
+                TransactionStatus::Submitted => {
+                    self.job_producer
+                        .produce_check_transaction_status_job(
+                            TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                            Some(Utc::now().timestamp() + 5),
+                        )
+                        .await?;
+                    Ok(tx)
                 }
-
-                Ok(tx)
+                TransactionStatus::Mined | TransactionStatus::Confirmed => {
+                    self.handle_noop_confirmation(&tx).await
+                }
+                TransactionStatus::Failed | TransactionStatus::Expired => {
+                    self.update_transaction_status(tx, status, None).await
+                }
+                _ => Err(TransactionError::UnexpectedError(format!(
+                    "Unexpected transaction status: {:?}",
+                    status
+                ))),
             }
-            TransactionStatus::Confirmed
-            | TransactionStatus::Failed
-            | TransactionStatus::Expired => {
-                let confirmed_at = if status == TransactionStatus::Confirmed {
-                    Some(Utc::now().to_rfc3339())
-                } else {
-                    None
-                };
+        } else {
+            // Original logic for regular transactions
+            match status {
+                TransactionStatus::Submitted | TransactionStatus::Mined => {
+                    self.job_producer
+                        .produce_check_transaction_status_job(
+                            TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                            Some(Utc::now().timestamp() + 5),
+                        )
+                        .await?;
 
-                self.update_transaction_status(tx, status, confirmed_at)
-                    .await
+                    if tx.status != status {
+                        return self.update_transaction_status(tx, status, None).await;
+                    }
+
+                    Ok(tx)
+                }
+                TransactionStatus::Confirmed
+                | TransactionStatus::Failed
+                | TransactionStatus::Expired => {
+                    let confirmed_at = if status == TransactionStatus::Confirmed {
+                        Some(Utc::now().to_rfc3339())
+                    } else {
+                        None
+                    };
+
+                    self.update_transaction_status(tx, status, confirmed_at)
+                        .await
+                }
+                _ => Err(TransactionError::UnexpectedError(format!(
+                    "Unexpected transaction status: {:?}",
+                    status
+                ))),
             }
-            _ => Err(TransactionError::UnexpectedError(format!(
-                "Unexpected transaction status: {:?}",
-                status
-            ))),
         }
+    }
+
+    /// Validates a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `_tx` - The transaction model to validate.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a boolean indicating validity or a `TransactionError`.
+    async fn validate_transaction(
+        &self,
+        _tx: TransactionRepoModel,
+    ) -> Result<bool, TransactionError> {
+        Ok(true)
     }
 
     /// Cancels a transaction.
@@ -507,81 +640,66 @@ impl Transaction for EvmRelayerTransaction {
             return Ok(tx_copy);
         }
 
-        // For transactions in Sent state, we need to send a cancellation transaction
+        // For transactions in Sent/Submitted state, we need to send a cancellation transaction
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
-        // in order to cancel the transaction, we need to calculate average gas price
-        // and use it to create a "noop" transaction
-        let price_params: TransactionPriceParams = Default::default();
-
-        // clean the price params
-        evm_data = evm_data.with_price_params(price_params);
-        // set the speed to average
-        evm_data = evm_data.with_speed(Speed::Average);
-        // Get the nonce from the transaction
-        let nonce = evm_data.nonce.ok_or_else(|| {
-            TransactionError::UnexpectedError("Transaction nonce is missing".to_string())
-        })?;
-
-        // Create a new transaction with the same nonce but higher gas price to replace the original
-        // This is the standard way to cancel a transaction in EVM networks
         let relayer = self.relayer();
 
-        // Calculate gas price for cancellation (higher than original)
-        let price_params: TransactionPriceParams = PriceCalculator::get_transaction_price_params(
-            &evm_data,
-            relayer,
-            &self.gas_price_service,
-            &self.provider,
-        )
-        .await?;
-
-        // Create a "noop" transaction with higher gas price
-        let mut cancel_tx_data = make_noop(
-            &self.provider,
-            relayer.address.clone(),
-            price_params,
-            EvmNetwork::from_id(evm_data.chain_id),
-        )
-        .await?;
-
-        // Set the nonce to match the original transaction
-        cancel_tx_data.nonce = Some(nonce);
-
-        // Sign the cancellation transaction
-        let sig_result = self
-            .signer
-            .sign_transaction(NetworkTransactionData::Evm(cancel_tx_data.clone()))
+        // Prepare the cancellation transaction
+        let signed_cancel_tx_data = self
+            .prepare_cancel_transaction(&mut evm_data, relayer)
             .await?;
 
-        let signed_cancel_tx_data =
-            cancel_tx_data.with_signed_transaction_data(sig_result.into_evm()?);
+        // Create a new transaction for the noop operation
+        let noop_tx = TransactionRepoModel {
+            id: format!("{}-noop-{}", tx.id, tx.noop_count.unwrap_or(0) + 1),
+            relayer_id: tx.relayer_id.clone(),
+            status: TransactionStatus::Sent,
+            network_data: NetworkTransactionData::Evm(signed_cancel_tx_data),
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: tx.valid_until.clone(),
+            network_type: tx.network_type,
+            noop_count: Some(0),
+            original_tx_id: Some(tx.id.clone()),
+        };
 
-        // Update the original transaction status to "Failed"
+        // Store the noop transaction
+        let stored_noop_tx = self.transaction_repository.create(noop_tx).await?;
+
+        // Update the original transaction to reflect the cancellation attempt
         let update = TransactionUpdateRequest {
-            status: Some(TransactionStatus::Failed),
-            network_data: Some(NetworkTransactionData::Evm(signed_cancel_tx_data)),
+            noop_count: Some(tx.noop_count.unwrap_or(0) + 1),
             ..Default::default()
         };
 
-        let updated_tx = self
+        let updated_original_tx = self
             .transaction_repository
             .partial_update(tx.id.clone(), update)
             .await?;
 
-        // Submit the cancellation transaction
-        let evm_data_for_raw = updated_tx.network_data.get_evm_transaction_data()?;
-        let raw_tx = evm_data_for_raw.raw.as_ref().ok_or_else(|| {
-            TransactionError::InvalidType("Raw transaction data is missing".to_string())
-        })?;
-
-        self.provider.send_raw_transaction(raw_tx).await?;
-        info!("Transaction sent successfully: {:?}", tx.id);
-        // Send notification if configured
-        self.send_transaction_update_notification(&updated_tx)
+        // Submit the noop transaction to the network
+        self.job_producer
+            .produce_submit_transaction_job(
+                TransactionSend::submit(
+                    stored_noop_tx.id.clone(),
+                    stored_noop_tx.relayer_id.clone(),
+                ),
+                None,
+            )
             .await?;
 
-        info!("Transaction cancelled successfully: {:?}", tx.id);
-        Ok(updated_tx)
+        // Send notification for both transactions
+        self.send_transaction_update_notification(&stored_noop_tx)
+            .await?;
+        self.send_transaction_update_notification(&updated_original_tx)
+            .await?;
+
+        info!(
+            "Cancellation transaction created and submitted: {:?}",
+            stored_noop_tx.id
+        );
+        Ok(updated_original_tx)
     }
 
     /// Replaces a transaction.
@@ -614,22 +732,6 @@ impl Transaction for EvmRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         Ok(tx)
-    }
-
-    /// Validates a transaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `_tx` - The transaction model to validate.
-    ///
-    /// # Returns
-    ///
-    /// A result containing a boolean indicating validity or a `TransactionError`.
-    async fn validate_transaction(
-        &self,
-        _tx: TransactionRepoModel,
-    ) -> Result<bool, TransactionError> {
-        Ok(true)
     }
 }
 
