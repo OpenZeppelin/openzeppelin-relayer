@@ -25,11 +25,35 @@ pub struct SpeedPrices {
     pub fast: u128,
     pub fastest: u128,
 }
+
+#[cfg(test)]
+impl Default for SpeedPrices {
+    fn default() -> Self {
+        Self {
+            safe_low: 20_000_000_000, // 20 Gwei
+            average: 30_000_000_000,  // 30 Gwei
+            fast: 40_000_000_000,     // 40 Gwei
+            fastest: 50_000_000_000,  // 50 Gwei
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasPrices {
     pub legacy_prices: SpeedPrices,
     pub max_priority_fee_per_gas: SpeedPrices,
     pub base_fee_per_gas: u128,
+}
+
+#[cfg(test)]
+impl Default for GasPrices {
+    fn default() -> Self {
+        Self {
+            legacy_prices: SpeedPrices::default(),
+            max_priority_fee_per_gas: SpeedPrices::default(),
+            base_fee_per_gas: 10_000_000_000, // 10 Gwei base fee
+        }
+    }
 }
 
 impl std::cmp::Eq for Speed {}

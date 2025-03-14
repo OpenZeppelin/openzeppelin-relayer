@@ -52,8 +52,10 @@ async fn handle_request(
             relayer_transaction.submit_transaction(transaction).await?;
         }
         TransactionCommand::Resubmit => {
-            info!("Resubmitting transaction");
-            relayer_transaction.submit_transaction(transaction).await?;
+            info!("Resubmitting transaction with updated parameters");
+            relayer_transaction
+                .resubmit_transaction(transaction)
+                .await?;
         }
         TransactionCommand::Resend => {
             info!("Resending transaction");

@@ -131,6 +131,12 @@ impl InMemoryTransactionRepository {
             if let Some(network_data) = update.network_data {
                 tx.network_data = network_data;
             }
+            if let Some(hashes) = update.hashes {
+                tx.hashes = hashes;
+            }
+            if let Some(priced_at) = update.priced_at {
+                tx.priced_at = Some(priced_at);
+            }
             Ok(tx.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
@@ -285,6 +291,8 @@ mod tests {
             confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             valid_until: None,
             network_type: NetworkType::Evm,
+            priced_at: None,
+            hashes: vec![],
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: Some(1000000000),
                 gas_limit: 21000,
@@ -314,6 +322,8 @@ mod tests {
             confirmed_at: None,
             valid_until: None,
             network_type: NetworkType::Evm,
+            priced_at: None,
+            hashes: vec![],
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: Some(1000000000),
                 gas_limit: 21000,
@@ -755,6 +765,8 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             network_data: None,
+            hashes: None,
+            priced_at: None,
         };
         let updated_tx1 = repo
             .partial_update("test-tx-id".to_string(), update1)
@@ -769,6 +781,8 @@ mod tests {
             sent_at: Some("2023-01-01T12:00:00Z".to_string()),
             confirmed_at: Some("2023-01-01T12:05:00Z".to_string()),
             network_data: None,
+            hashes: None,
+            priced_at: None,
         };
         let updated_tx2 = repo
             .partial_update("test-tx-id".to_string(), update2)
@@ -790,6 +804,8 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             network_data: None,
+            hashes: None,
+            priced_at: None,
         };
         let result = repo
             .partial_update("non-existent-id".to_string(), update3)

@@ -57,6 +57,15 @@ impl Transaction for SolanaRelayerTransaction {
         Ok(tx)
     }
 
+    async fn resubmit_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        info!("resubmitting transaction");
+        // For now, just call submit_transaction as Solana implementation is a stub
+        self.submit_transaction(tx).await
+    }
+
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,

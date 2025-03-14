@@ -1,5 +1,5 @@
 use crate::{
-    domain::{SignTransactionResponseEvm, TransactionPriceParams},
+    domain::{PriceParams, SignTransactionResponseEvm},
     models::{
         AddressError, EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError,
         RelayerRepoModel, SignerError, TransactionError, U256,
@@ -35,6 +35,10 @@ pub struct TransactionUpdateRequest {
     pub sent_at: Option<String>,
     pub confirmed_at: Option<String>,
     pub network_data: Option<NetworkTransactionData>,
+    /// Timestamp when gas price was determined
+    pub priced_at: Option<String>,
+    /// History of transaction hashes
+    pub hashes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +52,10 @@ pub struct TransactionRepoModel {
     pub valid_until: Option<String>,
     pub network_data: NetworkTransactionData,
     pub network_type: NetworkType,
+    /// Timestamp when gas price was determined
+    pub priced_at: Option<String>,
+    /// History of transaction hashes
+    pub hashes: Vec<String>,
 }
 
 impl TransactionRepoModel {
@@ -122,7 +130,7 @@ pub struct EvmTransactionData {
 }
 
 impl EvmTransactionData {
-    pub fn with_price_params(mut self, price_params: TransactionPriceParams) -> Self {
+    pub fn with_price_params(mut self, price_params: PriceParams) -> Self {
         self.gas_price = price_params.gas_price;
         self.max_fee_per_gas = price_params.max_fee_per_gas;
         self.max_priority_fee_per_gas = price_params.max_priority_fee_per_gas;
@@ -164,6 +172,25 @@ impl Default for EvmTransactionData {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             raw: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for TransactionRepoModel {
+    fn default() -> Self {
+        Self {
+            id: "00000000-0000-0000-0000-000000000001".to_string(),
+            relayer_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            status: TransactionStatus::Pending,
+            created_at: "2023-01-01T00:00:00Z".to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData::default()),
+            network_type: NetworkType::Evm,
+            priced_at: None,
+            hashes: Vec::new(),
         }
     }
 }
@@ -242,6 +269,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                         max_priority_fee_per_gas: evm_request.max_priority_fee_per_gas,
                         raw: None,
                     }),
+                    priced_at: None,
+                    hashes: Vec::new(),
                 })
             }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
@@ -259,6 +288,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     instructions: solana_request.instructions.clone(),
                     hash: None,
                 }),
+                priced_at: None,
+                hashes: Vec::new(),
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
@@ -276,6 +307,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     operations: vec![], // TODO
                     hash: Some("0x".to_string()),
                 }),
+                priced_at: None,
+                hashes: Vec::new(),
             }),
         }
     }
@@ -369,7 +402,6 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
 
     #[test]
     fn test_signature_from_bytes() {
@@ -413,11 +445,10 @@ mod tests {
     #[test]
     fn test_evm_tx_with_price_params() {
         let tx_data = create_sample_evm_tx_data();
-        let price_params = TransactionPriceParams {
+        let price_params = PriceParams {
             gas_price: None,
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
-            balance: Some(U256::from_str("1000000000000000000").unwrap()),
         };
 
         let updated_tx = tx_data.with_price_params(price_params);

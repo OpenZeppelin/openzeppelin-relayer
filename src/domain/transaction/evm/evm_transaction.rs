@@ -10,35 +10,23 @@ use log::{debug, info, warn};
 use std::sync::Arc;
 
 use crate::{
-    constants::DEFAULT_TX_VALID_TIMESPAN,
+    constants::{DEFAULT_RESUBMIT_TIMEOUT_MS, DEFAULT_TX_VALID_TIMESPAN},
     domain::{transaction::Transaction, PriceCalculator},
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, EvmNetwork, NetworkTransactionData,
         RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest, U256,
+        TransactionUpdateRequest,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
     services::{
         EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
         TransactionCounterService,
     },
+    utils::get_resubmit_timeout_for_speed,
 };
 
-/// Parameters for determining the price of a transaction.
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct TransactionPriceParams {
-    /// The gas price for the transaction.
-    pub gas_price: Option<u128>,
-    /// The maximum priority fee per gas.
-    pub max_priority_fee_per_gas: Option<u128>,
-    /// The maximum fee per gas.
-    pub max_fee_per_gas: Option<u128>,
-    /// The balance available for the transaction.
-    pub balance: Option<U256>,
-}
-
+use super::PriceParams;
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction {
     relayer: RelayerRepoModel,
@@ -47,7 +35,7 @@ pub struct EvmRelayerTransaction {
     transaction_repository: Arc<InMemoryTransactionRepository>,
     transaction_counter_service: TransactionCounterService,
     job_producer: Arc<JobProducer>,
-    gas_price_service: Arc<EvmGasPriceService<EvmProvider>>,
+    price_calculator: PriceCalculator<EvmGasPriceService<EvmProvider>>,
     signer: EvmSigner,
 }
 
@@ -76,7 +64,7 @@ impl EvmRelayerTransaction {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_service: TransactionCounterService,
         job_producer: Arc<JobProducer>,
-        gas_price_service: Arc<EvmGasPriceService<EvmProvider>>,
+        price_calculator: PriceCalculator<EvmGasPriceService<EvmProvider>>,
         signer: EvmSigner,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
@@ -86,7 +74,7 @@ impl EvmRelayerTransaction {
             transaction_repository,
             transaction_counter_service,
             job_producer,
-            gas_price_service,
+            price_calculator,
             signer,
         })
     }
@@ -229,11 +217,6 @@ impl EvmRelayerTransaction {
         }
     }
 
-    /// Returns a reference to the gas price service.
-    pub fn gas_price_service(&self) -> &Arc<EvmGasPriceService<EvmProvider>> {
-        &self.gas_price_service
-    }
-
     /// Returns a reference to the provider.
     pub fn provider(&self) -> &EvmProvider {
         &self.provider
@@ -289,6 +272,52 @@ impl EvmRelayerTransaction {
             .await?;
         Ok(updated_tx)
     }
+
+    /// Gets the age of a transaction since it was sent
+    fn get_age_of_sent_at(&self, tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
+        let now = Utc::now();
+        let sent_at_str = tx.sent_at.as_ref().ok_or_else(|| {
+            TransactionError::UnexpectedError("Transaction sent_at time is missing".to_string())
+        })?;
+        let sent_time = DateTime::parse_from_rfc3339(sent_at_str)
+            .map_err(|_| {
+                TransactionError::UnexpectedError("Error parsing sent_at time".to_string())
+            })?
+            .with_timezone(&Utc);
+        Ok(now.signed_duration_since(sent_time))
+    }
+
+    /// Determines if a transaction should be resubmitted
+    /// Returns true if the transaction should be resubmitted
+    async fn should_resubmit(&self, tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+        let age = self.get_age_of_sent_at(tx)?;
+
+        // Check for speed and determine timeout
+        let timeout = match tx.network_data.get_evm_transaction_data() {
+            Ok(data) => get_resubmit_timeout_for_speed(&data.speed, DEFAULT_RESUBMIT_TIMEOUT_MS),
+            Err(_) => DEFAULT_RESUBMIT_TIMEOUT_MS,
+        };
+
+        // If the transaction has been waiting for more than our timeout, resubmit it
+        if age > Duration::milliseconds(timeout) {
+            info!("Transaction has been pending for too long, resubmitting");
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Calculates bumped gas price for resubmission
+    async fn calculate_bumped_gas_price(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<PriceParams, TransactionError> {
+        info!("Calculating bumped gas price for transaction: {}", tx.id);
+        // Delegate to the PriceCalculator's implementation
+        self.price_calculator
+            .calculate_bumped_gas_price(tx, self.relayer())
+            .await
+    }
 }
 
 #[async_trait]
@@ -311,13 +340,11 @@ impl Transaction for EvmRelayerTransaction {
         let evm_data = tx.network_data.get_evm_transaction_data()?;
         // set the gas price
         let relayer = self.relayer();
-        let price_params: TransactionPriceParams = PriceCalculator::get_transaction_price_params(
-            &evm_data,
-            relayer,
-            &self.gas_price_service,
-            &self.provider,
-        )
-        .await?;
+        let price_params: PriceParams = self
+            .price_calculator
+            .get_transaction_price_params(&evm_data, relayer)
+            .await?;
+
         debug!("Gas price: {:?}", price_params.gas_price);
         // increment the nonce
         let nonce = self
@@ -340,9 +367,17 @@ impl Transaction for EvmRelayerTransaction {
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
+        // Track the transaction hash
+        let mut hashes = tx.hashes.clone();
+        if let Some(hash) = updated_evm_data.hash.clone() {
+            hashes.push(hash);
+        }
+
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Sent),
             network_data: Some(NetworkTransactionData::Evm(updated_evm_data)),
+            priced_at: Some(Utc::now().to_rfc3339()),
+            hashes: Some(hashes),
             ..Default::default()
         };
 
@@ -398,7 +433,7 @@ impl Transaction for EvmRelayerTransaction {
             .partial_update(tx.id.clone(), update)
             .await?;
 
-        // after submitting the transaction, we need to handle the transaction status
+        // Schedule status check
         self.job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
@@ -430,7 +465,33 @@ impl Transaction for EvmRelayerTransaction {
         let status = self.check_transaction_status(&tx).await?;
 
         match status {
-            TransactionStatus::Submitted | TransactionStatus::Mined => {
+            TransactionStatus::Submitted => {
+                // Check if transaction needs resubmission
+                if self.should_resubmit(&tx).await? {
+                    self.job_producer
+                        .produce_submit_transaction_job(
+                            TransactionSend::resubmit(tx.id.clone(), tx.relayer_id.clone()),
+                            None,
+                        )
+                        .await?;
+                }
+
+                // Otherwise, continue with normal status check
+                self.job_producer
+                    .produce_check_transaction_status_job(
+                        TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                        Some(Utc::now().timestamp() + 5),
+                    )
+                    .await?;
+
+                if tx.status != status {
+                    return self.update_transaction_status(tx, status, None).await;
+                }
+
+                Ok(tx)
+            }
+            TransactionStatus::Mined => {
+                // For mined transactions, just schedule the next check
                 self.job_producer
                     .produce_check_transaction_status_job(
                         TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
@@ -461,6 +522,66 @@ impl Transaction for EvmRelayerTransaction {
                 status
             ))),
         }
+    }
+
+    /// Resubmits a transaction with updated parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction model to resubmit.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the resubmitted transaction model or a `TransactionError`.
+    async fn resubmit_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        info!("Resubmitting transaction: {:?}", tx.id);
+
+        // Calculate bumped gas price
+        let bumped_price_params = self.calculate_bumped_gas_price(&tx).await?;
+
+        // Get transaction data
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+
+        // Create new transaction data with bumped gas price
+        let updated_evm_data = evm_data.with_price_params(bumped_price_params);
+
+        // Sign the transaction
+        let sig_result = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Evm(updated_evm_data.clone()))
+            .await?;
+
+        let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+
+        let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
+            TransactionError::InvalidType("Raw transaction data is missing".to_string())
+        })?;
+
+        self.provider.send_raw_transaction(raw_tx).await?;
+
+        // Track attempt count and hash history
+        let mut hashes = tx.hashes.clone();
+        if let Some(hash) = final_evm_data.hash.clone() {
+            hashes.push(hash);
+        }
+
+        // Update the transaction in the repository
+        let update = TransactionUpdateRequest {
+            network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
+            hashes: Some(hashes),
+            priced_at: Some(Utc::now().to_rfc3339()),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        Ok(updated_tx)
     }
 
     /// Cancels a transaction.

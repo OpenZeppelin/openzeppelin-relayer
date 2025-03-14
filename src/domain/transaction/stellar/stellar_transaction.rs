@@ -50,6 +50,14 @@ impl Transaction for StellarRelayerTransaction {
         Ok(tx)
     }
 
+    async fn resubmit_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        // For now, just call submit_transaction as Stellar implementation is a stub
+        self.submit_transaction(tx).await
+    }
+
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
