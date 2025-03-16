@@ -18,7 +18,7 @@ use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-use super::{SignerConfigValidate, ValidatableSignerConfig};
+use super::{validate_with_validator, SignerConfigValidate};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Validate)]
 #[serde(deny_unknown_fields)]
@@ -39,10 +39,9 @@ pub struct VaultTransitSignerFileConfig {
 
 impl SignerConfigValidate for VaultTransitSignerFileConfig {
     fn validate(&self) -> Result<(), ConfigFileError> {
-        self.validate_with_validator()
+        validate_with_validator(self)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,7 +193,7 @@ mod tests {
             namespace: None,
         };
 
-        let result = config.validate_with_validator();
+        let result = validate_with_validator(&config);
         assert!(result.is_err());
 
         if let Err(e) = result {

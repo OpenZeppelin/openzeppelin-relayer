@@ -24,17 +24,18 @@ pub struct LocalSigner {
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: &SignerRepoModel) -> Self {
+    pub fn new(signer_model: &SignerRepoModel) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_local()
-            .expect("local config not found");
+            .ok_or_else(|| SignerError::Configuration("Local config not found".to_string()))?;
 
-        let keypair = Keypair::from_seed(&config.raw_key).expect("invalid keypair");
+        let keypair = Keypair::from_seed(&config.raw_key)
+            .map_err(|e| SignerError::Configuration(format!("Failed to create signer: {}", e)))?;
 
-        Self {
+        Ok(Self {
             local_signer_client: keypair,
-        }
+        })
     }
 }
 
@@ -89,7 +90,7 @@ mod tests {
                 raw_key: valid_seed(),
             }),
         };
-        LocalSigner::new(&model)
+        LocalSigner::new(&model).unwrap()
     }
 
     #[test]
@@ -101,7 +102,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "invalid keypair")]
     fn test_new_local_signer_invalid_keypair() {
         let model = SignerRepoModel {
             id: "test".to_string(),
@@ -109,7 +109,15 @@ mod tests {
                 raw_key: vec![1u8; 10],
             }),
         };
-        let _ = LocalSigner::new(&model);
+        let result = LocalSigner::new(&model);
+
+        assert!(result.is_err());
+        match result.err() {
+            Some(SignerError::Configuration(msg)) => {
+                assert!(msg.contains("Failed to create signer"));
+            }
+            _ => panic!("Expected SignerError::Configuration"),
+        }
     }
 
     #[tokio::test]
@@ -162,7 +170,7 @@ mod tests {
             }),
         };
 
-        let local_signer = LocalSigner::new(&model);
+        let local_signer = LocalSigner::new(&model).unwrap();
 
         let pubkey_result = local_signer.pubkey();
         assert!(pubkey_result.is_ok());

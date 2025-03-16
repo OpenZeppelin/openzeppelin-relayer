@@ -47,26 +47,28 @@ pub enum SignerConfig {
 impl SignerConfig {
     pub fn get_local(&self) -> Option<&LocalSignerConfig> {
         match self {
-            SignerConfig::Local(config) => Some(config),
-            SignerConfig::Test(config) => Some(config),
-            SignerConfig::Vault(config) => Some(config),
-            SignerConfig::VaultCloud(config) => Some(config),
-            _ => None,
+            Self::Local(config)
+            | Self::Test(config)
+            | Self::Vault(config)
+            | Self::VaultCloud(config) => Some(config),
+            Self::VaultTransit(_) | Self::AwsKms(_) => None,
         }
     }
 
     pub fn get_aws_kms(&self) -> Option<&AwsKmsSignerConfig> {
-        match self {
-            SignerConfig::AwsKms(config) => Some(config),
-            _ => None,
-        }
+        let SignerConfig::AwsKms(config) = self else {
+            return None;
+        };
+
+        Some(config)
     }
 
     pub fn get_vault_transit(&self) -> Option<&VaultTransitSignerConfig> {
-        match self {
-            SignerConfig::VaultTransit(config) => Some(config),
-            _ => None,
-        }
+        let SignerConfig::VaultTransit(config) = self else {
+            return None;
+        };
+
+        Some(config)
     }
 }
 
