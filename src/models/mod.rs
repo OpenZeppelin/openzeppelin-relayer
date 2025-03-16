@@ -37,3 +37,9 @@ pub use rpc::*;
 
 mod types;
 pub use types::*;
+
+mod secure_string;
+pub use secure_string::*;
+
+mod plain_or_env_value;
+pub use plain_or_env_value::*;

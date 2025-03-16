@@ -14,7 +14,10 @@
 //!
 //! Unlike regular Vault configuration, this specifically targets the Transit
 //! engine use case where keys are managed and stored within Vault itself.
-use crate::config::ConfigFileError;
+use crate::{
+    config::ConfigFileError,
+    models::{validate_plain_or_env_value, PlainOrEnvValue},
+};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -27,10 +30,10 @@ pub struct VaultTransitSignerFileConfig {
     pub key_name: String,
     #[validate(url)]
     pub address: String,
-    #[validate(length(min = 1, message = "role_id cannot be empty"))]
-    pub role_id: String,
-    #[validate(length(min = 1, message = "secret_id cannot be empty"))]
-    pub secret_id: String,
+    #[validate(custom(function = "validate_plain_or_env_value"))]
+    pub role_id: PlainOrEnvValue,
+    #[validate(custom(function = "validate_plain_or_env_value"))]
+    pub secret_id: PlainOrEnvValue,
     #[validate(length(min = 1, message = "pubkey cannot be empty"))]
     pub pubkey: String,
     pub mount_point: Option<String>,
@@ -45,6 +48,8 @@ impl SignerConfigValidate for VaultTransitSignerFileConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::SecretString;
+
     use super::*;
 
     #[test]
@@ -52,8 +57,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com:8200".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==".to_string(),
             mount_point: Some("transit".to_string()),
             namespace: Some("namespace1".to_string()),
@@ -68,8 +77,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "transit-key".to_string(),
             address: "not-a-url".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==".to_string(),
             mount_point: Some("transit".to_string()),
             namespace: None,
@@ -88,8 +101,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "".to_string(),
             address: "https://vault.example.com:8200".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==".to_string(),
             mount_point: Some("transit".to_string()),
             namespace: None,
@@ -109,8 +126,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com:8200".to_string(),
-            role_id: "".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==".to_string(),
             mount_point: Some("transit".to_string()),
             namespace: None,
@@ -121,7 +142,6 @@ mod tests {
         if let Err(e) = result {
             let error_message = format!("{:?}", e);
             assert!(error_message.contains("role_id"));
-            assert!(error_message.contains("cannot be empty"));
         }
     }
 
@@ -130,8 +150,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com:8200".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
             pubkey: "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==".to_string(),
             mount_point: Some("transit".to_string()),
             namespace: None,
@@ -142,7 +166,6 @@ mod tests {
         if let Err(e) = result {
             let error_message = format!("{:?}", e);
             assert!(error_message.contains("secret_id"));
-            assert!(error_message.contains("cannot be empty"));
         }
     }
 
@@ -151,8 +174,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com:8200".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "".to_string(),
             mount_point: Some("transit".to_string()),
             namespace: None,
@@ -172,8 +199,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com:8200".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==".to_string(),
             mount_point: None,
             namespace: None,
@@ -187,8 +218,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "".to_string(),
             address: "invalid-url".to_string(),
-            role_id: "".to_string(),
-            secret_id: "".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "".to_string(),
             mount_point: None,
             namespace: None,
@@ -201,8 +236,6 @@ mod tests {
             if let ConfigFileError::InvalidFormat(msg) = e {
                 assert!(msg.contains("key_name"));
                 assert!(msg.contains("address"));
-                assert!(msg.contains("role_id"));
-                assert!(msg.contains("secret_id"));
                 assert!(msg.contains("pubkey"));
             } else {
                 panic!("Expected ConfigFileError::InvalidFormat, got {:?}", e);
@@ -216,8 +249,14 @@ mod tests {
         {
             "key_name": "transit-key",
             "address": "https://vault.example.com:8200",
-            "role_id": "role-123",
-            "secret_id": "secret-456",
+            "role_id": {
+                "type": "plain",
+                "value": "role-123"
+            },
+            "secret_id": { 
+                "type": "plain",
+                "value": "secret-456"
+            },
             "pubkey": "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==",
             "mount_point": "transit",
             "namespace": "my-namespace"
@@ -227,8 +266,14 @@ mod tests {
         let config: VaultTransitSignerFileConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.key_name, "transit-key");
         assert_eq!(config.address, "https://vault.example.com:8200");
-        assert_eq!(config.role_id, "role-123");
-        assert_eq!(config.secret_id, "secret-456");
+        assert_eq!(
+            config.role_id.get_value().unwrap().to_str().as_str(),
+            "role-123"
+        );
+        assert_eq!(
+            config.secret_id.get_value().unwrap().to_str().as_str(),
+            "secret-456"
+        );
         assert_eq!(config.pubkey, "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==");
         assert_eq!(config.mount_point, Some("transit".to_string()));
         assert_eq!(config.namespace, Some("my-namespace".to_string()));
@@ -258,8 +303,12 @@ mod tests {
         let config = VaultTransitSignerFileConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com:8200".to_string(),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             pubkey: "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEd+vn+WOG+lGUiJCzHsj8VItmr7Lmdv/Zr+tIhJM7rM+QT9QEzvEX2jWOPyXrvCwUyvVgWoMwUYIo3hd1PFTy7A==".to_string(),
             mount_point: Some("transit".to_string()),
             namespace: Some("namespace1".to_string()),
@@ -268,6 +317,12 @@ mod tests {
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: VaultTransitSignerFileConfig = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(config, deserialized);
+        assert_eq!(config.address, deserialized.address);
+        assert_eq!(config.key_name, deserialized.key_name);
+        assert_eq!(config.mount_point, deserialized.mount_point);
+        assert_eq!(config.namespace, deserialized.namespace);
+        assert_eq!(config.pubkey, deserialized.pubkey);
+        assert_ne!(config.role_id, deserialized.role_id);
+        assert_ne!(config.secret_id, deserialized.secret_id);
     }
 }

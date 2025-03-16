@@ -10,16 +10,16 @@
 //! * Support for environment variable-based passphrase retrieval
 use serde::{Deserialize, Serialize};
 
-use crate::config::ConfigFileError;
+use crate::{config::ConfigFileError, models::PlainOrEnvValue};
 
-use super::{PlainOrEnvConfigValue, SignerConfigValidate};
+use super::SignerConfigValidate;
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct LocalSignerFileConfig {
     pub path: String,
-    pub passphrase: PlainOrEnvConfigValue,
+    pub passphrase: PlainOrEnvValue,
 }
 
 impl LocalSignerFileConfig {
@@ -50,20 +50,20 @@ impl LocalSignerFileConfig {
 
     fn validate_passphrase(&self) -> Result<(), ConfigFileError> {
         match &self.passphrase {
-            PlainOrEnvConfigValue::Env { name } => {
-                if name.is_empty() {
+            PlainOrEnvValue::Env { value } => {
+                if value.is_empty() {
                     return Err(ConfigFileError::MissingField(
                         "Passphrase environment variable name cannot be empty".into(),
                     ));
                 }
-                if std::env::var(name).is_err() {
+                if std::env::var(value).is_err() {
                     return Err(ConfigFileError::MissingEnvVar(format!(
                         "Environment variable {} not found",
-                        name
+                        value
                     )));
                 }
             }
-            PlainOrEnvConfigValue::Plain { value } => {
+            PlainOrEnvValue::Plain { value } => {
                 if value.is_empty() {
                     return Err(ConfigFileError::InvalidFormat(
                         "Passphrase value cannot be empty".into(),
@@ -87,6 +87,8 @@ impl SignerConfigValidate for LocalSignerFileConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::SecretString;
+
     use super::*;
     use std::env;
     use std::fs::File;
@@ -102,8 +104,8 @@ mod tests {
 
         let config = LocalSignerFileConfig {
             path: file_path.to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "password123".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("password123"),
             },
         };
 
@@ -114,8 +116,8 @@ mod tests {
     fn test_empty_path() {
         let config = LocalSignerFileConfig {
             path: "".to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "password123".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("password123"),
             },
         };
 
@@ -128,8 +130,8 @@ mod tests {
     fn test_nonexistent_path() {
         let config = LocalSignerFileConfig {
             path: "/tmp/definitely-doesnt-exist-12345.json".to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "password123".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("password123"),
             },
         };
 
@@ -144,8 +146,8 @@ mod tests {
 
         let config = LocalSignerFileConfig {
             path: temp_dir.path().to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "password123".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("password123"),
             },
         };
 
@@ -163,8 +165,8 @@ mod tests {
 
         let config = LocalSignerFileConfig {
             path: file_path.to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
             },
         };
 
@@ -182,8 +184,8 @@ mod tests {
 
         let config = LocalSignerFileConfig {
             path: file_path.to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Env {
-                name: "".to_string(),
+            passphrase: PlainOrEnvValue::Env {
+                value: "".to_string(),
             },
         };
 
@@ -204,8 +206,8 @@ mod tests {
 
         let config = LocalSignerFileConfig {
             path: file_path.to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Env {
-                name: "TEST_SIGNER_PASSPHRASE_THAT_DOESNT_EXIST".to_string(),
+            passphrase: PlainOrEnvValue::Env {
+                value: "TEST_SIGNER_PASSPHRASE_THAT_DOESNT_EXIST".to_string(),
             },
         };
 
@@ -225,8 +227,8 @@ mod tests {
 
         let config = LocalSignerFileConfig {
             path: file_path.to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Env {
-                name: "TEST_SIGNER_PASSPHRASE".to_string(),
+            passphrase: PlainOrEnvValue::Env {
+                value: "TEST_SIGNER_PASSPHRASE".to_string(),
             },
         };
 
@@ -239,15 +241,16 @@ mod tests {
     fn test_serialize_deserialize() {
         let config = LocalSignerFileConfig {
             path: "/path/to/keystore.json".to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "password123".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("password123"),
             },
         };
 
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: LocalSignerFileConfig = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(config, deserialized);
+        assert_eq!(config.path, deserialized.path);
+        assert_ne!(config.passphrase, deserialized.passphrase);
     }
 
     #[test]
@@ -263,8 +266,8 @@ mod tests {
         let config: LocalSignerFileConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.path, "/path/to/keystore.json");
 
-        if let PlainOrEnvConfigValue::Plain { value } = &config.passphrase {
-            assert_eq!(value, "password123");
+        if let PlainOrEnvValue::Plain { value } = &config.passphrase {
+            assert_eq!(value.to_str().as_str(), "password123");
         } else {
             panic!("Expected Plain passphrase variant");
         }
@@ -276,15 +279,15 @@ mod tests {
             "path": "/path/to/keystore.json",
             "passphrase": {
                 "type": "env",
-                "name": "KEYSTORE_PASSPHRASE"
+                "value": "KEYSTORE_PASSPHRASE"
             }
         }"#;
 
         let config: LocalSignerFileConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.path, "/path/to/keystore.json");
 
-        if let PlainOrEnvConfigValue::Env { name } = &config.passphrase {
-            assert_eq!(name, "KEYSTORE_PASSPHRASE");
+        if let PlainOrEnvValue::Env { value } = &config.passphrase {
+            assert_eq!(value, "KEYSTORE_PASSPHRASE");
         } else {
             panic!("Expected Env passphrase variant");
         }
@@ -314,8 +317,8 @@ mod tests {
 
         let config1 = LocalSignerFileConfig {
             path: file_path.to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "password123".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("password123"),
             },
         };
         assert!(config1.validate_path().is_ok());
@@ -324,16 +327,16 @@ mod tests {
 
         let config2 = LocalSignerFileConfig {
             path: "/nonexistent/path.json".to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "password123".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("password123"),
             },
         };
         assert!(config2.validate_path().is_err());
 
         let config3 = LocalSignerFileConfig {
             path: file_path.to_str().unwrap().to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
             },
         };
         assert!(config3.validate_passphrase().is_err());

@@ -66,6 +66,10 @@ spl-associated-token-account = "6.0.0"
 itertools = "0.14.0"
 validator = { version = "0.20", features = ["derive"] }
 vaultrs = { version = "0.7.4" }
+secrets = { version = "1.2"}
+libsodium-sys = "0.2.7"
+zeroize = "1.8"
+subtle = "2.6"
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"

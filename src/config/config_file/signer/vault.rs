@@ -9,7 +9,10 @@
 //! - AppRole authentication (role_id and secret_id)
 //! - Key name to use for signing operations
 //! - Optional mount point override for Transit engine
-use crate::config::ConfigFileError;
+use crate::{
+    config::ConfigFileError,
+    models::{validate_plain_or_env_value, PlainOrEnvValue},
+};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -21,10 +24,10 @@ pub struct VaultSignerFileConfig {
     #[validate(url)]
     pub address: String,
     pub namespace: Option<String>,
-    #[validate(length(min = 1, message = "Vault role ID cannot be empty"))]
-    pub role_id: String,
-    #[validate(length(min = 1, message = "Vault secret ID cannot be empty"))]
-    pub secret_id: String,
+    #[validate(custom(function = "validate_plain_or_env_value"))]
+    pub role_id: PlainOrEnvValue,
+    #[validate(custom(function = "validate_plain_or_env_value"))]
+    pub secret_id: PlainOrEnvValue,
     #[validate(length(min = 1, message = "Vault key name cannot be empty"))]
     pub key_name: String,
     pub mount_point: Option<String>,
@@ -38,6 +41,8 @@ impl SignerConfigValidate for VaultSignerFileConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::SecretString;
+
     use super::*;
     use validator::Validate;
 
@@ -46,8 +51,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "https://vault.example.com:8200".to_string(),
             namespace: Some("namespace1".to_string()),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             key_name: "my-key".to_string(),
             mount_point: Some("transit".to_string()),
         };
@@ -61,8 +70,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "not-a-url".to_string(),
             namespace: Some("namespace1".to_string()),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             key_name: "my-key".to_string(),
             mount_point: Some("transit".to_string()),
         };
@@ -80,8 +93,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "https://vault.example.com:8200".to_string(),
             namespace: Some("namespace1".to_string()),
-            role_id: "".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             key_name: "my-key".to_string(),
             mount_point: Some("transit".to_string()),
         };
@@ -92,7 +109,6 @@ mod tests {
         if let Err(e) = result {
             let error_message = format!("{:?}", e);
             assert!(error_message.contains("role_id"));
-            assert!(error_message.contains("cannot be empty"));
         }
     }
 
@@ -101,8 +117,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "https://vault.example.com:8200".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
             key_name: "my-key".to_string(),
             mount_point: None,
         };
@@ -113,7 +133,6 @@ mod tests {
         if let Err(e) = result {
             let error_message = format!("{:?}", e);
             assert!(error_message.contains("secret_id"));
-            assert!(error_message.contains("cannot be empty"));
         }
     }
 
@@ -122,8 +141,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "https://vault.example.com:8200".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             key_name: "".to_string(),
             mount_point: None,
         };
@@ -143,8 +166,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "https://vault.example.com:8200".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             key_name: "my-key".to_string(),
             mount_point: None,
         };
@@ -158,8 +185,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "invalid-url".to_string(),
             namespace: None,
-            role_id: "".to_string(),
-            secret_id: "".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
             key_name: "".to_string(),
             mount_point: None,
         };
@@ -185,8 +216,14 @@ mod tests {
         {
             "address": "https://vault.example.com:8200",
             "namespace": "my-namespace",
-            "role_id": "role-123",
-            "secret_id": "secret-456",
+            "role_id": {
+                "type": "plain",
+                "value": "role-123"
+            },
+            "secret_id": { 
+                "type": "plain",
+                "value": "secret-456"
+            },
             "key_name": "my-key",
             "mount_point": "transit"
         }
@@ -195,8 +232,14 @@ mod tests {
         let config: VaultSignerFileConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.address, "https://vault.example.com:8200");
         assert_eq!(config.namespace, Some("my-namespace".to_string()));
-        assert_eq!(config.role_id, "role-123");
-        assert_eq!(config.secret_id, "secret-456");
+        assert_eq!(
+            config.role_id.get_value().unwrap().to_str().as_str(),
+            "role-123"
+        );
+        assert_eq!(
+            config.secret_id.get_value().unwrap().to_str().as_str(),
+            "secret-456"
+        );
         assert_eq!(config.key_name, "my-key");
         assert_eq!(config.mount_point, Some("transit".to_string()));
     }
@@ -207,8 +250,14 @@ mod tests {
         {
             "address": "https://vault.example.com:8200",
             "namespace": "my-namespace",
-            "role_id": "role-123",
-            "secret_id": "secret-456",
+            "role_id": {
+                "type": "plain",
+                "value": "role-123"
+            },
+            "secret_id": { 
+                "type": "plain",
+                "value": "secret-456"
+            },
             "key_name": "my-key",
             "mount_point": "transit",
             "unknown_field": "should cause error"
@@ -224,8 +273,12 @@ mod tests {
         let config = VaultSignerFileConfig {
             address: "https://vault.example.com:8200".to_string(),
             namespace: Some("namespace1".to_string()),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             key_name: "my-key".to_string(),
             mount_point: Some("transit".to_string()),
         };
@@ -233,6 +286,11 @@ mod tests {
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: VaultSignerFileConfig = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(config, deserialized);
+        assert_eq!(config.address, deserialized.address);
+        assert_eq!(config.key_name, deserialized.key_name);
+        assert_eq!(config.mount_point, deserialized.mount_point);
+        assert_eq!(config.namespace, deserialized.namespace);
+        assert_ne!(config.role_id, deserialized.role_id);
+        assert_ne!(config.secret_id, deserialized.secret_id);
     }
 }

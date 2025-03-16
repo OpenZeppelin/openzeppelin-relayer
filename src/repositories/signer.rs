@@ -115,6 +115,8 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
 
 #[cfg(test)]
 mod tests {
+    use secrets::SecretVec;
+
     use crate::models::{LocalSignerConfig, SignerConfig};
 
     use super::*;
@@ -122,7 +124,9 @@ mod tests {
     fn create_test_signer(id: String) -> SignerRepoModel {
         SignerRepoModel {
             id: id.clone(),
-            config: SignerConfig::Local(LocalSignerConfig { raw_key: vec![] }),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: SecretVec::zero(0),
+            }),
         }
     }
 

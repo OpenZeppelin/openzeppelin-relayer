@@ -257,8 +257,8 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             ConfigFileNetworkType::Solana => NetworkType::Solana,
         };
 
-        let policies = if let Some(config_policies) = config.policies {
-            RelayerNetworkPolicy::try_from(config_policies).map_err(|_| {
+        let policies = if let Some(config_policies) = &config.policies {
+            RelayerNetworkPolicy::try_from(config_policies.clone()).map_err(|_| {
                 ConversionError::InvalidNetworkType("Failed to convert network policy".to_string())
             })?
         } else {
@@ -292,11 +292,11 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
     type Error = eyre::Error;
 
     fn try_from(policy: ConfigFileRelayerNetworkPolicy) -> Result<Self, Self::Error> {
-        match policy {
+        match &policy {
             ConfigFileRelayerNetworkPolicy::Evm(evm) => {
                 Ok(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
                     gas_price_cap: evm.gas_price_cap,
-                    whitelist_receivers: evm.whitelist_receivers,
+                    whitelist_receivers: evm.whitelist_receivers.clone(),
                     eip1559_pricing: evm.eip1559_pricing,
                     private_transactions: evm.private_transactions.unwrap_or(false),
                     min_balance: evm.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
@@ -309,13 +309,14 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                 // SolanaAllowedTokensPolicy::new_partial.
                 let mapped_allowed_tokens = solana
                     .allowed_tokens
+                    .as_ref()
                     .filter(|tokens| !tokens.is_empty())
                     .map(|tokens| {
                         tokens
                             .into_iter()
                             .map(|token| {
                                 SolanaAllowedTokensPolicy::new_partial(
-                                    token.mint,
+                                    token.mint.clone(),
                                     token.max_allowed_fee,
                                     token.conversion_slippage_percentage,
                                 )
@@ -324,10 +325,10 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     });
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
-                    allowed_accounts: solana.allowed_accounts,
-                    allowed_programs: solana.allowed_programs,
+                    allowed_accounts: solana.allowed_accounts.clone(),
+                    allowed_programs: solana.allowed_programs.clone(),
                     allowed_tokens: mapped_allowed_tokens,
-                    disallowed_accounts: solana.disallowed_accounts,
+                    disallowed_accounts: solana.disallowed_accounts.clone(),
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
                     max_allowed_transfer_amount_lamports: solana
