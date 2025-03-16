@@ -101,10 +101,10 @@ impl EvmSignerFactory {
         signer_model: &SignerRepoModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match signer_model.config {
-            SignerConfig::Test(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::Local(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::Vault(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::Local(_)
+            | SignerConfig::Test(_)
+            | SignerConfig::Vault(_)
+            | SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(signer_model)?),
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }

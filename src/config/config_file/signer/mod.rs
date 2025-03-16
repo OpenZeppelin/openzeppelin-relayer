@@ -26,33 +26,32 @@ pub trait SignerConfigValidate {
     fn validate(&self) -> Result<(), ConfigFileError>;
 }
 
-pub trait ValidatableSignerConfig: SignerConfigValidate + Validate {
-    // Default implementation that uses validator::Validate
-    fn validate_with_validator(&self) -> Result<(), ConfigFileError> {
-        match Validate::validate(self) {
-            Ok(_) => Ok(()),
-            Err(errors) => {
-                // Convert validator::ValidationErrors to your ConfigFileError
-                let error_message = errors
-                    .field_errors()
-                    .iter()
-                    .map(|(field, errors)| {
-                        let messages: Vec<String> = errors
-                            .iter()
-                            .map(|error| error.message.clone().unwrap_or_default().to_string())
-                            .collect();
-                        format!("{}: {}", field, messages.join(", "))
-                    })
-                    .collect::<Vec<String>>()
-                    .join("; ");
+/// Validates a signer config using validator::Validate
+pub fn validate_with_validator<T>(config: &T) -> Result<(), ConfigFileError>
+where
+    T: SignerConfigValidate + Validate,
+{
+    match Validate::validate(config) {
+        Ok(_) => Ok(()),
+        Err(errors) => {
+            // Convert validator::ValidationErrors to your ConfigFileError
+            let error_message = errors
+                .field_errors()
+                .iter()
+                .map(|(field, errors)| {
+                    let messages: Vec<String> = errors
+                        .iter()
+                        .map(|error| error.message.clone().unwrap_or_default().to_string())
+                        .collect();
+                    format!("{}: {}", field, messages.join(", "))
+                })
+                .collect::<Vec<String>>()
+                .join("; ");
 
-                Err(ConfigFileError::InvalidFormat(error_message))
-            }
+            Err(ConfigFileError::InvalidFormat(error_message))
         }
     }
 }
-
-impl<T> ValidatableSignerConfig for T where T: SignerConfigValidate + Validate {}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]

@@ -48,9 +48,9 @@ pub enum SolanaSigner {
 impl Signer for SolanaSigner {
     async fn address(&self) -> Result<Address, SignerError> {
         match self {
-            Self::Local(signer) => signer.address().await,
-            Self::Vault(signer) => signer.address().await,
-            Self::VaultCloud(signer) => signer.address().await,
+            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
+                signer.address().await
+            }
             Self::VaultTransit(signer) => signer.address().await,
         }
     }
@@ -60,9 +60,9 @@ impl Signer for SolanaSigner {
         transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
-            Self::Local(signer) => signer.sign_transaction(transaction).await,
-            Self::Vault(signer) => signer.sign_transaction(transaction).await,
-            Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
+            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
+                signer.sign_transaction(transaction).await
+            }
             Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
         }
     }
@@ -79,18 +79,16 @@ pub trait SolanaSignTrait: Send + Sync {
 impl SolanaSignTrait for SolanaSigner {
     fn pubkey(&self) -> Result<Address, SignerError> {
         match self {
-            Self::Local(signer) => signer.pubkey(),
-            Self::Vault(signer) => signer.pubkey(),
-            Self::VaultCloud(signer) => signer.pubkey(),
+            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => signer.pubkey(),
             Self::VaultTransit(signer) => signer.pubkey(),
         }
     }
 
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         match self {
-            Self::Local(signer) => Ok(signer.sign(message).await?),
-            Self::Vault(signer) => Ok(signer.sign(message).await?),
-            Self::VaultCloud(signer) => Ok(signer.sign(message).await?),
+            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
+                Ok(signer.sign(message).await?)
+            }
             Self::VaultTransit(signer) => Ok(signer.sign(message).await?),
         }
     }
@@ -103,10 +101,10 @@ impl SolanaSignerFactory {
         signer_model: &SignerRepoModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
         let signer = match &signer_model.config {
-            SignerConfig::Test(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::Local(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::Vault(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
-            SignerConfig::VaultCloud(_) => SolanaSigner::Local(LocalSigner::new(signer_model)),
+            SignerConfig::Local(_)
+            | SignerConfig::Test(_)
+            | SignerConfig::Vault(_)
+            | SignerConfig::VaultCloud(_) => SolanaSigner::Local(LocalSigner::new(signer_model)?),
             SignerConfig::VaultTransit(vault_transit_signer_config) => {
                 let vault_service = VaultService::new(VaultConfig {
                     address: vault_transit_signer_config.address.clone(),
