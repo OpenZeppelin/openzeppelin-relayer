@@ -42,7 +42,7 @@ impl LocalSigner {
         let local_signer_client = {
             let key_bytes = config.raw_key.borrow();
 
-            AlloyLocalSignerClient::from_bytes(&FixedBytes::from_slice(&*key_bytes))
+            AlloyLocalSignerClient::from_bytes(&FixedBytes::from_slice(&key_bytes))
                 .expect("failed to create signer")
         };
 

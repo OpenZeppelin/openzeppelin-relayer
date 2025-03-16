@@ -313,7 +313,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     .filter(|tokens| !tokens.is_empty())
                     .map(|tokens| {
                         tokens
-                            .into_iter()
+                            .iter()
                             .map(|token| {
                                 SolanaAllowedTokensPolicy::new_partial(
                                     token.mint.clone(),

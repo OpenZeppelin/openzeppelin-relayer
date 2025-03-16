@@ -7,14 +7,14 @@
 //! The `SecretString` type wraps a `SecretVec<u8>` and provides methods for
 //! securely handling string data, including zeroizing the memory when the
 //! string is dropped.
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 #[derive(Clone)]
-pub struct SecretString(Arc<SecretVec<u8>>);
+pub struct SecretString(SecretVec<u8>);
 
 unsafe impl Send for SecretString {}
 unsafe impl Sync for SecretString {}
@@ -25,7 +25,7 @@ impl SecretString {
         let secret_vec = SecretVec::new(bytes.len(), |buffer| {
             buffer.copy_from_slice(bytes);
         });
-        Self(Arc::new(secret_vec))
+        Self(secret_vec)
     }
 
     pub fn as_str<F, R>(&self, f: F) -> R
@@ -39,7 +39,7 @@ impl SecretString {
 
     pub fn to_str(&self) -> Zeroizing<String> {
         let bytes = self.0.borrow();
-        let s = unsafe { std::str::from_utf8_unchecked(&*bytes) };
+        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
         Zeroizing::new(s.to_string())
     }
 
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn test_thread_safety() {
         let secret = SecretString::new("shared_across_threads");
-        let num_threads = 1;
+        let num_threads = 10;
         let barrier = Arc::new(Barrier::new(num_threads));
         let mut handles = vec![];
 

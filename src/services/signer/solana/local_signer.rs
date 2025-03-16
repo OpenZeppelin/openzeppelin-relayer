@@ -173,7 +173,7 @@ mod tests {
         let pubkey_result = local_signer.pubkey();
         assert!(pubkey_result.is_ok());
 
-        let direct_keypair = Keypair::from_seed(&*seed.borrow()).expect("invalid keypair");
+        let direct_keypair = Keypair::from_seed(&seed.borrow()).expect("invalid keypair");
         let expected_pubkey = direct_keypair.pubkey().to_string();
 
         match pubkey_result.unwrap() {
