@@ -78,7 +78,7 @@ pub trait TransactionCounterTrait {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct RelayerRepositoryStorage<T: Repository<RelayerRepoModel, String> + ?Sized> {
+pub struct RelayerRepositoryStorage<T: Repository<RelayerRepoModel, String>> {
     pub repository: Box<T>,
 }
 
@@ -93,7 +93,7 @@ impl RelayerRepositoryStorage<InMemoryRelayerRepository> {
 #[async_trait]
 impl<T> Repository<RelayerRepoModel, String> for RelayerRepositoryStorage<T>
 where
-    T: Repository<RelayerRepoModel, String> + ?Sized + Send + Sync,
+    T: Repository<RelayerRepoModel, String> + Send + Sync,
 {
     async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
         self.repository.create(entity).await
@@ -134,7 +134,7 @@ where
 #[async_trait]
 impl<T> RelayerRepository for RelayerRepositoryStorage<T>
 where
-    T: RelayerRepository + ?Sized + Send + Sync,
+    T: RelayerRepository + Send + Sync,
 {
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         self.repository.list_active().await
