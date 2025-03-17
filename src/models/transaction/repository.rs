@@ -6,8 +6,9 @@ use crate::{
     },
 };
 use alloy::{
-    consensus::TxLegacy,
+    consensus::{TxEip1559, TxLegacy},
     primitives::{Address as AlloyAddress, Bytes, TxKind},
+    rpc::types::AccessList,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -20,10 +21,20 @@ use super::evm::Speed;
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Pending,
-    Confirmed,
     Sent,
     Submitted,
+    Mined,
+    Confirmed,
     Failed,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TransactionUpdateRequest {
+    pub status: Option<TransactionStatus>,
+    pub sent_at: Option<String>,
+    pub confirmed_at: Option<String>,
+    pub network_data: Option<NetworkTransactionData>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +45,7 @@ pub struct TransactionRepoModel {
     pub created_at: String,
     pub sent_at: Option<String>,
     pub confirmed_at: Option<String>,
+    pub valid_until: Option<String>,
     pub network_data: NetworkTransactionData,
     pub network_type: NetworkType,
 }
@@ -91,6 +103,7 @@ pub struct EvmTransactionDataSignature {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
     pub gas_limit: u64,
@@ -130,6 +143,28 @@ impl EvmTransactionData {
         self.hash = Some(sig.hash);
         self.raw = Some(sig.raw);
         self
+    }
+}
+
+#[cfg(test)]
+impl Default for EvmTransactionData {
+    fn default() -> Self {
+        Self {
+            from: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".to_string(), // Standard Hardhat test address
+            to: Some("0x70997970C51812dc3A010C7d01b50e0d17dc79C8".to_string()), // Standard Hardhat test address
+            gas_price: Some(20000000000),
+            value: U256::from(1000000000000000000u128), // 1 ETH
+            data: Some("0x".to_string()),
+            nonce: Some(1),
+            chain_id: 1,
+            gas_limit: 21000,
+            hash: None,
+            signature: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        }
     }
 }
 
@@ -189,6 +224,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     created_at: now,
                     sent_at: None,
                     confirmed_at: None,
+                    valid_until: evm_request.valid_until.clone(),
                     network_type: NetworkType::Evm,
                     network_data: NetworkTransactionData::Evm(EvmTransactionData {
                         gas_price: evm_request.gas_price,
@@ -215,6 +251,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 created_at: now,
                 sent_at: None,
                 confirmed_at: None,
+                valid_until: None,
                 network_type: NetworkType::Solana,
                 network_data: NetworkTransactionData::Solana(SolanaTransactionData {
                     recent_blockhash: None,
@@ -230,6 +267,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 created_at: now,
                 sent_at: None,
                 confirmed_at: None,
+                valid_until: None,
                 network_type: NetworkType::Stellar,
                 network_data: NetworkTransactionData::Stellar(StellarTransactionData {
                     source_account: stellar_request.source_account.clone(),
@@ -277,6 +315,36 @@ impl TryFrom<NetworkTransactionData> for TxLegacy {
                     gas_price: tx.gas_price.unwrap_or(0),
                     to: tx_kind,
                     value: tx.value,
+                    input: tx.data_to_bytes()?,
+                })
+            }
+            _ => Err(SignerError::SigningError(
+                "Not an EVM transaction".to_string(),
+            )),
+        }
+    }
+}
+
+impl TryFrom<NetworkTransactionData> for TxEip1559 {
+    type Error = SignerError;
+
+    fn try_from(tx: NetworkTransactionData) -> Result<Self, Self::Error> {
+        match tx {
+            NetworkTransactionData::Evm(tx) => {
+                let tx_kind = match tx.to_address()? {
+                    Some(addr) => TxKind::Call(addr),
+                    None => TxKind::Create,
+                };
+
+                Ok(Self {
+                    chain_id: tx.chain_id,
+                    nonce: tx.nonce.unwrap_or(0),
+                    gas_limit: tx.gas_limit,
+                    max_fee_per_gas: tx.max_fee_per_gas.unwrap_or(0),
+                    max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or(0),
+                    to: tx_kind,
+                    value: tx.value,
+                    access_list: AccessList::default(),
                     input: tx.data_to_bytes()?,
                 })
             }
@@ -595,6 +663,4 @@ mod tests {
         });
         assert!(TxLegacy::try_from(solana_data).is_err());
     }
-
-    // Add more tests as needed...
 }

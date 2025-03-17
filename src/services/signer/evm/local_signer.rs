@@ -1,5 +1,5 @@
 use alloy::{
-    consensus::{SignableTransaction, TxLegacy},
+    consensus::{SignableTransaction, TxEip1559, TxLegacy},
     network::{EthereumWallet, TransactionBuilder, TxSigner},
     rpc::types::Transaction,
     signers::{
@@ -8,7 +8,7 @@ use alloy::{
     },
 };
 
-use alloy::primitives::{address, Address as AlloyAddress, FixedBytes, U256};
+use alloy::primitives::{address, Address as AlloyAddress, Bytes, FixedBytes, TxKind, U256};
 
 use async_trait::async_trait;
 
@@ -18,8 +18,8 @@ use crate::{
         SignTransactionResponseEvm, SignTypedDataRequest,
     },
     models::{
-        Address, EvmTransactionDataSignature, NetworkTransactionData, SignerError, SignerRepoModel,
-        SignerType, TransactionRepoModel,
+        Address, EvmTransactionData, EvmTransactionDataSignature, EvmTransactionDataTrait,
+        NetworkTransactionData, SignerError, SignerRepoModel, SignerType, TransactionRepoModel,
     },
     services::Signer,
 };
@@ -64,25 +64,61 @@ impl Signer for LocalSigner {
         &self,
         transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
-        let mut unsigned_tx = TxLegacy::try_from(transaction)?;
+        let evm_data = transaction.get_evm_transaction_data()?;
+        if evm_data.is_eip1559() {
+            // Handle EIP-1559 transaction
+            let mut unsigned_tx = TxEip1559::try_from(transaction)?;
 
-        let signature = self
-            .local_signer_client
-            .sign_transaction(&mut unsigned_tx)
-            .await
-            .map_err(|e| SignerError::SigningError(format!("Failed to sign transaction: {e}")))?;
+            let signature = self
+                .local_signer_client
+                .sign_transaction(&mut unsigned_tx)
+                .await
+                .map_err(|e| {
+                    SignerError::SigningError(format!("Failed to sign EIP-1559 transaction: {e}"))
+                })?;
 
-        let signed_tx = unsigned_tx.into_signed(signature);
-        let signature_bytes = signature.as_bytes();
+            let signed_tx = unsigned_tx.into_signed(signature);
+            let mut signature_bytes = signature.as_bytes();
 
-        let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
-        signed_tx.rlp_encode(&mut raw);
+            // Adjust v value for EIP-1559 (27/28 -> 0/1)
+            if signature_bytes[64] == 27 {
+                signature_bytes[64] = 0;
+            } else if signature_bytes[64] == 28 {
+                signature_bytes[64] = 1;
+            }
 
-        Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
-            hash: signed_tx.hash().to_string(),
-            signature: EvmTransactionDataSignature::from(&signature_bytes),
-            raw,
-        }))
+            let mut raw = Vec::with_capacity(signed_tx.eip2718_encoded_length());
+            signed_tx.eip2718_encode(&mut raw);
+
+            Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
+                hash: signed_tx.hash().to_string(),
+                signature: EvmTransactionDataSignature::from(&signature_bytes),
+                raw,
+            }))
+        } else {
+            // Handle legacy transaction
+            let mut unsigned_tx = TxLegacy::try_from(transaction.clone())?;
+
+            let signature = self
+                .local_signer_client
+                .sign_transaction(&mut unsigned_tx)
+                .await
+                .map_err(|e| {
+                    SignerError::SigningError(format!("Failed to sign legacy transaction: {e}"))
+                })?;
+
+            let signed_tx = unsigned_tx.into_signed(signature);
+            let signature_bytes = signature.as_bytes();
+
+            let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());
+            signed_tx.rlp_encode(&mut raw);
+
+            Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
+                hash: signed_tx.hash().to_string(),
+                signature: EvmTransactionDataSignature::from(&signature_bytes),
+                raw,
+            }))
+        }
     }
 }
 
@@ -220,6 +256,62 @@ mod tests {
 
         let result = signer.sign_transaction(tx).await.unwrap();
         match result {
+            SignTransactionResponse::Evm(signed_tx) => {
+                assert!(!signed_tx.hash.is_empty());
+                assert!(!signed_tx.raw.is_empty());
+                assert!(!signed_tx.signature.sig.is_empty());
+            }
+            _ => panic!("Expected EVM transaction response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_eip1559_transaction() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let mut tx = create_test_transaction();
+
+        // Convert to EIP-1559 transaction by setting max_fee_per_gas and max_priority_fee_per_gas
+        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
+            evm_tx.gas_price = None;
+            evm_tx.max_fee_per_gas = Some(30_000_000_000);
+            evm_tx.max_priority_fee_per_gas = Some(2_000_000_000);
+        }
+
+        let result = signer.sign_transaction(tx).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            SignTransactionResponse::Evm(signed_tx) => {
+                assert!(!signed_tx.hash.is_empty());
+                assert!(!signed_tx.raw.is_empty());
+                assert!(!signed_tx.signature.sig.is_empty());
+                // Verify signature components
+                assert_eq!(signed_tx.signature.r.len(), 64); // 32 bytes in hex
+                assert_eq!(signed_tx.signature.s.len(), 64); // 32 bytes in hex
+                assert!(signed_tx.signature.v == 0 || signed_tx.signature.v == 1);
+                // EIP-1559 v values
+            }
+            _ => panic!("Expected EVM transaction response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_eip1559_transaction_with_contract_creation() {
+        let signer = LocalSigner::new(&create_test_signer_model());
+        let mut tx = create_test_transaction();
+
+        if let NetworkTransactionData::Evm(ref mut evm_tx) = tx {
+            evm_tx.to = None;
+            evm_tx.data = Some("0x6080604000".to_string()); // Minimal valid hex string for test
+            evm_tx.gas_price = None;
+            evm_tx.max_fee_per_gas = Some(30_000_000_000);
+            evm_tx.max_priority_fee_per_gas = Some(2_000_000_000);
+        }
+
+        let result = signer.sign_transaction(tx).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
             SignTransactionResponse::Evm(signed_tx) => {
                 assert!(!signed_tx.hash.is_empty());
                 assert!(!signed_tx.raw.is_empty());

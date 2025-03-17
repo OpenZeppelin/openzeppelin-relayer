@@ -41,7 +41,9 @@ use crate::{
     repositories::{
         InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
     },
-    services::{DataSignerTrait, EvmProvider, EvmSigner, TransactionCounterService},
+    services::{
+        DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
+    },
 };
 use async_trait::async_trait;
 use eyre::Result;

@@ -295,7 +295,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                 Ok(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
                     gas_price_cap: evm.gas_price_cap,
                     whitelist_receivers: evm.whitelist_receivers,
-                    eip1559_pricing: evm.eip1559_pricing.unwrap_or(false),
+                    eip1559_pricing: evm.eip1559_pricing,
                     private_transactions: evm.private_transactions.unwrap_or(false),
                     min_balance: evm.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
                 }))
@@ -462,7 +462,7 @@ mod tests {
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
                 gas_price_cap: None,
                 whitelist_receivers: None,
-                eip1559_pricing: false,
+                eip1559_pricing: Some(false),
                 private_transactions: false,
                 min_balance: 0,
             }),

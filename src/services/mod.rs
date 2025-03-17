@@ -2,7 +2,7 @@
 //!
 //! Implements external service integrations and providers for blockchain networks.
 
-mod provider;
+pub mod provider;
 pub use provider::*;
 
 mod signer;
@@ -14,7 +14,7 @@ pub use notification::*;
 mod transaction_counter;
 pub use transaction_counter::*;
 
-mod gas;
+pub mod gas;
 pub use gas::*;
 mod jupiter;
 pub use jupiter::*;
