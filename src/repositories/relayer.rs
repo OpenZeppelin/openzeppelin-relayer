@@ -344,6 +344,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum RelayerRepositoryStorage {
     InMemory(InMemoryRelayerRepository),
 }

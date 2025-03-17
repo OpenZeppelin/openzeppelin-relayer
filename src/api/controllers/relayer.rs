@@ -17,7 +17,7 @@ use crate::{
         ApiError, ApiResponse, AppState, NetworkTransactionRequest, NetworkType, PaginationMeta,
         PaginationQuery, RelayerResponse, TransactionResponse,
     },
-    repositories::{RelayerRepository, Repository},
+    repositories::{RelayerRepository, Repository, TransactionRepository},
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;

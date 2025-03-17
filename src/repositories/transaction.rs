@@ -16,6 +16,65 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
+/// A trait defining transaction-specific repository operations
+#[async_trait]
+pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
+    /// Find transactions by relayer ID with pagination
+    async fn find_by_relayer_id(
+        &self,
+        relayer_id: &str,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
+
+    /// Find transactions by status
+    async fn find_by_status(
+        &self,
+        status: TransactionStatus,
+    ) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
+
+    /// Find a transaction by relayer ID and nonce
+    async fn find_by_nonce(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+
+    /// Update the status of a transaction
+    async fn update_status(
+        &self,
+        tx_id: String,
+        status: TransactionStatus,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Partially update a transaction
+    async fn partial_update(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Update the network data of a transaction
+    async fn update_network_data(
+        &self,
+        tx_id: String,
+        network_data: NetworkTransactionData,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Set the sent_at timestamp of a transaction
+    async fn set_sent_at(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Set the confirmed_at timestamp of a transaction
+    async fn set_confirmed_at(
+        &self,
+        tx_id: String,
+        confirmed_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+}
+
 #[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
@@ -31,8 +90,11 @@ impl InMemoryTransactionRepository {
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
         Ok(lock.lock().await)
     }
+}
 
-    pub async fn find_by_relayer_id(
+#[async_trait]
+impl TransactionRepository for InMemoryTransactionRepository {
+    async fn find_by_relayer_id(
         &self,
         relayer_id: &str,
         query: PaginationQuery,
@@ -73,7 +135,7 @@ impl InMemoryTransactionRepository {
         })
     }
 
-    pub async fn find_by_status(
+    async fn find_by_status(
         &self,
         status: TransactionStatus,
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
@@ -85,7 +147,7 @@ impl InMemoryTransactionRepository {
             .collect())
     }
 
-    pub async fn find_by_nonce(
+    async fn find_by_nonce(
         &self,
         relayer_id: &str,
         nonce: u64,
@@ -102,7 +164,7 @@ impl InMemoryTransactionRepository {
             .cloned())
     }
 
-    pub async fn update_status(
+    async fn update_status(
         &self,
         tx_id: String,
         status: TransactionStatus,
@@ -112,7 +174,7 @@ impl InMemoryTransactionRepository {
         self.update(tx_id, tx).await
     }
 
-    pub async fn partial_update(
+    async fn partial_update(
         &self,
         tx_id: String,
         update: TransactionUpdateRequest,
@@ -140,7 +202,7 @@ impl InMemoryTransactionRepository {
         }
     }
 
-    pub async fn update_network_data(
+    async fn update_network_data(
         &self,
         tx_id: String,
         network_data: NetworkTransactionData,
@@ -150,7 +212,7 @@ impl InMemoryTransactionRepository {
         self.update(tx_id, tx).await
     }
 
-    pub async fn set_sent_at(
+    async fn set_sent_at(
         &self,
         tx_id: String,
         sent_at: String,
@@ -160,7 +222,7 @@ impl InMemoryTransactionRepository {
         self.update(tx_id, tx).await
     }
 
-    pub async fn set_confirmed_at(
+    async fn set_confirmed_at(
         &self,
         tx_id: String,
         confirmed_at: String,

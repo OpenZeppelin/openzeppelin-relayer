@@ -2,7 +2,9 @@
 //!
 //! Implements data persistence layer for the relayer service using Repository pattern.
 
-use crate::models::{PaginationQuery, RepositoryError};
+use crate::domain::RelayerUpdateRequest;
+use crate::models::RelayerNetworkPolicy;
+use crate::models::{PaginationQuery, RelayerRepoModel, RepositoryError};
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -72,4 +74,99 @@ pub trait TransactionCounterTrait {
         address: &str,
         value: u64,
     ) -> Result<(), TransactionCounterError>;
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct RelayerRepositoryStorage<T: Repository<RelayerRepoModel, String> + ?Sized> {
+    pub repository: Box<T>,
+}
+
+impl RelayerRepositoryStorage<InMemoryRelayerRepository> {
+    pub fn in_memory(repository: InMemoryRelayerRepository) -> Self {
+        Self {
+            repository: Box::new(repository),
+        }
+    }
+}
+
+#[async_trait]
+impl<T> Repository<RelayerRepoModel, String> for RelayerRepositoryStorage<T>
+where
+    T: Repository<RelayerRepoModel, String> + ?Sized + Send + Sync,
+{
+    async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.create(entity).await
+    }
+
+    async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.get_by_id(id).await
+    }
+
+    async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        self.repository.list_all().await
+    }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
+        self.repository.list_paginated(query).await
+    }
+
+    async fn update(
+        &self,
+        id: String,
+        entity: RelayerRepoModel,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.update(id, entity).await
+    }
+
+    async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
+        self.repository.delete_by_id(id).await
+    }
+
+    async fn count(&self) -> Result<usize, RepositoryError> {
+        self.repository.count().await
+    }
+}
+
+#[async_trait]
+impl<T> RelayerRepository for RelayerRepositoryStorage<T>
+where
+    T: RelayerRepository + ?Sized + Send + Sync,
+{
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        self.repository.list_active().await
+    }
+
+    async fn partial_update(
+        &self,
+        id: String,
+        update: RelayerUpdateRequest,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.partial_update(id, update).await
+    }
+
+    async fn enable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.enable_relayer(relayer_id).await
+    }
+
+    async fn disable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.disable_relayer(relayer_id).await
+    }
+
+    async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.update_policy(id, policy).await
+    }
 }

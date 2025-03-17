@@ -6,13 +6,15 @@ use crate::{
     domain::transaction::Transaction,
     jobs::JobProducer,
     models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
-    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
+    repositories::{
+        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
+    },
 };
 
 #[allow(dead_code)]
 pub struct StellarRelayerTransaction {
     relayer: RelayerRepoModel,
-    relayer_repository: Arc<RelayerRepositoryStorage>,
+    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 }
@@ -21,7 +23,7 @@ pub struct StellarRelayerTransaction {
 impl StellarRelayerTransaction {
     pub fn new(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, TransactionError> {

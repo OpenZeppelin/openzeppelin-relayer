@@ -18,7 +18,8 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{
-        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        RelayerRepositoryStorage,
     },
     services::{
         get_solana_network_provider_from_str, EvmGasPriceService, EvmProvider, EvmSignerFactory,
@@ -146,7 +147,7 @@ pub trait Transaction {
 
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
-    Evm(EvmRelayerTransaction),
+    Evm(ConcreteEvmRelayerTransaction),
     Solana(SolanaRelayerTransaction),
     Stellar(StellarRelayerTransaction),
 }
@@ -313,7 +314,7 @@ pub trait RelayerTransactionFactoryTrait {
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
     fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
@@ -340,7 +341,7 @@ impl RelayerTransactionFactory {
     pub fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -368,7 +369,7 @@ impl RelayerTransactionFactory {
                     Arc::new(EvmGasPriceService::new(evm_provider.clone(), network));
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
 
-                Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
+                Ok(NetworkTransaction::Evm(ConcreteEvmRelayerTransaction::new(
                     relayer,
                     evm_provider,
                     relayer_repository,
