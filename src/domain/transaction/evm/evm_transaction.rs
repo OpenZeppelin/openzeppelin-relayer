@@ -566,166 +566,141 @@ pub type ConcreteEvmRelayerTransaction = EvmRelayerTransaction<
     EvmSigner,
 >;
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use chrono::{Duration, Utc};
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
 
-//     #[test]
-//     fn test_has_enough_confirmations() {
-//         // Test Ethereum Mainnet (requires 12 confirmations)
-//         let chain_id = 1; // Ethereum Mainnet
+    // Create a concrete type alias for testing
+    type TestEvmTransaction = ConcreteEvmRelayerTransaction;
 
-//         // Not enough confirmations
-//         let tx_block_number = 100;
-//         let current_block_number = 110; // Only 10 confirmations
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::has_enough_confirmations(
-//                 tx_block_number,
-//                 current_block_number,
-//                 chain_id
-//             )
-//         );
+    #[test]
+    fn test_has_enough_confirmations() {
+        // Test Ethereum Mainnet (requires 12 confirmations)
+        let chain_id = 1; // Ethereum Mainnet
 
-//         // Exactly enough confirmations
-//         let current_block_number = 112; // Exactly 12 confirmations
-//         assert!(
-//             EvmRelayerTransaction::<_, _, _, _, _, _>::has_enough_confirmations(
-//                 tx_block_number,
-//                 current_block_number,
-//                 chain_id
-//             )
-//         );
+        // Not enough confirmations
+        let tx_block_number = 100;
+        let current_block_number = 110; // Only 10 confirmations
+        assert!(!TestEvmTransaction::has_enough_confirmations(
+            tx_block_number,
+            current_block_number,
+            chain_id
+        ));
 
-//         // More than enough confirmations
-//         let current_block_number = 120; // 20 confirmations
-//         assert!(
-//             EvmRelayerTransaction::<_, _, _, _, _, _>::has_enough_confirmations(
-//                 tx_block_number,
-//                 current_block_number,
-//                 chain_id
-//             )
-//         );
-//     }
+        // Exactly enough confirmations
+        let current_block_number = 112; // Exactly 12 confirmations
+        assert!(TestEvmTransaction::has_enough_confirmations(
+            tx_block_number,
+            current_block_number,
+            chain_id
+        ));
 
-//     #[test]
-//     fn test_is_transaction_valid_with_valid_until() {
-//         // Test with valid_until in the future
-//         let created_at = Utc::now().to_rfc3339();
-//         let valid_until = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+        // More than enough confirmations
+        let current_block_number = 120; // 20 confirmations
+        assert!(TestEvmTransaction::has_enough_confirmations(
+            tx_block_number,
+            current_block_number,
+            chain_id
+        ));
+    }
 
-//         assert!(
-//             EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &created_at,
-//                 &valid_until
-//             )
-//         );
+    #[test]
+    fn test_is_transaction_valid_with_valid_until() {
+        // Test with valid_until in the future
+        let created_at = Utc::now().to_rfc3339();
+        let valid_until = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
 
-//         // Test with valid_until in the past
-//         let valid_until = Some((Utc::now() - Duration::hours(1)).to_rfc3339());
+        assert!(TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
 
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &created_at,
-//                 &valid_until
-//             )
-//         );
+        // Test with valid_until in the past
+        let valid_until = Some((Utc::now() - Duration::hours(1)).to_rfc3339());
 
-//         // Test with valid_until exactly at current time (should be invalid)
-//         let valid_until = Some(Utc::now().to_rfc3339());
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &created_at,
-//                 &valid_until
-//             )
-//         );
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
 
-//         // Test with valid_until very far in the future
-//         let valid_until = Some((Utc::now() + Duration::days(365)).to_rfc3339());
-//         assert!(
-//             EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &created_at,
-//                 &valid_until
-//             )
-//         );
+        // Test with valid_until exactly at current time (should be invalid)
+        let valid_until = Some(Utc::now().to_rfc3339());
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
 
-//         // Test with invalid valid_until format
-//         let valid_until = Some("invalid-date-format".to_string());
+        // Test with valid_until very far in the future
+        let valid_until = Some((Utc::now() + Duration::days(365)).to_rfc3339());
+        assert!(TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
 
-//         // Should return false when parsing fails
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &created_at,
-//                 &valid_until
-//             )
-//         );
+        // Test with invalid valid_until format
+        let valid_until = Some("invalid-date-format".to_string());
 
-//         // Test with empty valid_until string
-//         let valid_until = Some("".to_string());
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &created_at,
-//                 &valid_until
-//             )
-//         );
-//     }
+        // Should return false when parsing fails
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
 
-//     #[test]
-//     fn test_is_transaction_valid_without_valid_until() {
-//         // Test with created_at within the default timespan
-//         let created_at = Utc::now().to_rfc3339();
-//         let valid_until = None;
+        // Test with empty valid_until string
+        let valid_until = Some("".to_string());
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
+    }
 
-//         assert!(
-//             EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &created_at,
-//                 &valid_until
-//             )
-//         );
+    #[test]
+    fn test_is_transaction_valid_without_valid_until() {
+        // Test with created_at within the default timespan
+        let created_at = Utc::now().to_rfc3339();
+        let valid_until = None;
 
-//         // Test with created_at older than the default timespan (8 hours)
-//         let old_created_at =
-//             (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN + 1000)).to_rfc3339();
+        assert!(TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
 
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &old_created_at,
-//                 &valid_until
-//             )
-//         );
+        // Test with created_at older than the default timespan (8 hours)
+        let old_created_at =
+            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN + 1000)).to_rfc3339();
 
-//         // Test with created_at exactly at the boundary of default timespan
-//         let boundary_created_at =
-//             (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN)).to_rfc3339();
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &boundary_created_at,
-//                 &valid_until
-//             )
-//         );
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            &old_created_at,
+            &valid_until
+        ));
 
-//         // Test with created_at just within the default timespan
-//         let within_boundary_created_at =
-//             (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN - 1000)).to_rfc3339();
-//         assert!(
-//             EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 &within_boundary_created_at,
-//                 &valid_until
-//             )
-//         );
+        // Test with created_at exactly at the boundary of default timespan
+        let boundary_created_at =
+            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN)).to_rfc3339();
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            &boundary_created_at,
+            &valid_until
+        ));
 
-//         // Test with invalid created_at format
-//         let invalid_created_at = "invalid-date-format";
+        // Test with created_at just within the default timespan
+        let within_boundary_created_at =
+            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN - 1000)).to_rfc3339();
+        assert!(TestEvmTransaction::is_transaction_valid(
+            &within_boundary_created_at,
+            &valid_until
+        ));
 
-//         // Should return false when parsing fails
-//         assert!(
-//             !EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid(
-//                 invalid_created_at,
-//                 &valid_until
-//             )
-//         );
+        // Test with invalid created_at format
+        let invalid_created_at = "invalid-date-format";
 
-//         // Test with empty created_at string
-//         assert!(!EvmRelayerTransaction::<_, _, _, _, _, _>::is_transaction_valid("", &valid_until));
-//     }
-// }
+        // Should return false when parsing fails
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            invalid_created_at,
+            &valid_until
+        ));
+
+        // Test with empty created_at string
+        assert!(!TestEvmTransaction::is_transaction_valid("", &valid_until));
+    }
+}
