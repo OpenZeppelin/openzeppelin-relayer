@@ -23,7 +23,6 @@ use crate::{
     },
     services::{
         get_solana_network_provider_from_str, EvmGasPriceService, EvmProvider, EvmSignerFactory,
-        TransactionCounterService,
     },
 };
 use async_trait::async_trait;
@@ -360,11 +359,6 @@ impl RelayerTransactionFactory {
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
-                let transaction_counter_service = TransactionCounterService::new(
-                    relayer.id.clone(),
-                    relayer.address.clone(),
-                    transaction_counter_store,
-                );
                 let gas_price_service =
                     Arc::new(EvmGasPriceService::new(evm_provider.clone(), network));
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
@@ -374,7 +368,7 @@ impl RelayerTransactionFactory {
                     evm_provider,
                     relayer_repository,
                     transaction_repository,
-                    transaction_counter_service,
+                    transaction_counter_store,
                     job_producer,
                     gas_price_service,
                     signer_service,

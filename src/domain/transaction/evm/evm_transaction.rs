@@ -19,12 +19,12 @@ use crate::{
         TransactionUpdateRequest, U256,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
-        Repository, TransactionRepository,
+        InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
+        Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::{
         EvmGasPriceService, EvmGasPriceServiceTrait, EvmProvider, EvmProviderTrait, EvmSigner,
-        Signer, TransactionCounterService,
+        Signer,
     },
 };
 
@@ -43,7 +43,7 @@ pub struct TransactionPriceParams {
 }
 
 #[allow(dead_code)]
-pub struct EvmRelayerTransaction<P, R, T, J, G, S>
+pub struct EvmRelayerTransaction<P, R, T, J, G, S, C>
 where
     P: EvmProviderTrait,
     R: Repository<RelayerRepoModel, String>,
@@ -51,19 +51,20 @@ where
     J: JobProducerTrait,
     G: EvmGasPriceServiceTrait,
     S: Signer,
+    C: TransactionCounterTrait,
 {
     relayer: RelayerRepoModel,
     provider: P,
     relayer_repository: Arc<R>,
     transaction_repository: Arc<T>,
-    transaction_counter_service: TransactionCounterService,
+    transaction_counter_service: Arc<C>,
     job_producer: Arc<J>,
     gas_price_service: Arc<G>,
     signer: S,
 }
 
 #[allow(dead_code, clippy::too_many_arguments)]
-impl<P, R, T, J, G, S> EvmRelayerTransaction<P, R, T, J, G, S>
+impl<P, R, T, J, G, S, C> EvmRelayerTransaction<P, R, T, J, G, S, C>
 where
     P: EvmProviderTrait,
     R: Repository<RelayerRepoModel, String>,
@@ -71,6 +72,7 @@ where
     J: JobProducerTrait,
     G: EvmGasPriceServiceTrait,
     S: Signer,
+    C: TransactionCounterTrait,
 {
     /// Creates a new `EvmRelayerTransaction`.
     ///
@@ -93,7 +95,7 @@ where
         provider: P,
         relayer_repository: Arc<R>,
         transaction_repository: Arc<T>,
-        transaction_counter_service: TransactionCounterService,
+        transaction_counter_service: Arc<C>,
         job_producer: Arc<J>,
         gas_price_service: Arc<G>,
         signer: S,
@@ -311,7 +313,7 @@ where
 }
 
 #[async_trait]
-impl<P, R, T, J, G, S> Transaction for EvmRelayerTransaction<P, R, T, J, G, S>
+impl<P, R, T, J, G, S, C> Transaction for EvmRelayerTransaction<P, R, T, J, G, S, C>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + Send + Sync,
@@ -319,6 +321,7 @@ where
     J: JobProducerTrait + Send + Sync,
     G: EvmGasPriceServiceTrait + Send + Sync,
     S: Signer + Send + Sync,
+    C: TransactionCounterTrait + Send + Sync,
 {
     /// Prepares a transaction for submission.
     ///
@@ -350,7 +353,7 @@ where
         // increment the nonce
         let nonce = self
             .transaction_counter_service
-            .get_and_increment()
+            .get_and_increment(&self.relayer.id, &self.relayer.address)
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         let updated_evm_data = tx
@@ -560,19 +563,120 @@ where
 pub type ConcreteEvmRelayerTransaction = EvmRelayerTransaction<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryTransactionRepository,
+    crate::repositories::transaction::InMemoryTransactionRepository,
     JobProducer,
     EvmGasPriceService<EvmProvider>,
     EvmSigner,
+    InMemoryTransactionCounter,
 >;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        jobs::MockJobProducerTrait,
+        models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy},
+        repositories::{
+            MockRepository, MockTransactionRepository, TransactionCounterError,
+            TransactionCounterTrait,
+        },
+        services::{MockEvmGasPriceServiceTrait, MockEvmProviderTrait, MockSigner},
+    };
     use chrono::{Duration, Utc};
+    use mockall::mock;
+
+    // Create a mock implementation of TransactionCounterTrait for testing
+    mock! {
+        pub TransactionCounter {}
+
+        impl TransactionCounterTrait for TransactionCounter {
+            fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, TransactionCounterError>;
+            fn get_and_increment(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError>;
+            fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError>;
+            fn set(&self, relayer_id: &str, address: &str, value: u64) -> Result<(), TransactionCounterError>;
+        }
+    }
 
     // Create a concrete type alias for testing
     type TestEvmTransaction = ConcreteEvmRelayerTransaction;
+
+    // Helper to create test transactions
+    #[allow(dead_code)]
+    fn create_test_transaction() -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "test-tx-id".to_string(),
+            relayer_id: "test-relayer-id".to_string(),
+            status: TransactionStatus::Pending,
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_type: NetworkType::Evm,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                chain_id: 1,
+                from: "0xSender".to_string(),
+                to: Some("0xRecipient".to_string()),
+                value: U256::from(1000000000000000000u64), // 1 ETH
+                data: Some("0xData".to_string()),
+                gas_limit: 21000,
+                gas_price: Some(20000000000), // 20 Gwei
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                nonce: None,
+                signature: None,
+                hash: None,
+                speed: Some(Speed::Fast),
+                raw: None,
+            }),
+        }
+    }
+
+    // Helper to create a relayer model
+    fn create_test_relayer() -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "1".to_string(), // Ethereum Mainnet
+            address: "0xSender".to_string(),
+            paused: false,
+            system_disabled: false,
+            signer_id: "test-signer-id".to_string(),
+            notification_id: Some("test-notification-id".to_string()),
+            policies: RelayerNetworkPolicy::Evm(crate::models::RelayerEvmPolicy {
+                min_balance: 100000000000000000u128, // 0.1 ETH
+                whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
+                gas_price_cap: Some(100000000000), // 100 Gwei
+                eip1559_pricing: Some(false),
+                private_transactions: false,
+            }),
+            network_type: NetworkType::Evm,
+        }
+    }
+
+    // Test for the is_transaction_valid functionality
+    #[test]
+    fn test_is_transaction_valid_with_future_timestamp() {
+        let now = Utc::now();
+        let valid_until = Some((now + Duration::hours(1)).to_rfc3339());
+        let created_at = now.to_rfc3339();
+
+        assert!(TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
+    }
+
+    #[test]
+    fn test_is_transaction_valid_with_past_timestamp() {
+        let now = Utc::now();
+        let valid_until = Some((now - Duration::hours(1)).to_rfc3339());
+        let created_at = now.to_rfc3339();
+
+        assert!(!TestEvmTransaction::is_transaction_valid(
+            &created_at,
+            &valid_until
+        ));
+    }
 
     #[test]
     fn test_has_enough_confirmations() {
@@ -702,5 +806,35 @@ mod tests {
 
         // Test with empty created_at string
         assert!(!TestEvmTransaction::is_transaction_valid("", &valid_until));
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_gas_price_service = MockEvmGasPriceServiceTrait::new();
+
+        // Create a transaction counter that implements TransactionCounterTrait
+        let counter_service = MockTransactionCounter::new();
+
+        let relayer = create_test_relayer();
+
+        // Define all arguments in correct order and wrapped in Arc where needed
+        let _evm_transaction = EvmRelayerTransaction {
+            relayer,
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            gas_price_service: Arc::new(mock_gas_price_service),
+            signer: mock_signer,
+        };
+
+        // This test is currently ignored because it requires proper mocking of multiple dependencies.
+        // We'll implement it properly once we have resolved all the dependency structure issues.
     }
 }

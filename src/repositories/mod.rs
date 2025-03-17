@@ -7,13 +7,13 @@ use crate::models::RelayerNetworkPolicy;
 use crate::models::{PaginationQuery, RelayerRepoModel, RepositoryError};
 use async_trait::async_trait;
 use eyre::Result;
+use serde::Serialize;
+use thiserror::Error;
 
 mod relayer;
 pub use relayer::*;
 
-mod transaction;
-use serde::Serialize;
-use thiserror::Error;
+pub mod transaction;
 pub use transaction::*;
 
 mod signer;
