@@ -16,6 +16,9 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
+#[cfg(test)]
+use mockall::automock;
+
 /// A trait defining transaction-specific repository operations
 #[async_trait]
 pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
@@ -240,6 +243,7 @@ impl Default for InMemoryTransactionRepository {
 }
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository {
     async fn create(
         &self,

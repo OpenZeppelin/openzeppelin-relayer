@@ -32,9 +32,12 @@ pub struct PaginatedResult<T> {
     pub page: u32,
     pub per_page: u32,
 }
+#[cfg(test)]
+use mockall::automock;
 
 #[async_trait]
 #[allow(dead_code)]
+#[cfg_attr(test, automock)]
 pub trait Repository<T, ID> {
     async fn create(&self, entity: T) -> Result<T, RepositoryError>;
     async fn get_by_id(&self, id: ID) -> Result<T, RepositoryError>;
