@@ -7,16 +7,21 @@
 //! The `SecretString` type wraps a `SecretVec<u8>` and provides methods for
 //! securely handling string data, including zeroizing the memory when the
 //! string is dropped.
-use std::fmt;
+use std::{fmt, sync::RwLock};
 
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-#[derive(Clone)]
-pub struct SecretString(SecretVec<u8>);
+pub struct SecretString(RwLock<SecretVec<u8>>);
 
-unsafe impl Send for SecretString {}
+impl Clone for SecretString {
+    fn clone(&self) -> Self {
+        let secret_vec = self.with_secret_vec(|secret_vec| secret_vec.clone());
+        Self(RwLock::new(secret_vec))
+    }
+}
+
 unsafe impl Sync for SecretString {}
 
 impl SecretString {
@@ -25,26 +30,42 @@ impl SecretString {
         let secret_vec = SecretVec::new(bytes.len(), |buffer| {
             buffer.copy_from_slice(bytes);
         });
-        Self(secret_vec)
+        Self(RwLock::new(secret_vec))
+    }
+
+    fn with_secret_vec<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&SecretVec<u8>) -> R,
+    {
+        let guard = match self.0.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        f(&guard)
     }
 
     pub fn as_str<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&str) -> R,
     {
-        let bytes = self.0.borrow();
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        f(s)
+        self.with_secret_vec(|secret_vec| {
+            let bytes = secret_vec.borrow();
+            let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+            f(s)
+        })
     }
 
     pub fn to_str(&self) -> Zeroizing<String> {
-        let bytes = self.0.borrow();
-        let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
-        Zeroizing::new(s.to_string())
+        self.with_secret_vec(|secret_vec| {
+            let bytes = secret_vec.borrow();
+            let s = unsafe { std::str::from_utf8_unchecked(&bytes) };
+            Zeroizing::new(s.to_string())
+        })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.with_secret_vec(|secret_vec| secret_vec.is_empty())
     }
 }
 
@@ -70,10 +91,15 @@ impl<'de> Deserialize<'de> for SecretString {
 
 impl PartialEq for SecretString {
     fn eq(&self, other: &Self) -> bool {
-        let self_bytes = self.0.borrow();
-        let other_bytes = other.0.borrow();
-        self_bytes.len() == other_bytes.len()
-            && subtle::ConstantTimeEq::ct_eq(&*self_bytes, &*other_bytes).into()
+        self.with_secret_vec(|self_vec| {
+            other.with_secret_vec(|other_vec| {
+                let self_bytes = self_vec.borrow();
+                let other_bytes = other_vec.borrow();
+
+                self_bytes.len() == other_bytes.len()
+                    && subtle::ConstantTimeEq::ct_eq(&*self_bytes, &*other_bytes).into()
+            })
+        })
     }
 }
 
@@ -243,6 +269,6 @@ mod tests {
             assert_eq!(s, long_string);
         });
 
-        assert_eq!(secret.0.len(), 100_000);
+        assert_eq!(secret.0.read().unwrap().len(), 100_000);
     }
 }
