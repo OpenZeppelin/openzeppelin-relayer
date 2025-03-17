@@ -115,15 +115,6 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 SecretVec::new(decoded_bytes.len(), |buffer| {
                     buffer.copy_from_slice(&decoded_bytes);
                 })
-                // let decoded_len = hex_secret.len() / 2;
-                // let mut secret_vec: SecretVec<u8> = SecretVec::zero(decoded_len);
-                // hex::decode_to_slice(&hex_secret, secret_vec.borrow_mut().as_mut())?;
-                // secret_vec
-                // SecretVec::new(decoded_len, |buffer| {
-                //     if let Err(e) = hex::decode_to_slice(&*hex_value, buffer) {
-                //         panic!("Invalid hex in vault cloud secret: {}", e);
-                //     }
-                // })
             };
 
             SignerRepoModel {

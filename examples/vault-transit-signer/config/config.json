@@ -29,7 +29,7 @@
       "id": "local_vault_transit",
       "type": "vault_transit",
       "config": {
-        "address": "http://localhost:8200",
+        "address": "http://vault:8200",
         "role_id": {
           "type": "plain",
           "value": ""

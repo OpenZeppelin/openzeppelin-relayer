@@ -218,7 +218,7 @@ mod tests {
         if let Err(e) = result {
             if let ConfigFileError::InvalidFormat(msg) = e {
                 assert!(msg.contains("client_id"));
-                // assert!(msg.contains("client_secret"));
+                assert!(msg.contains("client_secret"));
                 assert!(msg.contains("org_id"));
                 assert!(msg.contains("project_id"));
                 assert!(msg.contains("app_name"));
