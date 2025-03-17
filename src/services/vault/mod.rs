@@ -284,6 +284,9 @@ impl VaultServiceTrait for VaultService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_vault_config_new() {
@@ -361,5 +364,274 @@ mod tests {
             key_without_namespace.to_string(),
             "https://vault.example.com|role-123|"
         );
+    }
+
+    // utility function to setup a mock AppRole login response
+    async fn setup_mock_approle_login(
+        mock_server: &MockServer,
+        role_id: &str,
+        secret_id: &str,
+        token: &str,
+    ) {
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .and(body_json(json!({
+                "role_id": role_id,
+                "secret_id": secret_id
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "request_id": "test-request-id",
+                "lease_id": "",
+                "renewable": false,
+                "lease_duration": 0,
+                "data": null,
+                "wrap_info": null,
+                "warnings": null,
+                "auth": {
+                    "client_token": token,
+                    "accessor": "test-accessor",
+                    "policies": ["default"],
+                    "token_policies": ["default"],
+                    "metadata": {
+                        "role_name": "test-role"
+                    },
+                    "lease_duration": 3600,
+                    "renewable": true,
+                    "entity_id": "test-entity-id",
+                    "token_type": "service",
+                    "orphan": true
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_vault_service_auth_failure() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/test-mount/data/my-secret"))
+            .and(header("X-Vault-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "request_id": "test-request-id",
+                "lease_id": "",
+                "renewable": false,
+                "lease_duration": 0,
+                "data": {
+                    "data": {
+                        "value": "super-secret-value"
+                    },
+                    "metadata": {
+                        "created_time": "2024-01-01T00:00:00Z",
+                        "deletion_time": "",
+                        "destroyed": false,
+                        "version": 1
+                    }
+                },
+                "wrap_info": null,
+                "warnings": null,
+                "auth": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let config = VaultConfig::new(
+            mock_server.uri(),
+            "test-role-id-fake".to_string(),
+            "test-secret-id-fake".to_string(),
+            None,
+            "test-mount".to_string(),
+            Some(60),
+        );
+
+        let vault_service = VaultService::new(config);
+
+        let secret = vault_service.retrieve_secret("my-secret").await;
+
+        assert!(secret.is_err());
+
+        if let Err(e) = secret {
+            assert!(matches!(e, VaultError::AuthenticationFailed(_)));
+            assert!(e.to_string().contains("An error occurred with the request"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vault_service_retrieve_secret_success() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/test-mount/data/my-secret"))
+            .and(header("X-Vault-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "request_id": "test-request-id",
+                "lease_id": "",
+                "renewable": false,
+                "lease_duration": 0,
+                "data": {
+                    "data": {
+                        "value": "super-secret-value"
+                    },
+                    "metadata": {
+                        "created_time": "2024-01-01T00:00:00Z",
+                        "deletion_time": "",
+                        "destroyed": false,
+                        "version": 1
+                    }
+                },
+                "wrap_info": null,
+                "warnings": null,
+                "auth": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let config = VaultConfig::new(
+            mock_server.uri(),
+            "test-role-id".to_string(),
+            "test-secret-id".to_string(),
+            None,
+            "test-mount".to_string(),
+            Some(60),
+        );
+
+        let vault_service = VaultService::new(config);
+
+        let secret = vault_service.retrieve_secret("my-secret").await.unwrap();
+
+        assert_eq!(secret, "super-secret-value");
+    }
+
+    #[tokio::test]
+    async fn test_vault_service_sign_success() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
+            .await;
+
+        let message = b"hello world";
+        let encoded_message = base64_encode(message);
+
+        Mock::given(method("POST"))
+            .and(path("/v1/test-mount/sign/my-signing-key"))
+            .and(header("X-Vault-Token", "test-token"))
+            .and(body_json(json!({
+                "input": encoded_message
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "request_id": "test-request-id",
+                "lease_id": "",
+                "renewable": false,
+                "lease_duration": 0,
+                "data": {
+                    "signature": "vault:v1:fake-signature",
+                    "key_version": 1
+                },
+                "wrap_info": null,
+                "warnings": null,
+                "auth": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let config = VaultConfig::new(
+            mock_server.uri(),
+            "test-role-id".to_string(),
+            "test-secret-id".to_string(),
+            None,
+            "test-mount".to_string(),
+            Some(60),
+        );
+
+        let vault_service = VaultService::new(config);
+        let signature = vault_service.sign("my-signing-key", message).await.unwrap();
+
+        assert_eq!(signature, "vault:v1:fake-signature");
+    }
+
+    #[tokio::test]
+    async fn test_vault_service_retrieve_secret_failure() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/test-mount/data/my-secret"))
+            .and(header("X-Vault-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "errors": ["secret not found:"]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let config = VaultConfig::new(
+            mock_server.uri(),
+            "test-role-id".to_string(),
+            "test-secret-id".to_string(),
+            None,
+            "test-mount".to_string(),
+            Some(60),
+        );
+
+        let vault_service = VaultService::new(config);
+
+        let result = vault_service.retrieve_secret("my-secret").await;
+        assert!(result.is_err());
+
+        if let Err(e) = result {
+            assert!(matches!(e, VaultError::ClientError(_)));
+            assert!(e
+                .to_string()
+                .contains("The Vault server returned an error (status code 404)"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_vault_service_sign_failure() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
+            .await;
+
+        let message = b"hello world";
+        let encoded_message = base64_encode(message);
+
+        Mock::given(method("POST"))
+            .and(path("/v1/test-mount/sign/my-signing-key"))
+            .and(header("X-Vault-Token", "test-token"))
+            .and(body_json(json!({
+                "input": encoded_message
+            })))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "errors": ["1 error occurred:\n\t* signing key not found"]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let config = VaultConfig::new(
+            mock_server.uri(),
+            "test-role-id".to_string(),
+            "test-secret-id".to_string(),
+            None,
+            "test-mount".to_string(),
+            Some(60),
+        );
+
+        let vault_service = VaultService::new(config);
+        let result = vault_service.sign("my-signing-key", message).await;
+        assert!(result.is_err());
+
+        if let Err(e) = result {
+            assert!(matches!(e, VaultError::SigningError(_)));
+            assert!(e.to_string().contains("Failed to sign with Vault"));
+        }
     }
 }

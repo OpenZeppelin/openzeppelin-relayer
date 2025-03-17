@@ -259,7 +259,13 @@ mod tests {
     use crate::{
         config::{AwsKmsSignerFileConfig, TestSignerFileConfig, VaultTransitSignerFileConfig},
         models::{PlainOrEnvValue, SecretString},
+    use crate::config::{
+        AwsKmsSignerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
+        VaultTransitSignerFileConfig,
     };
+    use serde_json::json;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn test_process_signer_test() {
@@ -355,6 +361,110 @@ mod tests {
         match model.config {
             SignerConfig::AwsKms(_) => {}
             _ => panic!("Expected AwsKms config"),
+        }
+
+        Ok(())
+    }
+
+    // utility function to setup a mock AppRole login response
+    async fn setup_mock_approle_login(
+        mock_server: &MockServer,
+        role_id: &str,
+        secret_id: &str,
+        token: &str,
+    ) {
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .and(body_json(json!({
+                "role_id": role_id,
+                "secret_id": secret_id
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "request_id": "test-request-id",
+                "lease_id": "",
+                "renewable": false,
+                "lease_duration": 0,
+                "data": null,
+                "wrap_info": null,
+                "warnings": null,
+                "auth": {
+                    "client_token": token,
+                    "accessor": "test-accessor",
+                    "policies": ["default"],
+                    "token_policies": ["default"],
+                    "metadata": {
+                        "role_name": "test-role"
+                    },
+                    "lease_duration": 3600,
+                    "renewable": true,
+                    "entity_id": "test-entity-id",
+                    "token_type": "service",
+                    "orphan": true
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_process_signer_vault() -> Result<()> {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/secret/data/test-key"))
+            .and(header("X-Vault-Token", "test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "request_id": "test-request-id",
+                "lease_id": "",
+                "renewable": false,
+                "lease_duration": 0,
+                "data": {
+                    "data": {
+                        "value": "C5ACE14AB163556747F02C1110911537578FBE335FB74D18FBF82990AD70C3B9"
+                    },
+                    "metadata": {
+                        "created_time": "2024-01-01T00:00:00Z",
+                        "deletion_time": "",
+                        "destroyed": false,
+                        "version": 1
+                    }
+                },
+                "wrap_info": null,
+                "warnings": null,
+                "auth": null
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let signer = SignerFileConfig {
+            id: "vault-signer".to_string(),
+            config: SignerFileConfigEnum::Vault(VaultSignerFileConfig {
+                key_name: "test-key".to_string(),
+                address: mock_server.uri(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: "test-role-id".to_string(),
+                secret_id: "test-secret-id".to_string(),
+                mount_point: Some("secret".to_string()),
+            }),
+        };
+
+        let result = process_signer(&signer).await;
+
+        assert!(
+            result.is_ok(),
+            "Failed to process Vault signer: {:?}",
+            result.err()
+        );
+        let model = result.unwrap();
+
+        assert_eq!(model.id, "vault-signer");
+
+        match model.config {
+            SignerConfig::Vault(_) => {}
+            _ => panic!("Expected Vault config"),
         }
 
         Ok(())
