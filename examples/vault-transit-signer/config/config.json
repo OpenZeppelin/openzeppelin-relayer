@@ -21,11 +21,7 @@
     {
       "id": "notification-example",
       "type": "webhook",
-      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
-      "signing_key": {
-        "type": "env",
-        "value": "WEBHOOK_SIGNING_KEY"
-      }
+      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b"
     }
   ],
   "signers": [

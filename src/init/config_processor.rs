@@ -257,11 +257,11 @@ pub async fn process_config_file(config_file: Config, app_state: ThinData<AppSta
 mod tests {
     use super::*;
     use crate::{
-        config::{AwsKmsSignerFileConfig, TestSignerFileConfig, VaultTransitSignerFileConfig},
+        config::{
+            AwsKmsSignerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            VaultTransitSignerFileConfig,
+        },
         models::{PlainOrEnvValue, SecretString},
-    use crate::config::{
-        AwsKmsSignerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
-        VaultTransitSignerFileConfig,
     };
     use serde_json::json;
     use wiremock::matchers::{body_json, header, method, path};
@@ -445,8 +445,12 @@ mod tests {
                 key_name: "test-key".to_string(),
                 address: mock_server.uri(),
                 namespace: Some("test-namespace".to_string()),
-                role_id: "test-role-id".to_string(),
-                secret_id: "test-secret-id".to_string(),
+                role_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-role-id"),
+                },
+                secret_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-secret-id"),
+                },
                 mount_point: Some("secret".to_string()),
             }),
         };

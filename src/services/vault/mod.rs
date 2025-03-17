@@ -441,8 +441,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id-fake".to_string(),
-            "test-secret-id-fake".to_string(),
+            SecretString::new("test-role-id-fake"),
+            SecretString::new("test-secret-id-fake"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -495,8 +495,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -543,8 +543,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -574,8 +574,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -618,8 +618,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),

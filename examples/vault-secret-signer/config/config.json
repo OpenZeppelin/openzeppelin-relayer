@@ -32,11 +32,11 @@
         "address": "http://localhost:8200",
         "role_id": {
           "type": "plain",
-          "value": "84048aab-1d52-c0e4-aece-6575472aff46"
+          "value": ""
         },
         "secret_id": {
           "type": "plain",
-          "value": "53ebde46-1af2-9ba1-c515-6cef3d872ab1"
+          "value": ""
         },
         "key_name": "my-app"
       }
