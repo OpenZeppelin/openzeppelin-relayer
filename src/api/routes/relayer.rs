@@ -113,21 +113,21 @@ async fn delete_pending_transactions(
 /// Cancels a specific transaction by its ID.
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_relayer_transaction(
-    relayer_id: web::Path<String>,
-    transaction_id: web::Path<String>,
+    path: web::Path<TransactionPath>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
-    relayer::cancel_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
+    let path = path.into_inner();
+    relayer::cancel_transaction(path.relayer_id, path.transaction_id, data).await
 }
 
 /// Replaces a specific transaction with a new one.
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_relayer_transaction(
-    relayer_id: web::Path<String>,
-    transaction_id: web::Path<String>,
+    path: web::Path<TransactionPath>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
-    relayer::replace_transaction(relayer_id.into_inner(), transaction_id.into_inner(), data).await
+    let path = path.into_inner();
+    relayer::replace_transaction(path.relayer_id, path.transaction_id, data).await
 }
 
 /// Signs data using the specified relayer.
@@ -162,18 +162,181 @@ async fn relayer_rpc(
 
 /// Initializes the routes for the relayer module.
 pub fn init(cfg: &mut web::ServiceConfig) {
-    cfg.service(list_relayers);
-    cfg.service(get_relayer);
-    cfg.service(get_relayer_balance);
-    cfg.service(update_relayer);
-    cfg.service(get_relayer_transaction_by_nonce);
-    cfg.service(get_relayer_transaction_by_id);
-    cfg.service(send_relayer_transaction);
-    cfg.service(list_relayer_transactions);
-    cfg.service(get_relayer_status);
-    cfg.service(relayer_sign_typed_data);
-    cfg.service(relayer_sign);
-    cfg.service(cancel_relayer_transaction);
-    cfg.service(delete_pending_transactions);
-    cfg.service(relayer_rpc);
+    // Register routes with literal segments before routes with path parameters
+    cfg.service(delete_pending_transactions); // /relayers/{id}/transactions/pending
+
+    // Then register other routes
+    cfg.service(cancel_relayer_transaction); // /relayers/{id}/transactions/{tx_id}
+    cfg.service(replace_relayer_transaction); // /relayers/{id}/transactions/{tx_id}
+    cfg.service(get_relayer_transaction_by_id); // /relayers/{id}/transactions/{tx_id}
+    cfg.service(get_relayer_transaction_by_nonce); // /relayers/{id}/transactions/by-nonce/{nonce}
+    cfg.service(send_relayer_transaction); // /relayers/{id}/transactions
+    cfg.service(list_relayer_transactions); // /relayers/{id}/transactions
+    cfg.service(get_relayer_status); // /relayers/{id}/status
+    cfg.service(get_relayer_balance); // /relayers/{id}/balance
+    cfg.service(relayer_sign); // /relayers/{id}/sign
+    cfg.service(relayer_sign_typed_data); // /relayers/{id}/sign-typed-data
+    cfg.service(relayer_rpc); // /relayers/{id}/rpc
+    cfg.service(get_relayer); // /relayers/{id}
+    cfg.service(update_relayer); // /relayers/{id}
+    cfg.service(list_relayers); // /relayers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        jobs::{JobProducer, Queue},
+        repositories::{
+            InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
+            InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        },
+    };
+    use actix_web::{http::StatusCode, test, App};
+    use std::sync::Arc;
+
+    // Simple mock for AppState
+    async fn get_test_app_state() -> AppState {
+        AppState {
+            relayer_repository: Arc::new(RelayerRepositoryStorage::InMemory(
+                InMemoryRelayerRepository::new(),
+            )),
+            transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
+            signer_repository: Arc::new(InMemorySignerRepository::new()),
+            notification_repository: Arc::new(InMemoryNotificationRepository::new()),
+            transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
+            job_producer: Arc::new(JobProducer::new(Queue::setup().await)),
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_routes_are_registered() {
+        // Create a test app with our routes
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(get_test_app_state()))
+                .configure(init),
+        )
+        .await;
+
+        // Test that routes are registered by checking they return 500 (not 404)
+
+        // Test GET /relayers
+        let req = test::TestRequest::get().uri("/relayers").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test GET /relayers/{id}
+        let req = test::TestRequest::get()
+            .uri("/relayers/test-id")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test PATCH /relayers/{id}
+        let req = test::TestRequest::patch()
+            .uri("/relayers/test-id")
+            .set_json(serde_json::json!({}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test GET /relayers/{id}/status
+        let req = test::TestRequest::get()
+            .uri("/relayers/test-id/status")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test GET /relayers/{id}/balance
+        let req = test::TestRequest::get()
+            .uri("/relayers/test-id/balance")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test POST /relayers/{id}/transactions
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/transactions")
+            .set_json(serde_json::json!({}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test GET /relayers/{id}/transactions/{tx_id}
+        let req = test::TestRequest::get()
+            .uri("/relayers/test-id/transactions/tx-123")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test GET /relayers/{id}/transactions/by-nonce/{nonce}
+        let req = test::TestRequest::get()
+            .uri("/relayers/test-id/transactions/by-nonce/123")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test GET /relayers/{id}/transactions
+        let req = test::TestRequest::get()
+            .uri("/relayers/test-id/transactions")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test DELETE /relayers/{id}/transactions/pending
+        let req = test::TestRequest::delete()
+            .uri("/relayers/test-id/transactions/pending")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test DELETE /relayers/{id}/transactions/{tx_id}
+        let req = test::TestRequest::delete()
+            .uri("/relayers/test-id/transactions/tx-123")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test PUT /relayers/{id}/transactions/{tx_id}
+        let req = test::TestRequest::put()
+            .uri("/relayers/test-id/transactions/tx-123")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test POST /relayers/{id}/sign
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/sign")
+            .set_json(serde_json::json!({
+                "message": "0x1234567890abcdef"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Test POST /relayers/{id}/sign-typed-data
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/sign-typed-data")
+            .set_json(serde_json::json!({
+                "domain_separator": "0x1234567890abcdef",
+                "hash_struct_message": "0x1234567890abcdef"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // // Test POST /relayers/{id}/rpc
+        let req = test::TestRequest::post()
+            .uri("/relayers/test-id/rpc")
+            .set_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBlockByNumber",
+                "params": ["0x1", true],
+                "id": 1
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

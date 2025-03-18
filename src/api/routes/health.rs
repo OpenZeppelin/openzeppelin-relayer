@@ -17,3 +17,25 @@ async fn health() -> Result<HttpResponse, actix_web::Error> {
 pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(health);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, App};
+
+    #[actix_web::test]
+    async fn test_health_endpoint() {
+        // Arrange
+        let app = test::init_service(App::new().configure(init)).await;
+
+        // Act
+        let req = test::TestRequest::get().uri("/health").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Assert
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        assert_eq!(body, "OK");
+    }
+}
