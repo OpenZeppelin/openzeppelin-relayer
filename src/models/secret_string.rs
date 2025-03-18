@@ -32,9 +32,9 @@ unsafe impl Sync for SecretString {}
 
 impl SecretString {
     pub fn new(s: &str) -> Self {
-        let bytes = s.as_bytes();
+        let bytes = Zeroizing::new(s.as_bytes().to_vec());
         let secret_vec = SecretVec::new(bytes.len(), |buffer| {
-            buffer.copy_from_slice(bytes);
+            buffer.copy_from_slice(&bytes);
         });
         Self(RwLock::new(secret_vec))
     }
