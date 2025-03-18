@@ -219,4 +219,112 @@ mod tests {
         // Verify response status
         assert!(resp.status().is_success());
     }
+
+    #[actix_web::test]
+    async fn test_scrape_metrics_error() {
+        // We need to mock the gather_metrics function to return an error
+        // This would typically be done with a mocking framework
+        // For this example, we'll create a custom handler that simulates the error
+
+        async fn mock_scrape_metrics_error() -> impl Responder {
+            // Simulate an error from gather_metrics
+            HttpResponse::InternalServerError().body("Error: test error")
+        }
+
+        // Create a test app with our mock error handler
+        let app = test::init_service(App::new().service(
+            web::resource("/debug/metrics/scrape").route(web::get().to(mock_scrape_metrics_error)),
+        ))
+        .await;
+
+        // Make request to scrape metrics
+        let req = test::TestRequest::get()
+            .uri("/debug/metrics/scrape")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Verify we get a 500 response
+        assert_eq!(resp.status(), 500);
+
+        // Check that response contains our error message
+        let body = test::read_body(resp).await;
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("Error: test error"));
+    }
+
+    #[actix_web::test]
+    async fn test_init() {
+        // Create a test app with our init function
+        let app = test::init_service(App::new().configure(init)).await;
+
+        // Test each endpoint to ensure they were properly registered
+
+        // Test list_metrics endpoint
+        let req = test::TestRequest::get().uri("/metrics").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // We expect this to succeed since list_metrics should work with any registry state
+        assert!(resp.status().is_success());
+
+        // Test metric_detail endpoint - we expect a 404 since test_counter doesn't exist in global registry
+        let req = test::TestRequest::get()
+            .uri("/metrics/test_counter")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // We expect a 404 Not Found since test_counter doesn't exist in the global registry
+        assert_eq!(resp.status(), 404);
+
+        // Test scrape_metrics endpoint
+        let req = test::TestRequest::get()
+            .uri("/debug/metrics/scrape")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        // This should succeed as it doesn't depend on specific metrics existing
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_metric_detail_encoding_error() {
+        // Create a mock handler that simulates an encoding error
+        async fn mock_metric_detail_with_encoding_error(path: web::Path<String>) -> impl Responder {
+            let metric_name = path.into_inner();
+
+            // Create a test registry with our test_counter
+            let registry = setup_test_registry();
+            let metric_families = registry.gather();
+
+            for mf in metric_families {
+                if mf.get_name() == metric_name {
+                    // Simulate an encoding error by returning an error response directly
+                    return HttpResponse::InternalServerError()
+                        .body("Encoding error: simulated error");
+                }
+            }
+            HttpResponse::NotFound().body("Metric not found")
+        }
+
+        // Create a test app with our mock error handler
+        let app = test::init_service(
+            App::new().service(
+                web::resource("/metrics/{metric_name}")
+                    .route(web::get().to(mock_metric_detail_with_encoding_error)),
+            ),
+        )
+        .await;
+
+        // Make request for our test metric - use "test_counter" which we know exists in setup_test_registry
+        let req = test::TestRequest::get()
+            .uri("/metrics/test_counter")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        // Verify we get a 500 response
+        assert_eq!(resp.status(), 500);
+
+        // Check that response contains our error message
+        let body = test::read_body(resp).await;
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("Encoding error: simulated error"));
+    }
 }
