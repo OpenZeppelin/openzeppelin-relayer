@@ -22,6 +22,12 @@ impl Clone for SecretString {
     }
 }
 
+// Example with explanation
+// SAFETY: SecretString is safely shareable between threads because:
+// 1. All access to the inner SecretVec is protected by RwLock
+// 2. SecretVec itself only performs memory operations that are thread-safe
+// 3. No interior mutability is exposed outside the RwLock
+unsafe impl Send for SecretString {}
 unsafe impl Sync for SecretString {}
 
 impl SecretString {
