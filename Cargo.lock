@@ -4565,6 +4565,7 @@ dependencies = [
  "redis 0.28.2",
  "regex",
  "reqwest 0.12.14",
+ "rustls-webpki 0.103.0",
  "secrets",
  "serde",
  "serde_json",

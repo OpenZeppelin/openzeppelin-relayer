@@ -81,6 +81,7 @@ tempfile = "3.2"
 serial_test = "3.2"
 clap = { version = "4.4", features = ["derive"] }
 wiremock = "0.6"
+rustls-webpki = "0.103.0"
 
 [[bin]]
 name = "openzeppelin-relayer"
