@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use validator::ValidationError;
+use zeroize::Zeroizing;
 
 use super::SecretString;
 
@@ -34,12 +35,12 @@ impl PlainOrEnvValue {
     pub fn get_value(&self) -> Result<SecretString, PlainOrEnvValueError> {
         match self {
             PlainOrEnvValue::Env { value } => {
-                let value = std::env::var(value).map_err(|_| {
+                let value = Zeroizing::new(std::env::var(value).map_err(|_| {
                     PlainOrEnvValueError::MissingEnvVar(format!(
                         "Environment variable {} not found",
                         value
                     ))
-                })?;
+                })?);
                 Ok(SecretString::new(&value))
             }
             PlainOrEnvValue::Plain { value } => Ok(value.clone()),

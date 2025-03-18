@@ -89,7 +89,7 @@ impl<'de> Deserialize<'de> for SecretString {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
+        let s = Zeroizing::new(String::deserialize(deserializer)?);
 
         Ok(SecretString::new(&s))
     }

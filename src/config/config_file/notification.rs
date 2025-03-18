@@ -63,16 +63,9 @@ impl NotificationFileConfig {
     }
 
     pub fn get_signing_key(&self) -> Option<SecretString> {
-        match &self.signing_key {
-            Some(signing_key) => match signing_key {
-                PlainOrEnvValue::Env { value } => {
-                    let signing_key = std::env::var(value);
-                    signing_key.ok().map(|s| SecretString::new(&s))
-                }
-                PlainOrEnvValue::Plain { value } => Some(value.clone()),
-            },
-            None => None,
-        }
+        self.signing_key
+            .as_ref()
+            .and_then(|key| key.get_value().ok())
     }
 
     pub fn validate(&self) -> Result<(), ConfigFileError> {
