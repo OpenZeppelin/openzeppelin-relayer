@@ -449,6 +449,7 @@ mod tests {
             gas_price: None,
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
+            is_min_bumped: None,
         };
 
         let updated_tx = tx_data.with_price_params(price_params);

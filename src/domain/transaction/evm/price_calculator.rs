@@ -35,6 +35,7 @@
 //! - Maximum base fee multiplier: 10x
 //! - Time window for fee calculation: 90 seconds
 use crate::{
+    constants::DEFAULT_TRANSACTION_SPEED,
     models::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
         TransactionError, TransactionRepoModel,
@@ -55,6 +56,7 @@ pub struct PriceParams {
     pub gas_price: Option<u128>,
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
+    pub is_min_bumped: Option<bool>,
 }
 
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
@@ -102,6 +104,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             gas_price: gas_price_capped,
             max_fee_per_gas: max_fee_per_gas_capped,
             max_priority_fee_per_gas: max_priority_fee_per_gas_capped,
+            is_min_bumped: None,
         })
     }
 
@@ -115,6 +118,9 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
     /// 3. Compare with current network prices to decide how much to bump.
     /// 4. Apply any relayer gas price caps.
     /// 5. Return the final bumped gas parameters.
+    ///
+    /// The returned PriceParams includes an is_min_bumped flag that indicates whether
+    /// the calculated gas parameters meet the minimum bump requirements.
     pub async fn calculate_bumped_gas_price(
         &self,
         tx: &TransactionRepoModel,
@@ -182,7 +188,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         max_fee: u128,
         max_priority_fee: u128,
     ) -> Result<PriceParams, TransactionError> {
-        let speed = maybe_speed.unwrap_or(&Speed::Fast);
+        let speed = maybe_speed.unwrap_or(&DEFAULT_TRANSACTION_SPEED);
 
         // Calculate the minimum required fees (10% increase over previous values)
         let min_bump_max_fee = Self::calculate_min_bump(max_fee);
@@ -225,11 +231,16 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         let capped_priority = Self::cap_gas_price(bumped_priority_fee, gas_price_cap);
         let capped_max_fee = Self::cap_gas_price(final_max_fee, gas_price_cap);
 
+        // Check if the capped values still meet the minimum bump requirements
+        let is_min_bumped =
+            capped_priority >= min_bump_max_priority && capped_max_fee >= min_bump_max_fee;
+
         // Step 6: Return the final bumped gas parameters.
         Ok(PriceParams {
             gas_price: None,
             max_priority_fee_per_gas: Some(capped_priority),
             max_fee_per_gas: Some(capped_max_fee),
+            is_min_bumped: Some(is_min_bumped),
         })
     }
 
@@ -262,10 +273,14 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         // Cap
         let capped_gas_price = Self::cap_gas_price(bumped_gas_price, gas_price_cap);
 
+        // Check if the capped value still meets the minimum bump requirement
+        let is_min_bumped = capped_gas_price >= min_bump_gas_price;
+
         Ok(PriceParams {
             gas_price: Some(capped_gas_price),
             max_priority_fee_per_gas: None,
             max_fee_per_gas: None,
+            is_min_bumped: Some(is_min_bumped),
         })
     }
     /// Fetches price params based on the type of transaction (legacy, EIP1559, speed-based).
@@ -305,6 +320,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             gas_price: Some(gas_price),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
+            is_min_bumped: None,
         })
     }
 
@@ -327,6 +343,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             gas_price: None,
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(max_priority_fee),
+            is_min_bumped: None,
         })
     }
     /// Handles gas price calculation for speed-based transactions.
@@ -378,6 +395,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             gas_price: None,
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(priority_fee),
+            is_min_bumped: None,
         })
     }
     /// Calculates legacy gas prices based on the requested speed.
@@ -402,6 +420,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             gas_price: Some(gas_price),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
+            is_min_bumped: None,
         })
     }
 
@@ -1028,5 +1047,150 @@ mod tests {
         let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
         assert!(bumped.max_fee_per_gas.unwrap() <= 105_000_000_000);
         assert!(bumped.max_priority_fee_per_gas.unwrap() <= 105_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_is_min_bumped_flag_eip1559() {
+        let mut mock_service = MockEvmGasPriceServiceTrait::new();
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices::default(),
+            max_priority_fee_per_gas: SpeedPrices {
+                safe_low: 1_000_000_000,
+                average: 2_000_000_000,
+                fast: 3_000_000_000,
+                fastest: 4_000_000_000,
+            },
+            base_fee_per_gas: 40_000_000_000,
+        };
+        mock_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+        mock_service
+            .expect_network()
+            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+
+        let pc = PriceCalculator::new(mock_service);
+        let mut relayer = create_mock_relayer();
+
+        // Case 1: Price high enough - should result in is_min_bumped = true
+        relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(200_000_000_000u128),
+            ..Default::default()
+        });
+
+        let tx = TransactionRepoModel {
+            network_data: {
+                let evm_data = EvmTransactionData {
+                    max_fee_per_gas: Some(50_000_000_000),
+                    max_priority_fee_per_gas: Some(2_000_000_000),
+                    speed: Some(Speed::Fast),
+                    ..Default::default()
+                };
+                NetworkTransactionData::Evm(evm_data)
+            },
+            ..Default::default()
+        };
+
+        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        assert_eq!(
+            bumped.is_min_bumped,
+            Some(true),
+            "Should be min bumped when prices are high enough"
+        );
+
+        // Case 2: Gas price cap too low - should result in is_min_bumped = false
+        relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(50_000_000_000u128), // Cap is below the min bump for max_fee_per_gas
+            ..Default::default()
+        });
+
+        let tx = TransactionRepoModel {
+            network_data: {
+                let evm_data = EvmTransactionData {
+                    max_fee_per_gas: Some(50_000_000_000),
+                    max_priority_fee_per_gas: Some(2_000_000_000),
+                    speed: Some(Speed::Fast),
+                    ..Default::default()
+                };
+                NetworkTransactionData::Evm(evm_data)
+            },
+            ..Default::default()
+        };
+
+        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        // Since min bump is 10%, original was 50 Gwei, min is 55 Gwei, but cap is 50 Gwei
+        assert_eq!(
+            bumped.is_min_bumped,
+            Some(false),
+            "Should not be min bumped when cap is too low"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_is_min_bumped_flag_legacy() {
+        let mut mock_service = MockEvmGasPriceServiceTrait::new();
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 8_000_000_000,
+                average: 10_000_000_000,
+                fast: 12_000_000_000,
+                fastest: 15_000_000_000,
+            },
+            max_priority_fee_per_gas: SpeedPrices::default(),
+            base_fee_per_gas: 0,
+        };
+        mock_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+        mock_service
+            .expect_network()
+            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+
+        let pc = PriceCalculator::new(mock_service);
+        let mut relayer = create_mock_relayer();
+
+        // Case 1: Regular case, cap is high enough
+        relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(100_000_000_000u128),
+            ..Default::default()
+        });
+
+        let tx = TransactionRepoModel {
+            network_data: {
+                let evm_data = EvmTransactionData {
+                    gas_price: Some(10_000_000_000),
+                    speed: Some(Speed::Fast),
+                    ..Default::default()
+                };
+                NetworkTransactionData::Evm(evm_data)
+            },
+            ..Default::default()
+        };
+
+        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        assert_eq!(
+            bumped.is_min_bumped,
+            Some(true),
+            "Should be min bumped with sufficient cap"
+        );
+
+        // Case 2: Cap too low
+        relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(10_000_000_000u128), // Same as original, preventing the 10% bump
+            ..Default::default()
+        });
+
+        let bumped = pc.calculate_bumped_gas_price(&tx, &relayer).await.unwrap();
+        assert_eq!(
+            bumped.is_min_bumped,
+            Some(false),
+            "Should not be min bumped with insufficient cap"
+        );
     }
 }

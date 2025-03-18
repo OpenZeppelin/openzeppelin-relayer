@@ -10,7 +10,7 @@ use log::{debug, info, warn};
 use std::sync::Arc;
 
 use crate::{
-    constants::{DEFAULT_RESUBMIT_TIMEOUT_MS, DEFAULT_TX_VALID_TIMESPAN},
+    constants::DEFAULT_TX_VALID_TIMESPAN,
     domain::{transaction::Transaction, PriceCalculator},
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
@@ -23,7 +23,7 @@ use crate::{
         EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
         TransactionCounterService,
     },
-    utils::get_resubmit_timeout_for_speed,
+    utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
 use super::PriceParams;
@@ -290,33 +290,30 @@ impl EvmRelayerTransaction {
     /// Determines if a transaction should be resubmitted
     /// Returns true if the transaction should be resubmitted
     async fn should_resubmit(&self, tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+        if tx.status != TransactionStatus::Submitted {
+            return Err(TransactionError::UnexpectedError(format!(
+                "Transaction must be in Submitted status to resubmit, found: {:?}",
+                tx.status
+            )));
+        }
+
         let age = self.get_age_of_sent_at(tx)?;
 
         // Check for speed and determine timeout
         let timeout = match tx.network_data.get_evm_transaction_data() {
-            Ok(data) => get_resubmit_timeout_for_speed(&data.speed, DEFAULT_RESUBMIT_TIMEOUT_MS),
-            Err(_) => DEFAULT_RESUBMIT_TIMEOUT_MS,
+            Ok(data) => get_resubmit_timeout_for_speed(&data.speed),
+            Err(e) => return Err(e),
         };
 
+        let timeout_with_backoff = get_resubmit_timeout_with_backoff(timeout, tx.hashes.len());
+
         // If the transaction has been waiting for more than our timeout, resubmit it
-        if age > Duration::milliseconds(timeout) {
+        if age > Duration::milliseconds(timeout_with_backoff) {
             info!("Transaction has been pending for too long, resubmitting");
             return Ok(true);
         }
 
         Ok(false)
-    }
-
-    /// Calculates bumped gas price for resubmission
-    async fn calculate_bumped_gas_price(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<PriceParams, TransactionError> {
-        info!("Calculating bumped gas price for transaction: {}", tx.id);
-        // Delegate to the PriceCalculator's implementation
-        self.price_calculator
-            .calculate_bumped_gas_price(tx, self.relayer())
-            .await
     }
 }
 
@@ -540,7 +537,18 @@ impl Transaction for EvmRelayerTransaction {
         info!("Resubmitting transaction: {:?}", tx.id);
 
         // Calculate bumped gas price
-        let bumped_price_params = self.calculate_bumped_gas_price(&tx).await?;
+        let bumped_price_params = self
+            .price_calculator
+            .calculate_bumped_gas_price(&tx, self.relayer())
+            .await?;
+
+        if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
+            warn!(
+                "Bumped gas price does not meet minimum requirement, skipping resubmission: {:?}",
+                bumped_price_params
+            );
+            return Ok(tx);
+        }
 
         // Get transaction data
         let evm_data = tx.network_data.get_evm_transaction_data()?;
