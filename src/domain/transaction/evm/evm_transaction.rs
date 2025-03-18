@@ -575,7 +575,9 @@ mod tests {
     use super::*;
     use crate::{
         jobs::MockJobProducerTrait,
-        models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy},
+        models::{
+            evm::Speed, EvmNamedNetwork, EvmTransactionData, NetworkType, RelayerNetworkPolicy,
+        },
         repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
         services::{MockEvmGasPriceServiceTrait, MockEvmProviderTrait, MockSigner},
     };
@@ -794,21 +796,98 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction() {
-        let mock_transaction = MockTransactionRepository::new();
+        // Create mocks for all dependencies
+        let mut mock_transaction = MockTransactionRepository::new();
         let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
-        let mock_provider = MockEvmProviderTrait::new();
-        let mock_signer = MockSigner::new();
-        let mock_job_producer = MockJobProducerTrait::new();
-        let mock_gas_price_service = MockEvmGasPriceServiceTrait::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_gas_price_service = MockEvmGasPriceServiceTrait::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
 
-        // Create a transaction counter that implements TransactionCounterTrait
-        let counter_service = MockTransactionCounterTrait::new();
-
+        // Create test relayer and transaction
         let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
 
-        // Define all arguments in correct order and wrapped in Arc where needed
-        let _evm_transaction = EvmRelayerTransaction {
-            relayer,
+        // Set up expectations for the mocks
+
+        // Gas price service should return gas price params
+        mock_gas_price_service
+            .expect_get_prices_from_json_rpc()
+            .returning(|| {
+                Box::pin(async {
+                    Ok(crate::services::gas::evm_gas_price::GasPrices {
+                        legacy_prices: crate::services::gas::evm_gas_price::SpeedPrices {
+                            safe_low: 10000000000, // 10 Gwei
+                            average: 20000000000,  // 20 Gwei
+                            fast: 30000000000,     // 30 Gwei
+                            fastest: 40000000000,  // 40 Gwei
+                        },
+                        max_priority_fee_per_gas:
+                            crate::services::gas::evm_gas_price::SpeedPrices {
+                                safe_low: 1000000000, // 1 Gwei
+                                average: 2000000000,  // 2 Gwei
+                                fast: 3000000000,     // 3 Gwei
+                                fastest: 4000000000,  // 4 Gwei
+                            },
+                        base_fee_per_gas: 5000000000, // 5 Gwei
+                    })
+                })
+            });
+
+        mock_gas_price_service
+            .expect_network()
+            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+
+        // Provider should be called for balance check
+        mock_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) })); // 1 ETH
+
+        // Transaction counter should increment and return a nonce
+        counter_service
+            .expect_get_and_increment()
+            .returning(|_, _| Ok(42u64)); // Return nonce 42
+
+        // Signer should be called to sign the transaction
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xtxhash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ))
+            })
+        });
+
+        // Transaction repository should update the transaction
+        mock_transaction
+            .expect_partial_update()
+            .returning(|tx_id, update| {
+                let mut updated_tx = create_test_transaction();
+                updated_tx.id = tx_id;
+                updated_tx.status = update.status.unwrap_or(TransactionStatus::Pending);
+                updated_tx.network_data = update.network_data.unwrap_or(updated_tx.network_data);
+                Ok(updated_tx)
+            });
+
+        // Job producer should create a submit transaction job
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        // Set up EVM transaction with the mocks
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
             provider: mock_provider,
             relayer_repository: Arc::new(mock_relayer),
             transaction_repository: Arc::new(mock_transaction),
@@ -817,6 +896,25 @@ mod tests {
             gas_price_service: Arc::new(mock_gas_price_service),
             signer: mock_signer,
         };
-        // todo create a test transaction
+
+        // Call prepare_transaction and verify it succeeds
+        let result = evm_transaction.prepare_transaction(test_tx).await;
+
+        // Verify the transaction was successfully prepared
+        assert!(result.is_ok());
+
+        // Verify the transaction has the expected values
+        let prepared_tx = result.unwrap();
+        assert_eq!(prepared_tx.status, TransactionStatus::Sent);
+
+        // Verify the network data was properly updated
+        if let NetworkTransactionData::Evm(evm_data) = &prepared_tx.network_data {
+            assert_eq!(evm_data.nonce, Some(42));
+            assert!(evm_data.raw.is_some());
+            assert_eq!(evm_data.hash, Some("0xtxhash".to_string()));
+            assert!(evm_data.signature.is_some());
+        } else {
+            panic!("Expected EVM transaction data");
+        }
     }
 }
