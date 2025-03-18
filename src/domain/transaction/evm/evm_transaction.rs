@@ -833,8 +833,6 @@ mod tests {
             gas_price_service: Arc::new(mock_gas_price_service),
             signer: mock_signer,
         };
-
-        // This test is currently ignored because it requires proper mocking of multiple dependencies.
-        // We'll implement it properly once we have resolved all the dependency structure issues.
+        // todo create a test transaction
     }
 }
