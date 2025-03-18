@@ -576,26 +576,10 @@ mod tests {
     use crate::{
         jobs::MockJobProducerTrait,
         models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy},
-        repositories::{
-            MockRepository, MockTransactionRepository, TransactionCounterError,
-            TransactionCounterTrait,
-        },
+        repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
         services::{MockEvmGasPriceServiceTrait, MockEvmProviderTrait, MockSigner},
     };
     use chrono::{Duration, Utc};
-    use mockall::mock;
-
-    // Create a mock implementation of TransactionCounterTrait for testing
-    mock! {
-        pub TransactionCounter {}
-
-        impl TransactionCounterTrait for TransactionCounter {
-            fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, TransactionCounterError>;
-            fn get_and_increment(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError>;
-            fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError>;
-            fn set(&self, relayer_id: &str, address: &str, value: u64) -> Result<(), TransactionCounterError>;
-        }
-    }
 
     // Create a concrete type alias for testing
     type TestEvmTransaction = ConcreteEvmRelayerTransaction;
@@ -818,7 +802,7 @@ mod tests {
         let mock_gas_price_service = MockEvmGasPriceServiceTrait::new();
 
         // Create a transaction counter that implements TransactionCounterTrait
-        let counter_service = MockTransactionCounter::new();
+        let counter_service = MockTransactionCounterTrait::new();
 
         let relayer = create_test_relayer();
 
