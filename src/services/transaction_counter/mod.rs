@@ -12,13 +12,13 @@ use async_trait::async_trait;
 use mockall::automock;
 
 #[derive(Clone)]
-pub struct TransactionCounterService<T: TransactionCounterTrait + Send + Sync + 'static> {
+pub struct TransactionCounterService<T: TransactionCounterTrait + Send + Sync> {
     relayer_id: String,
     address: String,
     store: Arc<T>,
 }
 
-impl<T: TransactionCounterTrait + Send + Sync + 'static> TransactionCounterService<T> {
+impl<T: TransactionCounterTrait + Send + Sync> TransactionCounterService<T> {
     pub fn new(relayer_id: String, address: String, store: Arc<T>) -> Self {
         Self {
             relayer_id,
@@ -39,7 +39,7 @@ pub trait TransactionCounterServiceTrait: Send + Sync {
 
 #[async_trait]
 #[allow(dead_code)]
-impl<T: TransactionCounterTrait + Send + Sync + 'static> TransactionCounterServiceTrait
+impl<T: TransactionCounterTrait + Send + Sync> TransactionCounterServiceTrait
     for TransactionCounterService<T>
 {
     async fn get(&self) -> Result<Option<u64>, TransactionCounterError> {
