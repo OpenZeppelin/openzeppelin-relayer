@@ -51,3 +51,56 @@ async fn handle_request(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apalis::prelude::Attempt;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_status_check_job_validation() {
+        // Create a basic status check job
+        let check_job = TransactionStatusCheck::new("tx123", "relayer-1");
+        let job = Job::new(crate::jobs::JobType::TransactionStatusCheck, check_job);
+
+        // Validate the job data
+        assert_eq!(job.data.transaction_id, "tx123");
+        assert_eq!(job.data.relayer_id, "relayer-1");
+        assert!(job.data.metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_status_check_with_metadata() {
+        // Create a job with retry metadata
+        let mut metadata = HashMap::new();
+        metadata.insert("retry_count".to_string(), "2".to_string());
+        metadata.insert("last_status".to_string(), "pending".to_string());
+
+        let check_job =
+            TransactionStatusCheck::new("tx123", "relayer-1").with_metadata(metadata.clone());
+
+        // Validate the metadata
+        assert!(check_job.metadata.is_some());
+        let job_metadata = check_job.metadata.unwrap();
+        assert_eq!(job_metadata.get("retry_count").unwrap(), "2");
+        assert_eq!(job_metadata.get("last_status").unwrap(), "pending");
+    }
+
+    #[tokio::test]
+    async fn test_status_handler_attempt_tracking() {
+        // Create attempts with different retry counts
+        let first_attempt = Attempt::default();
+        assert_eq!(first_attempt.current(), 0);
+
+        let second_attempt = Attempt::default();
+        second_attempt.increment();
+        assert_eq!(second_attempt.current(), 1);
+
+        let final_attempt = Attempt::default();
+        for _ in 0..WORKER_DEFAULT_MAXIMUM_RETRIES {
+            final_attempt.increment();
+        }
+        assert_eq!(final_attempt.current(), WORKER_DEFAULT_MAXIMUM_RETRIES);
+    }
+}

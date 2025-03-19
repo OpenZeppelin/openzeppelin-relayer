@@ -206,4 +206,94 @@ mod tests {
         let cloned_req_attempt = cloned_req.parts.attempt.current();
         assert_eq!(cloned_req_attempt, 1);
     }
+
+    #[test]
+    fn test_default_policy() {
+        let policy = BackoffRetryPolicy::default();
+
+        assert_eq!(policy.retries, 5);
+        assert_eq!(policy.initial_backoff, Duration::from_millis(1000));
+        assert_eq!(policy.multiplier, 1.5);
+        assert_eq!(policy.max_backoff, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_zero_initial_backoff() {
+        let policy = BackoffRetryPolicy {
+            retries: 3,
+            initial_backoff: Duration::from_millis(0),
+            multiplier: 2.0,
+            max_backoff: Duration::from_secs(60),
+        };
+
+        // With zero initial backoff, all durations should be zero
+        assert_eq!(policy.backoff_duration(0), Duration::from_millis(0));
+        assert_eq!(policy.backoff_duration(1), Duration::from_millis(0));
+        assert_eq!(policy.backoff_duration(2), Duration::from_millis(0));
+    }
+
+    #[test]
+    fn test_multiplier_one() {
+        let policy = BackoffRetryPolicy {
+            retries: 3,
+            initial_backoff: Duration::from_millis(500),
+            multiplier: 1.0,
+            max_backoff: Duration::from_secs(60),
+        };
+
+        // With multiplier of 1.0, all durations should be the same as initial
+        assert_eq!(policy.backoff_duration(0), Duration::from_millis(500));
+        assert_eq!(policy.backoff_duration(1), Duration::from_millis(500));
+        assert_eq!(policy.backoff_duration(2), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_multiplier_less_than_one() {
+        let policy = BackoffRetryPolicy {
+            retries: 3,
+            initial_backoff: Duration::from_millis(1000),
+            multiplier: 0.5,
+            max_backoff: Duration::from_secs(60),
+        };
+
+        // With multiplier < 1.0, each duration should be less than the previous
+        assert_eq!(policy.backoff_duration(0), Duration::from_millis(1000));
+        assert_eq!(policy.backoff_duration(1), Duration::from_millis(500));
+        assert_eq!(policy.backoff_duration(2), Duration::from_millis(250));
+    }
+
+    #[tokio::test]
+    async fn test_retry_policy_exhausted_retries() {
+        let mut policy = BackoffRetryPolicy {
+            retries: 0, // No retries allowed
+            initial_backoff: Duration::from_millis(10),
+            multiplier: 2.0,
+            max_backoff: Duration::from_secs(1),
+        };
+
+        let job = TestJob;
+        let ctx = ();
+        let mut req = Request::new_with_ctx(job, ctx);
+        let mut result: Result<(), Err> = Err(Error::from(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Test error",
+        ))
+            as Box<dyn std::error::Error + Send + Sync>));
+
+        // Should return None immediately because retries=0
+        assert!(policy.retry(&mut req, &mut result).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_retry_policy_large_max_backoff() {
+        let policy = BackoffRetryPolicy {
+            retries: 10,
+            initial_backoff: Duration::from_millis(100),
+            multiplier: 10.0,                               // Large multiplier
+            max_backoff: Duration::from_secs(24 * 60 * 60), // 24 hours
+        };
+
+        // Even with a large multiplier, we should never exceed max_backoff
+        assert!(policy.backoff_duration(10) <= Duration::from_secs(24 * 60 * 60));
+    }
 }

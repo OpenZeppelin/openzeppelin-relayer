@@ -172,13 +172,103 @@ impl NotificationSend {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::str::FromStr;
 
     use crate::models::{
-        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload, U256,
+        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookNotification,
+        WebhookPayload, U256,
     };
 
     use super::*;
+
+    #[test]
+    fn test_job_creation() {
+        let job_data = TransactionRequest::new("tx123", "relayer-1");
+        let job = Job::new(JobType::TransactionRequest, job_data.clone());
+
+        assert_eq!(job.job_type.to_string(), "TransactionRequest");
+        assert_eq!(job.version, "1.0");
+        assert_eq!(job.data.transaction_id, "tx123");
+        assert_eq!(job.data.relayer_id, "relayer-1");
+        assert!(job.data.metadata.is_none());
+    }
+
+    #[test]
+    fn test_transaction_request_with_metadata() {
+        let mut metadata = HashMap::new();
+        metadata.insert("chain_id".to_string(), "1".to_string());
+        metadata.insert("gas_price".to_string(), "20000000000".to_string());
+
+        let tx_request =
+            TransactionRequest::new("tx123", "relayer-1").with_metadata(metadata.clone());
+
+        assert_eq!(tx_request.transaction_id, "tx123");
+        assert_eq!(tx_request.relayer_id, "relayer-1");
+        assert!(tx_request.metadata.is_some());
+        assert_eq!(tx_request.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_transaction_send_methods() {
+        // Test submit
+        let tx_submit = TransactionSend::submit("tx123", "relayer-1");
+        assert_eq!(tx_submit.transaction_id, "tx123");
+        assert_eq!(tx_submit.relayer_id, "relayer-1");
+        matches!(tx_submit.command, TransactionCommand::Submit);
+
+        // Test cancel
+        let tx_cancel = TransactionSend::cancel("tx123", "relayer-1", "user requested");
+        matches!(tx_cancel.command, TransactionCommand::Cancel { reason } if reason == "user requested");
+
+        // Test resubmit
+        let tx_resubmit = TransactionSend::resubmit("tx123", "relayer-1");
+        matches!(tx_resubmit.command, TransactionCommand::Resubmit);
+
+        // Test resend
+        let tx_resend = TransactionSend::resend("tx123", "relayer-1");
+        matches!(tx_resend.command, TransactionCommand::Resend);
+
+        // Test with_metadata
+        let mut metadata = HashMap::new();
+        metadata.insert("nonce".to_string(), "5".to_string());
+
+        let tx_with_metadata =
+            TransactionSend::submit("tx123", "relayer-1").with_metadata(metadata.clone());
+
+        assert!(tx_with_metadata.metadata.is_some());
+        assert_eq!(tx_with_metadata.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_transaction_status_check() {
+        let tx_status = TransactionStatusCheck::new("tx123", "relayer-1");
+        assert_eq!(tx_status.transaction_id, "tx123");
+        assert_eq!(tx_status.relayer_id, "relayer-1");
+        assert!(tx_status.metadata.is_none());
+
+        let mut metadata = HashMap::new();
+        metadata.insert("retries".to_string(), "3".to_string());
+
+        let tx_status_with_metadata =
+            TransactionStatusCheck::new("tx123", "relayer-1").with_metadata(metadata.clone());
+
+        assert!(tx_status_with_metadata.metadata.is_some());
+        assert_eq!(tx_status_with_metadata.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_job_serialization() {
+        let tx_request = TransactionRequest::new("tx123", "relayer-1");
+        let job = Job::new(JobType::TransactionRequest, tx_request);
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<TransactionRequest> = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.job_type.to_string(), "TransactionRequest");
+        assert_eq!(deserialized.data.transaction_id, "tx123");
+        assert_eq!(deserialized.data.relayer_id, "relayer-1");
+    }
 
     #[test]
     fn test_notification_send_serialization() {

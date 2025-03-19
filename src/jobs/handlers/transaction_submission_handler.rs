@@ -65,3 +65,55 @@ async fn handle_request(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_submission_handler_job_validation() {
+        // Create a job with Submit command
+        let submit_job = TransactionSend::submit("tx123", "relayer-1");
+        let job = Job::new(crate::jobs::JobType::TransactionSend, submit_job);
+
+        // Validate the job data
+        match job.data.command {
+            TransactionCommand::Submit => {}
+            _ => panic!("Expected Submit command"),
+        }
+        assert_eq!(job.data.transaction_id, "tx123");
+        assert_eq!(job.data.relayer_id, "relayer-1");
+        assert!(job.data.metadata.is_none());
+
+        // Create a job with Cancel command
+        let cancel_job = TransactionSend::cancel("tx123", "relayer-1", "user requested");
+        let job = Job::new(crate::jobs::JobType::TransactionSend, cancel_job);
+
+        // Validate the job data
+        match job.data.command {
+            TransactionCommand::Cancel { reason } => {
+                assert_eq!(reason, "user requested");
+            }
+            _ => panic!("Expected Cancel command"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_submission_job_with_metadata() {
+        // Create a job with metadata
+        let mut metadata = HashMap::new();
+        metadata.insert("gas_price".to_string(), "20000000000".to_string());
+
+        let submit_job =
+            TransactionSend::submit("tx123", "relayer-1").with_metadata(metadata.clone());
+
+        // Validate the metadata
+        assert!(submit_job.metadata.is_some());
+        let job_metadata = submit_job.metadata.unwrap();
+        assert_eq!(job_metadata.get("gas_price").unwrap(), "20000000000");
+    }
+
+    // Note: As with the transaction_request_handler tests, full testing of the
+    // handler functionality would require dependency injection or integration tests.
+}
