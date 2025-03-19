@@ -20,7 +20,7 @@ use super::evm::Speed;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
-    Cancelled,
+    Canceled,
     Pending,
     Sent,
     Submitted,
