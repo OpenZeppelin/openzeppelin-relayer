@@ -7,43 +7,41 @@
 //! The `SecretString` type wraps a `SecretVec<u8>` and provides methods for
 //! securely handling string data, including zeroizing the memory when the
 //! string is dropped.
-use std::{fmt, sync::RwLock};
+use std::{fmt, sync::Mutex};
 
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-pub struct SecretString(RwLock<SecretVec<u8>>);
+pub struct SecretString(Mutex<SecretVec<u8>>);
 
 impl Clone for SecretString {
     fn clone(&self) -> Self {
         let secret_vec = self.with_secret_vec(|secret_vec| secret_vec.clone());
-        Self(RwLock::new(secret_vec))
+        Self(Mutex::new(secret_vec))
     }
 }
 
-// Example with explanation
-// SAFETY: SecretString is safely shareable between threads because:
-// 1. All access to the inner SecretVec is protected by RwLock
-// 2. SecretVec itself only performs memory operations that are thread-safe
-// 3. No interior mutability is exposed outside the RwLock
-unsafe impl Send for SecretString {}
-unsafe impl Sync for SecretString {}
-
 impl SecretString {
+    /// Creates a new SecretString from a regular string
+    ///
+    /// The input string's content is copied into secure memory and protected.
     pub fn new(s: &str) -> Self {
         let bytes = Zeroizing::new(s.as_bytes().to_vec());
         let secret_vec = SecretVec::new(bytes.len(), |buffer| {
             buffer.copy_from_slice(&bytes);
         });
-        Self(RwLock::new(secret_vec))
+        Self(Mutex::new(secret_vec))
     }
 
+    /// Access the SecretVec with a provided function
+    ///
+    /// This is a private helper method to safely access the locked SecretVec
     fn with_secret_vec<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&SecretVec<u8>) -> R,
     {
-        let guard = match self.0.read() {
+        let guard = match self.0.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
@@ -51,6 +49,10 @@ impl SecretString {
         f(&guard)
     }
 
+    /// Access the secret string content with a provided function
+    ///
+    /// This method allows temporary access to the string content
+    /// without creating a copy of the string.
     pub fn as_str<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&str) -> R,
@@ -62,6 +64,10 @@ impl SecretString {
         })
     }
 
+    /// Create a temporary copy of the string content
+    ///
+    /// Returns a zeroizing string that will be securely erased when dropped.
+    /// Only use this when absolutely necessary as it creates a copy of the secret.
     pub fn to_str(&self) -> Zeroizing<String> {
         self.with_secret_vec(|secret_vec| {
             let bytes = secret_vec.borrow();
@@ -70,6 +76,9 @@ impl SecretString {
         })
     }
 
+    /// Check if the secret string is empty
+    ///
+    /// Returns true if the string contains no bytes.
     pub fn is_empty(&self) -> bool {
         self.with_secret_vec(|secret_vec| secret_vec.is_empty())
     }
@@ -275,6 +284,6 @@ mod tests {
             assert_eq!(s, long_string);
         });
 
-        assert_eq!(secret.0.read().unwrap().len(), 100_000);
+        assert_eq!(secret.0.lock().unwrap().len(), 100_000);
     }
 }
