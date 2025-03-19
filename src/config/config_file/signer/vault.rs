@@ -220,7 +220,7 @@ mod tests {
                 "type": "plain",
                 "value": "role-123"
             },
-            "secret_id": { 
+            "secret_id": {
                 "type": "plain",
                 "value": "secret-456"
             },
@@ -254,7 +254,7 @@ mod tests {
                 "type": "plain",
                 "value": "role-123"
             },
-            "secret_id": { 
+            "secret_id": {
                 "type": "plain",
                 "value": "secret-456"
             },

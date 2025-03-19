@@ -234,7 +234,7 @@ mod tests {
         let json = r#"
         {
             "client_id": "client-123",
-            "client_secret": { 
+            "client_secret": {
                 "type": "plain",
                 "value":"secret-abc"
             },
