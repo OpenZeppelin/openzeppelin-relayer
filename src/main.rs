@@ -165,8 +165,9 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use actix_web::test::TestRequest;
-    use openzeppelin_relayer::constants::{
-        AUTHORIZATION_HEADER_NAME, AUTHORIZATION_HEADER_VALUE_PREFIX,
+    use openzeppelin_relayer::{
+        constants::{AUTHORIZATION_HEADER_NAME, AUTHORIZATION_HEADER_VALUE_PREFIX},
+        models::SecretString,
     };
 
     #[test]
@@ -178,14 +179,20 @@ mod tests {
             ))
             .to_srv_request();
 
-        assert!(check_authorization_header(&req, "test_key"));
+        assert!(check_authorization_header(
+            &req,
+            &SecretString::new("test_key")
+        ));
     }
 
     #[test]
     fn test_check_authorization_header_missing_header() {
         let req = TestRequest::default().to_srv_request();
 
-        assert!(!check_authorization_header(&req, "test_key"));
+        assert!(!check_authorization_header(
+            &req,
+            &SecretString::new("test_key")
+        ));
     }
 
     #[test]
@@ -194,7 +201,10 @@ mod tests {
             .insert_header((AUTHORIZATION_HEADER_NAME, "InvalidPrefix test_key"))
             .to_srv_request();
 
-        assert!(!check_authorization_header(&req, "test_key"));
+        assert!(!check_authorization_header(
+            &req,
+            &SecretString::new("test_key")
+        ));
     }
 
     #[test]
@@ -206,6 +216,9 @@ mod tests {
             ))
             .to_srv_request();
 
-        assert!(!check_authorization_header(&req, "test_key"));
+        assert!(!check_authorization_header(
+            &req,
+            &SecretString::new("test_key")
+        ));
     }
 }

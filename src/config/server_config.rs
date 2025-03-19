@@ -1,6 +1,8 @@
 /// Configuration for the server, including network and rate limiting settings.
 use std::env;
 
+use crate::models::SecretString;
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// The host address the server will bind to.
@@ -12,7 +14,7 @@ pub struct ServerConfig {
     /// The file path to the server's configuration file.
     pub config_file_path: String,
     /// The API key used for authentication.
-    pub api_key: String,
+    pub api_key: SecretString,
     /// The number of requests allowed per second.
     pub rate_limit_requests_per_second: u64,
     /// The maximum burst size for rate limiting.
@@ -47,7 +49,7 @@ impl ServerConfig {
             redis_url: env::var("REDIS_URL").expect("REDIS_URL must be set"),
             config_file_path: env::var("CONFIG_FILE_PATH")
                 .unwrap_or_else(|_| "config/config.json".to_string()),
-            api_key: env::var("API_KEY").expect("API_KEY must be set"),
+            api_key: SecretString::new(&env::var("API_KEY").expect("API_KEY must be set")),
             rate_limit_requests_per_second: env::var("RATE_LIMIT_REQUESTS_PER_SECOND")
                 .unwrap_or_else(|_| "100".to_string())
                 .parse()
