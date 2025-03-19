@@ -838,9 +838,6 @@ impl Transaction for EvmRelayerTransaction {
             .prepare_cancel_transaction(&mut evm_data, relayer)
             .await?;
 
-        // Update the noop count in the transaction
-        let noop_count = tx.noop_count.unwrap_or(0) + 1;
-
         // Track the new transaction hash in the hashes history
         let mut hashes = tx.hashes.clone();
         if let Some(hash) = hash_previous {
@@ -850,7 +847,6 @@ impl Transaction for EvmRelayerTransaction {
         // Update original transaction with the cancel/noop transaction data
         let update = TransactionUpdateRequest {
             network_data: Some(NetworkTransactionData::Evm(signed_cancel_tx_data)),
-            noop_count: Some(noop_count),
             status: Some(TransactionStatus::Sent), // Reset status to Sent since we're sending a new tx
             sent_at: None, // Clear sent_at since it will be updated when the transaction is submitted
             hashes: Some(hashes),
