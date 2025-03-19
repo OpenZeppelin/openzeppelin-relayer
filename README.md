@@ -97,6 +97,16 @@ Run the following commands to install pre-commit hooks:
   rustup component add rustfmt
   ```
 
+### Run Tests
+
+To run tests, use the following commands:
+
+```bash
+cargo test
+cargo test properties
+cargo test integration
+```
+
 ### Config files
 
 Create `config/config.json` file. You can use `config/config.example.json` as a starting point:
