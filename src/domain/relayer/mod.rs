@@ -15,8 +15,9 @@ use utoipa::ToSchema;
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, EvmTransactionDataSignature, NetworkTransactionRequest, NetworkType,
-        RelayerError, RelayerRepoModel, SignerRepoModel, TransactionError, TransactionRepoModel,
+        EvmNetwork, EvmTransactionDataSignature, NetworkRpcResult, NetworkTransactionRequest,
+        NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel, TransactionError,
+        TransactionRepoModel,
     },
     repositories::RelayerRepositoryStorage,
     services::{
@@ -116,7 +117,10 @@ pub trait Relayer {
     ///
     /// A `Result` containing a `JsonRpcResponse` on success, or a
     /// `RelayerError` on failure.
-    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
+    async fn rpc(
+        &self,
+        request: JsonRpcRequest,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
 
     /// Retrieves the current status of the relayer.
     ///
@@ -164,7 +168,10 @@ pub trait SolanaRelayerTrait {
     ///
     /// A `Result` containing a `JsonRpcResponse` on success, or a
     /// `RelayerError` on failure.
-    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
+    async fn rpc(
+        &self,
+        request: JsonRpcRequest,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
 
     /// Initializes the relayer.
     ///
@@ -237,7 +244,10 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+    async fn rpc(
+        &self,
+        request: JsonRpcRequest,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.rpc(request).await,
             NetworkRelayer::Solana(relayer) => relayer.rpc(request).await,
@@ -427,21 +437,29 @@ pub struct JsonRpcRequest {
 
 // JSON-RPC Response struct
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcResponse {
+pub struct JsonRpcResponse<T> {
     pub jsonrpc: String,
-    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<u64>,
 }
 
-impl JsonRpcResponse {
-    pub fn result<T: Serialize>(id: u64, result: T) -> Self {
-        let result_seriliazed = serde_json::to_value(result).unwrap();
+impl<T> JsonRpcResponse<T> {
+    /// Creates a new successful JSON-RPC response with the given result and id.
+    ///
+    /// # Arguments
+    /// * `id` - The request identifier
+    /// * `result` - The result value to include in the response
+    ///
+    /// # Returns
+    /// A new JsonRpcResponse with the specified result
+    pub fn result(id: u64, result: T) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
-            result: Some(result_seriliazed),
+            result: Some(result),
             error: None,
             id: Some(id),
         }

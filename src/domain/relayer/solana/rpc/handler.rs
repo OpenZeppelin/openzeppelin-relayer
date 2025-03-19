@@ -12,7 +12,7 @@ use crate::{
     domain::{JsonRpcRequest, JsonRpcResponse},
     models::{
         FeeEstimateRequestParams, GetFeaturesEnabledRequestParams, GetSupportedTokensRequestParams,
-        PrepareTransactionRequestParams, SignAndSendTransactionRequestParams,
+        NetworkRpcResult, PrepareTransactionRequestParams, SignAndSendTransactionRequestParams,
         SignTransactionRequestParams, SolanaRpcMethod, SolanaRpcResult,
         TransferTransactionRequestParams,
     },
@@ -79,7 +79,7 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
     pub async fn handle_request(
         &self,
         request: JsonRpcRequest,
-    ) -> Result<JsonRpcResponse, SolanaRpcError> {
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, SolanaRpcError> {
         info!(
             "Received {} request.method and params: {:?}",
             request.method, request.params
@@ -141,7 +141,10 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
             }
         };
 
-        Ok(JsonRpcResponse::result(request.id, result))
+        Ok(JsonRpcResponse::result(
+            request.id,
+            NetworkRpcResult::Solana(result),
+        ))
     }
 }
 
@@ -195,10 +198,12 @@ mod tests {
         let json_response = response.unwrap();
         assert_eq!(
             json_response.result,
-            Some(json!({
-                "estimated_fee": "0",
-                "conversion_rate": "0"
-            }))
+            Some(NetworkRpcResult::Solana(SolanaRpcResult::FeeEstimate(
+                FeeEstimateResult {
+                    estimated_fee: "0".to_string(),
+                    conversion_rate: "0".to_string(),
+                }
+            )))
         );
     }
 
@@ -228,9 +233,11 @@ mod tests {
         let json_response = response.unwrap();
         assert_eq!(
             json_response.result,
-            Some(json!({
-                "features": ["gasless"]
-            }))
+            Some(NetworkRpcResult::Solana(
+                SolanaRpcResult::GetFeaturesEnabled(GetFeaturesEnabledResult {
+                    features: vec!["gasless".to_string()],
+                })
+            ))
         );
     }
 
@@ -332,10 +339,11 @@ mod tests {
 
         match json_response.result {
             Some(value) => {
-                let result = value.as_object().unwrap();
-                assert!(result.contains_key("transaction"));
-                assert!(result.contains_key("signature"));
-                assert_eq!(result["signature"], mock_signature);
+                if let NetworkRpcResult::Solana(SolanaRpcResult::SignTransaction(result)) = value {
+                    assert_eq!(result.signature, mock_signature);
+                } else {
+                    panic!("Expected SignTransaction result, got {:?}", value);
+                }
             }
             None => panic!("Expected Some result, got None"),
         }
@@ -407,10 +415,13 @@ mod tests {
         let json_response = response.unwrap();
         match json_response.result {
             Some(value) => {
-                let result = value.as_object().unwrap();
-                assert!(result.contains_key("transaction"));
-                assert!(result.contains_key("signature"));
-                assert_eq!(result["signature"], mock_signature);
+                if let NetworkRpcResult::Solana(SolanaRpcResult::SignAndSendTransaction(result)) =
+                    value
+                {
+                    assert_eq!(result.signature, mock_signature);
+                } else {
+                    panic!("Expected SignAndSendTransaction result, got {:?}", value);
+                }
             }
             None => panic!("Expected Some result, got None"),
         }
@@ -479,12 +490,17 @@ mod tests {
         let json_response = response.unwrap();
         match json_response.result {
             Some(value) => {
-                let result = value.as_object().unwrap();
-                assert!(result.contains_key("fee_in_lamports"));
-                assert!(result.contains_key("fee_in_spl"));
-                assert!(result.contains_key("fee_token"));
-                assert!(result.contains_key("transaction"));
-                assert!(result.contains_key("valid_until_blockheight"));
+                if let NetworkRpcResult::Solana(SolanaRpcResult::TransferTransaction(result)) =
+                    value
+                {
+                    assert!(!result.fee_in_lamports.is_empty());
+                    assert!(!result.fee_in_spl.is_empty());
+                    assert!(!result.fee_token.is_empty());
+                    assert!(!result.transaction.into_inner().is_empty());
+                    assert!(result.valid_until_blockheight > 0);
+                } else {
+                    panic!("Expected TransferTransaction result, got {:?}", value);
+                }
             }
             None => panic!("Expected Some result, got None"),
         }
@@ -530,12 +546,16 @@ mod tests {
         let json_response = response.unwrap();
         match json_response.result {
             Some(value) => {
-                let result = value.as_object().unwrap();
-                assert!(result.contains_key("fee_in_lamports"));
-                assert!(result.contains_key("fee_in_spl"));
-                assert!(result.contains_key("fee_token"));
-                assert!(result.contains_key("transaction"));
-                assert!(result.contains_key("valid_until_blockheight"));
+                if let NetworkRpcResult::Solana(SolanaRpcResult::PrepareTransaction(result)) = value
+                {
+                    assert!(!result.fee_in_lamports.is_empty());
+                    assert!(!result.fee_in_spl.is_empty());
+                    assert!(!result.fee_token.is_empty());
+                    assert!(!result.transaction.into_inner().is_empty());
+                    assert!(result.valid_until_blockheight > 0);
+                } else {
+                    panic!("Expected PrepareTransaction result, got {:?}", value);
+                }
             }
             None => panic!("Expected Some result, got None"),
         }

@@ -8,8 +8,8 @@ use crate::{
         SignDataResponse, SignTypedDataRequest,
     },
     models::{
-        ApiResponse, AppState, NetworkTransactionRequest, PaginationQuery, RelayerResponse,
-        TransactionResponse,
+        ApiResponse, AppState, NetworkRpcResult, NetworkTransactionRequest, PaginationQuery,
+        RelayerResponse, TransactionResponse,
     },
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
@@ -336,7 +336,7 @@ async fn relayer_sign_typed_data(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Rpc", body = JsonRpcResponse),
+        (status = 200, description = "RPC", body = JsonRpcResponse<NetworkRpcResult>),
         (status = 401, description = "Unauthorized"),
     )
 )]

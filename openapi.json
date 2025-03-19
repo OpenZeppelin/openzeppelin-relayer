@@ -9,6 +9,111 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/debug/metrics/scrape": {
+      "get": {
+        "tags": [
+          "Metrics"
+        ],
+        "summary": "Triggers an update of system metrics and returns the result in plain text format.",
+        "description": "# Returns\n\nAn `HttpResponse` containing the updated metrics in plain text, or an error message if the\nupdate fails.",
+        "operationId": "scrape_metrics",
+        "responses": {
+          "200": {
+            "description": "Complete metrics in Prometheus exposition format",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Metrics"
+        ],
+        "summary": "Returns a list of all available metric names in JSON format.",
+        "description": "# Returns\n\nAn `HttpResponse` containing a JSON array of metric names.",
+        "operationId": "list_metrics",
+        "responses": {
+          "200": {
+            "description": "Metric names list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/metrics/{metric_name}": {
+      "get": {
+        "tags": [
+          "Metrics"
+        ],
+        "summary": "Returns the details of a specific metric in plain text format.",
+        "description": "# Parameters\n\n- `path`: The name of the metric to retrieve details for.\n\n# Returns\n\nAn `HttpResponse` containing the metric details in plain text, or a 404 error if the metric is\nnot found.",
+        "operationId": "metric_detail",
+        "parameters": [
+          {
+            "name": "metric_name",
+            "in": "path",
+            "description": "Name of the metric to retrieve, e.g. utopia_transactions_total",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metric details in Prometheus text format",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - missing or invalid API key"
+          },
+          "403": {
+            "description": "Forbidden - insufficient permissions to access this metric"
+          },
+          "404": {
+            "description": "Metric not found"
+          },
+          "429": {
+            "description": "Too many requests - rate limit for metrics access exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": [
+              "metrics:read"
+            ]
+          }
+        ]
+      }
+    },
     "/relayers": {
       "get": {
         "tags": [
@@ -155,11 +260,11 @@
         },
         "responses": {
           "200": {
-            "description": "Rpc",
+            "description": "RPC",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonRpcResponse"
+                  "$ref": "#/components/schemas/JsonRpcResponse_NetworkRpcResult"
                 }
               }
             }
@@ -990,6 +1095,9 @@
           }
         }
       },
+      "EncodedSerializedTransaction": {
+        "type": "string"
+      },
       "EvmPolicyResponse": {
         "type": "object",
         "required": [
@@ -1027,6 +1135,13 @@
             }
           }
         }
+      },
+      "EvmRpcResult": {
+        "oneOf": [
+          {
+            "type": "string"
+          }
+        ]
       },
       "EvmTransactionRequest": {
         "type": "object",
@@ -1170,6 +1285,85 @@
           }
         }
       },
+      "FeeEstimateResult": {
+        "type": "object",
+        "required": [
+          "estimated_fee",
+          "conversion_rate"
+        ],
+        "properties": {
+          "conversion_rate": {
+            "type": "string"
+          },
+          "estimated_fee": {
+            "type": "string"
+          }
+        }
+      },
+      "GetFeaturesEnabledResult": {
+        "type": "object",
+        "required": [
+          "features"
+        ],
+        "properties": {
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GetSupportedTokensItem": {
+        "type": "object",
+        "required": [
+          "mint",
+          "symbol",
+          "decimals"
+        ],
+        "properties": {
+          "conversion_slippage_percentage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_allowed_fee": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "mint": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        }
+      },
+      "GetSupportedTokensResult": {
+        "type": "object",
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GetSupportedTokensItem"
+            }
+          }
+        }
+      },
       "JsonRpcError": {
         "type": "object",
         "required": [
@@ -1213,7 +1407,7 @@
           "params": {}
         }
       },
-      "JsonRpcResponse": {
+      "JsonRpcResponse_NetworkRpcResult": {
         "type": "object",
         "required": [
           "jsonrpc"
@@ -1240,7 +1434,19 @@
           "jsonrpc": {
             "type": "string"
           },
-          "result": {}
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SolanaRpcResult"
+              },
+              {
+                "$ref": "#/components/schemas/StellarRpcResult"
+              },
+              {
+                "$ref": "#/components/schemas/EvmRpcResult"
+              }
+            ]
+          }
         }
       },
       "NetworkPolicyResponse": {
@@ -1253,6 +1459,19 @@
           },
           {
             "$ref": "#/components/schemas/StellarPolicyResponse"
+          }
+        ]
+      },
+      "NetworkRpcResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SolanaRpcResult"
+          },
+          {
+            "$ref": "#/components/schemas/StellarRpcResult"
+          },
+          {
+            "$ref": "#/components/schemas/EvmRpcResult"
           }
         ]
       },
@@ -1296,6 +1515,35 @@
             "minimum": 0
           },
           "total_items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "PrepareTransactionResult": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_in_spl",
+          "fee_in_lamports",
+          "fee_token",
+          "valid_until_blockheight"
+        ],
+        "properties": {
+          "fee_in_lamports": {
+            "type": "string"
+          },
+          "fee_in_spl": {
+            "type": "string"
+          },
+          "fee_token": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          },
+          "valid_until_blockheight": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -1349,6 +1597,21 @@
               "boolean",
               "null"
             ]
+          }
+        }
+      },
+      "SignAndSendTransactionResult": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "signature"
+        ],
+        "properties": {
+          "signature": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
           }
         }
       },
@@ -1410,6 +1673,21 @@
           },
           "signature": {
             "type": "string"
+          }
+        }
+      },
+      "SignTransactionResult": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "signature"
+        ],
+        "properties": {
+          "signature": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
           }
         }
       },
@@ -1539,6 +1817,31 @@
           }
         }
       },
+      "SolanaRpcResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FeeEstimateResult"
+          },
+          {
+            "$ref": "#/components/schemas/TransferTransactionResult"
+          },
+          {
+            "$ref": "#/components/schemas/PrepareTransactionResult"
+          },
+          {
+            "$ref": "#/components/schemas/SignTransactionResult"
+          },
+          {
+            "$ref": "#/components/schemas/SignAndSendTransactionResult"
+          },
+          {
+            "$ref": "#/components/schemas/GetSupportedTokensResult"
+          },
+          {
+            "$ref": "#/components/schemas/GetFeaturesEnabledResult"
+          }
+        ]
+      },
       "SolanaTransactionRequest": {
         "type": "object",
         "required": [
@@ -1631,6 +1934,13 @@
             "minimum": 0
           }
         }
+      },
+      "StellarRpcResult": {
+        "oneOf": [
+          {
+            "type": "string"
+          }
+        ]
       },
       "StellarTransactionRequest": {
         "type": "object",
@@ -1752,6 +2062,35 @@
           "failed",
           "expired"
         ]
+      },
+      "TransferTransactionResult": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_in_spl",
+          "fee_in_lamports",
+          "fee_token",
+          "valid_until_blockheight"
+        ],
+        "properties": {
+          "fee_in_lamports": {
+            "type": "string"
+          },
+          "fee_in_spl": {
+            "type": "string"
+          },
+          "fee_token": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          },
+          "valid_until_blockheight": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       }
     },
     "securitySchemes": {
