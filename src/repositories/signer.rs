@@ -2,8 +2,7 @@
 //! It provides asynchronous CRUD operations and supports pagination.
 //! The repository is thread-safe, using a `Mutex` to protect access to the underlying data store.
 use crate::{
-    config::{SignerFileConfig, SignerFileConfigPassphrase, SignerFileConfigType},
-    models::{RepositoryError, SignerPassphrase, SignerRepoModel, SignerType},
+    models::{RepositoryError, SignerRepoModel},
     repositories::*,
 };
 use async_trait::async_trait;
@@ -114,48 +113,20 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
     }
 }
 
-impl TryFrom<SignerFileConfig> for SignerRepoModel {
-    type Error = ConversionError;
-
-    fn try_from(config: SignerFileConfig) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: config.id,
-            signer_type: match config.r#type {
-                SignerFileConfigType::Test => SignerType::Test,
-                SignerFileConfigType::Local => SignerType::Local,
-                SignerFileConfigType::AwsKms => SignerType::AwsKms,
-                SignerFileConfigType::Vault => SignerType::Vault,
-            },
-            path: config.path,
-            raw_key: None,
-            passphrase: match config.passphrase {
-                Some(passphrase) => match passphrase {
-                    SignerFileConfigPassphrase::Env { name } => {
-                        Some(SignerPassphrase::Env { name })
-                    }
-                    SignerFileConfigPassphrase::Plain { value } => {
-                        Some(SignerPassphrase::Plain { value })
-                    }
-                },
-                None => None,
-            },
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use secrets::SecretVec;
+
+    use crate::models::{LocalSignerConfig, SignerConfig};
+
     use super::*;
 
     fn create_test_signer(id: String) -> SignerRepoModel {
         SignerRepoModel {
             id: id.clone(),
-            signer_type: SignerType::Local,
-            path: Some("examples/basic-example/keys/local-signer.json".to_string()),
-            passphrase: Some(SignerPassphrase::Plain {
-                value: "test".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: SecretVec::zero(0),
             }),
-            raw_key: None,
         }
     }
 

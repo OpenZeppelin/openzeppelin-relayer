@@ -8,6 +8,10 @@ coverage:
       default:
         target: 80%
         threshold: 1%
+        flags:
+          - integration
+          - properties
+          - unittests
     patch:
       default:
         target: 90%

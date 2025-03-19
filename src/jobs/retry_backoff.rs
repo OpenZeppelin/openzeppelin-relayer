@@ -105,3 +105,105 @@ where
         Some(req)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestJob;
+
+    #[tokio::test]
+    async fn test_backoff_duration_calculation() {
+        let policy = BackoffRetryPolicy {
+            retries: 5,
+            initial_backoff: Duration::from_secs(1),
+            multiplier: 2.0,
+            max_backoff: Duration::from_secs(60),
+        };
+
+        // Check first few backoff durations
+        assert_eq!(policy.backoff_duration(0), Duration::from_secs(1));
+        assert_eq!(policy.backoff_duration(1), Duration::from_secs(2));
+        assert_eq!(policy.backoff_duration(2), Duration::from_secs(4));
+        assert_eq!(policy.backoff_duration(3), Duration::from_secs(8));
+
+        // Test max backoff limit
+        let policy = BackoffRetryPolicy {
+            retries: 10,
+            initial_backoff: Duration::from_secs(10),
+            multiplier: 3.0,
+            max_backoff: Duration::from_secs(60),
+        };
+
+        // This would be 10 * 3^3 = 270 seconds, but should be capped at 60
+        assert_eq!(policy.backoff_duration(3), Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn test_retry_policy_success() {
+        let mut policy = BackoffRetryPolicy::default();
+        let job = TestJob;
+        let ctx = ();
+        let mut req = Request::new_with_ctx(job, ctx);
+        let mut result: Result<(), Err> = Ok(());
+
+        // Should return None for successful results
+        assert!(policy.retry(&mut req, &mut result).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_retry_policy_failure_with_retries() {
+        let mut policy = BackoffRetryPolicy {
+            retries: 3,
+            initial_backoff: Duration::from_millis(10),
+            multiplier: 2.0,
+            max_backoff: Duration::from_secs(1),
+        };
+
+        let job = TestJob;
+        let ctx = ();
+        let mut req = Request::new_with_ctx(job, ctx);
+        let mut result: Result<(), Err> = Err(Error::from(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Test error",
+        ))
+            as Box<dyn std::error::Error + Send + Sync>));
+
+        // First attempt (0) should return Some(Sleep) since retries > 0
+        assert!(policy.retry(&mut req, &mut result).is_some());
+
+        // Simulate first retry
+        req.parts.attempt.increment();
+        assert!(policy.retry(&mut req, &mut result).is_some());
+
+        // Simulate second retry
+        req.parts.attempt.increment();
+        assert!(policy.retry(&mut req, &mut result).is_some());
+
+        // Simulate third retry - should be the last one
+        req.parts.attempt.increment();
+        assert!(policy.retry(&mut req, &mut result).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_clone_request() {
+        let mut policy: BackoffRetryPolicy = BackoffRetryPolicy::default();
+        let job = TestJob;
+        let ctx = ();
+        let req: Request<TestJob, ()> = Request::new_with_ctx(job, ctx);
+
+        // Original request attempt should be 0
+        assert_eq!(req.parts.attempt.current(), 0);
+
+        // Cloned request should have attempt incremented to 1
+        let cloned_req =
+            <BackoffRetryPolicy as Policy<Request<TestJob, ()>, (), Error>>::clone_request(
+                &mut policy,
+                &req,
+            )
+            .unwrap();
+        let cloned_req_attempt = cloned_req.parts.attempt.current();
+        assert_eq!(cloned_req_attempt, 1);
+    }
+}

@@ -36,3 +36,4 @@ logs/
 
 # Ignore node_modules
 node_modules
+.qodo

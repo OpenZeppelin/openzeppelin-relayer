@@ -13,3 +13,6 @@ pub use time::*;
 
 mod transaction;
 pub use transaction::*;
+
+mod base64;
+pub use base64::*;

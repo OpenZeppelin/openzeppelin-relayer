@@ -8,6 +8,8 @@
 //!   methods for validation and signing key retrieval.
 //! - `NotificationsFileConfig`: A struct for managing a collection of notification configurations,
 //!   with validation to ensure uniqueness and completeness.
+use crate::models::{PlainOrEnvValue, SecretString};
+
 use super::ConfigFileError;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -19,13 +21,6 @@ pub enum NotificationFileConfigType {
     Webhook,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum SigningKeyConfig {
-    Env { name: String },
-    Plain { value: String },
-}
-
 /// Represents the type of notification configuration.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -33,28 +28,28 @@ pub struct NotificationFileConfig {
     pub id: String,
     pub r#type: NotificationFileConfigType,
     pub url: String,
-    pub signing_key: Option<SigningKeyConfig>,
+    pub signing_key: Option<PlainOrEnvValue>,
 }
 
 impl NotificationFileConfig {
     fn validate_signing_key(&self) -> Result<(), ConfigFileError> {
         match &self.signing_key {
             Some(signing_key) => match signing_key {
-                SigningKeyConfig::Env { name } => {
-                    if name.is_empty() {
+                PlainOrEnvValue::Env { value } => {
+                    if value.is_empty() {
                         return Err(ConfigFileError::MissingField(
                             "Signing key environment variable name cannot be empty".into(),
                         ));
                     }
-                    if std::env::var(name).is_err() {
+                    if std::env::var(value).is_err() {
                         return Err(ConfigFileError::MissingEnvVar(format!(
                             "Environment variable {} not found",
-                            name
+                            value
                         )));
                     }
                 }
-                SigningKeyConfig::Plain { value } => {
-                    if value.is_empty() {
+                PlainOrEnvValue::Plain { value } => {
+                    if value.to_str().is_empty() {
                         return Err(ConfigFileError::InvalidFormat(
                             "Signing key value cannot be empty".into(),
                         ));
@@ -67,17 +62,10 @@ impl NotificationFileConfig {
         Ok(())
     }
 
-    pub fn get_signing_key(&self) -> Option<String> {
-        match &self.signing_key {
-            Some(signing_key) => match signing_key {
-                SigningKeyConfig::Env { name } => {
-                    let signing_key = std::env::var(name);
-                    signing_key.ok()
-                }
-                SigningKeyConfig::Plain { value } => Some(value.clone()),
-            },
-            None => None,
-        }
+    pub fn get_signing_key(&self) -> Option<SecretString> {
+        self.signing_key
+            .as_ref()
+            .and_then(|key| key.get_value().ok())
     }
 
     pub fn validate(&self) -> Result<(), ConfigFileError> {

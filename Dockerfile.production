@@ -2,7 +2,10 @@
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev AS base
 
 USER root
-RUN apk update && apk --no-cache add openssl-dev perl
+RUN apk update && apk --no-cache add \
+    openssl-dev \
+    perl \
+    libsodium-dev
 
 WORKDIR /usr/app
 

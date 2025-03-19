@@ -16,5 +16,9 @@ pub use transaction_counter::*;
 
 pub mod gas;
 pub use gas::*;
+
 mod jupiter;
 pub use jupiter::*;
+
+mod vault;
+pub use vault::*;

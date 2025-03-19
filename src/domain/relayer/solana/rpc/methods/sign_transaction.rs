@@ -73,7 +73,8 @@ where
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
 
-        let (signed_transaction, signature) = self.relayer_sign_transaction(transaction_request)?;
+        let (signed_transaction, signature) =
+            self.relayer_sign_transaction(transaction_request).await?;
 
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
 
@@ -162,7 +163,7 @@ mod tests {
 
         signer
             .expect_sign()
-            .returning(move |_| Ok(expected_signature));
+            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
 
         provider
             .expect_get_latest_blockhash_with_commitment()
@@ -237,8 +238,10 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
-
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -297,8 +300,10 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
-
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -611,8 +616,10 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
-
+        signer.expect_sign().returning(move |_| {
+            let signature = signature;
+            Box::pin(async move { Ok(signature) })
+        });
         provider
             .expect_is_blockhash_valid()
             .with(predicate::always(), predicate::always())
@@ -737,8 +744,10 @@ mod tests {
         relayer.notification_id = Some("test-webhook-id".to_string());
 
         let signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| Ok(signature));
-
+        signer.expect_sign().returning(move |_| {
+            let signature = signature;
+            Box::pin(async move { Ok(signature) })
+        });
         provider
             .expect_is_blockhash_valid()
             .returning(|_, _| Box::pin(async { Ok(true) }));

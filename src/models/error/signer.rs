@@ -1,6 +1,8 @@
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::services::VaultError;
+
 use super::TransactionError;
 
 #[derive(Error, Debug, Serialize)]
@@ -20,6 +22,15 @@ pub enum SignerError {
 
     #[error("Invalid transaction: {0}")]
     InvalidTransaction(#[from] TransactionError),
+
+    #[error("Vault error: {0}")]
+    VaultError(#[from] VaultError),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
+
+    #[error("Invalid configuration: {0}")]
+    Configuration(String),
 }
 
 #[derive(Error, Debug, Serialize)]
@@ -30,4 +41,6 @@ pub enum SignerFactoryError {
     CreationFailed(String),
     #[error("Unsupported signer type: {0}")]
     UnsupportedType(String),
+    #[error("Signer error: {0}")]
+    SignerError(#[from] SignerError),
 }

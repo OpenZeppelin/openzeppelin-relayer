@@ -79,11 +79,11 @@ where
     /// This function will return an error if:
     /// * The signer service fails to sign the transaction data
     /// * The transaction format is invalid
-    pub(crate) fn relayer_sign_transaction(
+    pub(crate) async fn relayer_sign_transaction(
         &self,
         mut transaction: Transaction,
     ) -> Result<(Transaction, Signature), SolanaRpcError> {
-        let signature = self.signer.sign(&transaction.message_data())?;
+        let signature = self.signer.sign(&transaction.message_data()).await?;
 
         transaction.signatures[0] = signature;
 
@@ -312,7 +312,7 @@ where
 
         let transaction = Transaction::new_unsigned(message);
 
-        let (signed_transaction, _) = self.relayer_sign_transaction(transaction)?;
+        let (signed_transaction, _) = self.relayer_sign_transaction(transaction).await?;
 
         Ok((signed_transaction, recent_blockhash))
     }
@@ -424,8 +424,8 @@ mod tests {
         system_instruction,
     };
 
-    #[test]
-    fn test_relayer_sign_transaction() {
+    #[tokio::test]
+    async fn test_relayer_sign_transaction() {
         let (relayer, mut signer, provider, jupiter_service, _, job_producer) =
             setup_test_context();
 
@@ -434,9 +434,11 @@ mod tests {
         let instruction = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[instruction], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
-        let signature = Signature::new_unique();
-
-        signer.expect_sign().returning(move |_| Ok(signature));
+        signer.expect_sign().returning(move |_| {
+            let signature = Signature::new_unique();
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
@@ -446,7 +448,7 @@ mod tests {
             Arc::new(job_producer),
         );
 
-        let result = rpc.relayer_sign_transaction(transaction);
+        let result = rpc.relayer_sign_transaction(transaction).await;
 
         assert!(result.is_ok(), "Transaction signing should succeed");
         let (signed_tx, signature) = result.unwrap();
@@ -851,9 +853,10 @@ mod tests {
         let amount = 1_000_000;
 
         let expected_signature = Signature::new_unique();
-        signer
-            .expect_sign()
-            .returning(move |_| Ok(expected_signature));
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = expected_signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
 
         let expected_blockhash = Hash::new_unique();
         let expected_slot = 100u64;
@@ -899,7 +902,7 @@ mod tests {
 
         signer
             .expect_sign()
-            .returning(|_| Ok(Signature::new_unique()));
+            .returning(|_| Box::pin(async { Ok(Signature::new_unique()) }));
 
         provider
             .expect_get_latest_blockhash_with_commitment()
