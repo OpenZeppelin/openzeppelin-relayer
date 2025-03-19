@@ -426,7 +426,6 @@ impl SignTransactionResponse {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum RpcMethod {

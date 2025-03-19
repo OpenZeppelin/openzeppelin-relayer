@@ -323,7 +323,9 @@ mod tests {
             method: RpcMethod::SignTransaction,
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignTransaction(
                 SignTransactionRequestParams {
-                    transaction: EncodedSerializedTransaction::new("invalid_transaction".to_string()),
+                    transaction: EncodedSerializedTransaction::new(
+                        "invalid_transaction".to_string(),
+                    ),
                 },
             )),
         };
