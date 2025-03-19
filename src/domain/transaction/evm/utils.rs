@@ -1,16 +1,17 @@
 use crate::{
-    domain::transaction::evm::TransactionPriceParams,
-    models::{EvmNetwork, EvmTransactionData, TransactionError, U256},
+    models::{EvmNetwork, EvmTransactionData, TransactionError, TransactionStatus, U256},
     services::EvmProviderTrait,
 };
 use eyre::Result;
+
+use super::PriceParams;
 
 /// Creates a "noop" transaction (transaction to self with zero value and no data)
 /// This is commonly used for cancellation and replacement transactions
 pub async fn make_noop<P: EvmProviderTrait>(
     provider: &P,
     from: String,
-    gas_params: TransactionPriceParams,
+    gas_params: PriceParams,
     network: EvmNetwork,
 ) -> Result<EvmTransactionData, TransactionError> {
     let gas_limit = if network.is_arbitrum() {
@@ -62,6 +63,12 @@ pub async fn make_noop<P: EvmProviderTrait>(
     })
 }
 
+pub fn is_transaction_not_yet_mined(tx_status: TransactionStatus) -> bool {
+    tx_status == TransactionStatus::Pending
+        || tx_status == TransactionStatus::Sent
+        || tx_status == TransactionStatus::Submitted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,11 +87,11 @@ mod tests {
     async fn test_make_noop_standard_network() {
         let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
         let from = "0x1234567890123456789012345678901234567890".to_string();
-        let gas_params = TransactionPriceParams {
+        let gas_params = PriceParams {
             gas_price: Some(20_000_000_000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            balance: None,
+            is_min_bumped: None,
         };
 
         let provider = create_mock_provider();
@@ -105,11 +112,11 @@ mod tests {
     async fn test_make_noop_arbitrum() {
         let network = EvmNetwork::from_named(EvmNamedNetwork::Arbitrum);
         let from = "0x1234567890123456789012345678901234567890".to_string();
-        let gas_params = TransactionPriceParams {
+        let gas_params = PriceParams {
             gas_price: Some(20_000_000_000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            balance: None,
+            is_min_bumped: None,
         };
 
         let provider = create_mock_provider();
@@ -130,11 +137,11 @@ mod tests {
     async fn test_make_noop_optimism() {
         let network = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
         let from = "0x1234567890123456789012345678901234567890".to_string();
-        let gas_params = TransactionPriceParams {
+        let gas_params = PriceParams {
             gas_price: Some(20_000_000_000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            balance: None,
+            is_min_bumped: None,
         };
 
         let provider = create_mock_provider();

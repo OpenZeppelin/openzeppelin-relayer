@@ -71,6 +71,20 @@ pub trait Transaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError>;
 
+    /// Resubmits a transaction with updated parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A `TransactionRepoModel` representing the transaction to be resubmitted.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the resubmitted `TransactionRepoModel` or a `TransactionError`.
+    async fn resubmit_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError>;
+
     /// Handles the status of a transaction.
     ///
     /// # Arguments
@@ -190,6 +204,25 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.submit_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.submit_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.submit_transaction(tx).await,
+        }
+    }
+    /// Resubmits a transaction with updated parameters based on the network type.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - A `TransactionRepoModel` representing the transaction to be resubmitted.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the resubmitted `TransactionRepoModel` or a `TransactionError`.
+    async fn resubmit_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        match self {
+            NetworkTransaction::Evm(relayer) => relayer.resubmit_transaction(tx).await,
+            NetworkTransaction::Solana(relayer) => relayer.resubmit_transaction(tx).await,
+            NetworkTransaction::Stellar(relayer) => relayer.resubmit_transaction(tx).await,
         }
     }
 
@@ -364,9 +397,10 @@ impl RelayerTransactionFactory {
                     relayer.address.clone(),
                     transaction_counter_store,
                 );
-                let gas_price_service =
-                    Arc::new(EvmGasPriceService::new(evm_provider.clone(), network));
+
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let price_calculator =
+                    PriceCalculator::new(EvmGasPriceService::new(evm_provider.clone(), network));
 
                 Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
                     relayer,
@@ -375,7 +409,7 @@ impl RelayerTransactionFactory {
                     transaction_repository,
                     transaction_counter_service,
                     job_producer,
-                    gas_price_service,
+                    price_calculator,
                     signer_service,
                 )?))
             }

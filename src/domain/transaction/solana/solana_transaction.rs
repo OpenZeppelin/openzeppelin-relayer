@@ -64,6 +64,13 @@ impl Transaction for SolanaRelayerTransaction {
         Ok(tx)
     }
 
+    async fn resubmit_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        Ok(tx)
+    }
+
     async fn cancel_transaction(
         &self,
         tx: TransactionRepoModel,

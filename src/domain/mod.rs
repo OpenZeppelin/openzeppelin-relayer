@@ -9,5 +9,5 @@
 mod relayer;
 pub use relayer::*;
 
-pub mod transaction;
+mod transaction;
 pub use transaction::*;
