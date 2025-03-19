@@ -380,6 +380,7 @@ pub struct SignDataResponseSolana {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
 pub enum SignDataResponse {
     Evm(SignDataResponseEvm),
     Solana(SignDataResponseSolana),

@@ -47,7 +47,6 @@ use std::env;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-
 use openzeppelin_relayer::{
     api, config,
     init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file},

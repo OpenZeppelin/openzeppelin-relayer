@@ -7,7 +7,10 @@ use crate::{
         BalanceResponse, JsonRpcRequest, JsonRpcResponse, RelayerUpdateRequest, SignDataRequest,
         SignDataResponse, SignTypedDataRequest,
     },
-    models::{ApiResponse, AppState, NetworkTransactionRequest, PaginationQuery, RelayerResponse, SolanaTransactionRequest, TransactionResponse},
+    models::{
+        ApiResponse, AppState, NetworkTransactionRequest, PaginationQuery, RelayerResponse,
+        TransactionResponse,
+    },
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -22,7 +25,7 @@ use utoipa::ToSchema;
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Relayers list", body = Vec<String>),
+        (status = 200, description = "Relayers list", body = ApiResponse<Vec<RelayerResponse>>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -65,7 +68,7 @@ async fn get_relayer(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Update relayer", body = Vec<String>),
+        (status = 200, description = "Update relayer", body = ApiResponse<RelayerResponse>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -87,7 +90,7 @@ async fn update_relayer(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Relayer status", body = Vec<String>),
+        (status = 200, description = "Relayer status", body = ApiResponse<bool>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -202,7 +205,7 @@ async fn get_relayer_transaction_by_nonce(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Transaction list response", body = Vec<TransactionResponse>),
+        (status = 200, description = "Transaction list response", body = ApiResponse<Vec<TransactionResponse>>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -224,7 +227,7 @@ async fn list_relayer_transactions(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Delete Pending transactions", body = Vec<TransactionResponse>),
+        (status = 200, description = "Delete Pending transactions", body = ApiResponse<String>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -245,7 +248,7 @@ async fn delete_pending_transactions(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Cancel transaction", body = TransactionResponse),
+        (status = 200, description = "Cancel transaction", body = ApiResponse<TransactionResponse>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -267,7 +270,7 @@ async fn cancel_relayer_transaction(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Cancel transaction", body = TransactionResponse),
+        (status = 200, description = "Cancel transaction", body = ApiResponse<TransactionResponse>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -289,7 +292,7 @@ async fn replace_relayer_transaction(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Sign transaction", body = SignDataResponse),
+        (status = 200, description = "Sign transaction", body = ApiResponse<SignDataResponse>),
         (status = 401, description = "Unauthorized"),
     )
 )]
@@ -311,7 +314,7 @@ async fn relayer_sign(
         ("bearer_auth" = [])
     ),
     responses(
-        (status = 200, description = "Sign transaction", body = SignDataResponse),
+        (status = 200, description = "Sign transaction", body = ApiResponse<SignDataResponse>),
         (status = 401, description = "Unauthorized"),
     )
 )]

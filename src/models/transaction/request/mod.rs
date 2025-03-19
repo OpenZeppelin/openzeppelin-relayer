@@ -11,6 +11,7 @@ pub use stellar::StellarTransactionRequest;
 use utoipa::ToSchema;
 
 #[derive(Serialize, ToSchema)]
+#[serde(untagged)]
 pub enum NetworkTransactionRequest {
     Evm(EvmTransactionRequest),
     Solana(SolanaTransactionRequest),

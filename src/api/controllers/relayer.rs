@@ -104,7 +104,9 @@ pub async fn update_relayer(
         .partial_update(relayer_id.clone(), update_req)
         .await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(updated_relayer)))
+    let relayer_response: RelayerResponse = updated_relayer.into();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
 
 /// Retrieves the status of a specific relayer.
@@ -330,7 +332,9 @@ pub async fn cancel_transaction(
         .cancel_transaction(transaction_to_cancel)
         .await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(canceled_transaction)))
+    let transaction_response: TransactionResponse = canceled_transaction.into();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
 }
 
 /// Replaces a specific transaction for a relayer.

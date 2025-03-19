@@ -9,10 +9,565 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/relayers": {
+      "get": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Lists all relayers with pagination support.",
+        "operationId": "list_relayers",
+        "responses": {
+          "200": {
+            "description": "Relayers list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Vec_RelayerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}": {
+      "patch": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Updates a relayer's information based on the provided update request.",
+        "operationId": "update_relayer",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelayerUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Update relayer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_RelayerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/balance": {
+      "get": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Retrieves the balance of a specific relayer.",
+        "operationId": "get_relayer_balance",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Relayer balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_BalanceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/rpc": {
+      "post": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Performs a JSON-RPC call using the specified relayer.",
+        "operationId": "relayer_rpc",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonRpcRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rpc",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonRpcResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/sign": {
+      "post": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Signs data using the specified relayer.",
+        "operationId": "relayer_sign",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sign transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_SignDataResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/sign-typed-data": {
+      "post": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Signs typed data using the specified relayer.",
+        "operationId": "relayer_sign_typed_data",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignTypedDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sign transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_SignDataResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/status": {
+      "get": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Fetches the current status of a specific relayer.",
+        "operationId": "get_relayer_status",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Relayer status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_bool"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/transactions": {
+      "post": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Sends a transaction through the specified relayer.",
+        "operationId": "send_relayer_transaction",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TransactionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/transactions/": {
+      "get": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Lists all transactions for a specific relayer with pagination.",
+        "operationId": "list_relayer_transactions",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction list response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Vec_TransactionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/transactions/by-nonce/{nonce}": {
+      "get": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Retrieves a transaction by its nonce value.",
+        "operationId": "get_relayer_transaction_by_nonce",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nonce",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TransactionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/transactions/pending": {
+      "delete": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Deletes all pending transactions for a specific relayer.",
+        "operationId": "delete_pending_transactions",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delete Pending transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/relayers/{relayer_id}/transactions/{transaction_id}": {
+      "get": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Retrieves a specific transaction by its ID.",
+        "operationId": "get_relayer_transaction_by_id",
+        "responses": {
+          "200": {
+            "description": "Transaction response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TransactionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Relayers"
+        ],
+        "summary": "Cancels a specific transaction by its ID.",
+        "operationId": "cancel_relayer_transaction",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancel transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_TransactionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/v1/relayers/{relayer_id}": {
       "get": {
         "tags": [
-          "Relayer"
+          "Relayers"
         ],
         "summary": "Retrieves details of a specific relayer by ID.",
         "operationId": "get_relayer",
@@ -37,6 +592,9 @@
               }
             }
           },
+          "401": {
+            "description": "Unauthorized"
+          },
           "500": {
             "description": "internal server error",
             "content": {
@@ -47,12 +605,60 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
       }
     }
   },
   "components": {
     "schemas": {
+      "ApiResponse_BalanceResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "balance",
+              "unit"
+            ],
+            "properties": {
+              "balance": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_RelayerResponse": {
         "type": "object",
         "required": [
@@ -119,6 +725,271 @@
           }
         }
       },
+      "ApiResponse_SignDataResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignDataResponseEvm"
+              },
+              {
+                "$ref": "#/components/schemas/SignDataResponseSolana"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_String": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_TransactionResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EvmTransactionResponse"
+              },
+              {
+                "$ref": "#/components/schemas/SolanaTransactionResponse"
+              },
+              {
+                "$ref": "#/components/schemas/StellarTransactionResponse"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_Vec_RelayerResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "network",
+                "network_type",
+                "paused",
+                "policies",
+                "address",
+                "system_disabled"
+              ],
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "network": {
+                  "type": "string"
+                },
+                "network_type": {
+                  "$ref": "#/components/schemas/NetworkType"
+                },
+                "paused": {
+                  "type": "boolean"
+                },
+                "policies": {
+                  "$ref": "#/components/schemas/NetworkPolicyResponse"
+                },
+                "system_disabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_Vec_TransactionResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/EvmTransactionResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/SolanaTransactionResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/StellarTransactionResponse"
+                }
+              ]
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_bool": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BalanceResponse": {
+        "type": "object",
+        "required": [
+          "balance",
+          "unit"
+        ],
+        "properties": {
+          "balance": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
       "EvmPolicyResponse": {
         "type": "object",
         "required": [
@@ -157,6 +1028,221 @@
           }
         }
       },
+      "EvmTransactionRequest": {
+        "type": "object",
+        "required": [
+          "value",
+          "gas_limit"
+        ],
+        "properties": {
+          "data": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gas_limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "gas_price": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "max_fee_per_gas": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "max_priority_fee_per_gas": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "speed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Speed"
+              }
+            ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "EvmTransactionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "gas_limit",
+          "value",
+          "from",
+          "relayer_id"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "gas_limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "gas_price": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "relayer_id": {
+            "type": "string"
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "JsonRpcError": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "description"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "description": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "JsonRpcRequest": {
+        "type": "object",
+        "required": [
+          "jsonrpc",
+          "method",
+          "params",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "jsonrpc": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "params": {}
+        }
+      },
+      "JsonRpcResponse": {
+        "type": "object",
+        "required": [
+          "jsonrpc"
+        ],
+        "properties": {
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonRpcError"
+              }
+            ]
+          },
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "jsonrpc": {
+            "type": "string"
+          },
+          "result": {}
+        }
+      },
       "NetworkPolicyResponse": {
         "oneOf": [
           {
@@ -167,6 +1253,19 @@
           },
           {
             "$ref": "#/components/schemas/StellarPolicyResponse"
+          }
+        ]
+      },
+      "NetworkTransactionRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EvmTransactionRequest"
+          },
+          {
+            "$ref": "#/components/schemas/SolanaTransactionRequest"
+          },
+          {
+            "$ref": "#/components/schemas/StellarTransactionRequest"
           }
         ]
       },
@@ -239,6 +1338,93 @@
           },
           "system_disabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "RelayerUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "paused": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "SignDataRequest": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "SignDataResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SignDataResponseEvm"
+          },
+          {
+            "$ref": "#/components/schemas/SignDataResponseSolana"
+          }
+        ]
+      },
+      "SignDataResponseEvm": {
+        "type": "object",
+        "required": [
+          "r",
+          "s",
+          "v",
+          "sig"
+        ],
+        "properties": {
+          "r": {
+            "type": "string"
+          },
+          "s": {
+            "type": "string"
+          },
+          "sig": {
+            "type": "string"
+          },
+          "v": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SignDataResponseSolana": {
+        "type": "object",
+        "required": [
+          "signature",
+          "public_key"
+        ],
+        "properties": {
+          "public_key": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        }
+      },
+      "SignTypedDataRequest": {
+        "type": "object",
+        "required": [
+          "domain_separator",
+          "hash_struct_message"
+        ],
+        "properties": {
+          "domain_separator": {
+            "type": "string"
+          },
+          "hash_struct_message": {
+            "type": "string"
           }
         }
       },
@@ -353,6 +1539,78 @@
           }
         }
       },
+      "SolanaTransactionRequest": {
+        "type": "object",
+        "required": [
+          "fee_payer",
+          "instructions"
+        ],
+        "properties": {
+          "fee_payer": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SolanaTransactionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "recent_blockhash",
+          "fee_payer"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "fee_payer": {
+            "type": "string"
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "recent_blockhash": {
+            "type": "string"
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionStatus"
+          }
+        }
+      },
+      "Speed": {
+        "type": "string",
+        "enum": [
+          "fastest",
+          "fast",
+          "average",
+          "safeLow"
+        ]
+      },
       "StellarPolicyResponse": {
         "type": "object",
         "required": [
@@ -373,6 +1631,133 @@
             "minimum": 0
           }
         }
+      },
+      "StellarTransactionRequest": {
+        "type": "object",
+        "required": [
+          "source_account",
+          "destination_account",
+          "amount",
+          "asset_code",
+          "fee",
+          "sequence_number"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "asset_code": {
+            "type": "string"
+          },
+          "asset_issuer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "destination_account": {
+            "type": "string"
+          },
+          "fee": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sequence_number": {
+            "type": "string"
+          },
+          "source_account": {
+            "type": "string"
+          }
+        }
+      },
+      "StellarTransactionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "source_account",
+          "fee",
+          "sequence_number"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "fee": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sequence_number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "source_account": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionStatus"
+          }
+        }
+      },
+      "TransactionResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EvmTransactionResponse"
+          },
+          {
+            "$ref": "#/components/schemas/SolanaTransactionResponse"
+          },
+          {
+            "$ref": "#/components/schemas/StellarTransactionResponse"
+          }
+        ]
+      },
+      "TransactionStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "sent",
+          "submitted",
+          "mined",
+          "confirmed",
+          "failed",
+          "expired"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "bearer_auth": {
+        "type": "http",
+        "scheme": "bearer"
       }
     }
   },
