@@ -3,10 +3,12 @@ use crate::{
     models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel, U256},
 };
 use serde::{Deserialize, Serialize};
+use utoipa::{schema, ToSchema};
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Deserialize, Serialize, Default, ToSchema)]
 pub struct EvmTransactionRequest {
     pub to: Option<String>,
+    #[schema(value_type = String)]
     pub value: U256,
     pub data: Option<String>,
     pub gas_limit: u64,
@@ -17,7 +19,7 @@ pub struct EvmTransactionRequest {
     pub valid_until: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Speed {
     Fastest,

@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use crate::{
     jobs::JobProducer,
@@ -359,12 +360,12 @@ impl RelayerFactoryTrait for RelayerFactory {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignDataRequest {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignDataResponseEvm {
     pub r: String,
     pub s: String,
@@ -372,19 +373,19 @@ pub struct SignDataResponseEvm {
     pub sig: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignDataResponseSolana {
     pub signature: String,
     pub public_key: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub enum SignDataResponse {
     Evm(SignDataResponseEvm),
     Solana(SignDataResponseSolana),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignTypedDataRequest {
     pub domain_separator: String,
     pub hash_struct_message: String,
@@ -415,7 +416,7 @@ impl SignTransactionResponse {
 }
 
 // JSON-RPC Request struct
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
     pub method: String,
@@ -424,7 +425,7 @@ pub struct JsonRpcRequest {
 }
 
 // JSON-RPC Response struct
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub result: Option<serde_json::Value>,
@@ -460,20 +461,20 @@ impl JsonRpcResponse {
 }
 
 // JSON-RPC Error struct
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     pub description: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BalanceResponse {
     pub balance: u128,
     pub unit: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct RelayerUpdateRequest {
     pub paused: Option<bool>,
 }

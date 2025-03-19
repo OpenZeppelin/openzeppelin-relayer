@@ -5,8 +5,9 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(untagged)]
 pub enum TransactionResponse {
     Evm(EvmTransactionResponse),
@@ -14,7 +15,7 @@ pub enum TransactionResponse {
     Stellar(StellarTransactionResponse),
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct EvmTransactionResponse {
     pub id: String,
     pub hash: Option<String>,
@@ -28,13 +29,14 @@ pub struct EvmTransactionResponse {
     pub gas_limit: u64,
     #[serde(deserialize_with = "deserialize_optional_u64", default)]
     pub nonce: Option<u64>,
+    #[schema(value_type = String)]
     pub value: U256,
     pub from: String,
     pub to: Option<String>,
     pub relayer_id: String,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct SolanaTransactionResponse {
     pub id: String,
     pub hash: Option<String>,
@@ -46,7 +48,7 @@ pub struct SolanaTransactionResponse {
     pub fee_payer: String,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct StellarTransactionResponse {
     pub id: String,
     pub hash: Option<String>,
@@ -74,7 +76,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     gas_price: evm_data.gas_price,
                     gas_limit: evm_data.gas_limit,
                     nonce: evm_data.nonce,
-                    value: evm_data.value,
+                    value: evm_data.value.into(),
                     from: evm_data.from,
                     to: evm_data.to,
                     relayer_id: model.relayer_id,

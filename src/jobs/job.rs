@@ -175,7 +175,8 @@ mod tests {
     use std::str::FromStr;
 
     use crate::models::{
-        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookPayload, U256,
+        EvmTransactionResponse, TransactionResponse, TransactionStatus, U256Wrapper,
+        WebhookPayload, U256,
     };
 
     use super::*;

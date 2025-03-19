@@ -13,11 +13,12 @@ use alloy::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, str::FromStr};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::evm::Speed;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Pending,

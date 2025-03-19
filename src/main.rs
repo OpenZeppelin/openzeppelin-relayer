@@ -44,11 +44,16 @@ use dotenvy::dotenv;
 use log::info;
 use std::env;
 
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
+
+
 use openzeppelin_relayer::{
     api, config,
     init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file},
     logging::setup_logging,
     metrics,
+    openapi::ApiDoc,
     utils::check_authorization_header,
 };
 
@@ -93,25 +98,32 @@ async fn main() -> Result<()> {
 
     info!("Starting server on {}:{}", config.host, config.port);
     let app_server = HttpServer::new({
-      // Clone the config for use within the closure.
-      let server_config = Arc::clone(&server_config);
-      let app_state = app_state.clone();
+        // Clone the config for use within the closure.
+        let server_config = Arc::clone(&server_config);
+        let app_state = app_state.clone();
         move || {
-          let config = Arc::clone(&server_config);
+            let config = Arc::clone(&server_config);
             App::new()
-            .wrap_fn(move |req, srv| {
-                if check_authorization_header(&req, &config.api_key) {
-                    return srv.call(req);
-                }
-                Box::pin(async move {
-                    Ok(req.into_response(
-                        HttpResponse::Unauthorized().body(
-                            r#"{"success": false, "code":401, "error": "Unauthorized", "message": "Unauthorized"}"#.to_string(),
-                        ),
-                    ))
-                })
-            })
-            .wrap(Governor::new(&rate_limit_config))
+            .service(
+                SwaggerUi::new("/swagger-ui/{_:.*}")
+                    .url("/api-docs/openapi.json", ApiDoc::openapi()),
+            )
+            // .wrap_fn(move |req, srv| {
+            //     if (req.path() == "/api-docs/openapi.json" || req.path() == "/swagger-ui/") {
+            //         return srv.call(req);
+            //     }
+            //     if check_authorization_header(&req, &config.api_key) {
+            //         return srv.call(req);
+            //     }
+            //     Box::pin(async move {
+            //         Ok(req.into_response(
+            //             HttpResponse::Unauthorized().body(
+            //                 r#"{"success": false, "code":401, "error": "Unauthorized", "message": "Unauthorized"}"#.to_string(),
+            //             ),
+            //         ))
+            //     })
+            // })
+            // .wrap(Governor::new(&rate_limit_config))
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::DefaultHeaders::new())

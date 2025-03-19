@@ -1,9 +1,10 @@
 use crate::models::NetworkType;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::{RelayerNetworkPolicy, RelayerRepoModel, SolanaAllowedTokensPolicy};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
     pub id: String,
     pub name: String,
@@ -15,7 +16,7 @@ pub struct RelayerResponse {
     pub system_disabled: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(untagged)]
 pub enum NetworkPolicyResponse {
     Evm(EvmPolicyResponse),
@@ -23,7 +24,7 @@ pub enum NetworkPolicyResponse {
     Stellar(StellarPolicyResponse),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct EvmPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gas_price_cap: Option<u128>,
@@ -35,7 +36,7 @@ pub struct EvmPolicyResponse {
     pub min_balance: u128,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
@@ -53,7 +54,7 @@ pub struct SolanaPolicyResponse {
     pub max_allowed_transfer_amount_lamports: Option<u64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct StellarPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_fee: Option<u32>,

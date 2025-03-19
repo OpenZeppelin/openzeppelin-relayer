@@ -8,8 +8,9 @@ use serde::Serialize;
 pub use evm::EvmTransactionRequest;
 pub use solana::SolanaTransactionRequest;
 pub use stellar::StellarTransactionRequest;
+use utoipa::ToSchema;
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub enum NetworkTransactionRequest {
     Evm(EvmTransactionRequest),
     Solana(SolanaTransactionRequest),

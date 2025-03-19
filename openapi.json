@@ -1,0 +1,384 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenZeppelin Relayer API",
+    "description": "OpenZeppelin Relayer API",
+    "license": {
+      "name": ""
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/relayers/{relayer_id}": {
+      "get": {
+        "tags": [
+          "Relayer"
+        ],
+        "summary": "Retrieves details of a specific relayer by ID.",
+        "operationId": "get_relayer",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_RelayerResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal server error",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiResponse_RelayerResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "network",
+              "network_type",
+              "paused",
+              "policies",
+              "address",
+              "system_disabled"
+            ],
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "network": {
+                "type": "string"
+              },
+              "network_type": {
+                "$ref": "#/components/schemas/NetworkType"
+              },
+              "paused": {
+                "type": "boolean"
+              },
+              "policies": {
+                "$ref": "#/components/schemas/NetworkPolicyResponse"
+              },
+              "system_disabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pagination": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EvmPolicyResponse": {
+        "type": "object",
+        "required": [
+          "private_transactions",
+          "min_balance"
+        ],
+        "properties": {
+          "eip1559_pricing": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "gas_price_cap": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "min_balance": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "private_transactions": {
+            "type": "boolean"
+          },
+          "whitelist_receivers": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "NetworkPolicyResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EvmPolicyResponse"
+          },
+          {
+            "$ref": "#/components/schemas/SolanaPolicyResponse"
+          },
+          {
+            "$ref": "#/components/schemas/StellarPolicyResponse"
+          }
+        ]
+      },
+      "NetworkType": {
+        "type": "string",
+        "enum": [
+          "evm",
+          "stellar",
+          "solana"
+        ]
+      },
+      "PaginationMeta": {
+        "type": "object",
+        "required": [
+          "current_page",
+          "per_page",
+          "total_items"
+        ],
+        "properties": {
+          "current_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total_items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RelayerResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "network",
+          "network_type",
+          "paused",
+          "policies",
+          "address",
+          "system_disabled"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "network_type": {
+            "$ref": "#/components/schemas/NetworkType"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "policies": {
+            "$ref": "#/components/schemas/NetworkPolicyResponse"
+          },
+          "system_disabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SolanaAllowedTokensPolicy": {
+        "type": "object",
+        "required": [
+          "mint"
+        ],
+        "properties": {
+          "conversion_slippage_percentage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "decimals": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_allowed_fee": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "mint": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SolanaPolicyResponse": {
+        "type": "object",
+        "required": [
+          "max_tx_data_size",
+          "min_balance"
+        ],
+        "properties": {
+          "allowed_accounts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_programs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_tokens": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SolanaAllowedTokensPolicy"
+            }
+          },
+          "disallowed_accounts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_allowed_transfer_amount_lamports": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_signatures": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_tx_data_size": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "min_balance": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "StellarPolicyResponse": {
+        "type": "object",
+        "required": [
+          "min_balance"
+        ],
+        "properties": {
+          "max_fee": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "min_balance": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "OpenZeppelin Relayer API"
+    }
+  ]
+}

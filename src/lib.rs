@@ -26,6 +26,7 @@ pub mod jobs;
 pub mod logging;
 pub mod metrics;
 pub mod models;
+pub mod openapi;
 pub mod repositories;
 pub mod services;
 pub mod utils;

@@ -1,13 +1,14 @@
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PaginationMeta {
     pub current_page: u32,
     pub per_page: u32,
     pub total_items: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
