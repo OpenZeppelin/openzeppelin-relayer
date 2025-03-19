@@ -108,3 +108,171 @@ impl From<TransactionRepoModel> for TransactionResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        EvmTransactionData, NetworkType, SolanaTransactionData, StellarTransactionData,
+        TransactionRepoModel,
+    };
+    use chrono::Utc;
+
+    #[test]
+    fn test_from_transaction_repo_model_evm() {
+        let now = Utc::now().to_rfc3339();
+        let model = TransactionRepoModel {
+            id: "tx123".to_string(),
+            status: TransactionStatus::Pending,
+            created_at: now.clone(),
+            sent_at: Some(now.clone()),
+            confirmed_at: None,
+            relayer_id: "relayer1".to_string(),
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                hash: Some("0xabc123".to_string()),
+                gas_price: Some(20_000_000_000),
+                gas_limit: 21000,
+                nonce: Some(5),
+                value: U256::from(1000000000000000000u128), // 1 ETH
+                from: "0xsender".to_string(),
+                to: Some("0xrecipient".to_string()),
+                data: None,
+                chain_id: 1,
+                signature: None,
+                speed: None,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                raw: None,
+            }),
+            valid_until: None,
+            network_type: NetworkType::Evm,
+        };
+
+        let response = TransactionResponse::from(model.clone());
+
+        match response {
+            TransactionResponse::Evm(evm) => {
+                assert_eq!(evm.id, model.id);
+                assert_eq!(evm.hash, Some("0xabc123".to_string()));
+                assert_eq!(evm.status, TransactionStatus::Pending);
+                assert_eq!(evm.created_at, now);
+                assert_eq!(evm.sent_at, Some(now.clone()));
+                assert_eq!(evm.confirmed_at, None);
+                assert_eq!(evm.gas_price, Some(20_000_000_000));
+                assert_eq!(evm.gas_limit, 21000);
+                assert_eq!(evm.nonce, Some(5));
+                assert_eq!(evm.value, U256::from(1000000000000000000u128));
+                assert_eq!(evm.from, "0xsender");
+                assert_eq!(evm.to, Some("0xrecipient".to_string()));
+                assert_eq!(evm.relayer_id, "relayer1");
+            }
+            _ => panic!("Expected EvmTransactionResponse"),
+        }
+    }
+
+    #[test]
+    fn test_from_transaction_repo_model_solana() {
+        let now = Utc::now().to_rfc3339();
+        let model = TransactionRepoModel {
+            id: "tx456".to_string(),
+            status: TransactionStatus::Confirmed,
+            created_at: now.clone(),
+            sent_at: Some(now.clone()),
+            confirmed_at: Some(now.clone()),
+            relayer_id: "relayer2".to_string(),
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData {
+                hash: Some("solana_hash_123".to_string()),
+                recent_blockhash: Some("blockhash123".to_string()),
+                fee_payer: "fee_payer_pubkey".to_string(),
+                instructions: vec![],
+            }),
+            valid_until: None,
+            network_type: NetworkType::Solana,
+        };
+
+        let response = TransactionResponse::from(model.clone());
+
+        match response {
+            TransactionResponse::Solana(solana) => {
+                assert_eq!(solana.id, model.id);
+                assert_eq!(solana.hash, Some("solana_hash_123".to_string()));
+                assert_eq!(solana.status, TransactionStatus::Confirmed);
+                assert_eq!(solana.created_at, now);
+                assert_eq!(solana.sent_at, Some(now.clone()));
+                assert_eq!(solana.confirmed_at, Some(now.clone()));
+                assert_eq!(solana.recent_blockhash, "blockhash123");
+                assert_eq!(solana.fee_payer, "fee_payer_pubkey");
+            }
+            _ => panic!("Expected SolanaTransactionResponse"),
+        }
+    }
+
+    #[test]
+    fn test_from_transaction_repo_model_stellar() {
+        let now = Utc::now().to_rfc3339();
+        let model = TransactionRepoModel {
+            id: "tx789".to_string(),
+            status: TransactionStatus::Failed,
+            created_at: now.clone(),
+            sent_at: Some(now.clone()),
+            confirmed_at: Some(now.clone()),
+            relayer_id: "relayer3".to_string(),
+            network_data: NetworkTransactionData::Stellar(StellarTransactionData {
+                hash: Some("stellar_hash_123".to_string()),
+                source_account: "source_account_id".to_string(),
+                fee: 100,
+                sequence_number: 12345,
+                operations: vec![],
+            }),
+            valid_until: None,
+            network_type: NetworkType::Stellar,
+        };
+
+        let response = TransactionResponse::from(model.clone());
+
+        match response {
+            TransactionResponse::Stellar(stellar) => {
+                assert_eq!(stellar.id, model.id);
+                assert_eq!(stellar.hash, Some("stellar_hash_123".to_string()));
+                assert_eq!(stellar.status, TransactionStatus::Failed);
+                assert_eq!(stellar.created_at, now);
+                assert_eq!(stellar.sent_at, Some(now.clone()));
+                assert_eq!(stellar.confirmed_at, Some(now.clone()));
+                assert_eq!(stellar.source_account, "source_account_id");
+                assert_eq!(stellar.fee, 100);
+                assert_eq!(stellar.sequence_number, 12345);
+            }
+            _ => panic!("Expected StellarTransactionResponse"),
+        }
+    }
+
+    #[test]
+    fn test_solana_default_recent_blockhash() {
+        let now = Utc::now().to_rfc3339();
+        let model = TransactionRepoModel {
+            id: "tx456".to_string(),
+            status: TransactionStatus::Pending,
+            created_at: now.clone(),
+            sent_at: None,
+            confirmed_at: None,
+            relayer_id: "relayer2".to_string(),
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData {
+                hash: None,
+                recent_blockhash: None, // Testing the default case
+                fee_payer: "fee_payer_pubkey".to_string(),
+                instructions: vec![],
+            }),
+            valid_until: None,
+            network_type: NetworkType::Solana,
+        };
+
+        let response = TransactionResponse::from(model);
+
+        match response {
+            TransactionResponse::Solana(solana) => {
+                assert_eq!(solana.recent_blockhash, ""); // Should be default empty string
+            }
+            _ => panic!("Expected SolanaTransactionResponse"),
+        }
+    }
+}
