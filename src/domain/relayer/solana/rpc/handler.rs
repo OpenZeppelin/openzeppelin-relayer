@@ -10,15 +10,10 @@
 use super::{SolanaRpcError, SolanaRpcMethods};
 use crate::{
     domain::{JsonRpcRequest, JsonRpcResponse},
-    models::{
-        FeeEstimateRequestParams, GetFeaturesEnabledRequestParams, GetSupportedTokensRequestParams,
-        NetworkRpcRequest, NetworkRpcResult, PrepareTransactionRequestParams,
-        SignAndSendTransactionRequestParams, SignTransactionRequestParams, SolanaRpcMethod,
-        SolanaRpcRequest, SolanaRpcResult, TransferTransactionRequestParams,
-    },
+    models::{NetworkRpcRequest, NetworkRpcResult, SolanaRpcRequest, SolanaRpcResult},
 };
 use eyre::Result;
-use log::{error, info};
+use log::info;
 
 pub struct SolanaRpcHandler<T> {
     rpc_methods: T,
@@ -37,22 +32,6 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
     /// Returns a new instance of `SolanaRpcHandler`
     pub fn new(rpc_methods: T) -> Self {
         Self { rpc_methods }
-    }
-
-    /// Converts a `serde_json::Error` into a `SolanaRpcError`.
-    ///
-    /// This function is used to map JSON deserialization errors to a more
-    /// specific RPC error type.
-    ///
-    /// # Arguments
-    ///
-    /// * `result` - A `Result` containing either a successful value or a `serde_json::Error`.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing either the successful value or a `SolanaRpcError::BadRequest`.
-    fn handle_error<E>(result: Result<E, serde_json::Error>) -> Result<E, SolanaRpcError> {
-        result.map_err(|e| SolanaRpcError::BadRequest(e.to_string()))
     }
 
     /// Handles an incoming JSON-RPC request and dispatches it to the appropriate method.
@@ -139,15 +118,17 @@ mod tests {
     use crate::{
         domain::{MockSolanaRpcMethods, RpcMethod},
         models::{
-            EncodedSerializedTransaction, FeeEstimateResult, GetFeaturesEnabledResult,
-            PrepareTransactionResult, SignAndSendTransactionResult, SignTransactionResult,
+            EncodedSerializedTransaction, FeeEstimateRequestParams, FeeEstimateResult,
+            GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult,
+            PrepareTransactionRequestParams, PrepareTransactionResult,
+            SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
+            SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
             TransferTransactionResult,
         },
     };
 
     use super::*;
     use mockall::predicate::{self};
-    use serde_json::json;
 
     #[tokio::test]
     async fn test_handle_request_fee_estimate() {

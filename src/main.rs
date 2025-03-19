@@ -49,6 +49,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use openzeppelin_relayer::{
     api, config,
+    constants::PUBLIC_ENDPOINTS,
     init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file},
     logging::setup_logging,
     metrics,
@@ -100,29 +101,40 @@ async fn main() -> Result<()> {
         // Clone the config for use within the closure.
         let server_config = Arc::clone(&server_config);
         let app_state = app_state.clone();
+
         move || {
             let config = Arc::clone(&server_config);
-            App::new()
-            .service(
-                SwaggerUi::new("/swagger-ui/{_:.*}")
-                    .url("/api-docs/openapi.json", ApiDoc::openapi()),
-            )
-            // .wrap_fn(move |req, srv| {
-            //     if (req.path() == "/api-docs/openapi.json" || req.path() == "/swagger-ui/") {
-            //         return srv.call(req);
-            //     }
-            //     if check_authorization_header(&req, &config.api_key) {
-            //         return srv.call(req);
-            //     }
-            //     Box::pin(async move {
-            //         Ok(req.into_response(
-            //             HttpResponse::Unauthorized().body(
-            //                 r#"{"success": false, "code":401, "error": "Unauthorized", "message": "Unauthorized"}"#.to_string(),
-            //             ),
-            //         ))
-            //     })
-            // })
-            // .wrap(Governor::new(&rate_limit_config))
+            let mut app = App::new();
+
+            if config.enable_swagger {
+                app = app.service(
+                    SwaggerUi::new("/swagger-ui/{_:.*}")
+                        .url("/api-docs/openapi.json", ApiDoc::openapi()),
+                );
+            }
+
+            app
+            .wrap_fn(move |req, srv| {
+                let path = req.path();
+
+                let is_public_endpoint = PUBLIC_ENDPOINTS.iter().any(|prefix| path.starts_with(prefix));
+
+                if is_public_endpoint {
+                    return srv.call(req);
+                }
+
+                if check_authorization_header(&req, &config.api_key) {
+                    return srv.call(req);
+                }
+                Box::pin(async move {
+                    Ok(req.into_response(
+                        HttpResponse::Unauthorized().body(
+                            r#"{"success": false, "code":401, "error": "Unauthorized", "message": "Unauthorized"}"#.to_string(),
+                        ),
+                    ))
+                })
+            })
+            .wrap(Governor::new(&rate_limit_config))
             .wrap(middleware::Compress::default())
             .wrap(middleware::NormalizePath::trim())
             .wrap(middleware::DefaultHeaders::new())
