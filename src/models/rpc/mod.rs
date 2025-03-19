@@ -17,3 +17,11 @@ pub enum NetworkRpcResult {
     Stellar(StellarRpcResult),
     Evm(EvmRpcResult),
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(untagged)]
+pub enum NetworkRpcRequest {
+    Solana(SolanaRpcRequest),
+    // Stellar(StellarRpcResult),
+    // Evm(EvmRpcResult),
+}

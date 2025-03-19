@@ -35,8 +35,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcResult,
-        NetworkTransactionRequest, RelayerRepoModel, RepositoryError, TransactionRepoModel,
+        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
+        TransactionRepoModel,
     },
     repositories::{
         InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
@@ -256,7 +257,7 @@ impl Relayer for EvmRelayer {
     /// A `Result` containing the `JsonRpcResponse` or a `RelayerError`.
     async fn rpc(
         &self,
-        _request: JsonRpcRequest,
+        _request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         println!("EVM rpc...");
         Ok(JsonRpcResponse {

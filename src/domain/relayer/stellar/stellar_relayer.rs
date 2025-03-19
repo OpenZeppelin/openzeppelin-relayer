@@ -5,8 +5,8 @@ use crate::{
     },
     jobs::JobProducer,
     models::{
-        NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel, StellarNetwork,
-        StellarRpcResult, TransactionRepoModel,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel,
+        StellarNetwork, StellarRpcResult, TransactionRepoModel,
     },
     repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
 };
@@ -95,7 +95,7 @@ impl Relayer for StellarRelayer {
 
     async fn rpc(
         &self,
-        _request: JsonRpcRequest,
+        _request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         println!("Stellar rpc...");
         Ok(JsonRpcResponse {

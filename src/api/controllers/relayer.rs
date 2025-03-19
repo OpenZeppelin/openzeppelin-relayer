@@ -14,8 +14,8 @@ use crate::{
         Transaction,
     },
     models::{
-        ApiError, ApiResponse, AppState, NetworkTransactionRequest, NetworkType, PaginationMeta,
-        PaginationQuery, RelayerResponse, TransactionResponse,
+        ApiError, ApiResponse, AppState, NetworkRpcRequest, NetworkTransactionRequest, NetworkType,
+        PaginationMeta, PaginationQuery, RelayerResponse, TransactionResponse,
     },
     repositories::{RelayerRepository, Repository},
 };
@@ -437,7 +437,7 @@ pub async fn sign_typed_data(
 /// The result of the JSON-RPC call.
 pub async fn relayer_rpc(
     relayer_id: String,
-    request: JsonRpcRequest,
+    request: JsonRpcRequest<NetworkRpcRequest>,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;

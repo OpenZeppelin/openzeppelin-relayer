@@ -8,8 +8,8 @@ use crate::{
         SignDataResponse, SignTypedDataRequest,
     },
     models::{
-        ApiResponse, AppState, NetworkRpcResult, NetworkTransactionRequest, PaginationQuery,
-        RelayerResponse, TransactionResponse,
+        ApiResponse, AppState, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        PaginationQuery, RelayerResponse, TransactionResponse,
     },
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
@@ -343,7 +343,7 @@ async fn relayer_sign_typed_data(
 #[post("/relayers/{relayer_id}/rpc")]
 async fn relayer_rpc(
     relayer_id: web::Path<String>,
-    req: web::Json<JsonRpcRequest>,
+    req: web::Json<JsonRpcRequest<NetworkRpcRequest>>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await

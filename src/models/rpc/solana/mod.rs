@@ -55,7 +55,7 @@ impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transact
 }
 
 // feeEstimate
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 pub struct FeeEstimateRequestParams {
     pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
@@ -175,6 +175,18 @@ impl SolanaRpcMethod {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(untagged)]
+pub enum SolanaRpcRequest {
+    FeeEstimate(FeeEstimateRequestParams),
+    TransferTransaction(TransferTransactionRequestParams),
+    PrepareTransaction(PrepareTransactionRequestParams),
+    SignTransaction(SignTransactionRequestParams),
+    SignAndSendTransaction(SignAndSendTransactionRequestParams),
+    GetSupportedTokens(GetSupportedTokensRequestParams),
+    GetFeaturesEnabled(GetFeaturesEnabledRequestParams),
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]

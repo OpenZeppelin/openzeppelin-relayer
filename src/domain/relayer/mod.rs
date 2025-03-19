@@ -15,9 +15,9 @@ use utoipa::ToSchema;
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, EvmTransactionDataSignature, NetworkRpcResult, NetworkTransactionRequest,
-        NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel, TransactionError,
-        TransactionRepoModel,
+        EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
+        TransactionError, TransactionRepoModel,
     },
     repositories::RelayerRepositoryStorage,
     services::{
@@ -119,7 +119,7 @@ pub trait Relayer {
     /// `RelayerError` on failure.
     async fn rpc(
         &self,
-        request: JsonRpcRequest,
+        request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
 
     /// Retrieves the current status of the relayer.
@@ -170,7 +170,7 @@ pub trait SolanaRelayerTrait {
     /// `RelayerError` on failure.
     async fn rpc(
         &self,
-        request: JsonRpcRequest,
+        request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
 
     /// Initializes the relayer.
@@ -246,7 +246,7 @@ impl Relayer for NetworkRelayer {
 
     async fn rpc(
         &self,
-        request: JsonRpcRequest,
+        request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.rpc(request).await,
@@ -428,10 +428,10 @@ impl SignTransactionResponse {
 
 // JSON-RPC Request struct
 #[derive(Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcRequest {
+pub struct JsonRpcRequest<T> {
     pub jsonrpc: String,
     pub method: String,
-    pub params: serde_json::Value,
+    pub params: T,
     pub id: u64,
 }
 
