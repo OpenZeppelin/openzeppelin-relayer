@@ -7,6 +7,7 @@
 //! The `RelayerRepository` trait is designed to be implemented by any storage backend,
 //! allowing for flexibility in how relayers are stored and managed. The in-memory
 //! implementation is useful for testing and development purposes.
+use crate::models::PaginationQuery;
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
     constants::{
@@ -19,13 +20,12 @@ use crate::{
         RelayerStellarPolicy, RepositoryError, SolanaAllowedTokensPolicy,
     },
 };
+use async_trait::async_trait;
 use eyre::Result;
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{Mutex, MutexGuard};
-
-use crate::models::PaginationQuery;
-use async_trait::async_trait;
 
 use super::{PaginatedResult, Repository};
 
@@ -364,7 +364,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
 /// ```
 #[derive(Debug)]
 pub struct RelayerRepositoryStorage<T: Repository<RelayerRepoModel, String>> {
-    pub repository: Box<T>,
+    pub repository: Arc<T>,
 }
 
 impl RelayerRepositoryStorage<InMemoryRelayerRepository> {
@@ -379,7 +379,7 @@ impl RelayerRepositoryStorage<InMemoryRelayerRepository> {
     /// A new `RelayerRepositoryStorage` instance backed by the provided in-memory repository.
     pub fn in_memory(repository: InMemoryRelayerRepository) -> Self {
         Self {
-            repository: Box::new(repository),
+            repository: Arc::new(repository),
         }
     }
 }

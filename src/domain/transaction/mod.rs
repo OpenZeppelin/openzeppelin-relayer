@@ -146,7 +146,7 @@ pub trait Transaction {
 
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
-    Evm(ConcreteEvmRelayerTransaction),
+    Evm(DefaultEvmTransaction),
     Solana(SolanaRelayerTransaction),
     Stellar(StellarRelayerTransaction),
 }
@@ -363,7 +363,7 @@ impl RelayerTransactionFactory {
                     Arc::new(EvmGasPriceService::new(evm_provider.clone(), network));
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
 
-                Ok(NetworkTransaction::Evm(ConcreteEvmRelayerTransaction::new(
+                Ok(NetworkTransaction::Evm(DefaultEvmTransaction::new(
                     relayer,
                     evm_provider,
                     relayer_repository,

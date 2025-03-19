@@ -560,7 +560,7 @@ where
 }
 
 // we define concrete type for the evm transaction
-pub type ConcreteEvmRelayerTransaction = EvmRelayerTransaction<
+pub type DefaultEvmTransaction = EvmRelayerTransaction<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     crate::repositories::transaction::InMemoryTransactionRepository,
@@ -584,7 +584,7 @@ mod tests {
     use chrono::{Duration, Utc};
 
     // Create a concrete type alias for testing
-    type TestEvmTransaction = ConcreteEvmRelayerTransaction;
+    type TestEvmTransaction = DefaultEvmTransaction;
 
     // Helper to create test transactions
     #[allow(dead_code)]
