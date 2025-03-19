@@ -27,10 +27,13 @@ pub enum NetworkPolicyResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct EvmPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub gas_price_cap: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub whitelist_receivers: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
@@ -39,24 +42,31 @@ pub struct EvmPolicyResponse {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub allowed_programs: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub allowed_accounts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub disallowed_accounts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_signatures: Option<u8>,
     pub max_tx_data_size: u16,
     pub min_balance: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_allowed_transfer_amount_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct StellarPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_fee: Option<u32>,
     pub min_balance: u64,
 }

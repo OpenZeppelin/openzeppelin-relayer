@@ -134,7 +134,9 @@ pub struct GetSupportedTokensItem {
     pub mint: String,
     pub symbol: String,
     pub decimals: u8,
+    #[schema(nullable = false)]
     pub max_allowed_fee: Option<u64>,
+    #[schema(nullable = false)]
     pub conversion_slippage_percentage: Option<f32>,
 }
 

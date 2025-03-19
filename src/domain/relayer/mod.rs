@@ -467,10 +467,13 @@ pub struct JsonRpcRequest<T> {
 pub struct JsonRpcResponse<T> {
     pub jsonrpc: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub result: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub error: Option<JsonRpcError>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub id: Option<u64>,
 }
 
@@ -522,5 +525,6 @@ pub struct BalanceResponse {
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct RelayerUpdateRequest {
+    #[schema(nullable = false)]
     pub paused: Option<bool>,
 }

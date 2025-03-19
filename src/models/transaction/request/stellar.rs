@@ -7,7 +7,9 @@ pub struct StellarTransactionRequest {
     pub destination_account: String,
     pub amount: String,
     pub asset_code: String,
+    #[schema(nullable = false)]
     pub asset_issuer: Option<String>,
+    #[schema(nullable = false)]
     pub memo: Option<String>,
     pub fee: u128,
     pub sequence_number: String,

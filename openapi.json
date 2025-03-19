@@ -3,8 +3,14 @@
   "info": {
     "title": "OpenZeppelin Relayer API",
     "description": "OpenZeppelin Relayer API",
+    "termsOfService": "https://www.openzeppelin.com/tos",
+    "contact": {
+      "name": "OpenZeppelin",
+      "url": "https://www.openzeppelin.com"
+    },
     "license": {
-      "name": ""
+      "name": "AGPL-3.0 license",
+      "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
     "version": "0.1.0"
   },
@@ -252,7 +258,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonRpcRequest"
+                "$ref": "#/components/schemas/JsonRpcRequest_NetworkRpcRequest"
               }
             }
           },
@@ -518,6 +524,7 @@
           {
             "name": "relayer_id",
             "in": "path",
+            "description": "The ID of the relayer",
             "required": true,
             "schema": {
               "type": "string"
@@ -526,11 +533,10 @@
           {
             "name": "nonce",
             "in": "path",
+            "description": "The nonce of the transaction",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 0
+              "type": "string"
             }
           }
         ],
@@ -602,6 +608,26 @@
         ],
         "summary": "Retrieves a specific transaction by its ID.",
         "operationId": "get_relayer_transaction_by_id",
+        "parameters": [
+          {
+            "name": "relayer_id",
+            "in": "path",
+            "description": "The ID of the relayer",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "transaction_id",
+            "in": "path",
+            "description": "The ID of the transaction",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Transaction response",
@@ -744,20 +770,10 @@
             }
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -810,20 +826,10 @@
             }
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -847,20 +853,10 @@
             ]
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -877,20 +873,10 @@
             "type": "string"
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -917,20 +903,10 @@
             ]
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -986,20 +962,10 @@
             }
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -1029,20 +995,10 @@
             }
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -1059,20 +1015,10 @@
             "type": "boolean"
           },
           "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "pagination": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            ]
+            "$ref": "#/components/schemas/PaginationMeta"
           },
           "success": {
             "type": "boolean"
@@ -1106,16 +1052,10 @@
         ],
         "properties": {
           "eip1559_pricing": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
           },
           "gas_price_cap": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "minimum": 0
           },
           "min_balance": {
@@ -1126,15 +1066,19 @@
             "type": "boolean"
           },
           "whitelist_receivers": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }
           }
         }
+      },
+      "EvmRpcRequest": {
+        "oneOf": [
+          {
+            "type": "string"
+          }
+        ]
       },
       "EvmRpcResult": {
         "oneOf": [
@@ -1151,10 +1095,7 @@
         ],
         "properties": {
           "data": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "gas_limit": {
             "type": "integer",
@@ -1162,47 +1103,25 @@
             "minimum": 0
           },
           "gas_price": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "minimum": 0
           },
           "max_fee_per_gas": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "minimum": 0
           },
           "max_priority_fee_per_gas": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "minimum": 0
           },
           "speed": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/Speed"
-              }
-            ]
+            "$ref": "#/components/schemas/Speed"
           },
           "to": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "valid_until": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "value": {
             "type": "string"
@@ -1222,10 +1141,7 @@
         ],
         "properties": {
           "confirmed_at": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "created_at": {
             "type": "string"
@@ -1239,26 +1155,17 @@
             "minimum": 0
           },
           "gas_price": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "minimum": 0
           },
           "hash": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "id": {
             "type": "string"
           },
           "nonce": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "minimum": 0
           },
@@ -1266,22 +1173,31 @@
             "type": "string"
           },
           "sent_at": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "status": {
             "$ref": "#/components/schemas/TransactionStatus"
           },
           "to": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "FeeEstimateRequestParams": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_token"
+        ],
+        "properties": {
+          "fee_token": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
           }
         }
       },
@@ -1299,6 +1215,9 @@
             "type": "string"
           }
         }
+      },
+      "GetFeaturesEnabledRequestParams": {
+        "type": "object"
       },
       "GetFeaturesEnabledResult": {
         "type": "object",
@@ -1323,10 +1242,7 @@
         ],
         "properties": {
           "conversion_slippage_percentage": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "float"
           },
           "decimals": {
@@ -1335,10 +1251,7 @@
             "minimum": 0
           },
           "max_allowed_fee": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "minimum": 0
           },
@@ -1349,6 +1262,9 @@
             "type": "string"
           }
         }
+      },
+      "GetSupportedTokensRequestParams": {
+        "type": "object"
       },
       "GetSupportedTokensResult": {
         "type": "object",
@@ -1384,7 +1300,7 @@
           }
         }
       },
-      "JsonRpcRequest": {
+      "JsonRpcRequest_NetworkRpcRequest": {
         "type": "object",
         "required": [
           "jsonrpc",
@@ -1402,9 +1318,21 @@
             "type": "string"
           },
           "method": {
-            "type": "string"
+            "$ref": "#/components/schemas/RpcMethod"
           },
-          "params": {}
+          "params": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SolanaRpcRequest"
+              },
+              {
+                "$ref": "#/components/schemas/StellarRpcRequest"
+              },
+              {
+                "$ref": "#/components/schemas/EvmRpcRequest"
+              }
+            ]
+          }
         }
       },
       "JsonRpcResponse_NetworkRpcResult": {
@@ -1414,20 +1342,10 @@
         ],
         "properties": {
           "error": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/JsonRpcError"
-              }
-            ]
+            "$ref": "#/components/schemas/JsonRpcError"
           },
           "id": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "minimum": 0
           },
@@ -1459,6 +1377,19 @@
           },
           {
             "$ref": "#/components/schemas/StellarPolicyResponse"
+          }
+        ]
+      },
+      "NetworkRpcRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SolanaRpcRequest"
+          },
+          {
+            "$ref": "#/components/schemas/StellarRpcRequest"
+          },
+          {
+            "$ref": "#/components/schemas/EvmRpcRequest"
           }
         ]
       },
@@ -1518,6 +1449,21 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "PrepareTransactionRequestParams": {
+        "type": "object",
+        "required": [
+          "transaction",
+          "fee_token"
+        ],
+        "properties": {
+          "fee_token": {
+            "type": "string"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
           }
         }
       },
@@ -1593,10 +1539,30 @@
         "type": "object",
         "properties": {
           "paused": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
+          }
+        }
+      },
+      "RpcMethod": {
+        "type": "string",
+        "enum": [
+          "feeEstimate",
+          "transferTransaction",
+          "prepareTransaction",
+          "signTransaction",
+          "signAndSendTransaction",
+          "getSupportedTokens",
+          "getFeaturesEnabled"
+        ]
+      },
+      "SignAndSendTransactionRequestParams": {
+        "type": "object",
+        "required": [
+          "transaction"
+        ],
+        "properties": {
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
           }
         }
       },
@@ -1676,6 +1642,17 @@
           }
         }
       },
+      "SignTransactionRequestParams": {
+        "type": "object",
+        "required": [
+          "transaction"
+        ],
+        "properties": {
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
+          }
+        }
+      },
       "SignTransactionResult": {
         "type": "object",
         "required": [
@@ -1713,25 +1690,16 @@
         ],
         "properties": {
           "conversion_slippage_percentage": {
-            "type": [
-              "number",
-              "null"
-            ],
+            "type": "number",
             "format": "float"
           },
           "decimals": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "minimum": 0
           },
           "max_allowed_fee": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "minimum": 0
           },
@@ -1739,10 +1707,7 @@
             "type": "string"
           },
           "symbol": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           }
         }
       },
@@ -1754,54 +1719,36 @@
         ],
         "properties": {
           "allowed_accounts": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }
           },
           "allowed_programs": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }
           },
           "allowed_tokens": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/SolanaAllowedTokensPolicy"
             }
           },
           "disallowed_accounts": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }
           },
           "max_allowed_transfer_amount_lamports": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "minimum": 0
           },
           "max_signatures": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "minimum": 0
           },
@@ -1816,6 +1763,31 @@
             "minimum": 0
           }
         }
+      },
+      "SolanaRpcRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FeeEstimateRequestParams"
+          },
+          {
+            "$ref": "#/components/schemas/TransferTransactionRequestParams"
+          },
+          {
+            "$ref": "#/components/schemas/PrepareTransactionRequestParams"
+          },
+          {
+            "$ref": "#/components/schemas/SignTransactionRequestParams"
+          },
+          {
+            "$ref": "#/components/schemas/SignAndSendTransactionRequestParams"
+          },
+          {
+            "$ref": "#/components/schemas/GetSupportedTokensRequestParams"
+          },
+          {
+            "$ref": "#/components/schemas/GetFeaturesEnabledRequestParams"
+          }
+        ]
       },
       "SolanaRpcResult": {
         "oneOf": [
@@ -1871,10 +1843,7 @@
         ],
         "properties": {
           "confirmed_at": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "created_at": {
             "type": "string"
@@ -1883,10 +1852,7 @@
             "type": "string"
           },
           "hash": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "id": {
             "type": "string"
@@ -1895,10 +1861,7 @@
             "type": "string"
           },
           "sent_at": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "status": {
             "$ref": "#/components/schemas/TransactionStatus"
@@ -1921,10 +1884,7 @@
         ],
         "properties": {
           "max_fee": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "minimum": 0
           },
@@ -1934,6 +1894,13 @@
             "minimum": 0
           }
         }
+      },
+      "StellarRpcRequest": {
+        "oneOf": [
+          {
+            "type": "string"
+          }
+        ]
       },
       "StellarRpcResult": {
         "oneOf": [
@@ -1960,10 +1927,7 @@
             "type": "string"
           },
           "asset_issuer": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "destination_account": {
             "type": "string"
@@ -1973,10 +1937,7 @@
             "minimum": 0
           },
           "memo": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "sequence_number": {
             "type": "string"
@@ -1998,10 +1959,7 @@
         ],
         "properties": {
           "confirmed_at": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "created_at": {
             "type": "string"
@@ -2011,19 +1969,13 @@
             "minimum": 0
           },
           "hash": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "id": {
             "type": "string"
           },
           "sent_at": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "sequence_number": {
             "type": "integer",
@@ -2062,6 +2014,31 @@
           "failed",
           "expired"
         ]
+      },
+      "TransferTransactionRequestParams": {
+        "type": "object",
+        "required": [
+          "amount",
+          "token",
+          "source",
+          "destination"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "destination": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
       },
       "TransferTransactionResult": {
         "type": "object",

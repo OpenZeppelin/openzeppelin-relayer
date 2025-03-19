@@ -12,8 +12,10 @@ pub struct PaginationMeta {
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
+    #[schema(nullable = false)]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub pagination: Option<PaginationMeta>,
 }
 

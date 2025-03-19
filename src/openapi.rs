@@ -24,7 +24,15 @@ impl Modify for SecurityAddon {
 #[openapi(
     modifiers(&SecurityAddon),
     tags((name = "OpenZeppelin Relayer API")),
-    info(description = "OpenZeppelin Relayer API", version = "0.1.0", title = "OpenZeppelin Relayer API"),
+    info(description = "OpenZeppelin Relayer API", version = "0.1.0", title = "OpenZeppelin Relayer API",  license(
+        name = "AGPL-3.0 license", 
+        url = "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
+    ),
+    contact(
+        name = "OpenZeppelin",
+        url = "https://www.openzeppelin.com",
+    ),
+    terms_of_service = "https://www.openzeppelin.com/tos"),
     paths(
         relayer::get_relayer,
         relayer::list_relayers,

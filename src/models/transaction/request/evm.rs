@@ -7,15 +7,22 @@ use utoipa::{schema, ToSchema};
 
 #[derive(Deserialize, Serialize, Default, ToSchema)]
 pub struct EvmTransactionRequest {
+    #[schema(nullable = false)]
     pub to: Option<String>,
     #[schema(value_type = String)]
     pub value: U256,
+    #[schema(nullable = false)]
     pub data: Option<String>,
     pub gas_limit: u64,
+    #[schema(nullable = false)]
     pub gas_price: Option<u128>,
+    #[schema(nullable = false)]
     pub speed: Option<Speed>,
+    #[schema(nullable = false)]
     pub max_fee_per_gas: Option<u128>,
+    #[schema(nullable = false)]
     pub max_priority_fee_per_gas: Option<u128>,
+    #[schema(nullable = false)]
     pub valid_until: Option<String>,
 }
 

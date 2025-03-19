@@ -160,6 +160,10 @@ pub struct TransactionPath {
     security(
         ("bearer_auth" = [])
     ),
+    params(
+        ("relayer_id" = String, Path, description = "The ID of the relayer"),
+        ("transaction_id" = String, Path, description = "The ID of the transaction")
+    ),
     responses(
         (status = 200, description = "Transaction response", body = ApiResponse<TransactionResponse>),
         (status = 401, description = "Unauthorized"),
@@ -181,6 +185,10 @@ async fn get_relayer_transaction_by_id(
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The ID of the relayer"),
+        ("nonce" = String, Path, description = "The nonce of the transaction")
     ),
     responses(
         (status = 200, description = "Transaction response", body = ApiResponse<TransactionResponse>),

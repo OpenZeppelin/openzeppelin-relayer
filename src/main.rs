@@ -101,13 +101,14 @@ async fn main() -> Result<()> {
         // Clone the config for use within the closure.
         let server_config = Arc::clone(&server_config);
         let app_state = app_state.clone();
-
         move || {
             let config = Arc::clone(&server_config);
             let mut app = App::new();
 
             if config.enable_swagger {
-                app = app.service(
+                app = app
+                .service(web::scope("/api/v1"))
+                .service(
                     SwaggerUi::new("/swagger-ui/{_:.*}")
                         .url("/api-docs/openapi.json", ApiDoc::openapi()),
                 );

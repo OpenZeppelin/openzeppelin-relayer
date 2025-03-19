@@ -72,9 +72,13 @@ impl Default for RelayerEvmPolicy {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaAllowedTokensPolicy {
     pub mint: String,
+    #[schema(nullable = false)]
     pub decimals: Option<u8>,
+    #[schema(nullable = false)]
     pub symbol: Option<String>,
+    #[schema(nullable = false)]
     pub max_allowed_fee: Option<u64>,
+    #[schema(nullable = false)]
     pub conversion_slippage_percentage: Option<f32>,
 }
 

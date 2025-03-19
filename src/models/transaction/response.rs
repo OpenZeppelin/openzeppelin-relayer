@@ -18,20 +18,26 @@ pub enum TransactionResponse {
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct EvmTransactionResponse {
     pub id: String,
+    #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
+    #[schema(nullable = false)]
     pub sent_at: Option<String>,
+    #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
     #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[schema(nullable = false)]
     pub gas_price: Option<u128>,
     #[serde(deserialize_with = "deserialize_u64")]
     pub gas_limit: u64,
     #[serde(deserialize_with = "deserialize_optional_u64", default)]
+    #[schema(nullable = false)]
     pub nonce: Option<u64>,
     #[schema(value_type = String)]
     pub value: U256,
     pub from: String,
+    #[schema(nullable = false)]
     pub to: Option<String>,
     pub relayer_id: String,
 }
@@ -39,10 +45,13 @@ pub struct EvmTransactionResponse {
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct SolanaTransactionResponse {
     pub id: String,
+    #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
+    #[schema(nullable = false)]
     pub sent_at: Option<String>,
+    #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
     pub recent_blockhash: String,
     pub fee_payer: String,
@@ -51,10 +60,13 @@ pub struct SolanaTransactionResponse {
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct StellarTransactionResponse {
     pub id: String,
+    #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
+    #[schema(nullable = false)]
     pub sent_at: Option<String>,
+    #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
     pub source_account: String,
     #[serde(deserialize_with = "deserialize_u128")]
