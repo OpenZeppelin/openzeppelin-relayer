@@ -6,3 +6,9 @@ use utoipa::ToSchema;
 pub enum EvmRpcResult {
     GenericRpcResult(String),
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(untagged)]
+pub enum EvmRpcRequest {
+    GenericRpcRequest(String),
+}

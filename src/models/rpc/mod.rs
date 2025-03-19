@@ -22,6 +22,6 @@ pub enum NetworkRpcResult {
 #[serde(untagged)]
 pub enum NetworkRpcRequest {
     Solana(SolanaRpcRequest),
-    // Stellar(StellarRpcResult),
-    // Evm(EvmRpcResult),
+    Stellar(StellarRpcRequest),
+    Evm(EvmRpcRequest),
 }
