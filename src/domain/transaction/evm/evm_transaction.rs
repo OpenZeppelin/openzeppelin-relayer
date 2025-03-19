@@ -112,7 +112,6 @@ impl EvmRelayerTransaction {
 
         // Create a "noop" transaction with higher gas price
         let mut cancel_tx_data = make_noop(
-            &self.provider,
             relayer.address.clone(),
             price_params,
             EvmNetwork::from_id(evm_data.chain_id),
@@ -831,6 +830,7 @@ impl Transaction for EvmRelayerTransaction {
 
         // For transactions in Sent/Submitted state, we need to send a cancellation transaction
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
+        let hash_previous = evm_data.hash.clone();
         let relayer = self.relayer();
 
         // Prepare the cancellation transaction
@@ -843,7 +843,7 @@ impl Transaction for EvmRelayerTransaction {
 
         // Track the new transaction hash in the hashes history
         let mut hashes = tx.hashes.clone();
-        if let Some(hash) = signed_cancel_tx_data.hash.clone() {
+        if let Some(hash) = hash_previous {
             hashes.push(hash);
         }
 
