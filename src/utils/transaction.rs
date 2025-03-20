@@ -29,7 +29,11 @@ pub fn get_resubmit_timeout_for_speed(speed: &Option<Speed>) -> i64 {
 /// # Returns
 /// The new timeout with exponential backoff applied: timeout * 2^(attempts-1)
 pub fn get_resubmit_timeout_with_backoff(timeout: i64, attempts: usize) -> i64 {
-    timeout * 2_i64.pow((attempts - 1).max(0) as u32)
+    if attempts <= 1 {
+        timeout
+    } else {
+        timeout * 2_i64.pow((attempts - 1) as u32)
+    }
 }
 
 #[cfg(test)]
@@ -59,7 +63,7 @@ mod tests {
         // Test with None speed (should return default)
         assert_eq!(
             get_resubmit_timeout_for_speed(&None),
-            minutes_ms(5) // Assuming DEFAULT_TRANSACTION_SPEED is Speed::Average
+            minutes_ms(3) // DEFAULT_TRANSACTION_SPEED is Speed::Fast
         );
     }
 
