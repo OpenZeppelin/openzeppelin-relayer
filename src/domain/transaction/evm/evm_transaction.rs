@@ -737,7 +737,7 @@ where
         // Update original transaction with the cancel/noop transaction data
         let update = TransactionUpdateRequest {
             network_data: Some(NetworkTransactionData::Evm(signed_cancel_tx_data)),
-            status: Some(TransactionStatus::Sent), // Reset status to Canceled
+            status: Some(TransactionStatus::Canceled), // Reset status to Canceled
             sent_at: None, // Clear sent_at since it will be updated when the transaction is submitted
             hashes: Some(hashes),
             priced_at: Some(Utc::now().to_rfc3339()),

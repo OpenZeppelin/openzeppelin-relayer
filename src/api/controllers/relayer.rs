@@ -330,7 +330,10 @@ pub async fn cancel_transaction(
         .cancel_transaction(transaction_to_cancel)
         .await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(canceled_transaction)))
+    // Transform the TransactionRepoModel into a TransactionResponse
+    let response = TransactionResponse::from(canceled_transaction);
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
 }
 
 /// Replaces a specific transaction for a relayer.
