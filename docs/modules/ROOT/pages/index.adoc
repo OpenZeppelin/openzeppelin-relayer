@@ -219,7 +219,7 @@ Available configuration fields
 |signer type related config
 |===
 
-`local` type config: 
+`local` type config:
 [cols="1,1,2"]
 |===
 |Field |Type |Description
@@ -237,7 +237,7 @@ Available configuration fields
 |Passphrase value, env variable name, ...
 |===
 
-`vault` type config: 
+`vault` type config:
 [cols="1,1,2"]
 |===
 |Field |Type |Description
@@ -271,7 +271,7 @@ Available configuration fields
 | The mount point for the Secrets engine in Vault. Defaults to `secret` if not explicitly specified. Optional.
 |===
 
-`vault_cloud` type config: 
+`vault_cloud` type config:
 [cols="1,1,2"]
 |===
 |Field |Type |Description
@@ -305,7 +305,7 @@ Available configuration fields
 |===
 
 
-`vault_transit` type config: 
+`vault_transit` type config:
 [cols="1,1,2"]
 |===
 |Field |Type |Description
@@ -344,7 +344,7 @@ Available configuration fields
 
 |pubkey
 |String
-|Public key of the cryptographic key within Vault’s Transit engine that is used for signing operations 
+|Public key of the cryptographic key within Vault’s Transit engine that is used for signing operations
 |===
 
 
