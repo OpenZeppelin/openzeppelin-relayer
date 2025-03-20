@@ -1,5 +1,5 @@
 //! This module provides the `WebhookNotificationService` for sending notifications via webhooks.
-use crate::models::{WebhookNotification, WebhookResponse};
+use crate::models::{SecretString, WebhookNotification, WebhookResponse};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use hmac::{Hmac, Mac};
 use reqwest::Client;
@@ -12,11 +12,11 @@ type HmacSha256 = Hmac<Sha256>;
 pub struct WebhookNotificationService {
     client: Client,
     webhook_url: String,
-    secret_key: Option<String>,
+    secret_key: Option<SecretString>,
 }
 
 impl WebhookNotificationService {
-    pub fn new(webhook_url: String, secret_key: Option<String>) -> Self {
+    pub fn new(webhook_url: String, secret_key: Option<SecretString>) -> Self {
         Self {
             client: Client::new(),
             webhook_url,
@@ -27,9 +27,9 @@ impl WebhookNotificationService {
     fn sign_payload(
         &self,
         payload: &str,
-        secret_key: &str,
+        secret_key: &SecretString,
     ) -> Result<String, WebhookNotificationError> {
-        let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
+        let mut mac = HmacSha256::new_from_slice(secret_key.to_str().as_bytes())
             .map_err(|e| WebhookNotificationError::SigningError(e.to_string()))?;
         mac.update(payload.as_bytes());
         let result = mac.finalize();

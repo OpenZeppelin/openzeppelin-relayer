@@ -20,7 +20,10 @@ use crate::{
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaNetwork,
     },
-    repositories::{InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage},
+    repositories::{
+        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepository,
+        RelayerRepositoryStorage,
+    },
     services::{SolanaProvider, SolanaProviderTrait, SolanaSigner},
 };
 use async_trait::async_trait;
@@ -38,7 +41,7 @@ pub struct SolanaRelayer {
     network: SolanaNetwork,
     provider: Arc<SolanaProvider>,
     rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
-    relayer_repository: Arc<RelayerRepositoryStorage>,
+    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 }
@@ -47,7 +50,7 @@ impl SolanaRelayer {
     pub fn new(
         relayer: RelayerRepoModel,
         signer: Arc<SolanaSigner>,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         provider: Arc<SolanaProvider>,
         rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,

@@ -22,30 +22,6 @@ pub use vault_cloud::*;
 mod vault_transit;
 pub use vault_transit::*;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum PlainOrEnvConfigValue {
-    Env { name: String },
-    Plain { value: String },
-}
-
-impl PlainOrEnvConfigValue {
-    pub fn get_value(&self) -> Result<String, ConfigFileError> {
-        match self {
-            PlainOrEnvConfigValue::Env { name } => {
-                let value = std::env::var(name).map_err(|_| {
-                    ConfigFileError::MissingEnvVar(format!(
-                        "Environment variable {} not found",
-                        name
-                    ))
-                })?;
-                Ok(value)
-            }
-            PlainOrEnvConfigValue::Plain { value } => Ok(value.clone()),
-        }
-    }
-}
-
 pub trait SignerConfigValidate {
     fn validate(&self) -> Result<(), ConfigFileError>;
 }
@@ -213,28 +189,36 @@ impl SignersFileConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{PlainOrEnvValue, PlainOrEnvValueError, SecretString};
+
     use super::*;
     use serde_json::json;
     use std::env;
 
     #[test]
     fn test_plain_or_env_config_value_plain() {
-        let plain = PlainOrEnvConfigValue::Plain {
-            value: "test-value".to_string(),
+        let plain = PlainOrEnvValue::Plain {
+            value: SecretString::new("test-value"),
         };
 
-        assert_eq!(plain.get_value().unwrap(), "test-value");
+        assert_eq!(
+            plain.get_value().unwrap().to_str().as_str(),
+            "test-value".to_string()
+        );
     }
 
     #[test]
     fn test_plain_or_env_config_value_env_exists() {
         env::set_var("TEST_ENV_VAR", "env-test-value");
 
-        let env_value = PlainOrEnvConfigValue::Env {
-            name: "TEST_ENV_VAR".to_string(),
+        let env_value = PlainOrEnvValue::Env {
+            value: "TEST_ENV_VAR".to_string(),
         };
 
-        assert_eq!(env_value.get_value().unwrap(), "env-test-value");
+        assert_eq!(
+            env_value.get_value().unwrap().to_str().as_str(),
+            "env-test-value".to_string()
+        );
         env::remove_var("TEST_ENV_VAR");
     }
 
@@ -242,13 +226,16 @@ mod tests {
     fn test_plain_or_env_config_value_env_missing() {
         env::remove_var("NONEXISTENT_TEST_VAR");
 
-        let env_value = PlainOrEnvConfigValue::Env {
-            name: "NONEXISTENT_TEST_VAR".to_string(),
+        let env_value = PlainOrEnvValue::Env {
+            value: "NONEXISTENT_TEST_VAR".to_string(),
         };
 
         let result = env_value.get_value();
         assert!(result.is_err());
-        assert!(matches!(result, Err(ConfigFileError::MissingEnvVar(_))));
+        assert!(matches!(
+            result,
+            Err(PlainOrEnvValueError::MissingEnvVar(_))
+        ));
     }
 
     #[test]
@@ -280,7 +267,7 @@ mod tests {
                 "path": "examples/basic-example/config/keys/local-signer.json",
                 "passphrase": {
                     "type": "env",
-                    "name": "LOCAL_SIGNER_KEY_PASSPHRASE"
+                    "value": "LOCAL_SIGNER_KEY_PASSPHRASE"
                 }
             }
         });
@@ -371,8 +358,14 @@ mod tests {
             "type": "vault",
             "config": {
                 "address": "https://vault.example.com",
-                "role_id": "role-123",
-                "secret_id": "secret-456",
+                "role_id": {
+                    "type":"plain",
+                    "value":"role-123"
+                },
+                "secret_id": {
+                    "type":"plain",
+                    "value":"secret-456"
+                },
                 "key_name": "test-key"
             }
         });
@@ -388,7 +381,10 @@ mod tests {
             "type": "vault_cloud",
             "config": {
                 "client_id": "client-123",
-                "client_secret": "secret-abc",
+                "client_secret": {
+                    "type": "plain",
+                    "value":"secret-abc"
+                },
                 "org_id": "org-456",
                 "project_id": "proj-789",
                 "app_name": "my-app",
@@ -408,8 +404,14 @@ mod tests {
             "config": {
                 "key_name": "transit-key",
                 "address": "https://vault.example.com",
-                "role_id": "role-123",
-                "secret_id": "secret-456",
+                "role_id": {
+                    "type":"plain",
+                    "value":"role-123"
+                },
+                "secret_id": {
+                    "type":"plain",
+                    "value":"secret-456"
+                },
                 "pubkey": "test-pubkey"
             }
         });
@@ -426,8 +428,14 @@ mod tests {
             "config": {
                 "key_name": "",
                 "address": "https://vault.example.com",
-                "role_id": "role-123",
-                "secret_id": "secret-456",
+                "role_id": {
+                    "type":"plain",
+                    "value":"role-123"
+                },
+                "secret_id": {
+                    "type":"plain",
+                    "value":"secret-456"
+                },
                 "pubkey": "test-pubkey"
             }
         });
@@ -490,8 +498,8 @@ mod tests {
             "type": "vault",
             "config": {
                 "address": "https://vault.example.com",
-                "role_id": "role-123",
-                "secret_id": "secret-456",
+                "role_id": {"type": "plain", "value": "role-123"},
+                "secret_id": { "type": "plain", "value": "secret-456"},
                 "key_name": "test-key"
             }
         });
@@ -502,7 +510,7 @@ mod tests {
             "type": "vault_cloud",
             "config": {
                 "client_id": "client-123",
-                "client_secret": "secret-abc",
+                "client_secret": {"type": "plain", "value": "secret-abc"},
                 "org_id": "org-456",
                 "project_id": "proj-789",
                 "app_name": "my-app",
@@ -517,8 +525,8 @@ mod tests {
             "config": {
                 "key_name": "transit-key",
                 "address": "https://vault.example.com",
-                "role_id": "role-123",
-                "secret_id": "secret-456",
+                "role_id": {"type": "plain", "value": "role-123"},
+                "secret_id": { "type": "plain", "value": "secret-456"},
                 "pubkey": "test-pubkey"
             }
         });
@@ -545,8 +553,8 @@ mod tests {
 
         let local_config = SignerFileConfigEnum::Local(LocalSignerFileConfig {
             path: "test-path".to_string(),
-            passphrase: PlainOrEnvConfigValue::Plain {
-                value: "test-passphrase".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("test-passphrase"),
             },
         });
         assert!(local_config.get_test().is_none());
@@ -559,8 +567,12 @@ mod tests {
         let vault_config = SignerFileConfigEnum::Vault(VaultSignerFileConfig {
             address: "https://vault.example.com".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-456"),
+            },
             key_name: "test-key".to_string(),
             mount_point: None,
         });
@@ -573,7 +585,9 @@ mod tests {
 
         let vault_cloud_config = SignerFileConfigEnum::VaultCloud(VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-app".to_string(),
@@ -590,8 +604,12 @@ mod tests {
             SignerFileConfigEnum::VaultTransit(VaultTransitSignerFileConfig {
                 key_name: "transit-key".to_string(),
                 address: "https://vault.example.com".to_string(),
-                role_id: "role-123".to_string(),
-                secret_id: "secret-456".to_string(),
+                role_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("role-123"),
+                },
+                secret_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("secret-456"),
+                },
                 pubkey: "test-pubkey".to_string(),
                 mount_point: None,
                 namespace: None,

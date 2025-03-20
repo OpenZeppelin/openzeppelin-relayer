@@ -44,3 +44,53 @@ impl From<RepositoryError> for ApiError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_repository_error_to_api_error_not_found() {
+        let repo_error = RepositoryError::NotFound("User not found".to_string());
+        let api_error = ApiError::from(repo_error);
+
+        match api_error {
+            ApiError::NotFound(msg) => assert_eq!(msg, "User not found"),
+            _ => panic!("Expected ApiError::NotFound, got something else"),
+        }
+    }
+
+    #[test]
+    fn test_repository_error_to_api_error_unknown() {
+        let repo_error = RepositoryError::Unknown("Database error".to_string());
+        let api_error = ApiError::from(repo_error);
+
+        match api_error {
+            ApiError::InternalError(msg) => assert_eq!(msg, "Database error"),
+            _ => panic!("Expected ApiError::InternalError, got something else"),
+        }
+    }
+
+    #[test]
+    fn test_repository_error_to_api_error_other_errors() {
+        let test_cases = vec![
+            RepositoryError::LockError("Lock error".to_string()),
+            RepositoryError::ConnectionError("Connection error".to_string()),
+            RepositoryError::ConstraintViolation("Constraint error".to_string()),
+            RepositoryError::InvalidData("Invalid data".to_string()),
+            RepositoryError::TransactionFailure("Transaction failed".to_string()),
+            RepositoryError::TransactionValidationFailed("Validation failed".to_string()),
+            RepositoryError::PermissionDenied("Permission denied".to_string()),
+            RepositoryError::NotSupported("Not supported".to_string()),
+        ];
+
+        for repo_error in test_cases {
+            let api_error = ApiError::from(repo_error);
+
+            match api_error {
+                ApiError::InternalError(msg) => assert_eq!(msg, "An unknown error occurred"),
+                _ => panic!("Expected ApiError::InternalError, got something else"),
+            }
+        }
+    }
+}

@@ -132,7 +132,7 @@ impl<T: VaultServiceTrait> Signer for VaultTransitSigner<T> {
 mod tests {
     use super::*;
     use crate::{
-        models::{SignerConfig, SolanaTransactionData, VaultTransitSignerConfig},
+        models::{SecretString, SignerConfig, SolanaTransactionData, VaultTransitSignerConfig},
         services::{vault::VaultError, MockVaultServiceTrait},
     };
     use mockall::predicate::*;
@@ -144,8 +144,8 @@ mod tests {
                 key_name: "transit-key".to_string(),
                 address: "https://vault.example.com".to_string(),
                 namespace: None,
-                role_id: "role-123".to_string(),
-                secret_id: "secret-456".to_string(),
+                role_id: SecretString::new("role-123"),
+                secret_id: SecretString::new("secret-456"),
                 pubkey: "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=".to_string(),
                 mount_point: None,
             }),

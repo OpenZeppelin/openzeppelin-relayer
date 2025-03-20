@@ -6,13 +6,15 @@ use crate::{
     domain::transaction::Transaction,
     jobs::JobProducer,
     models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
-    repositories::{InMemoryTransactionRepository, RelayerRepositoryStorage},
+    repositories::{
+        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
+    },
 };
 
 #[allow(dead_code)]
 pub struct StellarRelayerTransaction {
     relayer: RelayerRepoModel,
-    relayer_repository: Arc<RelayerRepositoryStorage>,
+    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 }
@@ -21,7 +23,7 @@ pub struct StellarRelayerTransaction {
 impl StellarRelayerTransaction {
     pub fn new(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, TransactionError> {
@@ -48,6 +50,14 @@ impl Transaction for StellarRelayerTransaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         Ok(tx)
+    }
+
+    async fn resubmit_transaction(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        // For now, just call submit_transaction as Stellar implementation is a stub
+        self.submit_transaction(tx).await
     }
 
     async fn handle_transaction_status(

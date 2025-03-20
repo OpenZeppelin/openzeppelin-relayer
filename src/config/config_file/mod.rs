@@ -21,7 +21,10 @@
 //! the file and validate its contents. If the configuration is valid, it can be used
 //! to initialize the application components.
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs};
+use std::{
+    collections::HashSet,
+    fs::{self},
+};
 use thiserror::Error;
 
 mod relayer;
@@ -79,7 +82,7 @@ pub enum ConfigFileNetworkType {
     Solana,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub relayers: Vec<RelayerFileConfig>,
     pub signers: Vec<SignerFileConfig>,
@@ -235,6 +238,8 @@ pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{PlainOrEnvValue, SecretString};
+
     use super::*;
 
     fn create_valid_config() -> Config {
@@ -254,8 +259,8 @@ mod tests {
                     id: "test-1".to_string(),
                     config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
                         path: "examples/basic-example/config/keys/local-signer.json".to_string(),
-                        passphrase: PlainOrEnvConfigValue::Plain {
-                            value: "test".to_string(),
+                        passphrase: PlainOrEnvValue::Plain {
+                            value: SecretString::new("test"),
                         },
                     }),
                 },

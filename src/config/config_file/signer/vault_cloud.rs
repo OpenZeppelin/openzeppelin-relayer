@@ -13,7 +13,10 @@
 //!
 //! HCP Vault differs from self-hosted Vault by requiring OAuth-based authentication
 //! instead of token or AppRole based authentication methods.
-use crate::config::ConfigFileError;
+use crate::{
+    config::ConfigFileError,
+    models::{validate_plain_or_env_value, PlainOrEnvValue},
+};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -24,8 +27,8 @@ use super::{validate_with_validator, SignerConfigValidate};
 pub struct VaultCloudSignerFileConfig {
     #[validate(length(min = 1, message = "Client ID cannot be empty"))]
     pub client_id: String,
-    #[validate(length(min = 1, message = "Client secret cannot be empty"))]
-    pub client_secret: String,
+    #[validate(custom(function = "validate_plain_or_env_value"))]
+    pub client_secret: PlainOrEnvValue,
     #[validate(length(min = 1, message = "Organization ID cannot be empty"))]
     pub org_id: String,
     #[validate(length(min = 1, message = "Project ID cannot be empty"))]
@@ -45,12 +48,15 @@ impl SignerConfigValidate for VaultCloudSignerFileConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::SecretString;
 
     #[test]
     fn test_vault_cloud_signer_file_config_valid() {
         let config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -65,7 +71,9 @@ mod tests {
     fn test_vault_cloud_signer_file_config_empty_client_id() {
         let config = VaultCloudSignerFileConfig {
             client_id: "".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -85,7 +93,9 @@ mod tests {
     fn test_vault_cloud_signer_file_config_empty_client_secret() {
         let config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -97,7 +107,6 @@ mod tests {
         if let Err(e) = result {
             let error_message = format!("{:?}", e);
             assert!(error_message.contains("client_secret"));
-            assert!(error_message.contains("cannot be empty"));
         }
     }
 
@@ -105,7 +114,9 @@ mod tests {
     fn test_vault_cloud_signer_file_config_empty_org_id() {
         let config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -125,7 +136,9 @@ mod tests {
     fn test_vault_cloud_signer_file_config_empty_project_id() {
         let config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -145,7 +158,9 @@ mod tests {
     fn test_vault_cloud_signer_file_config_empty_app_name() {
         let config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "".to_string(),
@@ -165,7 +180,9 @@ mod tests {
     fn test_vault_cloud_signer_file_config_empty_key_name() {
         let config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -186,7 +203,9 @@ mod tests {
         // Config with multiple validation errors
         let config = VaultCloudSignerFileConfig {
             client_id: "".to_string(),
-            client_secret: "".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new(""),
+            },
             org_id: "".to_string(),
             project_id: "".to_string(),
             app_name: "".to_string(),
@@ -215,7 +234,10 @@ mod tests {
         let json = r#"
         {
             "client_id": "client-123",
-            "client_secret": "secret-abc",
+            "client_secret": { 
+                "type": "plain",
+                "value":"secret-abc"
+            },
             "org_id": "org-456",
             "project_id": "proj-789",
             "app_name": "my-cloud-app",
@@ -225,7 +247,10 @@ mod tests {
 
         let config: VaultCloudSignerFileConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.client_id, "client-123");
-        assert_eq!(config.client_secret, "secret-abc");
+        assert_eq!(
+            config.client_secret.get_value().unwrap().to_str().as_str(),
+            "secret-abc"
+        );
         assert_eq!(config.org_id, "org-456");
         assert_eq!(config.project_id, "proj-789");
         assert_eq!(config.app_name, "my-cloud-app");
@@ -254,7 +279,9 @@ mod tests {
     fn test_serde_serialize_deserialize() {
         let config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -264,14 +291,22 @@ mod tests {
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: VaultCloudSignerFileConfig = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(config, deserialized);
+        assert_eq!(config.app_name, deserialized.app_name);
+        assert_eq!(config.client_id, deserialized.client_id);
+        assert_eq!(config.key_name, deserialized.key_name);
+        assert_eq!(config.org_id, deserialized.org_id);
+        assert_eq!(config.project_id, deserialized.project_id);
+        assert_ne!(config.client_secret, deserialized.client_secret);
     }
 
     #[test]
     fn test_serde_pretty_json() {
         let json = r#"{
         "client_id": "client-123",
-        "client_secret": "secret-abc",
+        "client_secret": {
+            "type": "plain",
+            "value":"secret-abc"
+        },
         "org_id": "org-456",
         "project_id": "proj-789",
         "app_name": "my-cloud-app",
@@ -280,14 +315,19 @@ mod tests {
 
         let config: VaultCloudSignerFileConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.client_id, "client-123");
-        assert_eq!(config.client_secret, "secret-abc");
+        assert_eq!(
+            config.client_secret.get_value().unwrap().to_str().as_str(),
+            "secret-abc"
+        );
     }
 
     #[test]
     fn test_validate_with_validator() {
         let valid_config = VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),
@@ -296,7 +336,9 @@ mod tests {
 
         let invalid_config = VaultCloudSignerFileConfig {
             client_id: "".to_string(),
-            client_secret: "secret-abc".to_string(),
+            client_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("secret-abc"),
+            },
             org_id: "org-456".to_string(),
             project_id: "proj-789".to_string(),
             app_name: "my-cloud-app".to_string(),

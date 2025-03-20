@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::{
     jobs::JobProducer,
     repositories::{
-        InMemoryNotificationRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
 };
 
@@ -16,7 +16,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct AppState {
     /// Repository for managing relayer data.
-    pub relayer_repository: Arc<RelayerRepositoryStorage>,
+    pub relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     /// Repository for managing transaction data.
     pub transaction_repository: Arc<InMemoryTransactionRepository>,
     /// Repository for managing signer data.
@@ -35,7 +35,7 @@ impl AppState {
     /// # Returns
     ///
     /// An `Arc` pointing to the `RelayerRepositoryStorage`.
-    pub fn relayer_repository(&self) -> Arc<RelayerRepositoryStorage> {
+    pub fn relayer_repository(&self) -> Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>> {
         Arc::clone(&self.relayer_repository)
     }
 

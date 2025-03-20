@@ -65,3 +65,137 @@ impl From<RepositoryError> for RelayerError {
         RelayerError::NetworkConfiguration(error.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::SignerError;
+    use crate::repositories::TransactionCounterError;
+    use crate::services::{ProviderError, SolanaProviderError};
+
+    #[test]
+    fn test_relayer_error_variants() {
+        let network_error = RelayerError::NetworkConfiguration("Invalid network".to_string());
+        assert_eq!(
+            network_error.to_string(),
+            "Network configuration error: Invalid network"
+        );
+
+        let provider_error = RelayerError::ProviderError("Connection failed".to_string());
+        assert_eq!(
+            provider_error.to_string(),
+            "Provider error: Connection failed"
+        );
+
+        let queue_error = RelayerError::QueueError("Queue full".to_string());
+        assert_eq!(queue_error.to_string(), "Queue error: Queue full");
+
+        let not_supported = RelayerError::NotSupported("Feature unavailable".to_string());
+        assert_eq!(
+            not_supported.to_string(),
+            "Not supported: Feature unavailable"
+        );
+
+        let disabled = RelayerError::RelayerDisabled;
+        assert_eq!(disabled.to_string(), "Relayer is disabled");
+
+        let paused = RelayerError::RelayerPaused;
+        assert_eq!(paused.to_string(), "Relayer is paused");
+
+        let insufficient_balance =
+            RelayerError::InsufficientBalanceError("Not enough ETH".to_string());
+        assert_eq!(
+            insufficient_balance.to_string(),
+            "Insufficient balance error: Not enough ETH"
+        );
+
+        let policy_error = RelayerError::PolicyConfigurationError("Invalid policy".to_string());
+        assert_eq!(
+            policy_error.to_string(),
+            "Relayer Policy configuration error: Invalid policy"
+        );
+    }
+
+    #[test]
+    fn test_from_provider_error() {
+        let provider_error = ProviderError::NetworkConfiguration("RPC timeout".to_string());
+        let relayer_error: RelayerError = provider_error.into();
+
+        assert!(matches!(relayer_error, RelayerError::UnderlyingProvider(_)));
+        assert!(relayer_error.to_string().contains("RPC timeout"));
+    }
+
+    #[test]
+    fn test_from_solana_provider_error() {
+        let solana_error = SolanaProviderError::RpcError("Solana RPC down".to_string());
+        let relayer_error: RelayerError = solana_error.into();
+
+        assert!(matches!(
+            relayer_error,
+            RelayerError::UnderlyingSolanaProvider(_)
+        ));
+        assert!(relayer_error.to_string().contains("Solana RPC down"));
+    }
+
+    #[test]
+    fn test_from_signer_factory_error() {
+        let factory_error = SignerFactoryError::InvalidConfig("Unknown chain".to_string());
+        let relayer_error: RelayerError = factory_error.into();
+
+        assert!(matches!(relayer_error, RelayerError::SignerFactoryError(_)));
+        assert!(relayer_error.to_string().contains("Unknown chain"));
+    }
+
+    #[test]
+    fn test_from_signer_error() {
+        let signer_error = SignerError::SigningError("Invalid key".to_string());
+        let relayer_error: RelayerError = signer_error.into();
+
+        assert!(matches!(relayer_error, RelayerError::SignerError(_)));
+        assert!(relayer_error.to_string().contains("Invalid key"));
+    }
+
+    #[test]
+    fn test_from_transaction_counter_error() {
+        let counter_error = TransactionCounterError::NotFound("Nonce not found".to_string());
+        let relayer_error: RelayerError = counter_error.into();
+
+        assert!(matches!(
+            relayer_error,
+            RelayerError::TransactionSequenceError(_)
+        ));
+        assert!(relayer_error.to_string().contains("Nonce not found"));
+    }
+
+    #[test]
+    fn test_conversion_to_api_error() {
+        let network_error = RelayerError::NetworkConfiguration("Invalid network".to_string());
+        let api_error: ApiError = network_error.into();
+        assert!(matches!(api_error, ApiError::InternalError(_)));
+
+        let not_supported = RelayerError::NotSupported("Feature unavailable".to_string());
+        let api_error: ApiError = not_supported.into();
+        assert!(matches!(api_error, ApiError::BadRequest(_)));
+
+        let disabled = RelayerError::RelayerDisabled;
+        let api_error: ApiError = disabled.into();
+        assert!(matches!(api_error, ApiError::ForbiddenError(_)));
+        assert_eq!(api_error.to_string(), "Forbidden: Relayer disabled");
+
+        let insufficient = RelayerError::InsufficientBalanceError("Not enough funds".to_string());
+        let api_error: ApiError = insufficient.into();
+        assert!(matches!(api_error, ApiError::BadRequest(_)));
+    }
+
+    #[test]
+    fn test_from_repository_error() {
+        let repo_error = RepositoryError::ConnectionError("Connection failed".to_string());
+        let relayer_error: RelayerError = repo_error.into();
+
+        assert!(matches!(
+            relayer_error,
+            RelayerError::NetworkConfiguration(_)
+        ));
+        assert!(relayer_error.to_string().contains("Connection failed"));
+    }
+}

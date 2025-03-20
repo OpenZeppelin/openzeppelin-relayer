@@ -5,8 +5,11 @@
 //! and set nonce values. This implementation uses a `DashMap` for concurrent access and
 //! modification of the nonce values.
 use dashmap::DashMap;
+use serde::Serialize;
+use thiserror::Error;
 
-use super::{TransactionCounterError, TransactionCounterTrait};
+#[cfg(test)]
+use mockall::automock;
 
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryTransactionCounter {
@@ -19,6 +22,35 @@ impl InMemoryTransactionCounter {
             store: DashMap::new(),
         }
     }
+}
+
+#[derive(Error, Debug, Serialize)]
+pub enum TransactionCounterError {
+    #[error("No sequence found for relayer {relayer_id} and address {address}")]
+    SequenceNotFound { relayer_id: String, address: String },
+    #[error("Counter not found for {0}")]
+    NotFound(String),
+}
+
+#[allow(dead_code)]
+#[cfg_attr(test, automock)]
+pub trait TransactionCounterTrait {
+    fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, TransactionCounterError>;
+
+    fn get_and_increment(
+        &self,
+        relayer_id: &str,
+        address: &str,
+    ) -> Result<u64, TransactionCounterError>;
+
+    fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, TransactionCounterError>;
+
+    fn set(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        value: u64,
+    ) -> Result<(), TransactionCounterError>;
 }
 
 impl TransactionCounterTrait for InMemoryTransactionCounter {

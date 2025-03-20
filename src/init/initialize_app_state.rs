@@ -26,7 +26,7 @@ use std::sync::Arc;
 /// - Repository initialization fails
 /// - Configuration loading fails
 pub async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
-    let relayer_repository = Arc::new(RelayerRepositoryStorage::InMemory(
+    let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
         InMemoryRelayerRepository::new(),
     ));
     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());

@@ -121,15 +121,19 @@ impl EvmSignerFactory {
 mod tests {
     use super::*;
     use crate::models::{
-        AwsKmsSignerConfig, EvmTransactionData, LocalSignerConfig, SignerConfig, SignerRepoModel,
-        VaultTransitSignerConfig, U256,
+        AwsKmsSignerConfig, EvmTransactionData, LocalSignerConfig, SecretString, SignerConfig,
+        SignerRepoModel, VaultTransitSignerConfig, U256,
     };
     use mockall::predicate::*;
+    use secrets::SecretVec;
     use std::str::FromStr;
     use std::sync::Arc;
 
-    fn test_key_bytes() -> Vec<u8> {
-        hex::decode("0000000000000000000000000000000000000000000000000000000000000001").unwrap()
+    fn test_key_bytes() -> SecretVec<u8> {
+        let key_bytes =
+            hex::decode("0000000000000000000000000000000000000000000000000000000000000001")
+                .unwrap();
+        SecretVec::new(key_bytes.len(), |v| v.copy_from_slice(&key_bytes))
     }
 
     fn test_key_address() -> Address {
@@ -231,8 +235,8 @@ mod tests {
                 key_name: "test".to_string(),
                 address: "address".to_string(),
                 namespace: None,
-                role_id: "role_id".to_string(),
-                secret_id: "secret_id".to_string(),
+                role_id: SecretString::new("test-role"),
+                secret_id: SecretString::new("test-secret"),
                 pubkey: "pubkey".to_string(),
                 mount_point: None,
             }),

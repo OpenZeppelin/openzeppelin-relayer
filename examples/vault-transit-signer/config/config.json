@@ -21,11 +21,7 @@
     {
       "id": "notification-example",
       "type": "webhook",
-      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
-      "signing_key": {
-        "type": "env",
-        "name": "WEBHOOK_SIGNING_KEY"
-      }
+      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b"
     }
   ],
   "signers": [
@@ -33,11 +29,17 @@
       "id": "local_vault_transit",
       "type": "vault_transit",
       "config": {
-        "address": "http://localhost:8200",
-        "role_id": "fcff6348-3358-549f-8773-a25a3f791c4f",
-        "secret_id": "3191c58e-97de-4b7b-dcf6-72b8e783a62b",
+        "address": "http://vault:8200",
+        "role_id": {
+          "type": "plain",
+          "value": ""
+        },
+        "secret_id": {
+          "type": "plain",
+          "value": ""
+        },
         "key_name": "my_signing_key",
-        "pubkey": "VhLEeDJgJOikOAQxr7eN10u4Y/sLFxo0yM4G6Ivf+24="
+        "pubkey": ""
       }
     }
   ]

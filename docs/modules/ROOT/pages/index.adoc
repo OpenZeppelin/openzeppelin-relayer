@@ -246,13 +246,21 @@ Available configuration fields
 | String
 | Specifies the Vault API endpoint.
 
-| role_id
+| role_id.type
 | String
-| The Vault AppRole role identifier.
+| Type of value source (`env` or `plain`)
 
-| secret_id
+| role_id.value
 | String
-| The Vault AppRole secret identifier.
+| The Vault AppRole role identifier value, or the environment variable name where the AppRole role identifier is stored.
+
+| secret_id.type
+| String
+| Type of value source (`env` or `plain`)
+
+| secret_id.value
+| String
+| The Vault AppRole role secret value, or the environment variable name where the AppRole secret value is stored.
 
 | key_name
 | String
@@ -272,9 +280,12 @@ Available configuration fields
 | String
 | The client identifier used to authenticate with Vault Cloud.
 
-| client_secret
+| client_secret.type
 | String
-| The client secret for Vault Cloud authentication.
+| Type of value source (`env` or `plain`)
+
+| client_secret.value
+| StringThe Vault secret value, or the environment variable name where the secret value is stored.
 
 | org_id
 | String
@@ -303,13 +314,21 @@ Available configuration fields
 | String
 | Specifies the Vault API endpoint.
 
-| role_id
+| role_id.type
 | String
-| The Vault AppRole role identifier.
+| Type of value source (`env` or `plain`)
 
-| secret_id
+| role_id.value
 | String
-| The Vault AppRole secret identifier.
+| The Vault AppRole role identifier value, or the environment variable name where the AppRole role identifier is stored.
+
+| secret_id.type
+| String
+| Type of value source (`env` or `plain`)
+
+| secret_id.value
+| String
+| The Vault AppRole role secret value, or the environment variable name where the AppRole secret value is stored.
 
 | key_name
 | String
@@ -341,7 +360,7 @@ Available configuration fields
     "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
     "signing_key": {
       "type": "env",
-      "name": "WEBHOOK_SIGNING_KEY"
+      "value": "WEBHOOK_SIGNING_KEY"
     }
   }
 ]

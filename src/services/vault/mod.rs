@@ -36,6 +36,7 @@ use vaultrs::{
     client::{VaultClient, VaultClientSettingsBuilder},
     kv2, transit,
 };
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Error, Debug, Serialize)]
 pub enum VaultError {
@@ -56,11 +57,10 @@ pub enum VaultError {
 }
 
 // Token cache key to uniquely identify a vault configuration
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Zeroize, ZeroizeOnDrop)]
 struct VaultCacheKey {
     address: String,
     role_id: String,
-    secret_id: String,
     namespace: Option<String>,
 }
 
@@ -68,10 +68,9 @@ impl fmt::Display for VaultCacheKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}|{}|{}|{}",
+            "{}|{}|{}",
             self.address,
             self.role_id,
-            self.secret_id,
             self.namespace.as_deref().unwrap_or("")
         )
     }
@@ -89,14 +88,15 @@ static TOKEN_CACHE: Lazy<RwLock<HashMap<VaultCacheKey, TokenCache>>> =
 #[cfg(test)]
 use mockall::automock;
 
+use crate::models::SecretString;
 use crate::utils::base64_encode;
 
 #[derive(Clone)]
 pub struct VaultConfig {
     pub address: String,
     pub namespace: Option<String>,
-    pub role_id: String,
-    pub secret_id: String,
+    pub role_id: SecretString,
+    pub secret_id: SecretString,
     pub mount_path: String,
     // Optional token TTL in seconds, defaults to 45 minutes if not set
     pub token_ttl: Option<u64>,
@@ -105,8 +105,8 @@ pub struct VaultConfig {
 impl VaultConfig {
     pub fn new(
         address: String,
-        role_id: String,
-        secret_id: String,
+        role_id: SecretString,
+        secret_id: SecretString,
         namespace: Option<String>,
         mount_path: String,
         token_ttl: Option<u64>,
@@ -124,8 +124,7 @@ impl VaultConfig {
     fn cache_key(&self) -> VaultCacheKey {
         VaultCacheKey {
             address: self.address.clone(),
-            role_id: self.role_id.clone(),
-            secret_id: self.secret_id.clone(),
+            role_id: self.role_id.to_str().to_string(),
             namespace: self.namespace.clone(),
         }
     }
@@ -210,8 +209,8 @@ impl VaultService {
         let token = login(
             &client,
             "approle",
-            &self.config.role_id,
-            &self.config.secret_id,
+            &self.config.role_id.to_str(),
+            &self.config.secret_id.to_str(),
         )
         .await
         .map_err(|e| VaultError::AuthenticationFailed(e.to_string()))?;
@@ -293,16 +292,16 @@ mod tests {
     fn test_vault_config_new() {
         let config = VaultConfig::new(
             "https://vault.example.com".to_string(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             Some("test-namespace".to_string()),
             "test-mount-path".to_string(),
             Some(60),
         );
 
         assert_eq!(config.address, "https://vault.example.com");
-        assert_eq!(config.role_id, "test-role-id");
-        assert_eq!(config.secret_id, "test-secret-id");
+        assert_eq!(config.role_id.to_str().as_str(), "test-role-id");
+        assert_eq!(config.secret_id.to_str().as_str(), "test-secret-id");
         assert_eq!(config.namespace, Some("test-namespace".to_string()));
         assert_eq!(config.mount_path, "test-mount-path");
         assert_eq!(config.token_ttl, Some(60));
@@ -313,8 +312,8 @@ mod tests {
         let config1 = VaultConfig {
             address: "https://vault1.example.com".to_string(),
             namespace: Some("namespace1".to_string()),
-            role_id: "role1".to_string(),
-            secret_id: "secret1".to_string(),
+            role_id: SecretString::new("role1"),
+            secret_id: SecretString::new("secret1"),
             mount_path: "transit".to_string(),
             token_ttl: None,
         };
@@ -322,8 +321,8 @@ mod tests {
         let config2 = VaultConfig {
             address: "https://vault1.example.com".to_string(),
             namespace: Some("namespace1".to_string()),
-            role_id: "role1".to_string(),
-            secret_id: "secret1".to_string(),
+            role_id: SecretString::new("role1"),
+            secret_id: SecretString::new("secret1"),
             mount_path: "different-mount".to_string(),
             token_ttl: None,
         };
@@ -331,8 +330,8 @@ mod tests {
         let config3 = VaultConfig {
             address: "https://vault2.example.com".to_string(),
             namespace: Some("namespace1".to_string()),
-            role_id: "role1".to_string(),
-            secret_id: "secret1".to_string(),
+            role_id: SecretString::new("role1"),
+            secret_id: SecretString::new("secret1"),
             mount_path: "transit".to_string(),
             token_ttl: None,
         };
@@ -347,25 +346,23 @@ mod tests {
         let key_with_namespace = VaultCacheKey {
             address: "https://vault.example.com".to_string(),
             role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
             namespace: Some("my-namespace".to_string()),
         };
 
         let key_without_namespace = VaultCacheKey {
             address: "https://vault.example.com".to_string(),
             role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
             namespace: None,
         };
 
         assert_eq!(
             key_with_namespace.to_string(),
-            "https://vault.example.com|role-123|secret-456|my-namespace"
+            "https://vault.example.com|role-123|my-namespace"
         );
 
         assert_eq!(
             key_without_namespace.to_string(),
-            "https://vault.example.com|role-123|secret-456|"
+            "https://vault.example.com|role-123|"
         );
     }
 
@@ -444,8 +441,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id-fake".to_string(),
-            "test-secret-id-fake".to_string(),
+            SecretString::new("test-role-id-fake"),
+            SecretString::new("test-secret-id-fake"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -498,8 +495,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -546,8 +543,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -577,8 +574,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),
@@ -621,8 +618,8 @@ mod tests {
 
         let config = VaultConfig::new(
             mock_server.uri(),
-            "test-role-id".to_string(),
-            "test-secret-id".to_string(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
             None,
             "test-mount".to_string(),
             Some(60),

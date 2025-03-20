@@ -39,10 +39,13 @@ impl LocalSigner {
             .get_local()
             .ok_or_else(|| SignerError::Configuration("Local config not found".to_string()))?;
 
-        // transforms the key into alloy wallet
-        let key_bytes = FixedBytes::from_slice(config.raw_key.as_slice());
-        let local_signer_client = AlloyLocalSignerClient::from_bytes(&key_bytes)
-            .map_err(|e| SignerError::Configuration(format!("Failed to create signer: {}", e)))?;
+        let local_signer_client = {
+            let key_bytes = config.raw_key.borrow();
+
+            AlloyLocalSignerClient::from_bytes(&FixedBytes::from_slice(&key_bytes)).map_err(
+                |e| SignerError::Configuration(format!("Failed to create signer: {}", e)),
+            )?
+        };
 
         Ok(Self {
             local_signer_client,
@@ -156,17 +159,19 @@ impl DataSignerTrait for LocalSigner {
 
 #[cfg(test)]
 mod tests {
+    use secrets::SecretVec;
+
     use crate::models::{EvmTransactionData, LocalSignerConfig, SignerConfig, U256};
 
     use super::*;
     use std::str::FromStr;
 
     fn create_test_signer_model() -> SignerRepoModel {
+        let seed = vec![1u8; 32];
+        let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
         SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: vec![1u8; 32],
-            }),
+            config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         }
     }
 

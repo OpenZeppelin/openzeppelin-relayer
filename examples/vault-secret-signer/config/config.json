@@ -24,7 +24,7 @@
       "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
       "signing_key": {
         "type": "env",
-        "name": "WEBHOOK_SIGNING_KEY"
+        "value": "WEBHOOK_SIGNING_KEY"
       }
     }
   ],
@@ -33,9 +33,15 @@
       "id": "local-vault",
       "type": "vault",
       "config": {
-        "address": "http://localhost:8200",
-        "role_id": "REPLACE_WITH_YOUR_ROLE_ID",
-        "secret_id": "REPLACE_WITH_YOUR_SECRET_ID",
+        "address": "http://vault:8200",
+        "role_id": {
+          "type": "plain",
+          "value": ""
+        },
+        "secret_id": {
+          "type": "plain",
+          "value": ""
+        },
         "key_name": "my-app"
       }
     }

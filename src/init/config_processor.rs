@@ -16,6 +16,8 @@ use actix_web::web::ThinData;
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use oz_keystore::{HashicorpCloudClient, LocalClient};
+use secrets::SecretVec;
+use zeroize::Zeroizing;
 
 /// Process a signer configuration from the config file and convert it into a `SignerRepoModel`.
 ///
@@ -31,13 +33,22 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
         SignerFileConfigEnum::Test(_) => SignerRepoModel {
             id: signer.id.clone(),
             config: SignerConfig::Test(LocalSignerConfig {
-                raw_key: unsafe_generate_random_private_key(),
+                raw_key: SecretVec::new(32, |b| {
+                    b.copy_from_slice(&unsafe_generate_random_private_key())
+                }),
             }),
         },
         SignerFileConfigEnum::Local(local_signer) => {
             let passphrase = local_signer.passphrase.get_value()?;
-            let raw_key =
-                LocalClient::load(Path::new(&local_signer.path).to_path_buf(), passphrase);
+
+            let raw_key = SecretVec::new(32, |buffer| {
+                let loaded = LocalClient::load(
+                    Path::new(&local_signer.path).to_path_buf(),
+                    passphrase.to_str().as_str().to_string(),
+                );
+
+                buffer.copy_from_slice(&loaded);
+            });
             SignerRepoModel {
                 id: signer.id.clone(),
                 config: SignerConfig::Local(LocalSignerConfig { raw_key }),
@@ -51,8 +62,8 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
             let config = VaultConfig {
                 address: vault_config.address.clone(),
                 namespace: vault_config.namespace.clone(),
-                role_id: vault_config.role_id.clone(),
-                secret_id: vault_config.secret_id.clone(),
+                role_id: vault_config.role_id.get_value()?,
+                secret_id: vault_config.secret_id.get_value()?,
                 mount_path: vault_config
                     .mount_point
                     .clone()
@@ -61,10 +72,20 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
             };
 
             let vault_service = VaultService::new(config);
-            let secret = vault_service
-                .retrieve_secret(&vault_config.key_name)
-                .await?;
-            let raw_key = hex::decode(&secret)?;
+
+            let raw_key = {
+                let hex_secret = Zeroizing::new(
+                    vault_service
+                        .retrieve_secret(&vault_config.key_name)
+                        .await?,
+                );
+                let decoded_bytes = hex::decode(hex_secret)
+                    .map_err(|e| eyre::eyre!("Invalid hex in vault cloud secret: {}", e))?;
+
+                SecretVec::new(decoded_bytes.len(), |buffer| {
+                    buffer.copy_from_slice(&decoded_bytes);
+                })
+            };
 
             SignerRepoModel {
                 id: signer.id.clone(),
@@ -74,14 +95,27 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
         SignerFileConfigEnum::VaultCloud(vault_cloud_config) => {
             let client = HashicorpCloudClient::new(
                 vault_cloud_config.client_id.clone(),
-                vault_cloud_config.client_secret.clone(),
+                vault_cloud_config
+                    .client_secret
+                    .get_value()?
+                    .to_str()
+                    .to_string(),
                 vault_cloud_config.org_id.clone(),
                 vault_cloud_config.project_id.clone(),
                 vault_cloud_config.app_name.clone(),
             );
 
-            let response = client.get_secret(&vault_cloud_config.key_name).await?;
-            let raw_key = hex::decode(&response.secret.static_version.value)?;
+            let raw_key = {
+                let response = client.get_secret(&vault_cloud_config.key_name).await?;
+                let hex_secret = Zeroizing::new(response.secret.static_version.value.clone());
+
+                let decoded_bytes = hex::decode(hex_secret)
+                    .map_err(|e| eyre::eyre!("Invalid hex in vault cloud secret: {}", e))?;
+
+                SecretVec::new(decoded_bytes.len(), |buffer| {
+                    buffer.copy_from_slice(&decoded_bytes);
+                })
+            };
 
             SignerRepoModel {
                 id: signer.id.clone(),
@@ -94,8 +128,8 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 key_name: vault_transit_config.key_name.clone(),
                 address: vault_transit_config.address.clone(),
                 namespace: vault_transit_config.namespace.clone(),
-                role_id: vault_transit_config.role_id.clone(),
-                secret_id: vault_transit_config.secret_id.clone(),
+                role_id: vault_transit_config.role_id.get_value()?,
+                secret_id: vault_transit_config.secret_id.get_value()?,
                 pubkey: vault_transit_config.pubkey.clone(),
                 mount_point: vault_transit_config.mount_point.clone(),
             }),
@@ -213,9 +247,12 @@ pub async fn process_config_file(config_file: Config, app_state: ThinData<AppSta
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        AwsKmsSignerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
-        VaultTransitSignerFileConfig,
+    use crate::{
+        config::{
+            AwsKmsSignerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            VaultTransitSignerFileConfig,
+        },
+        models::{PlainOrEnvValue, SecretString},
     };
     use serde_json::json;
     use wiremock::matchers::{body_json, header, method, path};
@@ -256,8 +293,12 @@ mod tests {
                 key_name: "test-transit-key".to_string(),
                 address: "https://vault.example.com".to_string(),
                 namespace: Some("test-namespace".to_string()),
-                role_id: "test-role".to_string(),
-                secret_id: "test-secret".to_string(),
+                role_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-role"),
+                },
+                secret_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-secret"),
+                },
                 pubkey: "test-pubkey".to_string(),
                 mount_point: Some("transit".to_string()),
             }),
@@ -279,8 +320,8 @@ mod tests {
                 assert_eq!(config.key_name, "test-transit-key");
                 assert_eq!(config.address, "https://vault.example.com");
                 assert_eq!(config.namespace, Some("test-namespace".to_string()));
-                assert_eq!(config.role_id, "test-role");
-                assert_eq!(config.secret_id, "test-secret");
+                assert_eq!(config.role_id.to_str().as_str(), "test-role");
+                assert_eq!(config.secret_id.to_str().as_str(), "test-secret");
                 assert_eq!(config.pubkey, "test-pubkey");
                 assert_eq!(config.mount_point, Some("transit".to_string()));
             }
@@ -395,8 +436,12 @@ mod tests {
                 key_name: "test-key".to_string(),
                 address: mock_server.uri(),
                 namespace: Some("test-namespace".to_string()),
-                role_id: "test-role-id".to_string(),
-                secret_id: "test-secret-id".to_string(),
+                role_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-role-id"),
+                },
+                secret_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-secret-id"),
+                },
                 mount_point: Some("secret".to_string()),
             }),
         };

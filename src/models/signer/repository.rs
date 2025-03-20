@@ -1,4 +1,14 @@
-use serde::{Deserialize, Serialize};
+use secrets::SecretVec;
+use serde::{Deserialize, Serialize, Serializer};
+
+use crate::models::SecretString;
+
+fn serialize_secretvec<S>(_secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str("[REDACTED]")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -17,7 +27,8 @@ pub struct SignerRepoModel {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalSignerConfig {
-    pub raw_key: Vec<u8>,
+    #[serde(serialize_with = "serialize_secretvec")]
+    pub raw_key: SecretVec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,8 +39,8 @@ pub struct VaultTransitSignerConfig {
     pub key_name: String,
     pub address: String,
     pub namespace: Option<String>,
-    pub role_id: String,
-    pub secret_id: String,
+    pub role_id: SecretString,
+    pub secret_id: SecretString,
     pub pubkey: String,
     pub mount_point: Option<String>,
 }
@@ -110,7 +121,7 @@ mod tests {
         let model = SignerRepoModel {
             id: "test-signer".to_string(),
             config: SignerConfig::Test(LocalSignerConfig {
-                raw_key: vec![1, 2, 3, 4],
+                raw_key: SecretVec::new(4, |v| v.copy_from_slice(&[1, 2, 3, 4])),
             }),
         };
 
@@ -122,10 +133,11 @@ mod tests {
     fn test_local_signer_config() {
         let private_key = vec![0, 1, 2, 3, 4, 5];
         let config = LocalSignerConfig {
-            raw_key: private_key.clone(),
+            raw_key: SecretVec::new(private_key.len(), |v| v.copy_from_slice(&private_key)),
         };
 
-        assert_eq!(config.raw_key, private_key);
+        let test = config.raw_key.borrow();
+        assert_eq!(*test, private_key);
     }
 
     #[test]
@@ -134,8 +146,8 @@ mod tests {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com".to_string(),
             namespace: Some("ns1".to_string()),
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: SecretString::new("role-123"),
+            secret_id: SecretString::new("secret-456"),
             pubkey: "mypubkey123".to_string(),
             mount_point: Some("transit".to_string()),
         };
@@ -143,8 +155,8 @@ mod tests {
         assert_eq!(config.key_name, "transit-key");
         assert_eq!(config.address, "https://vault.example.com");
         assert_eq!(config.namespace, Some("ns1".to_string()));
-        assert_eq!(config.role_id, "role-123");
-        assert_eq!(config.secret_id, "secret-456");
+        assert_eq!(config.role_id.to_str().as_str(), "role-123");
+        assert_eq!(config.secret_id.to_str().as_str(), "secret-456");
         assert_eq!(config.pubkey, "mypubkey123");
         assert_eq!(config.mount_point, Some("transit".to_string()));
 
@@ -152,8 +164,8 @@ mod tests {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: SecretString::new("role-123"),
+            secret_id: SecretString::new("secret-456"),
             pubkey: "mypubkey123".to_string(),
             mount_point: None,
         };
@@ -165,27 +177,27 @@ mod tests {
     #[test]
     fn test_signer_config_variants() {
         let test_config = SignerConfig::Test(LocalSignerConfig {
-            raw_key: vec![1, 2, 3],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[1, 2, 3])),
         });
 
         let local_config = SignerConfig::Local(LocalSignerConfig {
-            raw_key: vec![4, 5, 6],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[4, 5, 6])),
         });
 
         let vault_config = SignerConfig::Vault(LocalSignerConfig {
-            raw_key: vec![7, 8, 9],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[7, 8, 9])),
         });
 
         let vault_cloud_config = SignerConfig::VaultCloud(LocalSignerConfig {
-            raw_key: vec![10, 11, 12],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[10, 11, 12])),
         });
 
         let vault_transit_config = SignerConfig::VaultTransit(VaultTransitSignerConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: SecretString::new("role-123"),
+            secret_id: SecretString::new("secret-456"),
             pubkey: "mypubkey123".to_string(),
             mount_point: None,
         });
@@ -206,35 +218,35 @@ mod tests {
     #[test]
     fn test_signer_config_get_local() {
         let local_config = SignerConfig::Local(LocalSignerConfig {
-            raw_key: vec![1, 2, 3],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[1, 2, 3])),
         });
         let retrieved = local_config.get_local().unwrap();
-        assert_eq!(retrieved.raw_key, vec![1, 2, 3]);
+        assert_eq!(*retrieved.raw_key.borrow(), vec![1, 2, 3]);
 
         let test_config = SignerConfig::Test(LocalSignerConfig {
-            raw_key: vec![4, 5, 6],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[4, 5, 6])),
         });
         let retrieved = test_config.get_local().unwrap();
-        assert_eq!(retrieved.raw_key, vec![4, 5, 6]);
+        assert_eq!(*retrieved.raw_key.borrow(), vec![4, 5, 6]);
 
         let vault_config = SignerConfig::Vault(LocalSignerConfig {
-            raw_key: vec![7, 8, 9],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[7, 8, 9])),
         });
         let retrieved = vault_config.get_local().unwrap();
-        assert_eq!(retrieved.raw_key, vec![7, 8, 9]);
+        assert_eq!(*retrieved.raw_key.borrow(), vec![7, 8, 9]);
 
         let vault_cloud_config = SignerConfig::VaultCloud(LocalSignerConfig {
-            raw_key: vec![10, 11, 12],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[10, 11, 12])),
         });
         let retrieved = vault_cloud_config.get_local().unwrap();
-        assert_eq!(retrieved.raw_key, vec![10, 11, 12]);
+        assert_eq!(*retrieved.raw_key.borrow(), vec![10, 11, 12]);
 
         let vault_transit_config = SignerConfig::VaultTransit(VaultTransitSignerConfig {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: SecretString::new("role-123"),
+            secret_id: SecretString::new("secret-456"),
             pubkey: "mypubkey123".to_string(),
             mount_point: None,
         });
@@ -248,12 +260,12 @@ mod tests {
 
         // Test with configs that should return None
         let local_config = SignerConfig::Local(LocalSignerConfig {
-            raw_key: vec![1, 2, 3],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[1, 2, 3])),
         });
         assert!(local_config.get_aws_kms().is_none());
 
         let test_config = SignerConfig::Test(LocalSignerConfig {
-            raw_key: vec![4, 5, 6],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[4, 5, 6])),
         });
         assert!(test_config.get_aws_kms().is_none());
     }
@@ -264,8 +276,8 @@ mod tests {
             key_name: "transit-key".to_string(),
             address: "https://vault.example.com".to_string(),
             namespace: None,
-            role_id: "role-123".to_string(),
-            secret_id: "secret-456".to_string(),
+            role_id: SecretString::new("role-123"),
+            secret_id: SecretString::new("secret-456"),
             pubkey: "mypubkey123".to_string(),
             mount_point: None,
         });
@@ -274,12 +286,12 @@ mod tests {
         assert_eq!(retrieved.address, "https://vault.example.com");
 
         let local_config = SignerConfig::Local(LocalSignerConfig {
-            raw_key: vec![1, 2, 3],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[1, 2, 3])),
         });
         assert!(local_config.get_vault_transit().is_none());
 
         let vault_config = SignerConfig::Vault(LocalSignerConfig {
-            raw_key: vec![7, 8, 9],
+            raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[7, 8, 9])),
         });
         assert!(vault_config.get_vault_transit().is_none());
     }

@@ -133,18 +133,19 @@ impl SolanaSignerFactory {
 mod solana_signer_factory_tests {
     use super::*;
     use crate::models::{
-        AwsKmsSignerConfig, LocalSignerConfig, SignerConfig, SignerRepoModel,
+        AwsKmsSignerConfig, LocalSignerConfig, SecretString, SignerConfig, SignerRepoModel,
         SolanaTransactionData, VaultTransitSignerConfig,
     };
     use mockall::predicate::*;
+    use secrets::SecretVec;
     use std::sync::Arc;
 
-    fn test_key_bytes() -> Vec<u8> {
-        // 32-byte key for Solana keypair
-        vec![
+    fn test_key_bytes() -> SecretVec<u8> {
+        let key_bytes = vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
             25, 26, 27, 28, 29, 30, 31, 32,
-        ]
+        ];
+        SecretVec::new(key_bytes.len(), |v| v.copy_from_slice(&key_bytes))
     }
 
     fn test_key_bytes_pubkey() -> Address {
@@ -227,8 +228,8 @@ mod solana_signer_factory_tests {
                 key_name: "test".to_string(),
                 address: "address".to_string(),
                 namespace: None,
-                role_id: "role_id".to_string(),
-                secret_id: "secret_id".to_string(),
+                role_id: SecretString::new("role_id"),
+                secret_id: SecretString::new("secret_id"),
                 pubkey: "pubkey".to_string(),
                 mount_point: None,
             }),
@@ -318,8 +319,8 @@ mod solana_signer_factory_tests {
                 key_name: "test".to_string(),
                 address: "address".to_string(),
                 namespace: None,
-                role_id: "role_id".to_string(),
-                secret_id: "secret_id".to_string(),
+                role_id: SecretString::new("role_id"),
+                secret_id: SecretString::new("secret_id"),
                 pubkey: "fV060x5X3Eo4uK/kTqQbSVL/qmMNaYKF2oaTa15hNfU=".to_string(),
                 mount_point: None,
             }),

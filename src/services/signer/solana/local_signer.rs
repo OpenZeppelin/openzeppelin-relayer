@@ -30,8 +30,13 @@ impl LocalSigner {
             .get_local()
             .ok_or_else(|| SignerError::Configuration("Local config not found".to_string()))?;
 
-        let keypair = Keypair::from_seed(&config.raw_key)
-            .map_err(|e| SignerError::Configuration(format!("Failed to create signer: {}", e)))?;
+        let keypair = {
+            let key_bytes = config.raw_key.borrow();
+
+            Keypair::from_seed(&key_bytes).map_err(|e| {
+                SignerError::Configuration(format!("Failed to create signer: {}", e))
+            })?
+        };
 
         Ok(Self {
             local_signer_client: keypair,
@@ -76,11 +81,13 @@ mod tests {
     };
 
     use super::*;
+    use secrets::SecretVec;
     use solana_sdk::signature::Signer as SolanaSigner;
 
     // Returns a valid 32-byte seed (all bytes set to 1)
-    fn valid_seed() -> Vec<u8> {
-        vec![1u8; 32]
+    fn valid_seed() -> SecretVec<u8> {
+        let seed = vec![1u8; 32];
+        SecretVec::new(32, |v| v.copy_from_slice(&seed))
     }
 
     fn create_testing_signer() -> LocalSigner {
@@ -103,11 +110,11 @@ mod tests {
 
     #[test]
     fn test_new_local_signer_invalid_keypair() {
+        let seed = vec![1u8; 10];
+        let raw_key = SecretVec::new(10, |v| v.copy_from_slice(&seed));
         let model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: vec![1u8; 10],
-            }),
+            config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         };
         let result = LocalSigner::new(&model);
 
@@ -175,7 +182,7 @@ mod tests {
         let pubkey_result = local_signer.pubkey();
         assert!(pubkey_result.is_ok());
 
-        let direct_keypair = Keypair::from_seed(&seed).expect("invalid keypair");
+        let direct_keypair = Keypair::from_seed(&seed.borrow()).expect("invalid keypair");
         let expected_pubkey = direct_keypair.pubkey().to_string();
 
         match pubkey_result.unwrap() {
