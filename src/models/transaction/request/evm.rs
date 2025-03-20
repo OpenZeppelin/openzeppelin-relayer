@@ -9,7 +9,7 @@ use utoipa::{schema, ToSchema};
 pub struct EvmTransactionRequest {
     #[schema(nullable = false)]
     pub to: Option<String>,
-    #[schema(value_type = String)]
+    #[schema(value_type = u128, format = "u128")]
     pub value: U256,
     #[schema(nullable = false)]
     pub data: Option<String>,

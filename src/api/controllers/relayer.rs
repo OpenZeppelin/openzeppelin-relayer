@@ -200,6 +200,11 @@ pub async fn get_transaction_by_id(
     transaction_id: String,
     state: web::ThinData<AppState>,
 ) -> Result<HttpResponse, ApiError> {
+    if relayer_id.is_empty() || transaction_id.is_empty() {
+        return Ok(HttpResponse::Ok().json(ApiResponse::<()>::error(
+            "Invalid relayer or transaction ID".to_string(),
+        )));
+    }
     // validation purpose only, checks if relayer exists
     get_relayer_by_id(relayer_id, &state).await?;
 

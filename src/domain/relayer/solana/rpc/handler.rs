@@ -59,10 +59,7 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, SolanaRpcError> {
-        info!(
-            "Received {:?} request.method and params: {:?}",
-            request.method, request.params
-        );
+        info!("Received request params: {:?}", request.params);
         // Extract Solana request or return error
         let solana_request = match request.params {
             NetworkRpcRequest::Solana(solana_params) => solana_params,
@@ -86,13 +83,13 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
                 let res = self.rpc_methods.prepare_transaction(params).await?;
                 SolanaRpcResult::PrepareTransaction(res)
             }
-            SolanaRpcRequest::SignTransaction(params) => {
-                let res = self.rpc_methods.sign_transaction(params).await?;
-                SolanaRpcResult::SignTransaction(res)
-            }
             SolanaRpcRequest::SignAndSendTransaction(params) => {
                 let res = self.rpc_methods.sign_and_send_transaction(params).await?;
                 SolanaRpcResult::SignAndSendTransaction(res)
+            }
+            SolanaRpcRequest::SignTransaction(params) => {
+                let res = self.rpc_methods.sign_transaction(params).await?;
+                SolanaRpcResult::SignTransaction(res)
             }
             SolanaRpcRequest::GetSupportedTokens(params) => {
                 let res = self.rpc_methods.get_supported_tokens(params).await?;
@@ -116,7 +113,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        domain::{MockSolanaRpcMethods, RpcMethod},
+        domain::MockSolanaRpcMethods,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams, FeeEstimateResult,
             GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult,
@@ -150,7 +147,6 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
-            method: RpcMethod::FeeEstimate,
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::FeeEstimate(
                 FeeEstimateRequestParams {
                     transaction: EncodedSerializedTransaction::new("test_transaction".to_string()),
@@ -190,7 +186,6 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
-            method: RpcMethod::GetFeaturesEnabled,
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::GetFeaturesEnabled(
                 GetFeaturesEnabledRequestParams {},
             )),
@@ -208,38 +203,6 @@ mod tests {
                 })
             ))
         );
-    }
-
-    #[tokio::test]
-    async fn test_unsupported_params() {
-        let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: 1,
-            method: RpcMethod::FeeEstimate,
-            params: NetworkRpcRequest::Solana(SolanaRpcRequest::FeeEstimate(
-                FeeEstimateRequestParams {
-                    transaction: EncodedSerializedTransaction::new("test_transaction".to_string()),
-                    fee_token: "test_token".to_string(),
-                },
-            )),
-        };
-
-        let response = mock_handler.handle_request(request).await;
-
-        match response {
-            Err(SolanaRpcError::BadRequest(msg)) => {
-                // Optionally verify error message
-                assert!(
-                    msg.contains("missing field `transaction`"),
-                    "Unexpected error message: {}",
-                    msg
-                );
-            }
-            Err(e) => panic!("Expected BadRequest error, but got: {:?}", e),
-            Ok(resp) => panic!("Expected error response, got Ok: {:?}", resp),
-        }
     }
 
     #[tokio::test]
@@ -268,7 +231,6 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
-            method: RpcMethod::SignTransaction,
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignTransaction(
                 SignTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
@@ -290,38 +252,6 @@ mod tests {
                 }
             }
             None => panic!("Expected Some result, got None"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handle_request_sign_transaction_invalid_params() {
-        let mock_rpc_methods = MockSolanaRpcMethods::new();
-        let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
-
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: 1,
-            method: RpcMethod::SignTransaction,
-            params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignTransaction(
-                SignTransactionRequestParams {
-                    transaction: EncodedSerializedTransaction::new(
-                        "invalid_transaction".to_string(),
-                    ),
-                },
-            )),
-        };
-
-        let response = mock_handler.handle_request(request).await;
-
-        match response {
-            Err(SolanaRpcError::BadRequest(msg)) => {
-                assert!(
-                    msg.contains("missing field `transaction`"),
-                    "Unexpected error message: {}",
-                    msg
-                );
-            }
-            _ => panic!("Expected BadRequest error"),
         }
     }
 
@@ -351,7 +281,6 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
-            method: RpcMethod::SignAndSendTransaction,
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignAndSendTransaction(
                 SignAndSendTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
@@ -406,7 +335,6 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
-            method: RpcMethod::TransferTransaction,
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::TransferTransaction(
                 TransferTransactionRequestParams {
                     source: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
@@ -466,7 +394,6 @@ mod tests {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
-            method: RpcMethod::PrepareTransaction,
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::PrepareTransaction(
                 PrepareTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),

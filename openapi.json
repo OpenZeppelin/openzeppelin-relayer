@@ -1073,13 +1073,6 @@
           }
         }
       },
-      "EvmRpcRequest": {
-        "oneOf": [
-          {
-            "type": "string"
-          }
-        ]
-      },
       "EvmRpcResult": {
         "oneOf": [
           {
@@ -1301,39 +1294,32 @@
         }
       },
       "JsonRpcRequest_NetworkRpcRequest": {
-        "type": "object",
-        "required": [
-          "jsonrpc",
-          "method",
-          "params",
-          "id"
-        ],
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "jsonrpc": {
-            "type": "string"
-          },
-          "method": {
-            "$ref": "#/components/schemas/RpcMethod"
-          },
-          "params": {
+        "allOf": [
+          {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/SolanaRpcRequest"
-              },
-              {
-                "$ref": "#/components/schemas/StellarRpcRequest"
-              },
-              {
-                "$ref": "#/components/schemas/EvmRpcRequest"
               }
             ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "jsonrpc",
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "jsonrpc": {
+                "type": "string"
+              }
+            }
           }
-        }
+        ]
       },
       "JsonRpcResponse_NetworkRpcResult": {
         "type": "object",
@@ -1384,12 +1370,6 @@
         "oneOf": [
           {
             "$ref": "#/components/schemas/SolanaRpcRequest"
-          },
-          {
-            "$ref": "#/components/schemas/StellarRpcRequest"
-          },
-          {
-            "$ref": "#/components/schemas/EvmRpcRequest"
           }
         ]
       },
@@ -1542,18 +1522,6 @@
             "type": "boolean"
           }
         }
-      },
-      "RpcMethod": {
-        "type": "string",
-        "enum": [
-          "feeEstimate",
-          "transferTransaction",
-          "prepareTransaction",
-          "signTransaction",
-          "signAndSendTransaction",
-          "getSupportedTokens",
-          "getFeaturesEnabled"
-        ]
       },
       "SignAndSendTransactionRequestParams": {
         "type": "object",
@@ -1767,25 +1735,137 @@
       "SolanaRpcRequest": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/FeeEstimateRequestParams"
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "feeEstimate"
+                ]
+              },
+              "params": {
+                "$ref": "#/components/schemas/FeeEstimateRequestParams"
+              }
+            },
+            "example": "feeEstimate"
           },
           {
-            "$ref": "#/components/schemas/TransferTransactionRequestParams"
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "transferTransaction"
+                ]
+              },
+              "params": {
+                "$ref": "#/components/schemas/TransferTransactionRequestParams"
+              }
+            },
+            "example": "transferTransaction"
           },
           {
-            "$ref": "#/components/schemas/PrepareTransactionRequestParams"
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "prepareTransaction"
+                ]
+              },
+              "params": {
+                "$ref": "#/components/schemas/PrepareTransactionRequestParams"
+              }
+            },
+            "example": "prepareTransaction"
           },
           {
-            "$ref": "#/components/schemas/SignTransactionRequestParams"
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "signTransaction"
+                ]
+              },
+              "params": {
+                "$ref": "#/components/schemas/SignTransactionRequestParams"
+              }
+            },
+            "example": "signTransaction"
           },
           {
-            "$ref": "#/components/schemas/SignAndSendTransactionRequestParams"
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "signAndSendTransaction"
+                ]
+              },
+              "params": {
+                "$ref": "#/components/schemas/SignAndSendTransactionRequestParams"
+              }
+            },
+            "example": "signAndSendTransaction"
           },
           {
-            "$ref": "#/components/schemas/GetSupportedTokensRequestParams"
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "getSupportedTokens"
+                ]
+              },
+              "params": {
+                "$ref": "#/components/schemas/GetSupportedTokensRequestParams"
+              }
+            },
+            "example": "getSupportedTokens"
           },
           {
-            "$ref": "#/components/schemas/GetFeaturesEnabledRequestParams"
+            "type": "object",
+            "required": [
+              "params",
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "getFeaturesEnabled"
+                ]
+              },
+              "params": {
+                "$ref": "#/components/schemas/GetFeaturesEnabledRequestParams"
+              }
+            },
+            "example": "getFeaturesEnabled"
           }
         ]
       },
@@ -1894,13 +1974,6 @@
             "minimum": 0
           }
         }
-      },
-      "StellarRpcRequest": {
-        "oneOf": [
-          {
-            "type": "string"
-          }
-        ]
       },
       "StellarRpcResult": {
         "oneOf": [

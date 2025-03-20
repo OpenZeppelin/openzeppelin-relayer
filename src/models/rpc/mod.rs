@@ -20,6 +20,7 @@ pub enum NetworkRpcResult {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(untagged)]
+#[serde(deny_unknown_fields)]
 pub enum NetworkRpcRequest {
     Solana(SolanaRpcRequest),
     Stellar(StellarRpcRequest),

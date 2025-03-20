@@ -8,7 +8,7 @@ pub enum StellarRpcResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
-#[serde(untagged)]
+#[serde(tag = "method", content = "params")]
 pub enum StellarRpcRequest {
     GenericRpcRequest(String),
 }

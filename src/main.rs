@@ -107,7 +107,6 @@ async fn main() -> Result<()> {
 
             if config.enable_swagger {
                 app = app
-                .service(web::scope("/api/v1"))
                 .service(
                     SwaggerUi::new("/swagger-ui/{_:.*}")
                         .url("/api-docs/openapi.json", ApiDoc::openapi()),

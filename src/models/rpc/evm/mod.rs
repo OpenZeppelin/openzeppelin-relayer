@@ -8,7 +8,7 @@ pub enum EvmRpcResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
-#[serde(untagged)]
+#[serde(tag = "method", content = "params")]
 pub enum EvmRpcRequest {
     GenericRpcRequest(String),
 }

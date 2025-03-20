@@ -24,6 +24,10 @@ use utoipa::ToSchema;
     security(
         ("bearer_auth" = [])
     ),
+    params(
+        ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),
+        ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)")
+    ),
     responses(
         (status = 200, description = "Relayers list", body = ApiResponse<Vec<RelayerResponse>>),
         (status = 401, description = "Unauthorized"),
@@ -40,10 +44,10 @@ async fn list_relayers(
 /// Retrieves details of a specific relayer by ID.
 #[utoipa::path(
     get,
-    path = "/v1/relayers/{relayer_id}",
+    path = "/relayers/{relayer_id}",
     tag = "Relayers",
     security(
-        ("bearer_auth" = [])  // Requires Authorization: Bearer <token>
+        ("bearer_auth" = []) 
     ),
     responses(
         (status = 200, description = "success", body = ApiResponse<RelayerResponse>),
@@ -138,7 +142,7 @@ async fn get_relayer_balance(
     )
 )]
 #[post("/relayers/{relayer_id}/transactions")]
-async fn send_relayer_transaction(
+async fn send_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
     data: web::ThinData<AppState>,
@@ -170,7 +174,7 @@ pub struct TransactionPath {
     )
 )]
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
-async fn get_relayer_transaction_by_id(
+async fn get_transaction_by_id(
     path: web::Path<TransactionPath>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
@@ -188,7 +192,7 @@ async fn get_relayer_transaction_by_id(
     ),
     params(
         ("relayer_id" = String, Path, description = "The ID of the relayer"),
-        ("nonce" = String, Path, description = "The nonce of the transaction")
+        ("nonce" = usize, Path, description = "The nonce of the transaction")
     ),
     responses(
         (status = 200, description = "Transaction response", body = ApiResponse<TransactionResponse>),
@@ -196,7 +200,7 @@ async fn get_relayer_transaction_by_id(
     )
 )]
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
-async fn get_relayer_transaction_by_nonce(
+async fn get_transaction_by_nonce(
     params: web::Path<(String, u64)>,
     data: web::ThinData<AppState>,
 ) -> impl Responder {
@@ -212,13 +216,18 @@ async fn get_relayer_transaction_by_nonce(
     security(
         ("bearer_auth" = [])
     ),
+    params(
+        ("relayer_id" = String, Path, description = "The ID of the relayer"),
+        ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),
+        ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)")
+    ),
     responses(
         (status = 200, description = "Transaction list response", body = ApiResponse<Vec<TransactionResponse>>),
         (status = 401, description = "Unauthorized"),
     )
 )]
 #[get("/relayers/{relayer_id}/transactions")]
-async fn list_relayer_transactions(
+async fn list_transactions(
     relayer_id: web::Path<String>,
     query: web::Query<PaginationQuery>,
     data: web::ThinData<AppState>,
@@ -261,7 +270,7 @@ async fn delete_pending_transactions(
     )
 )]
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
-async fn cancel_relayer_transaction(
+async fn cancel_transaction(
     relayer_id: web::Path<String>,
     transaction_id: web::Path<String>,
     data: web::ThinData<AppState>,
@@ -283,7 +292,7 @@ async fn cancel_relayer_transaction(
     )
 )]
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
-async fn replace_relayer_transaction(
+async fn replace_transaction(
     relayer_id: web::Path<String>,
     transaction_id: web::Path<String>,
     data: web::ThinData<AppState>,
@@ -305,7 +314,7 @@ async fn replace_relayer_transaction(
     )
 )]
 #[post("/relayers/{relayer_id}/sign")]
-async fn relayer_sign(
+async fn sign(
     relayer_id: web::Path<String>,
     req: web::Json<SignDataRequest>,
     data: web::ThinData<AppState>,
@@ -327,7 +336,7 @@ async fn relayer_sign(
     )
 )]
 #[post("/relayers/{relayer_id}/sign-typed-data")]
-async fn relayer_sign_typed_data(
+async fn sign_typed_data(
     relayer_id: web::Path<String>,
     req: web::Json<SignTypedDataRequest>,
     data: web::ThinData<AppState>,
@@ -343,13 +352,23 @@ async fn relayer_sign_typed_data(
     security(
         ("bearer_auth" = [])
     ),
+    request_body(content = JsonRpcRequest<NetworkRpcRequest>, description = "JSON-RPC request with method and parameters", content_type = "application/json", example = json!({
+        "jsonrpc": "2.0",
+        "method": "feeEstimate",
+        "params": {
+            "network": "solana",
+            "transaction": "base64_encoded_transaction",
+            "fee_token": "SOL"
+        },
+        "id": 1
+    })),
     responses(
         (status = 200, description = "RPC", body = JsonRpcResponse<NetworkRpcResult>),
         (status = 401, description = "Unauthorized"),
     )
 )]
 #[post("/relayers/{relayer_id}/rpc")]
-async fn relayer_rpc(
+async fn rpc(
     relayer_id: web::Path<String>,
     req: web::Json<JsonRpcRequest<NetworkRpcRequest>>,
     data: web::ThinData<AppState>,
@@ -363,14 +382,14 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(get_relayer);
     cfg.service(get_relayer_balance);
     cfg.service(update_relayer);
-    cfg.service(get_relayer_transaction_by_nonce);
-    cfg.service(get_relayer_transaction_by_id);
-    cfg.service(send_relayer_transaction);
-    cfg.service(list_relayer_transactions);
+    cfg.service(get_transaction_by_nonce);
+    cfg.service(get_transaction_by_id);
+    cfg.service(send_transaction);
+    cfg.service(list_transactions);
     cfg.service(get_relayer_status);
-    cfg.service(relayer_sign_typed_data);
-    cfg.service(relayer_sign);
-    cfg.service(cancel_relayer_transaction);
+    cfg.service(sign_typed_data);
+    cfg.service(sign);
+    cfg.service(cancel_transaction);
     cfg.service(delete_pending_transactions);
-    cfg.service(relayer_rpc);
+    cfg.service(rpc);
 }

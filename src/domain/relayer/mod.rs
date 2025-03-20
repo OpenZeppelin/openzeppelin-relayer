@@ -457,7 +457,7 @@ impl RpcMethod {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct JsonRpcRequest<T> {
     pub jsonrpc: String,
-    pub method: RpcMethod,
+    #[serde(flatten)]
     pub params: T,
     pub id: u64,
 }
@@ -520,6 +520,7 @@ pub struct JsonRpcError {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct BalanceResponse {
     pub balance: u128,
+    #[schema(example = "wei")]
     pub unit: String,
 }
 
