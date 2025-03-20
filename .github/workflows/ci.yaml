@@ -229,8 +229,7 @@ jobs:
         run: cargo hack llvm-cov --no-report --feature-powerset --locked --lib
 
       - name: Generate Unit Coverage Report
-        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path unit-lcov.info
-          --lib
+        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path unit-lcov.info --lib
 
       # Integration tests coverage
       - name: Run Integration Tests
@@ -240,8 +239,7 @@ jobs:
         run: cargo hack llvm-cov --no-report --feature-powerset --locked --test integrations
 
       - name: Generate Integration Coverage Report
-        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path integration-lcov.info
-          --test integrations
+        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path integration-lcov.info --test integrations
 
       # Properties tests coverage
       - name: Run Properties Tests
@@ -251,8 +249,7 @@ jobs:
         run: cargo hack llvm-cov --no-report --feature-powerset --locked --test properties
 
       - name: Generate Properties Coverage Report
-        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path properties-lcov.info
-          --test properties
+        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path properties-lcov.info --test properties
 
       # Upload unit coverage
       - name: Upload Unit Coverage to Codecov
