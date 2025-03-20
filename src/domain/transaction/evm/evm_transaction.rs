@@ -9,10 +9,16 @@ use eyre::Result;
 use log::{debug, info, warn};
 use std::sync::Arc;
 
-use super::PriceParams;
+use super::{make_noop, PriceParams};
 use crate::{
     constants::DEFAULT_TX_VALID_TIMESPAN,
-    domain::{is_transaction_not_yet_mined, make_noop, transaction::Transaction, PriceCalculator},
+    domain::{
+        is_transaction_not_yet_mined,
+        transaction::{
+            evm::price_calculator::{PriceCalculator, PriceCalculatorTrait},
+            Transaction,
+        },
+    },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         evm::Speed, produce_transaction_update_notification_payload, EvmNetwork,
@@ -23,45 +29,38 @@ use crate::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    services::{
-        EvmGasPriceService, EvmGasPriceServiceTrait, EvmProvider, EvmProviderTrait, EvmSigner,
-        Signer,
-    },
+    services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
+    utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
-use crate::domain::transaction::evm::price_calculator::PriceCalculatorTrait;
-
 #[allow(dead_code)]
-pub struct EvmRelayerTransaction<P, R, T, J, G, S, C, PC>
+pub struct EvmRelayerTransaction<P, R, T, J, S, C, PC>
 where
     P: EvmProviderTrait,
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    G: EvmGasPriceServiceTrait,
     S: Signer,
     C: TransactionCounterTrait,
     PC: PriceCalculatorTrait,
 {
-    relayer: RelayerRepoModel,
     provider: P,
     relayer_repository: Arc<R>,
     transaction_repository: Arc<T>,
-    transaction_counter_service: Arc<C>,
     job_producer: Arc<J>,
-    gas_price_service: Arc<G>,
-    price_calculator: Arc<PC>,
     signer: S,
+    relayer: RelayerRepoModel,
+    transaction_counter_service: Arc<C>,
+    price_calculator: PC,
 }
 
 #[allow(dead_code, clippy::too_many_arguments)]
-impl<P, R, T, J, G, S, C, PC> EvmRelayerTransaction<P, R, T, J, G, S, C, PC>
+impl<P, R, T, J, S, C, PC> EvmRelayerTransaction<P, R, T, J, S, C, PC>
 where
     P: EvmProviderTrait,
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    G: EvmGasPriceServiceTrait,
     S: Signer,
     C: TransactionCounterTrait,
     PC: PriceCalculatorTrait,
@@ -76,7 +75,7 @@ where
     /// * `transaction_repository` - Storage for transaction repository.
     /// * `transaction_counter_service` - Service for managing transaction counters.
     /// * `job_producer` - Producer for job queue.
-    /// * `gas_price_service` - Service for gas price management.
+    /// * `price_calculator` - Price calculator for gas price management.
     /// * `signer` - The EVM signer.
     ///
     /// # Returns
@@ -89,8 +88,7 @@ where
         transaction_repository: Arc<T>,
         transaction_counter_service: Arc<C>,
         job_producer: Arc<J>,
-        gas_price_service: Arc<G>,
-        price_calculator: Arc<PC>,
+        price_calculator: PC,
         signer: S,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
@@ -100,7 +98,6 @@ where
             transaction_repository,
             transaction_counter_service,
             job_producer,
-            gas_price_service,
             price_calculator,
             signer,
         })
@@ -296,11 +293,6 @@ where
         }
     }
 
-    /// Returns a reference to the gas price service.
-    pub fn gas_price_service(&self) -> &Arc<G> {
-        &self.gas_price_service
-    }
-
     /// Returns a reference to the provider.
     pub fn provider(&self) -> &P {
         &self.provider
@@ -357,54 +349,6 @@ where
         Ok(updated_tx)
     }
 
-    /// Validates a transaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `_tx` - The transaction model to validate.
-    ///
-    /// # Returns
-    ///
-    /// A result containing a boolean indicating validity or a `TransactionError`.
-    async fn validate_transaction(
-        &self,
-        _tx: TransactionRepoModel,
-    ) -> Result<bool, TransactionError> {
-        Ok(true)
-    }
-
-    /// Replaces a transaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - The transaction model to replace.
-    ///
-    /// # Returns
-    ///
-    /// A result containing the transaction model or a `TransactionError`.
-    async fn replace_transaction(
-        &self,
-        tx: TransactionRepoModel,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        Ok(tx)
-    }
-
-    /// Signs a transaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - The transaction model to sign.
-    ///
-    /// # Returns
-    ///
-    /// A result containing the transaction model or a `TransactionError`.
-    async fn sign_transaction(
-        &self,
-        tx: TransactionRepoModel,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        Ok(tx)
-    }
-
     /// Gets the age of a transaction since it was sent
     fn get_age_of_sent_at(&self, tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
         let now = Utc::now();
@@ -432,10 +376,12 @@ where
         let age = self.get_age_of_sent_at(tx)?;
 
         // Check for speed and determine timeout
-        let timeout =
-            self.get_resubmit_timeout_for_speed(&tx.network_data.get_evm_transaction_data()?.speed);
+        let timeout = match tx.network_data.get_evm_transaction_data() {
+            Ok(data) => get_resubmit_timeout_for_speed(&data.speed),
+            Err(e) => return Err(e),
+        };
 
-        let timeout_with_backoff = self.get_resubmit_timeout_with_backoff(timeout, tx.hashes.len());
+        let timeout_with_backoff = get_resubmit_timeout_with_backoff(timeout, tx.hashes.len());
 
         // If the transaction has been waiting for more than our timeout, resubmit it
         if age > Duration::milliseconds(timeout_with_backoff) {
@@ -445,42 +391,15 @@ where
 
         Ok(false)
     }
-
-    /// Gets the appropriate resubmission timeout based on transaction speed
-    fn get_resubmit_timeout_for_speed(&self, speed: &Option<Speed>) -> i64 {
-        // Default timeout (30 seconds for regular transactions)
-        const DEFAULT_TIMEOUT: i64 = 30_000;
-        // Faster timeout (15 seconds for faster transactions)
-        const FAST_TIMEOUT: i64 = 15_000;
-        // Slow timeout (60 seconds for slower transactions)
-        const SLOW_TIMEOUT: i64 = 60_000;
-
-        match speed {
-            Some(Speed::Fast) | Some(Speed::Fastest) => FAST_TIMEOUT,
-            Some(Speed::Average) => DEFAULT_TIMEOUT,
-            Some(Speed::SafeLow) => SLOW_TIMEOUT,
-            None => DEFAULT_TIMEOUT,
-        }
-    }
-
-    /// Applies exponential backoff to resubmission timeout based on number of attempts
-    fn get_resubmit_timeout_with_backoff(&self, base_timeout: i64, attempts: usize) -> i64 {
-        // Apply exponential backoff, but cap at a reasonable maximum (5 minutes)
-        const MAX_TIMEOUT: i64 = 300_000;
-
-        let multiplier = 2_i64.pow(attempts.min(10) as u32);
-        (base_timeout * multiplier).min(MAX_TIMEOUT)
-    }
 }
 
 #[async_trait]
-impl<P, R, T, J, G, S, C, PC> Transaction for EvmRelayerTransaction<P, R, T, J, G, S, C, PC>
+impl<P, R, T, J, S, C, PC> Transaction for EvmRelayerTransaction<P, R, T, J, S, C, PC>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    G: EvmGasPriceServiceTrait + Send + Sync,
     S: Signer + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     PC: PriceCalculatorTrait + Send + Sync,
@@ -507,6 +426,7 @@ where
             .price_calculator
             .get_transaction_price_params(&evm_data, relayer)
             .await?;
+
         debug!("Gas price: {:?}", price_params.gas_price);
         // increment the nonce
         let nonce = self
@@ -529,9 +449,17 @@ where
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
+        // Track the transaction hash
+        let mut hashes = tx.hashes.clone();
+        if let Some(hash) = updated_evm_data.hash.clone() {
+            hashes.push(hash);
+        }
+
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Sent),
             network_data: Some(NetworkTransactionData::Evm(updated_evm_data)),
+            priced_at: Some(Utc::now().to_rfc3339()),
+            hashes: Some(hashes),
             ..Default::default()
         };
 
@@ -587,7 +515,7 @@ where
             .partial_update(tx.id.clone(), update)
             .await?;
 
-        // after submitting the transaction, we need to handle the transaction status
+        // Schedule status check
         self.job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
@@ -622,10 +550,6 @@ where
             TransactionStatus::Submitted => {
                 // Check if transaction needs resubmission
                 if self.should_resubmit(&tx).await? {
-                    info!(
-                        "Transaction pending for too long, resubmitting: {:?}",
-                        tx.id
-                    );
                     self.job_producer
                         .produce_submit_transaction_job(
                             TransactionSend::resubmit(tx.id.clone(), tx.relayer_id.clone()),
@@ -682,22 +606,6 @@ where
         }
     }
 
-    /// Validates a transaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `_tx` - The transaction model to validate.
-    ///
-    /// # Returns
-    ///
-    /// A result containing a boolean indicating validity or a `TransactionError`.
-    async fn validate_transaction(
-        &self,
-        _tx: TransactionRepoModel,
-    ) -> Result<bool, TransactionError> {
-        Ok(true)
-    }
-
     /// Resubmits a transaction with updated parameters.
     ///
     /// # Arguments
@@ -718,6 +626,14 @@ where
             .price_calculator
             .calculate_bumped_gas_price(&tx, self.relayer())
             .await?;
+
+        if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
+            warn!(
+                "Bumped gas price does not meet minimum requirement, skipping resubmission: {:?}",
+                bumped_price_params
+            );
+            return Ok(tx);
+        }
 
         // Get transaction data
         let evm_data = tx.network_data.get_evm_transaction_data()?;
@@ -883,15 +799,36 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         Ok(tx)
     }
-}
 
+    /// Validates a transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `_tx` - The transaction model to validate.
+    ///
+    /// # Returns
+    ///
+    /// A result containing a boolean indicating validity or a `TransactionError`.
+    async fn validate_transaction(
+        &self,
+        _tx: TransactionRepoModel,
+    ) -> Result<bool, TransactionError> {
+        Ok(true)
+    }
+}
+// P: EvmProviderTrait,
+// R: Repository<RelayerRepoModel, String>,
+// T: TransactionRepository,
+// J: JobProducerTrait,
+// S: Signer,
+// C: TransactionCounterTrait,
+// PC: PriceCalculatorTrait,
 // we define concrete type for the evm transaction
 pub type DefaultEvmTransaction = EvmRelayerTransaction<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     crate::repositories::transaction::InMemoryTransactionRepository,
     JobProducer,
-    EvmGasPriceService<EvmProvider>,
     EvmSigner,
     InMemoryTransactionCounter,
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
@@ -901,19 +838,36 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
 mod tests {
     use super::*;
     use crate::{
-        domain::MockPriceCalculatorTrait,
+        domain::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
-        models::{
-            evm::Speed, EvmNamedNetwork, EvmTransactionData, NetworkType, RelayerNetworkPolicy,
-            U256,
-        },
+        models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy, U256},
         repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
-        services::{MockEvmGasPriceServiceTrait, MockEvmProviderTrait, MockSigner},
+        services::{MockEvmProviderTrait, MockSigner},
     };
     use chrono::{Duration, Utc};
+    use futures::future::ready;
+    use mockall::{mock, predicate::*};
 
-    // Create a concrete type alias for testing
     type TestEvmTransaction = DefaultEvmTransaction;
+
+    // Create a mock for PriceCalculatorTrait
+    mock! {
+        pub PriceCalculator {}
+        #[async_trait]
+        impl PriceCalculatorTrait for PriceCalculator {
+            async fn get_transaction_price_params(
+                &self,
+                tx_data: &EvmTransactionData,
+                relayer: &RelayerRepoModel
+            ) -> Result<PriceParams, TransactionError>;
+
+            async fn calculate_bumped_gas_price(
+                &self,
+                tx: &TransactionRepoModel,
+                relayer: &RelayerRepoModel,
+            ) -> Result<PriceParams, TransactionError>;
+        }
+    }
 
     // Helper to create test transactions
     #[allow(dead_code)]
@@ -944,7 +898,7 @@ mod tests {
                 raw: None,
             }),
             priced_at: None,
-            hashes: vec![],
+            hashes: Vec::new(),
             noop_count: None,
         }
     }
@@ -1134,7 +1088,7 @@ mod tests {
         let mut mock_provider = MockEvmProviderTrait::new();
         let mut mock_signer = MockSigner::new();
         let mut mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_gas_price_service = MockEvmGasPriceServiceTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
         let mut counter_service = MockTransactionCounterTrait::new();
 
         // Create test relayer and transaction
@@ -1142,39 +1096,21 @@ mod tests {
         let test_tx = create_test_transaction();
 
         // Set up expectations for the mocks
-
-        // Gas price service should return gas price params
-        mock_gas_price_service
-            .expect_get_prices_from_json_rpc()
-            .returning(|| {
-                Box::pin(async {
-                    Ok(crate::services::gas::evm_gas_price::GasPrices {
-                        legacy_prices: crate::services::gas::evm_gas_price::SpeedPrices {
-                            safe_low: 10000000000, // 10 Gwei
-                            average: 20000000000,  // 20 Gwei
-                            fast: 30000000000,     // 30 Gwei
-                            fastest: 40000000000,  // 40 Gwei
-                        },
-                        max_priority_fee_per_gas:
-                            crate::services::gas::evm_gas_price::SpeedPrices {
-                                safe_low: 1000000000, // 1 Gwei
-                                average: 2000000000,  // 2 Gwei
-                                fast: 3000000000,     // 3 Gwei
-                                fastest: 4000000000,  // 4 Gwei
-                            },
-                        base_fee_per_gas: 5000000000, // 5 Gwei
-                    })
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .return_once(move |_, _| {
+                Ok(PriceParams {
+                    gas_price: Some(30000000000), // 30 Gwei
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    is_min_bumped: None,
                 })
             });
-
-        mock_gas_price_service
-            .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
         // Provider should be called for balance check
         mock_provider
             .expect_get_balance()
-            .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) })); // 1 ETH
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64))))); // 1 ETH
 
         // Transaction counter should increment and return a nonce
         counter_service
@@ -1183,8 +1119,8 @@ mod tests {
 
         // Signer should be called to sign the transaction
         mock_signer.expect_sign_transaction().returning(|_| {
-            Box::pin(async {
-                Ok(crate::domain::relayer::SignTransactionResponse::Evm(
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
                     crate::domain::relayer::SignTransactionResponseEvm {
                         hash: "0xtxhash".to_string(),
                         signature: crate::models::EvmTransactionDataSignature {
@@ -1195,8 +1131,8 @@ mod tests {
                         },
                         raw: vec![1, 2, 3],
                     },
-                ))
-            })
+                ),
+            )))
         });
 
         // Transaction repository should update the transaction
@@ -1213,10 +1149,11 @@ mod tests {
         // Job producer should create a submit transaction job
         mock_job_producer
             .expect_produce_submit_transaction_job()
-            .returning(|_, _| Box::pin(async { Ok(()) }));
+            .returning(|_, _| Box::pin(ready(Ok(()))));
         mock_job_producer
             .expect_produce_send_notification_job()
-            .returning(|_, _| Box::pin(async { Ok(()) }));
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
         // Set up EVM transaction with the mocks
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -1225,8 +1162,7 @@ mod tests {
             transaction_repository: Arc::new(mock_transaction),
             transaction_counter_service: Arc::new(counter_service),
             job_producer: Arc::new(mock_job_producer),
-            gas_price_service: Arc::new(mock_gas_price_service),
-            price_calculator: Arc::new(MockPriceCalculatorTrait::new()),
+            price_calculator: mock_price_calculator,
             signer: mock_signer,
         };
 

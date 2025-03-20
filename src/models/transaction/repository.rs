@@ -36,8 +36,11 @@ pub struct TransactionUpdateRequest {
     pub sent_at: Option<String>,
     pub confirmed_at: Option<String>,
     pub network_data: Option<NetworkTransactionData>,
+    /// Timestamp when gas price was determined
     pub priced_at: Option<String>,
+    /// History of transaction hashes
     pub hashes: Option<Vec<String>>,
+    /// Number of no-ops in the transaction
     pub noop_count: Option<u32>,
 }
 

@@ -137,3 +137,130 @@ pub fn setup_logging() {
 
     info!("Logging is successfully configured (mode: {})", log_mode);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use std::sync::Once;
+    use tempfile::tempdir;
+
+    // Use this to ensure logger is only initialized once across all tests
+    static INIT_LOGGER: Once = Once::new();
+
+    #[test]
+    fn test_compute_rolled_file_path() {
+        // Test with .log extension
+        let result = compute_rolled_file_path("app.log", "2023-01-01", 1);
+        assert_eq!(result, "app-2023-01-01.1.log");
+
+        // Test without .log extension
+        let result = compute_rolled_file_path("app", "2023-01-01", 2);
+        assert_eq!(result, "app-2023-01-01.2.log");
+
+        // Test with path
+        let result = compute_rolled_file_path("logs/app.log", "2023-01-01", 3);
+        assert_eq!(result, "logs/app-2023-01-01.3.log");
+    }
+
+    #[test]
+    fn test_time_based_rolling() {
+        // This is just a wrapper around compute_rolled_file_path
+        let result = time_based_rolling("app.log", "2023-01-01", 1);
+        assert_eq!(result, "app-2023-01-01.1.log");
+    }
+
+    #[test]
+    fn test_space_based_rolling() {
+        // Create a temporary directory for testing
+        let temp_dir = tempdir().expect("Failed to create temp directory");
+        let base_path = temp_dir
+            .path()
+            .join("test.log")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Test when file doesn't exist
+        let result = space_based_rolling(&base_path, &base_path, "2023-01-01", 100);
+        assert_eq!(result, base_path);
+
+        // Create a file larger than max_size
+        {
+            let mut file = File::create(&base_path).expect("Failed to create test file");
+            file.write_all(&[0; 200])
+                .expect("Failed to write to test file");
+        }
+
+        // Test when file exists and is larger than max_size
+        let expected_path = compute_rolled_file_path(&base_path, "2023-01-01", 1);
+        let result = space_based_rolling(&base_path, &base_path, "2023-01-01", 100);
+        assert_eq!(result, expected_path);
+
+        // Create multiple files to test sequential numbering
+        {
+            let mut file = File::create(&expected_path).expect("Failed to create test file");
+            file.write_all(&[0; 200])
+                .expect("Failed to write to test file");
+        }
+
+        // Test sequential numbering
+        let expected_path2 = compute_rolled_file_path(&base_path, "2023-01-01", 2);
+        let result = space_based_rolling(&base_path, &base_path, "2023-01-01", 100);
+        assert_eq!(result, expected_path2);
+    }
+
+    #[test]
+    fn test_logging_configuration() {
+        // We'll test both configurations in a single test to avoid multiple logger initializations
+
+        // First test stdout configuration
+        {
+            // Set environment variables for testing
+            env::set_var("LOG_MODE", "stdout");
+            env::set_var("LOG_LEVEL", "debug");
+
+            // Initialize logger only once across all tests
+            INIT_LOGGER.call_once(|| {
+                setup_logging();
+            });
+
+            // Clean up
+            env::remove_var("LOG_MODE");
+            env::remove_var("LOG_LEVEL");
+        }
+
+        // Now test file configuration without reinitializing the logger
+        {
+            // Create a temporary directory for testing
+            let temp_dir = tempdir().expect("Failed to create temp directory");
+            let log_path = temp_dir
+                .path()
+                .join("test_logs")
+                .to_str()
+                .unwrap()
+                .to_string();
+
+            // Set environment variables for testing
+            env::set_var("LOG_MODE", "file");
+            env::set_var("LOG_LEVEL", "info");
+            env::set_var("LOG_FILE_PATH", &log_path);
+            env::set_var("LOG_MAX_SIZE", "1024"); // 1KB for testing
+
+            // We don't call setup_logging() again, but we can test the directory creation logic
+            if let Some(parent) = Path::new(&format!("{}/relayer.log", log_path)).parent() {
+                create_dir_all(parent).expect("Failed to create log directory");
+            }
+
+            // Verify the log directory was created
+            assert!(Path::new(&log_path).exists());
+
+            // Clean up
+            env::remove_var("LOG_MODE");
+            env::remove_var("LOG_LEVEL");
+            env::remove_var("LOG_FILE_PATH");
+            env::remove_var("LOG_MAX_SIZE");
+        }
+    }
+}

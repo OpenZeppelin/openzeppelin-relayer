@@ -392,8 +392,7 @@ impl RelayerTransactionFactory {
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
-                let gas_price_service =
-                    Arc::new(EvmGasPriceService::new(evm_provider.clone(), network));
+
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let price_calculator =
                     PriceCalculator::new(EvmGasPriceService::new(evm_provider.clone(), network));
@@ -405,8 +404,7 @@ impl RelayerTransactionFactory {
                     transaction_repository,
                     transaction_counter_store,
                     job_producer,
-                    gas_price_service,
-                    Arc::new(price_calculator),
+                    price_calculator,
                     signer_service,
                 )?))
             }
