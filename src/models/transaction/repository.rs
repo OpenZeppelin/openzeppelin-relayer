@@ -1,5 +1,5 @@
 use crate::{
-    domain::{PriceParams, SignTransactionResponseEvm},
+    domain::{price_calculator::PriceParams, SignTransactionResponseEvm},
     models::{
         AddressError, EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError,
         RelayerRepoModel, SignerError, TransactionError, U256,

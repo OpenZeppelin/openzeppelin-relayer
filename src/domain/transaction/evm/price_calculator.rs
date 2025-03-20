@@ -64,6 +64,42 @@ pub struct PriceCalculator<G: EvmGasPriceServiceTrait> {
     gas_price_service: G,
 }
 
+#[async_trait::async_trait]
+pub trait PriceCalculatorTrait {
+    /// Calculates transaction price parameters based on the transaction type and network conditions.
+    async fn get_transaction_price_params(
+        &self,
+        tx_data: &EvmTransactionData,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError>;
+
+    /// Computes bumped gas price for transaction resubmission, factoring in network conditions.
+    async fn calculate_bumped_gas_price(
+        &self,
+        tx: &TransactionRepoModel,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError>;
+}
+
+#[async_trait::async_trait]
+impl<G: EvmGasPriceServiceTrait + Send + Sync> PriceCalculatorTrait for PriceCalculator<G> {
+    async fn get_transaction_price_params(
+        &self,
+        tx_data: &EvmTransactionData,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError> {
+        self.get_transaction_price_params(tx_data, relayer).await
+    }
+
+    async fn calculate_bumped_gas_price(
+        &self,
+        tx: &TransactionRepoModel,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError> {
+        self.calculate_bumped_gas_price(tx, relayer).await
+    }
+}
+
 impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
     pub fn new(gas_price_service: G) -> Self {
         Self { gas_price_service }
@@ -370,11 +406,6 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             self.fetch_eip1559_speed_params(speed).await
         }
     }
-
-    /// Calculates EIP1559 gas prices based on the requested speed.
-    ///
-    /// Uses the gas price service to fetch current network conditions and calculates
-    /// appropriate max fee and priority fee based on the speed setting.
     async fn fetch_eip1559_speed_params(
         &self,
         speed: &Speed,

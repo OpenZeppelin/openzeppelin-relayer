@@ -18,11 +18,11 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{
-        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        RelayerRepositoryStorage,
     },
     services::{
         get_solana_network_provider_from_str, EvmGasPriceService, EvmProvider, EvmSignerFactory,
-        TransactionCounterService,
     },
 };
 use async_trait::async_trait;
@@ -38,6 +38,8 @@ pub use evm::*;
 pub use solana::*;
 pub use stellar::*;
 pub use util::*;
+
+use self::price_calculator::PriceCalculator;
 
 /// A trait that defines the operations for handling transactions across different networks.
 #[async_trait]
@@ -160,7 +162,7 @@ pub trait Transaction {
 
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
-    Evm(EvmRelayerTransaction),
+    Evm(DefaultEvmTransaction),
     Solana(SolanaRelayerTransaction),
     Stellar(StellarRelayerTransaction),
 }
@@ -347,7 +349,7 @@ pub trait RelayerTransactionFactoryTrait {
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
     fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
@@ -374,7 +376,7 @@ impl RelayerTransactionFactory {
     pub fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -393,22 +395,17 @@ impl RelayerTransactionFactory {
                     })?;
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
-                let transaction_counter_service = TransactionCounterService::new(
-                    relayer.id.clone(),
-                    relayer.address.clone(),
-                    transaction_counter_store,
-                );
 
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let price_calculator =
                     PriceCalculator::new(EvmGasPriceService::new(evm_provider.clone(), network));
 
-                Ok(NetworkTransaction::Evm(EvmRelayerTransaction::new(
+                Ok(NetworkTransaction::Evm(DefaultEvmTransaction::new(
                     relayer,
                     evm_provider,
                     relayer_repository,
                     transaction_repository,
-                    transaction_counter_service,
+                    transaction_counter_store,
                     job_producer,
                     price_calculator,
                     signer_service,

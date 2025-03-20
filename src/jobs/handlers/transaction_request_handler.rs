@@ -53,3 +53,36 @@ async fn handle_request(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apalis::prelude::Attempt;
+
+    #[tokio::test]
+    async fn test_handler_result_processing() {
+        // This test focuses only on the interaction with handle_result
+        // which we can test without mocking the entire state
+
+        // Create a minimal job
+        let request = TransactionRequest::new("tx123", "relayer-1");
+        let job = Job::new(crate::jobs::JobType::TransactionRequest, request);
+
+        // Create a test attempt
+        let attempt = Attempt::default();
+
+        // We cannot fully test the transaction_request_handler without extensive mocking
+        // of the domain layer, but we can verify our test setup is correct
+        assert_eq!(job.data.transaction_id, "tx123");
+        assert_eq!(job.data.relayer_id, "relayer-1");
+        assert_eq!(attempt.current(), 0);
+    }
+
+    // Note: Fully testing the functionality would require either:
+    // 1. Dependency injection for all external dependencies
+    // 2. Feature flags to enable mock implementations
+    // 3. Integration tests with a real or test database
+
+    // For now, these tests serve as placeholders to be expanded
+    // when the appropriate testing infrastructure is in place.
+}

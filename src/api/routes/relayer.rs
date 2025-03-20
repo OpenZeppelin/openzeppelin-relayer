@@ -198,7 +198,7 @@ mod tests {
     // Simple mock for AppState
     async fn get_test_app_state() -> AppState {
         AppState {
-            relayer_repository: Arc::new(RelayerRepositoryStorage::InMemory(
+            relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
                 InMemoryRelayerRepository::new(),
             )),
             transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
