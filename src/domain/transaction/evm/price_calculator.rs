@@ -40,10 +40,7 @@ use crate::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
         TransactionError,
     },
-    services::{
-        gas::{EvmGasPriceService, EvmGasPriceServiceTrait},
-        provider::evm::EvmProviderTrait,
-    },
+    services::{gas::EvmGasPriceServiceTrait, provider::evm::EvmProviderTrait},
 };
 
 type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
@@ -71,10 +68,10 @@ impl PriceCalculator {
     ///
     /// # Returns
     /// * `Result<TransactionPriceParams, TransactionError>` - Calculated price parameters or error
-    pub async fn get_transaction_price_params<P: EvmProviderTrait>(
+    pub async fn get_transaction_price_params<P: EvmProviderTrait, G: EvmGasPriceServiceTrait>(
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
-        gas_price_service: &EvmGasPriceService<P>,
+        gas_price_service: &G,
         provider: &P,
     ) -> Result<TransactionPriceParams, TransactionError> {
         let price_params;
@@ -85,7 +82,7 @@ impl PriceCalculator {
             price_params = Self::handle_eip1559_transaction(tx_data)?;
         } else if tx_data.is_speed() {
             price_params =
-                Self::handle_speed_transaction(tx_data, relayer, gas_price_service).await?;
+                Self::handle_speed_transaction::<G>(tx_data, relayer, gas_price_service).await?;
         } else {
             return Err(TransactionError::NotSupported(
                 "Invalid transaction type".to_string(),
@@ -162,10 +159,10 @@ impl PriceCalculator {
     ///
     /// Determines whether to use legacy or EIP1559 pricing based on network configuration
     /// and calculates appropriate gas prices based on the requested speed.
-    async fn handle_speed_transaction<P: EvmProviderTrait>(
+    async fn handle_speed_transaction<G: EvmGasPriceServiceTrait>(
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
-        gas_price_service: &EvmGasPriceService<P>,
+        gas_price_service: &G,
     ) -> Result<PriceParams, TransactionError> {
         let speed = tx_data
             .speed
@@ -178,9 +175,9 @@ impl PriceCalculator {
             || gas_price_service.network().is_legacy();
 
         if use_legacy {
-            Self::handle_legacy_speed(speed, gas_price_service).await
+            Self::handle_legacy_speed::<G>(speed, gas_price_service).await
         } else {
-            Self::handle_eip1559_speed(speed, gas_price_service).await
+            Self::handle_eip1559_speed::<G>(speed, gas_price_service).await
         }
     }
 
@@ -188,9 +185,9 @@ impl PriceCalculator {
     ///
     /// Uses the gas price service to fetch current network conditions and calculates
     /// appropriate max fee and priority fee based on the speed setting.
-    async fn handle_eip1559_speed<P: EvmGasPriceServiceTrait>(
+    async fn handle_eip1559_speed<G: EvmGasPriceServiceTrait>(
         speed: &Speed,
-        gas_price_service: &P,
+        gas_price_service: &G,
     ) -> Result<PriceParams, TransactionError> {
         let prices = gas_price_service.get_prices_from_json_rpc().await?;
         let (max_fee, max_priority_fee) = prices
@@ -220,9 +217,9 @@ impl PriceCalculator {
     ///
     /// Uses the gas price service to fetch current gas prices and applies
     /// speed-based multipliers for legacy transactions.
-    async fn handle_legacy_speed<P: EvmProviderTrait>(
+    async fn handle_legacy_speed<G: EvmGasPriceServiceTrait>(
         speed: &Speed,
-        gas_price_service: &EvmGasPriceService<P>,
+        gas_price_service: &G,
     ) -> Result<PriceParams, TransactionError> {
         let prices = gas_price_service.get_legacy_prices_from_json_rpc().await?;
         let gas_price = prices
@@ -625,8 +622,11 @@ mod tests {
             .return_const(network);
 
         for (speed, expected_priority_fee) in test_data {
-            let result =
-                PriceCalculator::handle_eip1559_speed(&speed, &mock_gas_price_service).await;
+            let result = PriceCalculator::handle_eip1559_speed::<MockEvmGasPriceServiceTrait>(
+                &speed,
+                &mock_gas_price_service,
+            )
+            .await;
             assert!(result.is_ok());
             let params = result.unwrap();
             // Verify max_priority_fee matches expected value

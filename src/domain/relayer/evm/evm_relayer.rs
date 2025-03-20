@@ -39,10 +39,12 @@ use crate::{
         RepositoryError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryTransactionRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
+        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        RelayerRepository, RelayerRepositoryStorage, Repository,
     },
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
+        TransactionCounterServiceTrait,
     },
 };
 use async_trait::async_trait;
@@ -55,9 +57,9 @@ pub struct EvmRelayer {
     signer: EvmSigner,
     network: EvmNetwork,
     provider: EvmProvider,
-    relayer_repository: Arc<RelayerRepositoryStorage>,
+    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
-    transaction_counter_service: TransactionCounterService,
+    transaction_counter_service: TransactionCounterService<InMemoryTransactionCounter>,
     job_producer: Arc<JobProducer>,
 }
 
@@ -84,9 +86,9 @@ impl EvmRelayer {
         signer: EvmSigner,
         provider: EvmProvider,
         network: EvmNetwork,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
-        transaction_counter_service: TransactionCounterService,
+        transaction_counter_service: TransactionCounterService<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, RelayerError> {
         Ok(Self {
@@ -118,7 +120,7 @@ impl EvmRelayer {
             on_chain_nonce, self.relayer.id
         );
 
-        self.transaction_counter_service.set(on_chain_nonce)?;
+        self.transaction_counter_service.set(on_chain_nonce).await?;
 
         Ok(())
     }

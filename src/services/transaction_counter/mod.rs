@@ -5,45 +5,57 @@
 //! and address. It uses an in-memory store to keep track of these counts.
 use std::sync::Arc;
 
-use crate::repositories::{
-    InMemoryTransactionCounter, TransactionCounterError, TransactionCounterTrait,
-};
+use crate::repositories::{TransactionCounterError, TransactionCounterTrait};
+use async_trait::async_trait;
+
+#[cfg(test)]
+use mockall::automock;
 
 #[derive(Clone)]
-pub struct TransactionCounterService {
+pub struct TransactionCounterService<T: TransactionCounterTrait + Send + Sync> {
     relayer_id: String,
     address: String,
-    store: Arc<InMemoryTransactionCounter>,
+    store: Arc<T>,
 }
 
-#[allow(dead_code)]
-impl TransactionCounterService {
-    pub fn new(
-        relayer_id: String,
-        address: String,
-        store: Arc<InMemoryTransactionCounter>,
-    ) -> Self {
+impl<T: TransactionCounterTrait + Send + Sync> TransactionCounterService<T> {
+    pub fn new(relayer_id: String, address: String, store: Arc<T>) -> Self {
         Self {
             relayer_id,
             address,
             store,
         }
     }
+}
 
-    pub fn get(&self) -> Result<Option<u64>, TransactionCounterError> {
+#[async_trait]
+#[cfg_attr(test, automock)]
+pub trait TransactionCounterServiceTrait: Send + Sync {
+    async fn get(&self) -> Result<Option<u64>, TransactionCounterError>;
+    async fn get_and_increment(&self) -> Result<u64, TransactionCounterError>;
+    async fn decrement(&self) -> Result<u64, TransactionCounterError>;
+    async fn set(&self, value: u64) -> Result<(), TransactionCounterError>;
+}
+
+#[async_trait]
+#[allow(dead_code)]
+impl<T: TransactionCounterTrait + Send + Sync> TransactionCounterServiceTrait
+    for TransactionCounterService<T>
+{
+    async fn get(&self) -> Result<Option<u64>, TransactionCounterError> {
         self.store.get(&self.relayer_id, &self.address)
     }
 
-    pub fn get_and_increment(&self) -> Result<u64, TransactionCounterError> {
+    async fn get_and_increment(&self) -> Result<u64, TransactionCounterError> {
         self.store
             .get_and_increment(&self.relayer_id, &self.address)
     }
 
-    pub fn decrement(&self) -> Result<u64, TransactionCounterError> {
+    async fn decrement(&self) -> Result<u64, TransactionCounterError> {
         self.store.decrement(&self.relayer_id, &self.address)
     }
 
-    pub fn set(&self, value: u64) -> Result<(), TransactionCounterError> {
+    async fn set(&self, value: u64) -> Result<(), TransactionCounterError> {
         self.store.set(&self.relayer_id, &self.address, value)
     }
 }
@@ -59,11 +71,11 @@ mod tests {
         let service =
             TransactionCounterService::new("relayer_id".to_string(), "address".to_string(), store);
 
-        assert_eq!(service.get().unwrap(), None);
-        assert_eq!(service.get_and_increment().unwrap(), 0);
-        assert_eq!(service.get_and_increment().unwrap(), 1);
-        assert_eq!(service.decrement().unwrap(), 1);
-        assert!(service.set(10).is_ok());
-        assert_eq!(service.get().unwrap(), Some(10));
+        assert_eq!(service.get().await.unwrap(), None);
+        assert_eq!(service.get_and_increment().await.unwrap(), 0);
+        assert_eq!(service.get_and_increment().await.unwrap(), 1);
+        assert_eq!(service.decrement().await.unwrap(), 1);
+        assert!(service.set(10).await.is_ok());
+        assert_eq!(service.get().await.unwrap(), Some(10));
     }
 }

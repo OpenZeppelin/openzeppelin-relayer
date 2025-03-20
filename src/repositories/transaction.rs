@@ -16,6 +16,93 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
+/// A trait defining transaction repository operations
+#[async_trait]
+pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
+    /// Find transactions by relayer ID with pagination
+    async fn find_by_relayer_id(
+        &self,
+        relayer_id: &str,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
+
+    /// Find transactions by status
+    async fn find_by_status(
+        &self,
+        status: TransactionStatus,
+    ) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
+
+    /// Find a transaction by relayer ID and nonce
+    async fn find_by_nonce(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+
+    /// Update the status of a transaction
+    async fn update_status(
+        &self,
+        tx_id: String,
+        status: TransactionStatus,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Partially update a transaction
+    async fn partial_update(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Update the network data of a transaction
+    async fn update_network_data(
+        &self,
+        tx_id: String,
+        network_data: NetworkTransactionData,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Set the sent_at timestamp of a transaction
+    async fn set_sent_at(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Set the confirmed_at timestamp of a transaction
+    async fn set_confirmed_at(
+        &self,
+        tx_id: String,
+        confirmed_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+}
+
+#[cfg(test)]
+mockall::mock! {
+    pub TransactionRepository {}
+
+    #[async_trait]
+    impl Repository<TransactionRepoModel, String> for TransactionRepository {
+        async fn create(&self, entity: TransactionRepoModel) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
+        async fn list_paginated(&self, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
+        async fn update(&self, id: String, entity: TransactionRepoModel) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
+        async fn count(&self) -> Result<usize, RepositoryError>;
+    }
+
+    #[async_trait]
+    impl TransactionRepository for TransactionRepository {
+        async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
+        async fn find_by_status(&self, status: TransactionStatus) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
+        async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+        async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
+    }
+}
+
 #[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
@@ -31,151 +118,9 @@ impl InMemoryTransactionRepository {
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
         Ok(lock.lock().await)
     }
-
-    pub async fn find_by_relayer_id(
-        &self,
-        relayer_id: &str,
-        query: PaginationQuery,
-    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        let filtered: Vec<TransactionRepoModel> = store
-            .values()
-            .filter(|tx| tx.relayer_id == relayer_id)
-            .cloned()
-            .collect();
-
-        let total = filtered.len() as u64;
-
-        if total == 0 {
-            return Ok(PaginatedResult::<TransactionRepoModel> {
-                items: vec![],
-                total: 0,
-                page: query.page,
-                per_page: query.per_page,
-            });
-        }
-
-        let start = ((query.page - 1) * query.per_page) as usize;
-
-        // Sort and paginate
-        let items = filtered
-            .into_iter()
-            .sorted_by(|a, b| a.created_at.cmp(&b.created_at)) // Sort by created_at
-            .skip(start)
-            .take(query.per_page as usize)
-            .collect();
-
-        Ok(PaginatedResult {
-            items,
-            total,
-            page: query.page,
-            per_page: query.per_page,
-        })
-    }
-
-    pub async fn find_by_status(
-        &self,
-        status: TransactionStatus,
-    ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        Ok(store
-            .values()
-            .filter(|tx| tx.status == status)
-            .cloned()
-            .collect())
-    }
-
-    pub async fn find_by_nonce(
-        &self,
-        relayer_id: &str,
-        nonce: u64,
-    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        Ok(store
-            .values()
-            .find(|tx| {
-                tx.relayer_id == relayer_id
-                    && matches!(&tx.network_data,
-                        NetworkTransactionData::Evm(data) if data.nonce == Some(nonce)
-                    )
-            })
-            .cloned())
-    }
-
-    pub async fn update_status(
-        &self,
-        tx_id: String,
-        status: TransactionStatus,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.status = status;
-        self.update(tx_id, tx).await
-    }
-
-    pub async fn partial_update(
-        &self,
-        tx_id: String,
-        update: TransactionUpdateRequest,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store).await?;
-        if let Some(tx) = store.get_mut(&tx_id) {
-            if let Some(status) = update.status {
-                tx.status = status;
-            }
-            if let Some(sent_at) = update.sent_at {
-                tx.sent_at = Some(sent_at);
-            }
-            if let Some(confirmed_at) = update.confirmed_at {
-                tx.confirmed_at = Some(confirmed_at);
-            }
-            if let Some(network_data) = update.network_data {
-                tx.network_data = network_data;
-            }
-            Ok(tx.clone())
-        } else {
-            Err(RepositoryError::NotFound(format!(
-                "Transaction with ID {} not found",
-                tx_id
-            )))
-        }
-    }
-
-    pub async fn update_network_data(
-        &self,
-        tx_id: String,
-        network_data: NetworkTransactionData,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.network_data = network_data;
-        self.update(tx_id, tx).await
-    }
-
-    pub async fn set_sent_at(
-        &self,
-        tx_id: String,
-        sent_at: String,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.sent_at = Some(sent_at);
-        self.update(tx_id, tx).await
-    }
-
-    pub async fn set_confirmed_at(
-        &self,
-        tx_id: String,
-        confirmed_at: String,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.confirmed_at = Some(confirmed_at);
-        self.update(tx_id, tx).await
-    }
 }
 
-impl Default for InMemoryTransactionRepository {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Implement both traits for InMemoryTransactionRepository
 
 #[async_trait]
 impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository {
@@ -266,6 +211,158 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
     }
 }
 
+#[async_trait]
+impl TransactionRepository for InMemoryTransactionRepository {
+    async fn find_by_relayer_id(
+        &self,
+        relayer_id: &str,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        let filtered: Vec<TransactionRepoModel> = store
+            .values()
+            .filter(|tx| tx.relayer_id == relayer_id)
+            .cloned()
+            .collect();
+
+        let total = filtered.len() as u64;
+
+        if total == 0 {
+            return Ok(PaginatedResult::<TransactionRepoModel> {
+                items: vec![],
+                total: 0,
+                page: query.page,
+                per_page: query.per_page,
+            });
+        }
+
+        let start = ((query.page - 1) * query.per_page) as usize;
+
+        // Sort and paginate
+        let items = filtered
+            .into_iter()
+            .sorted_by(|a, b| a.created_at.cmp(&b.created_at)) // Sort by created_at
+            .skip(start)
+            .take(query.per_page as usize)
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
+    async fn find_by_status(
+        &self,
+        status: TransactionStatus,
+    ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(store
+            .values()
+            .filter(|tx| tx.status == status)
+            .cloned()
+            .collect())
+    }
+
+    async fn find_by_nonce(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        let filtered: Vec<TransactionRepoModel> = store
+            .values()
+            .filter(|tx| {
+                tx.relayer_id == relayer_id
+                    && match &tx.network_data {
+                        NetworkTransactionData::Evm(data) => data.nonce == Some(nonce),
+                        _ => false,
+                    }
+            })
+            .cloned()
+            .collect();
+
+        Ok(filtered.into_iter().next())
+    }
+
+    async fn update_status(
+        &self,
+        tx_id: String,
+        status: TransactionStatus,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut tx = self.get_by_id(tx_id.clone()).await?;
+        tx.status = status;
+        self.update(tx_id, tx).await
+    }
+
+    async fn partial_update(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if let Some(status) = update.status {
+                tx.status = status;
+            }
+            if let Some(sent_at) = update.sent_at {
+                tx.sent_at = Some(sent_at);
+            }
+            if let Some(confirmed_at) = update.confirmed_at {
+                tx.confirmed_at = Some(confirmed_at);
+            }
+            if let Some(network_data) = update.network_data {
+                tx.network_data = network_data;
+            }
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {} not found",
+                tx_id
+            )))
+        }
+    }
+
+    async fn update_network_data(
+        &self,
+        tx_id: String,
+        network_data: NetworkTransactionData,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut tx = self.get_by_id(tx_id.clone()).await?;
+        tx.network_data = network_data;
+        self.update(tx_id, tx).await
+    }
+
+    async fn set_sent_at(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut tx = self.get_by_id(tx_id.clone()).await?;
+        tx.sent_at = Some(sent_at);
+        self.update(tx_id, tx).await
+    }
+
+    async fn set_confirmed_at(
+        &self,
+        tx_id: String,
+        confirmed_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut tx = self.get_by_id(tx_id.clone()).await?;
+        tx.confirmed_at = Some(confirmed_at);
+        self.update(tx_id, tx).await
+    }
+}
+
+impl Default for InMemoryTransactionRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
@@ -275,6 +372,7 @@ mod tests {
 
     use super::*;
 
+    // Helper function to create test transactions
     fn create_test_transaction(id: &str) -> TransactionRepoModel {
         TransactionRepoModel {
             id: id.to_string(),
@@ -290,9 +388,9 @@ mod tests {
                 gas_limit: 21000,
                 nonce: Some(1),
                 value: U256::from_str("1000000000000000000").unwrap(),
-                data: Some("Ox".to_string()),
-                from: "0x".to_string(),
-                to: Some("0x".to_string()),
+                data: Some("0x".to_string()),
+                from: "0xSender".to_string(),
+                to: Some("0xRecipient".to_string()),
                 chain_id: 1,
                 signature: None,
                 hash: Some(format!("0x{}", id)),
@@ -319,9 +417,9 @@ mod tests {
                 gas_limit: 21000,
                 nonce: Some(1),
                 value: U256::from_str("1000000000000000000").unwrap(),
-                data: Some("Ox".to_string()),
-                from: "0x".to_string(),
-                to: Some("0x".to_string()),
+                data: Some("0x".to_string()),
+                from: "0xSender".to_string(),
+                to: Some("0xRecipient".to_string()),
                 chain_id: 1,
                 signature: None,
                 hash: Some(format!("0x{}", id)),
@@ -333,7 +431,7 @@ mod tests {
         }
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_create_transaction() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
@@ -343,7 +441,7 @@ mod tests {
         assert_eq!(repo.count().await.unwrap(), 1);
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_get_transaction() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
@@ -357,7 +455,7 @@ mod tests {
         }
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_update_transaction() {
         let repo = InMemoryTransactionRepository::new();
         let mut tx = create_test_transaction("test-1");
@@ -369,7 +467,7 @@ mod tests {
         assert!(matches!(updated.status, TransactionStatus::Confirmed));
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_delete_transaction() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
@@ -381,7 +479,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_list_all_transactions() {
         let repo = InMemoryTransactionRepository::new();
         let tx1 = create_test_transaction("test-1");
@@ -394,7 +492,7 @@ mod tests {
         assert_eq!(transactions.len(), 2);
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_count_transactions() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
@@ -404,14 +502,14 @@ mod tests {
         assert_eq!(repo.count().await.unwrap(), 1);
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_get_nonexistent_transaction() {
         let repo = InMemoryTransactionRepository::new();
         let result = repo.get_by_id("nonexistent".to_string()).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_duplicate_transaction_creation() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
@@ -425,322 +523,13 @@ mod tests {
         ));
     }
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn test_update_nonexistent_transaction() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
 
         let result = repo.update("nonexistent".to_string(), tx).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
-    }
-
-    #[actix_web::test]
-    async fn test_update_network_data() {
-        let repo = InMemoryTransactionRepository::new();
-        let tx = create_test_transaction("test-1");
-
-        repo.create(tx.clone()).await.unwrap();
-
-        // Create new network data with updated values
-        let updated_network_data = NetworkTransactionData::Evm(EvmTransactionData {
-            gas_price: Some(2000000000),
-            gas_limit: 30000,
-            nonce: Some(2),
-            value: U256::from_str("2000000000000000000").unwrap(),
-            data: Some("0xUpdated".to_string()),
-            from: "0x".to_string(),
-            to: Some("0x".to_string()),
-            chain_id: 1,
-            signature: None,
-            hash: Some("0xUpdated".to_string()),
-            raw: None,
-            speed: None,
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
-        });
-
-        let updated = repo
-            .update_network_data("test-1".to_string(), updated_network_data)
-            .await
-            .unwrap();
-
-        // Verify the network data was updated
-        if let NetworkTransactionData::Evm(data) = &updated.network_data {
-            assert_eq!(data.gas_price, Some(2000000000));
-            assert_eq!(data.gas_limit, 30000);
-            assert_eq!(data.nonce, Some(2));
-            assert_eq!(data.hash, Some("0xUpdated".to_string()));
-            assert_eq!(data.data, Some("0xUpdated".to_string()));
-        } else {
-            panic!("Expected EVM network data");
-        }
-    }
-
-    #[actix_web::test]
-    async fn test_set_sent_at() {
-        let repo = InMemoryTransactionRepository::new();
-        let tx = create_test_transaction("test-1");
-
-        repo.create(tx).await.unwrap();
-
-        // Updated sent_at timestamp
-        let new_sent_at = "2025-02-01T10:00:00.000000+00:00".to_string();
-
-        let updated = repo
-            .set_sent_at("test-1".to_string(), new_sent_at.clone())
-            .await
-            .unwrap();
-
-        // Verify the sent_at timestamp was updated
-        assert_eq!(updated.sent_at, Some(new_sent_at.clone()));
-
-        // Also verify by getting the transaction directly
-        let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
-        assert_eq!(stored.sent_at, Some(new_sent_at.clone()));
-    }
-
-    #[actix_web::test]
-    async fn test_set_confirmed_at() {
-        let repo = InMemoryTransactionRepository::new();
-        let tx = create_test_transaction("test-1");
-
-        repo.create(tx).await.unwrap();
-
-        // Updated confirmed_at timestamp
-        let new_confirmed_at = "2025-02-01T11:30:45.123456+00:00".to_string();
-
-        let updated = repo
-            .set_confirmed_at("test-1".to_string(), new_confirmed_at.clone())
-            .await
-            .unwrap();
-
-        // Verify the confirmed_at timestamp was updated
-        assert_eq!(updated.confirmed_at, Some(new_confirmed_at.clone()));
-
-        // Also verify by getting the transaction directly
-        let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
-        assert_eq!(stored.confirmed_at, Some(new_confirmed_at.clone()));
-    }
-
-    #[actix_web::test]
-    async fn test_find_by_relayer_id() {
-        let repo = InMemoryTransactionRepository::new();
-        let tx1 = create_test_transaction("test-1");
-        let tx2 = create_test_transaction("test-2");
-
-        // Create a transaction with a different relayer_id
-        let mut tx3 = create_test_transaction("test-3");
-        tx3.relayer_id = "relayer-2".to_string();
-
-        repo.create(tx1).await.unwrap();
-        repo.create(tx2).await.unwrap();
-        repo.create(tx3).await.unwrap();
-
-        // Test finding transactions for relayer-1
-        let query = PaginationQuery {
-            page: 1,
-            per_page: 10,
-        };
-        let result = repo
-            .find_by_relayer_id("relayer-1", query.clone())
-            .await
-            .unwrap();
-        assert_eq!(result.total, 2);
-        assert_eq!(result.items.len(), 2);
-        assert!(result.items.iter().all(|tx| tx.relayer_id == "relayer-1"));
-
-        let result = repo
-            .find_by_relayer_id("relayer-2", query.clone())
-            .await
-            .unwrap();
-        assert_eq!(result.total, 1);
-        assert_eq!(result.items.len(), 1);
-        assert!(result.items.iter().all(|tx| tx.relayer_id == "relayer-2"));
-
-        let result = repo
-            .find_by_relayer_id("non-existent", query.clone())
-            .await
-            .unwrap();
-        assert_eq!(result.total, 0);
-        assert_eq!(result.items.len(), 0);
-    }
-
-    #[actix_web::test]
-    async fn test_find_by_status() {
-        let repo = InMemoryTransactionRepository::new();
-        let tx1 = create_test_transaction("test-1");
-
-        // Create a transaction with a different status
-        let mut tx2 = create_test_transaction("test-2");
-        tx2.status = TransactionStatus::Confirmed;
-
-        let mut tx3 = create_test_transaction("test-3");
-        tx3.status = TransactionStatus::Failed;
-
-        repo.create(tx1).await.unwrap();
-        repo.create(tx2).await.unwrap();
-        repo.create(tx3).await.unwrap();
-
-        // Test finding transactions with Pending status
-        let result = repo
-            .find_by_status(TransactionStatus::Pending)
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Pending));
-
-        // Test finding transactions with Confirmed status
-        let result = repo
-            .find_by_status(TransactionStatus::Confirmed)
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Confirmed));
-
-        // Test finding transactions with Failed status
-        let result = repo
-            .find_by_status(TransactionStatus::Failed)
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Failed));
-    }
-
-    #[actix_web::test]
-    async fn test_find_by_nonce() {
-        let repo = InMemoryTransactionRepository::new();
-
-        // Create transactions with different nonces
-        let tx1 = create_test_transaction("test-1");
-
-        let mut tx2 = create_test_transaction("test-2");
-        if let NetworkTransactionData::Evm(ref mut data) = tx2.network_data {
-            data.nonce = Some(2);
-        }
-
-        let mut tx3 = create_test_transaction("test-3");
-        tx3.relayer_id = "relayer-2".to_string();
-        if let NetworkTransactionData::Evm(ref mut data) = tx3.network_data {
-            data.nonce = Some(1);
-        }
-
-        repo.create(tx1).await.unwrap();
-        repo.create(tx2).await.unwrap();
-        repo.create(tx3).await.unwrap();
-
-        // Test finding transaction with specific relayer_id and nonce
-        let result = repo.find_by_nonce("relayer-1", 1).await.unwrap();
-        assert!(result.is_some());
-        assert_eq!(result.as_ref().unwrap().id, "test-1");
-
-        // Test finding transaction with a different nonce
-        let result = repo.find_by_nonce("relayer-1", 2).await.unwrap();
-        assert!(result.is_some());
-        assert_eq!(result.as_ref().unwrap().id, "test-2");
-
-        // Test finding transaction from a different relayer
-        let result = repo.find_by_nonce("relayer-2", 1).await.unwrap();
-        assert!(result.is_some());
-        assert_eq!(result.as_ref().unwrap().id, "test-3");
-
-        // Test finding transaction that doesn't exist
-        let result = repo.find_by_nonce("relayer-1", 99).await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[actix_web::test]
-    async fn test_update_status() {
-        let repo = InMemoryTransactionRepository::new();
-        let tx = create_test_transaction("test-1");
-
-        repo.create(tx).await.unwrap();
-
-        // Update status to Confirmed
-        let updated = repo
-            .update_status("test-1".to_string(), TransactionStatus::Confirmed)
-            .await
-            .unwrap();
-
-        // Verify the status was updated in the returned transaction
-        assert_eq!(updated.status, TransactionStatus::Confirmed);
-
-        // Also verify by getting the transaction directly
-        let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
-        assert_eq!(stored.status, TransactionStatus::Confirmed);
-
-        // Update status to Failed
-        let updated = repo
-            .update_status("test-1".to_string(), TransactionStatus::Failed)
-            .await
-            .unwrap();
-
-        // Verify the status was updated
-        assert_eq!(updated.status, TransactionStatus::Failed);
-
-        // Verify updating a non-existent transaction
-        let result = repo
-            .update_status("non-existent".to_string(), TransactionStatus::Confirmed)
-            .await;
-        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
-    }
-
-    #[actix_web::test]
-    async fn test_list_paginated() {
-        let repo = InMemoryTransactionRepository::new();
-
-        // Create multiple transactions
-        for i in 1..=10 {
-            let tx = create_test_transaction(&format!("test-{}", i));
-            repo.create(tx).await.unwrap();
-        }
-
-        // Test first page with 3 items per page
-        let query = PaginationQuery {
-            page: 1,
-            per_page: 3,
-        };
-        let result = repo.list_paginated(query).await.unwrap();
-        assert_eq!(result.items.len(), 3);
-        assert_eq!(result.total, 10);
-        assert_eq!(result.page, 1);
-        assert_eq!(result.per_page, 3);
-
-        // Test second page with 3 items per page
-        let query = PaginationQuery {
-            page: 2,
-            per_page: 3,
-        };
-        let result = repo.list_paginated(query).await.unwrap();
-        assert_eq!(result.items.len(), 3);
-        assert_eq!(result.total, 10);
-        assert_eq!(result.page, 2);
-        assert_eq!(result.per_page, 3);
-
-        // Test page with fewer items than per_page
-        let query = PaginationQuery {
-            page: 4,
-            per_page: 3,
-        };
-        let result = repo.list_paginated(query).await.unwrap();
-        assert_eq!(result.items.len(), 1);
-        assert_eq!(result.total, 10);
-        assert_eq!(result.page, 4);
-        assert_eq!(result.per_page, 3);
-
-        // Test empty page (beyond total items)
-        let query = PaginationQuery {
-            page: 5,
-            per_page: 3,
-        };
-        let result = repo.list_paginated(query).await.unwrap();
-        assert_eq!(result.items.len(), 0);
-        assert_eq!(result.total, 10);
     }
 
     #[tokio::test]
@@ -796,5 +585,316 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), RepositoryError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_update_status() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx).await.unwrap();
+
+        // Update status to Confirmed
+        let updated = repo
+            .update_status("test-1".to_string(), TransactionStatus::Confirmed)
+            .await
+            .unwrap();
+
+        // Verify the status was updated in the returned transaction
+        assert_eq!(updated.status, TransactionStatus::Confirmed);
+
+        // Also verify by getting the transaction directly
+        let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
+        assert_eq!(stored.status, TransactionStatus::Confirmed);
+
+        // Update status to Failed
+        let updated = repo
+            .update_status("test-1".to_string(), TransactionStatus::Failed)
+            .await
+            .unwrap();
+
+        // Verify the status was updated
+        assert_eq!(updated.status, TransactionStatus::Failed);
+
+        // Verify updating a non-existent transaction
+        let result = repo
+            .update_status("non-existent".to_string(), TransactionStatus::Confirmed)
+            .await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_list_paginated() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create multiple transactions
+        for i in 1..=10 {
+            let tx = create_test_transaction(&format!("test-{}", i));
+            repo.create(tx).await.unwrap();
+        }
+
+        // Test first page with 3 items per page
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 3,
+        };
+        let result = repo.list_paginated(query).await.unwrap();
+        assert_eq!(result.items.len(), 3);
+        assert_eq!(result.total, 10);
+        assert_eq!(result.page, 1);
+        assert_eq!(result.per_page, 3);
+
+        // Test second page with 3 items per page
+        let query = PaginationQuery {
+            page: 2,
+            per_page: 3,
+        };
+        let result = repo.list_paginated(query).await.unwrap();
+        assert_eq!(result.items.len(), 3);
+        assert_eq!(result.total, 10);
+        assert_eq!(result.page, 2);
+        assert_eq!(result.per_page, 3);
+
+        // Test page with fewer items than per_page
+        let query = PaginationQuery {
+            page: 4,
+            per_page: 3,
+        };
+        let result = repo.list_paginated(query).await.unwrap();
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.total, 10);
+        assert_eq!(result.page, 4);
+        assert_eq!(result.per_page, 3);
+
+        // Test empty page (beyond total items)
+        let query = PaginationQuery {
+            page: 5,
+            per_page: 3,
+        };
+        let result = repo.list_paginated(query).await.unwrap();
+        assert_eq!(result.items.len(), 0);
+        assert_eq!(result.total, 10);
+    }
+
+    #[tokio::test]
+    async fn test_find_by_nonce() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Create transactions with different nonces
+        let tx1 = create_test_transaction("test-1");
+
+        let mut tx2 = create_test_transaction("test-2");
+        if let NetworkTransactionData::Evm(ref mut data) = tx2.network_data {
+            data.nonce = Some(2);
+        }
+
+        let mut tx3 = create_test_transaction("test-3");
+        tx3.relayer_id = "relayer-2".to_string();
+        if let NetworkTransactionData::Evm(ref mut data) = tx3.network_data {
+            data.nonce = Some(1);
+        }
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+        repo.create(tx3).await.unwrap();
+
+        // Test finding transaction with specific relayer_id and nonce
+        let result = repo.find_by_nonce("relayer-1", 1).await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.as_ref().unwrap().id, "test-1");
+
+        // Test finding transaction with a different nonce
+        let result = repo.find_by_nonce("relayer-1", 2).await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.as_ref().unwrap().id, "test-2");
+
+        // Test finding transaction from a different relayer
+        let result = repo.find_by_nonce("relayer-2", 1).await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.as_ref().unwrap().id, "test-3");
+
+        // Test finding transaction that doesn't exist
+        let result = repo.find_by_nonce("relayer-1", 99).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_network_data() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx.clone()).await.unwrap();
+
+        // Create new network data with updated values
+        let updated_network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            gas_price: Some(2000000000),
+            gas_limit: 30000,
+            nonce: Some(2),
+            value: U256::from_str("2000000000000000000").unwrap(),
+            data: Some("0xUpdated".to_string()),
+            from: "0xSender".to_string(),
+            to: Some("0xRecipient".to_string()),
+            chain_id: 1,
+            signature: None,
+            hash: Some("0xUpdated".to_string()),
+            raw: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+        });
+
+        let updated = repo
+            .update_network_data("test-1".to_string(), updated_network_data)
+            .await
+            .unwrap();
+
+        // Verify the network data was updated
+        if let NetworkTransactionData::Evm(data) = &updated.network_data {
+            assert_eq!(data.gas_price, Some(2000000000));
+            assert_eq!(data.gas_limit, 30000);
+            assert_eq!(data.nonce, Some(2));
+            assert_eq!(data.hash, Some("0xUpdated".to_string()));
+            assert_eq!(data.data, Some("0xUpdated".to_string()));
+        } else {
+            panic!("Expected EVM network data");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_sent_at() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx).await.unwrap();
+
+        // Updated sent_at timestamp
+        let new_sent_at = "2025-02-01T10:00:00.000000+00:00".to_string();
+
+        let updated = repo
+            .set_sent_at("test-1".to_string(), new_sent_at.clone())
+            .await
+            .unwrap();
+
+        // Verify the sent_at timestamp was updated
+        assert_eq!(updated.sent_at, Some(new_sent_at.clone()));
+
+        // Also verify by getting the transaction directly
+        let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
+        assert_eq!(stored.sent_at, Some(new_sent_at.clone()));
+    }
+
+    #[tokio::test]
+    async fn test_set_confirmed_at() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-1");
+
+        repo.create(tx).await.unwrap();
+
+        // Updated confirmed_at timestamp
+        let new_confirmed_at = "2025-02-01T11:30:45.123456+00:00".to_string();
+
+        let updated = repo
+            .set_confirmed_at("test-1".to_string(), new_confirmed_at.clone())
+            .await
+            .unwrap();
+
+        // Verify the confirmed_at timestamp was updated
+        assert_eq!(updated.confirmed_at, Some(new_confirmed_at.clone()));
+
+        // Also verify by getting the transaction directly
+        let stored = repo.get_by_id("test-1".to_string()).await.unwrap();
+        assert_eq!(stored.confirmed_at, Some(new_confirmed_at.clone()));
+    }
+
+    #[tokio::test]
+    async fn test_find_by_relayer_id() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx1 = create_test_transaction("test-1");
+        let tx2 = create_test_transaction("test-2");
+
+        // Create a transaction with a different relayer_id
+        let mut tx3 = create_test_transaction("test-3");
+        tx3.relayer_id = "relayer-2".to_string();
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+        repo.create(tx3).await.unwrap();
+
+        // Test finding transactions for relayer-1
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = repo
+            .find_by_relayer_id("relayer-1", query.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.total, 2);
+        assert_eq!(result.items.len(), 2);
+        assert!(result.items.iter().all(|tx| tx.relayer_id == "relayer-1"));
+
+        // Test finding transactions for relayer-2
+        let result = repo
+            .find_by_relayer_id("relayer-2", query.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items.len(), 1);
+        assert!(result.items.iter().all(|tx| tx.relayer_id == "relayer-2"));
+
+        // Test finding transactions for non-existent relayer
+        let result = repo
+            .find_by_relayer_id("non-existent", query.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.total, 0);
+        assert_eq!(result.items.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_by_status() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx1 = create_test_transaction("test-1");
+
+        // Create a transaction with a different status
+        let mut tx2 = create_test_transaction("test-2");
+        tx2.status = TransactionStatus::Confirmed;
+
+        let mut tx3 = create_test_transaction("test-3");
+        tx3.status = TransactionStatus::Failed;
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+        repo.create(tx3).await.unwrap();
+
+        // Test finding transactions with Pending status
+        let result = repo
+            .find_by_status(TransactionStatus::Pending)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result
+            .iter()
+            .all(|tx| tx.status == TransactionStatus::Pending));
+
+        // Test finding transactions with Confirmed status
+        let result = repo
+            .find_by_status(TransactionStatus::Confirmed)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result
+            .iter()
+            .all(|tx| tx.status == TransactionStatus::Confirmed));
+
+        // Test finding transactions with Failed status
+        let result = repo
+            .find_by_status(TransactionStatus::Failed)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result
+            .iter()
+            .all(|tx| tx.status == TransactionStatus::Failed));
     }
 }
