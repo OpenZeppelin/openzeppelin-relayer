@@ -13,7 +13,7 @@ runs:
       with:
         toolchain: stable
         components: rustfmt, clippy
-    
+
     - name: Install libsodium
       run: sudo apt-get update && sudo apt-get install -y libsodium-dev
       shell: bash

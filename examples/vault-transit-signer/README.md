@@ -95,7 +95,7 @@ vault write auth/approle/role/my-role \
 
 ### Step 9: Retrieve the RoleID, SecretID and Public Key
 
-Retrieve Public key(store these values as they are needed for next step) by opening vault UI(localhost:8200). 
+Retrieve Public key(store these values as they are needed for next step) by opening vault UI(localhost:8200).
 
 Sign in with token `dev-only-token`. Navigate to http://localhost:8200/ui/vault/secrets/transit/show/my_signing_key?tab=versions and copy public key value from version dropdown menu.
 
@@ -137,11 +137,11 @@ docker compose up -d
 
 ## Troubleshooting
 
-- **Vault UI Not Accessible:**  
+- **Vault UI Not Accessible:**
   Ensure that the Vault container is running and that the command includes `-dev-listen-address=0.0.0.0:8200` so Vault binds to all network interfaces.
 
-- **Permission Denied Errors:**  
+- **Permission Denied Errors:**
   Verify that the policy includes both `secret/data/*` and `secret/metadata/*` paths. Also, ensure that the policy name provided during AppRole creation matches exactly with the policy you created.
 
-- **Connectivity Issues:**  
+- **Connectivity Issues:**
   Confirm that environment variables such as `VAULT_ADDR` and `VAULT_TOKEN` are correctly set.

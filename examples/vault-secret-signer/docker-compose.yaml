@@ -46,14 +46,14 @@ services:
     image: hashicorp/vault:1.19.0
     platform: linux/amd64
     ports:
-      - "8200:8200"
+      - 8200:8200
     environment:
       - VAULT_DEV_ROOT_TOKEN_ID=dev-only-token
     cap_add:
       - IPC_LOCK
     networks:
       - relayer-network
-    command: ["vault", "server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+    command: [vault, server, -dev, -dev-listen-address=0.0.0.0:8200]
     restart: on-failure
 
 networks:
