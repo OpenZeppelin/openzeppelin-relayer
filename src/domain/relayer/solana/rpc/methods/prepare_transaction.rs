@@ -122,7 +122,7 @@ where
             })?;
 
         // Sign transaction
-        let (signed_transaction, _) = self.relayer_sign_transaction(transaction)?;
+        let (signed_transaction, _) = self.relayer_sign_transaction(transaction).await?;
 
         // Serialize and encode
         let encoded_tx = EncodedSerializedTransaction::try_from(&signed_transaction)?;
@@ -210,7 +210,9 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
+        signer
+            .expect_sign()
+            .returning(move |_| Box::pin(async move { Ok(signature) }));
 
         // Mock provider responses
         provider
@@ -348,8 +350,9 @@ mod tests {
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
-
+        signer
+            .expect_sign()
+            .returning(move |_| Box::pin(async move { Ok(signature) }));
         provider
             .expect_get_latest_blockhash_with_commitment()
             .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
@@ -420,10 +423,10 @@ mod tests {
             ..Default::default()
         });
 
-        signer
-            .expect_sign()
-            .returning(move |_| Ok(expected_signature));
-
+        signer.expect_sign().returning(move |_| {
+            let signature = expected_signature;
+            Box::pin(async move { Ok(signature) })
+        });
         provider
             .expect_get_latest_blockhash_with_commitment()
             .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));

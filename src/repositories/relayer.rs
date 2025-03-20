@@ -7,6 +7,7 @@
 //! The `RelayerRepository` trait is designed to be implemented by any storage backend,
 //! allowing for flexibility in how relayers are stored and managed. The in-memory
 //! implementation is useful for testing and development purposes.
+use crate::models::PaginationQuery;
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
     constants::{
@@ -19,13 +20,12 @@ use crate::{
         RelayerStellarPolicy, RepositoryError, SolanaAllowedTokensPolicy,
     },
 };
+use async_trait::async_trait;
 use eyre::Result;
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{Mutex, MutexGuard};
-
-use crate::models::PaginationQuery;
-use async_trait::async_trait;
 
 use super::{PaginatedResult, Repository};
 
@@ -243,6 +243,8 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
 pub enum ConversionError {
     #[error("Invalid network type: {0}")]
     InvalidNetworkType(String),
+    #[error("Invalid config: {0}")]
+    InvalidConfig(String),
 }
 
 impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
@@ -255,8 +257,8 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             ConfigFileNetworkType::Solana => NetworkType::Solana,
         };
 
-        let policies = if let Some(config_policies) = config.policies {
-            RelayerNetworkPolicy::try_from(config_policies).map_err(|_| {
+        let policies = if let Some(config_policies) = &config.policies {
+            RelayerNetworkPolicy::try_from(config_policies.clone()).map_err(|_| {
                 ConversionError::InvalidNetworkType("Failed to convert network policy".to_string())
             })?
         } else {
@@ -290,11 +292,11 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
     type Error = eyre::Error;
 
     fn try_from(policy: ConfigFileRelayerNetworkPolicy) -> Result<Self, Self::Error> {
-        match policy {
+        match &policy {
             ConfigFileRelayerNetworkPolicy::Evm(evm) => {
                 Ok(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
                     gas_price_cap: evm.gas_price_cap,
-                    whitelist_receivers: evm.whitelist_receivers,
+                    whitelist_receivers: evm.whitelist_receivers.clone(),
                     eip1559_pricing: evm.eip1559_pricing,
                     private_transactions: evm.private_transactions.unwrap_or(false),
                     min_balance: evm.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
@@ -307,13 +309,14 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                 // SolanaAllowedTokensPolicy::new_partial.
                 let mapped_allowed_tokens = solana
                     .allowed_tokens
+                    .as_ref()
                     .filter(|tokens| !tokens.is_empty())
                     .map(|tokens| {
                         tokens
-                            .into_iter()
+                            .iter()
                             .map(|token| {
                                 SolanaAllowedTokensPolicy::new_partial(
-                                    token.mint,
+                                    token.mint.clone(),
                                     token.max_allowed_fee,
                                     token.conversion_slippage_percentage,
                                 )
@@ -322,10 +325,10 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     });
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
-                    allowed_accounts: solana.allowed_accounts,
-                    allowed_programs: solana.allowed_programs,
+                    allowed_accounts: solana.allowed_accounts.clone(),
+                    allowed_programs: solana.allowed_programs.clone(),
                     allowed_tokens: mapped_allowed_tokens,
-                    disallowed_accounts: solana.disallowed_accounts,
+                    disallowed_accounts: solana.disallowed_accounts.clone(),
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
                     max_allowed_transfer_amount_lamports: solana
@@ -343,71 +346,69 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
     }
 }
 
+/// A generic wrapper around a relayer repository implementation.
+///
+/// This structure provides a clean abstraction for relayer repositories,
+/// allowing for different concrete implementations to be used while
+/// maintaining a consistent interface.
+///
+/// # Type Parameters
+///
+/// * `T` - A repository implementation for relayer models that implements the `Repository` trait.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use std::sync::Arc;
+/// use crate::repositories::{InMemoryRelayerRepository, RelayerRepositoryStorage};
+///
+/// let repository = InMemoryRelayerRepository::new();
+/// let storage = Arc::new(RelayerRepositoryStorage::in_memory(repository));
+/// ```
 #[derive(Debug)]
-pub enum RelayerRepositoryStorage {
-    InMemory(InMemoryRelayerRepository),
+pub struct RelayerRepositoryStorage<T: Repository<RelayerRepoModel, String>> {
+    pub repository: Arc<T>,
 }
 
-#[async_trait]
-impl RelayerRepository for RelayerRepositoryStorage {
-    #[allow(dead_code)]
-    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.list_active().await,
-        }
-    }
-
-    async fn partial_update(
-        &self,
-        id: String,
-        update: RelayerUpdateRequest,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.partial_update(id, update).await,
-        }
-    }
-
-    async fn update_policy(
-        &self,
-        id: String,
-        policy: RelayerNetworkPolicy,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.update_policy(id, policy).await,
-        }
-    }
-
-    async fn disable_relayer(
-        &self,
-        relayer_id: String,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.disable_relayer(relayer_id).await,
-        }
-    }
-
-    async fn enable_relayer(
-        &self,
-        relayer_id: String,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.enable_relayer(relayer_id).await,
+impl RelayerRepositoryStorage<InMemoryRelayerRepository> {
+    /// Creates a new in-memory relayer repository storage.
+    ///
+    /// # Parameters
+    ///
+    /// * `repository` - An instance of `InMemoryRelayerRepository`.
+    ///
+    /// # Returns
+    ///
+    /// A new `RelayerRepositoryStorage` instance backed by the provided in-memory repository.
+    pub fn in_memory(repository: InMemoryRelayerRepository) -> Self {
+        Self {
+            repository: Arc::new(repository),
         }
     }
 }
 
 #[async_trait]
-impl Repository<RelayerRepoModel, String> for RelayerRepositoryStorage {
+impl<T> Repository<RelayerRepoModel, String> for RelayerRepositoryStorage<T>
+where
+    T: Repository<RelayerRepoModel, String> + Send + Sync,
+{
     async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.create(entity).await,
-        }
+        self.repository.create(entity).await
     }
 
     async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
-        }
+        self.repository.get_by_id(id).await
+    }
+
+    async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        self.repository.list_all().await
+    }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
+        self.repository.list_paginated(query).await
     }
 
     async fn update(
@@ -415,36 +416,55 @@ impl Repository<RelayerRepoModel, String> for RelayerRepositoryStorage {
         id: String,
         entity: RelayerRepoModel,
     ) -> Result<RelayerRepoModel, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.update(id, entity).await,
-        }
+        self.repository.update(id, entity).await
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.delete_by_id(id).await,
-        }
-    }
-
-    async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.list_all().await,
-        }
-    }
-
-    async fn list_paginated(
-        &self,
-        query: PaginationQuery,
-    ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
-        }
+        self.repository.delete_by_id(id).await
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        match self {
-            RelayerRepositoryStorage::InMemory(repo) => repo.count().await,
-        }
+        self.repository.count().await
+    }
+}
+
+#[async_trait]
+impl<T> RelayerRepository for RelayerRepositoryStorage<T>
+where
+    T: RelayerRepository + Send + Sync,
+{
+    async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        self.repository.list_active().await
+    }
+
+    async fn partial_update(
+        &self,
+        id: String,
+        update: RelayerUpdateRequest,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.partial_update(id, update).await
+    }
+
+    async fn enable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.enable_relayer(relayer_id).await
+    }
+
+    async fn disable_relayer(
+        &self,
+        relayer_id: String,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.disable_relayer(relayer_id).await
+    }
+
+    async fn update_policy(
+        &self,
+        id: String,
+        policy: RelayerNetworkPolicy,
+    ) -> Result<RelayerRepoModel, RepositoryError> {
+        self.repository.update_policy(id, policy).await
     }
 }
 
@@ -618,5 +638,32 @@ mod tests {
         let relayer = create_test_relayer("test".to_string());
 
         repo.create(relayer.clone()).await.unwrap();
+
+        // Create a new policy to update
+        let new_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(50000000000),
+            whitelist_receivers: Some(vec!["0x1234".to_string()]),
+            eip1559_pricing: Some(true),
+            private_transactions: true,
+            min_balance: 1000000,
+        });
+
+        // Update the policy
+        let updated_relayer = repo
+            .update_policy("test".to_string(), new_policy.clone())
+            .await
+            .unwrap();
+
+        // Verify the policy was updated
+        match updated_relayer.policies {
+            RelayerNetworkPolicy::Evm(policy) => {
+                assert_eq!(policy.gas_price_cap, Some(50000000000));
+                assert_eq!(policy.whitelist_receivers, Some(vec!["0x1234".to_string()]));
+                assert_eq!(policy.eip1559_pricing, Some(true));
+                assert!(policy.private_transactions);
+                assert_eq!(policy.min_balance, 1000000);
+            }
+            _ => panic!("Unexpected policy type"),
+        }
     }
 }

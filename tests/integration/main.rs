@@ -5,13 +5,14 @@ use std::sync::Arc;
 use openzeppelin_relayer::{
     config,
     constants::{AUTHORIZATION_HEADER_NAME, AUTHORIZATION_HEADER_VALUE_PREFIX},
+    models::SecretString,
     utils::check_authorization_header,
 };
 
 #[actix_web::test]
 async fn test_authorization_middleware_success() {
     let config = Arc::new(config::ServerConfig {
-        api_key: "test_key".to_string(),
+        api_key: SecretString::new("test_key"),
         host: "localhost".to_string(),
         port: 8080,
         metrics_port: 8081,
@@ -57,7 +58,7 @@ async fn test_authorization_middleware_success() {
 #[actix_web::test]
 async fn test_authorization_middleware_failure() {
     let config = Arc::new(config::ServerConfig {
-        api_key: "test_key".to_string(),
+        api_key: SecretString::new("test_key"),
         host: "localhost".to_string(),
         port: 8080,
         metrics_port: 8081,

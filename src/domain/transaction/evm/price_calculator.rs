@@ -43,6 +43,25 @@ use crate::{
     services::{gas::EvmGasPriceServiceTrait, GasPrices},
 };
 
+#[cfg(test)]
+use mockall::automock;
+
+#[async_trait::async_trait]
+#[cfg_attr(test, automock)]
+pub trait PriceCalculatorTrait: Send + Sync {
+    async fn get_transaction_price_params(
+        &self,
+        tx_data: &EvmTransactionData,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError>;
+
+    async fn calculate_bumped_gas_price(
+        &self,
+        tx: &TransactionRepoModel,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError>;
+}
+
 type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
 
 const PRECISION: u128 = 1_000_000_000; // 10^9 (similar to Gwei)
@@ -487,6 +506,70 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
     }
 }
 
+#[async_trait::async_trait]
+impl<G: EvmGasPriceServiceTrait + Send + Sync> PriceCalculatorTrait for PriceCalculator<G> {
+    async fn get_transaction_price_params(
+        &self,
+        tx_data: &EvmTransactionData,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError> {
+        let price_params = self
+            .fetch_price_params_based_on_tx_type(tx_data, relayer)
+            .await?;
+        let (gas_price_capped, max_fee_per_gas_capped, max_priority_fee_per_gas_capped) = self
+            .apply_gas_price_cap(
+                price_params.gas_price.unwrap_or_default(),
+                price_params.max_fee_per_gas,
+                price_params.max_priority_fee_per_gas,
+                relayer,
+            )?;
+
+        Ok(PriceParams {
+            gas_price: gas_price_capped,
+            max_fee_per_gas: max_fee_per_gas_capped,
+            max_priority_fee_per_gas: max_priority_fee_per_gas_capped,
+            is_min_bumped: None,
+        })
+    }
+
+    async fn calculate_bumped_gas_price(
+        &self,
+        tx: &TransactionRepoModel,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError> {
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+        let network_gas_prices = self.gas_price_service.get_prices_from_json_rpc().await?;
+        let relayer_gas_price_cap = relayer
+            .policies
+            .get_evm_policy()
+            .gas_price_cap
+            .unwrap_or(u128::MAX);
+
+        match (
+            evm_data.max_fee_per_gas,
+            evm_data.max_priority_fee_per_gas,
+            evm_data.gas_price,
+        ) {
+            (Some(max_fee), Some(max_priority_fee), _) => self.handle_eip1559_bump(
+                &network_gas_prices,
+                relayer_gas_price_cap,
+                evm_data.speed.as_ref(),
+                max_fee,
+                max_priority_fee,
+            ),
+            (None, None, Some(gas_price)) => self.handle_legacy_bump(
+                &network_gas_prices,
+                relayer_gas_price_cap,
+                evm_data.speed.as_ref(),
+                gas_price,
+            ),
+            _ => Err(TransactionError::InvalidType(
+                "Transaction missing required gas price parameters".to_string(),
+            )),
+        }
+    }
+}
+
 fn get_base_fee_multiplier(network: &EvmNetwork) -> u128 {
     let block_interval_ms = network.average_blocktime().map(|d| d.as_millis()).unwrap();
 
@@ -534,6 +617,7 @@ fn calculate_max_fee_per_gas(
     // Add priority fee
     multiplied_base_fee + max_priority_fee_wei
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

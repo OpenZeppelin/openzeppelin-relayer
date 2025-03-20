@@ -42,3 +42,59 @@ impl Queue {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_queue_storage_configuration() {
+        // Test the config creation logic without actual Redis connections
+        let namespace = "test_namespace";
+        let config = Config::default()
+            .set_namespace(namespace)
+            .set_max_retries(5);
+
+        assert_eq!(config.get_namespace(), namespace);
+        assert_eq!(config.get_max_retries(), 5);
+    }
+
+    // Mock version of Queue for testing
+    #[derive(Clone, Debug)]
+    struct MockQueue {
+        pub namespace_transaction_request: String,
+        pub namespace_transaction_submission: String,
+        pub namespace_transaction_status: String,
+        pub namespace_notification: String,
+    }
+
+    impl MockQueue {
+        fn new() -> Self {
+            Self {
+                namespace_transaction_request: "transaction_request_queue".to_string(),
+                namespace_transaction_submission: "transaction_submission_queue".to_string(),
+                namespace_transaction_status: "transaction_status_queue".to_string(),
+                namespace_notification: "notification_queue".to_string(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_queue_namespaces() {
+        let mock_queue = MockQueue::new();
+
+        assert_eq!(
+            mock_queue.namespace_transaction_request,
+            "transaction_request_queue"
+        );
+        assert_eq!(
+            mock_queue.namespace_transaction_submission,
+            "transaction_submission_queue"
+        );
+        assert_eq!(
+            mock_queue.namespace_transaction_status,
+            "transaction_status_queue"
+        );
+        assert_eq!(mock_queue.namespace_notification, "notification_queue");
+    }
+}

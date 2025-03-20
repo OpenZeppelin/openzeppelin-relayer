@@ -14,6 +14,8 @@
 //!   ├── EvmSigner
 //!   │   └── LocalSigner
 //!   ├── SolanaSigner
+//!   │   └── LocalSigner
+//!   │   └── VaultTransitSigner
 //!   └── StellarSigner
 
 #![allow(unused_imports)]
@@ -47,10 +49,10 @@ pub trait Signer: Send + Sync {
     /// Returns the signer's ethereum address
     async fn address(&self) -> Result<Address, SignerError>;
 
+    /// Signs a transaction
     async fn sign_transaction(
         &self,
-        transaction: NetworkTransactionData, /* TODO introduce Transactions models for specific
-                                              * operations */
+        transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError>;
 }
 

@@ -209,7 +209,10 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
 
         provider
             .expect_get_latest_blockhash_with_commitment()
@@ -281,7 +284,10 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
 
         // Mock provider responses
         provider
@@ -386,7 +392,10 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| Ok(signature));
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
 
         // Mock provider responses
         provider
@@ -576,7 +585,10 @@ mod tests {
         });
 
         let signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| Ok(signature));
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
 
         // Mock provider responses
         provider

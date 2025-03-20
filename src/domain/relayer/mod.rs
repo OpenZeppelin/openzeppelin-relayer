@@ -17,17 +17,17 @@ use crate::{
         EvmNetwork, EvmTransactionDataSignature, NetworkTransactionRequest, NetworkType,
         RelayerError, RelayerRepoModel, SignerRepoModel, TransactionError, TransactionRepoModel,
     },
-    repositories::RelayerRepositoryStorage,
+    repositories::{
+        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        RelayerRepositoryStorage,
+    },
     services::{
         get_solana_network_provider_from_str, EvmSignerFactory, JupiterService,
         SolanaSignerFactory, TransactionCounterService,
     },
 };
 
-use crate::{
-    repositories::{InMemoryTransactionCounter, InMemoryTransactionRepository},
-    services::EvmProvider,
-};
+use crate::services::EvmProvider;
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -273,7 +273,7 @@ pub trait RelayerFactoryTrait {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -285,7 +285,7 @@ impl RelayerFactoryTrait for RelayerFactory {
     fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage>,
+        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
