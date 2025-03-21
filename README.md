@@ -45,25 +45,30 @@ The OpenZeppelin Relayer is built using Actix-web and provides HTTP endpoints fo
 
 The project follows a standard Rust project layout:
 
-- `src/`: Source code
-  - `api/`: Route and controllers logic
-  - `config/`: Configuration logic
-  - `constants/`: Constant values used in the system
-  - `domain/`: Domain logic
-  - `init/`: Service initialization logic
-  - `jobs/`: Asynchronous processing logic(queueing)
-  - `logging/`: Logs File rotation logic
-  - `metrics/`: Metrics logic
-  - `models/`: Data structures and types
-  - `repositories/`: Configuration storage
-  - `services/`: Services logic
-  - `utils/`: Helper functions
-- `config/`: Configuration files
-- `tests/`: Integration tests
-- `docs/`: Documentation
-- `scripts/`: Utility scripts
-- `examples/`: Configuration examples
-- `helpers/`: Rust helper scripts
+```
+openzeppelin-relayer/
+├── src/
+│   ├── api/              # Route and controllers logic
+│   ├── bootstrap/        # Service initialization logic
+│   ├── config/           # Configuration logic
+│   ├── constants/        # Constant values used in the system
+│   ├── domain/           # Domain logic
+│   ├── jobs/             # Asynchronous processing logic (queueing)
+│   ├── logging/          # Logs File rotation logic
+│   ├── metrics/          # Metrics logic
+│   ├── models/           # Data structures and types
+│   ├── repositories/     # Configuration storage
+│   ├── services/         # Services logic
+│   └── utils/            # Helper functions
+│
+├── config/               # Configuration files
+├── tests/                # Integration tests
+├── docs/                 # Documentation
+├── scripts/              # Utility scripts
+├── examples/             # Configuration examples
+├── helpers/              # Rust helper scripts
+└── ... other root files (Cargo.toml, README.md, etc.)
+```
 
 ### Prerequisites
 

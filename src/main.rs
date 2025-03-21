@@ -45,8 +45,11 @@ use log::info;
 use std::env;
 
 use openzeppelin_relayer::{
-    api, config,
-    init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file},
+    api,
+    bootstrap::{
+        initialize_app_state, initialize_relayers, initialize_workers, process_config_file,
+    },
+    config,
     logging::setup_logging,
     metrics,
     utils::check_authorization_header,

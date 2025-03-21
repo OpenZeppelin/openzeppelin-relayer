@@ -11,6 +11,9 @@ The main source code directory contains the core implementation files organized 
 * `api/`: Route and controllers logic
 ** Manages HTTP routing and delegates incoming requests to controllers
 
+* `bootstrap/`: Service initialization
+** Bootstraps and initializes application services
+
 * `config/`: Configuration management
 ** Handles system configuration and environment settings
 
@@ -19,9 +22,6 @@ The main source code directory contains the core implementation files organized 
 
 * `domain/`: Business domain logic
 ** Encapsulates core business rules and domain-specific functionality
-
-* `init/`: Service initialization
-** Bootstraps and initializes application services
 
 * `jobs/`: Asynchronous job processing
 ** Manages background task queueing and execution
