@@ -14,7 +14,6 @@ services:
     environment:
       METRICS_PORT: 8081
       REDIS_URL: redis://redis:6379
-      CONFIG_FILE_PATH: config/config.json
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 30
       METRICS_ENABLED: true
@@ -30,9 +29,8 @@ services:
       - no-new-privileges
     volumes:
       - ./config:/app/config/
-      # Uncomment to persist logs
       # Default: writes to stdout/console
-      #- ${LOGS_DATA_DIR:-./logs}:/app/logs
+      - ${LOGS_DATA_DIR:-./logs}:/app/logs
     networks:
       - relayer-network
       - metrics-network
