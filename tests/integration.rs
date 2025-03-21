@@ -4,4 +4,5 @@
 
 mod integration {
     mod logging;
+    mod metrics;
 }

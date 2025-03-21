@@ -57,8 +57,6 @@ The project follows a standard Rust project layout:
 * `helpers/`: Rust helper scripts
 
 
-
-
 For detailed information about each directory and its contents, see xref:structure.adoc[Project Structure Details].
 
 == Getting Started
@@ -79,6 +77,11 @@ For detailed information about each directory and its contents, see xref:structu
 git clone https://github.com/openzeppelin/openzeppelin-relayer
 cd openzeppelin-relayer
 ----
+
+. Verify you have sodium libs installed. If not follow instructions:
+
+* Install stable libsodium version from link:https://download.libsodium.org/libsodium/releases/[here].
+* Follow steps to install libsodium from the link:https://doc.libsodium.org/installation[libsodium installation guide].
 
 . Install dependencies:
 
@@ -144,26 +147,88 @@ Please ensure appropriate access permissions on all configuration files (for `./
 
 === Environment configuration (.env)
 
-This file is the exception and should live in the same directory as `docker-compose.yaml`. It defines some base configurations for the Relayer application:
-[source,json]
+This defines some base configurations for the Relayer application:
+
+Copy the example environment file and update values according to your needs
+
+[source,bash]
 ----
-# For defaults see: ./docker-compose.yml
-# Create a .env file in the root of the project and add your environment variables there
-RUST_LOG=debug
-CONFIG_FILE_PATH=./config/config.json
-WEBHOOK_SIGNING_KEY=<my webhook signing key>
-API_KEY=<my api key>
-RATE_LIMIT_RPS=10
-RATE_LIMIT_BURST_SIZE=10
-METRICS_ENABLED=true
+cp .env.example .env
 ----
+
+This table lists the environment variables and their default values.
+
+[cols="1,1,2,3", options="header"]
+|===
+| Environment Variable | Default Value | Accepted Values | Description
+
+| `RUST_LOG`
+| `info`
+| `info, debug, warn, error, trace`
+| Log level.
+
+| `CONFIG_DIR`
+| `./config`
+| `<any relative file path where config.json is located>`
+| Relative path of directory where config files reside
+
+| `CONFIG_FILE_NAME`
+| `config.json`
+| `<any file name>`
+| File Name of the configuration file.
+
+| `RATE_LIMIT_RPS`
+| `10`
+| `<any value>`
+| Rate limit for the API in requests per second.
+
+| `RATE_LIMIT_BURST_SIZE`
+| `30`
+| `<any value>`
+| Rate limit burst size.
+
+| `API_KEY`
+| ``
+| `<Base32 or Base64 encoded string>`
+| API key to use for authentication to the relayer server.
+
+| `WEBHOOK_SIGNING_KEY`
+| ``
+| `<Base32 or Base64 encoded string>`
+| Signing key to use for webhook notifications.
+
+| `LOG_MODE`
+| `stdout`
+| `stdout, file`
+| Write logs either to console or to file.
+
+| `LOG_DATA_DIR`
+| `./logs`
+| `<any file path>`
+| Directory to persist log files on host.
+
+| `LOG_MAX_SIZE (in bytes)`
+| `1073741824`
+| `<any value in bytes>`
+| Size after which logs needs to be rolled.
+
+| `METRICS_ENABLED`
+| `false`
+| `true`
+| Enable metrics server for external tools to scrape metrics.
+
+| `METRICS_PORT`
+| `8081`
+| `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>`
+| Port to use for metrics server.
+|===
 
 Make sure to, at least, choose your API key. Without it, you won't be able to interact with most of the API endpoints on the Relayer.
 If you change any of these value, you will need to restart the container to make them active.
 
 === Main configuration file (config.json)
 
-This file should exist in `config/config.json`
+This file can exist in any directory, but the default location is `./config/config.json`.
 
 There are 3 important sections in this file:
 

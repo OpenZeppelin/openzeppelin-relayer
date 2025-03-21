@@ -222,36 +222,29 @@ jobs:
         run: cargo test --no-run --locked
 
       # Unit tests coverage
-      - name: Run Unit Tests
+      - name: Run Unit Tests and Generate Coverage Report
         env:
           LLVM_PROFILE_FILE: unit-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
-        run: cargo hack llvm-cov --no-report --feature-powerset --locked --lib
-
-      - name: Generate Unit Coverage Report
-        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path unit-lcov.info
-          --lib
+          RUST_TEST_THREADS: 1
+        run: cargo hack llvm-cov --locked --lib --lcov --output-path unit-lcov.info
 
       # Integration tests coverage
-      - name: Run Integration Tests
+      - name: Run Integration Tests and Generate Coverage Report
         env:
           LLVM_PROFILE_FILE: integration-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
-        run: cargo hack llvm-cov --no-report --feature-powerset --locked --test integrations
-
-      - name: Generate Integration Coverage Report
-        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path integration-lcov.info
-          --test integrations
+          RUST_TEST_THREADS: 1
+        run: cargo hack llvm-cov --locked --lcov --output-path integration-lcov.info
+          --test integration
 
       # Properties tests coverage
       - name: Run Properties Tests
         env:
           LLVM_PROFILE_FILE: properties-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
-        run: cargo hack llvm-cov --no-report --feature-powerset --locked --test properties
-
-      - name: Generate Properties Coverage Report
-        run: RUST_TEST_THREADS=1 cargo llvm-cov --locked --lcov --output-path properties-lcov.info
+          RUST_TEST_THREADS: 1
+        run: cargo hack llvm-cov --locked --lcov --output-path properties-lcov.info
           --test properties
 
       # Upload unit coverage
@@ -262,7 +255,7 @@ jobs:
           name: unit-coverage
           files: unit-lcov.info
           flags: unittests
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
       # Upload integration coverage
       - name: Upload Integration Coverage to Codecov
@@ -272,7 +265,7 @@ jobs:
           name: integration-coverage
           files: integration-lcov.info
           flags: integration
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
       # Upload properties coverage
       - name: Upload Properties Coverage to Codecov
@@ -282,13 +275,12 @@ jobs:
           name: properties-coverage
           files: properties-lcov.info
           flags: properties
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
   docker-scan:
     runs-on: ubuntu-latest
     needs: [changed_files, ci]
-    if: ${{ needs.changed_files.outputs.changed-docker-files == 'true' && github.event_name
-      != 'push' }}
+    if: ${{ needs.changed_files.outputs.changed-docker-files == 'true' }}
     steps:
       # Checkout the repository
       - name: Checkout Code
