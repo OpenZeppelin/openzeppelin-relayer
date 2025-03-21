@@ -35,11 +35,26 @@ impl ServerConfig {
     ///
     /// - `HOST` defaults to `"0.0.0.0"`.
     /// - `APP_PORT` defaults to `8080`.
-    /// - `CONFIG_FILE_PATH` defaults to `"config/config.json"`.
+    /// - `CONFIG_DIR` defaults to `"config/config.json"`.
     /// - `RATE_LIMIT_REQUESTS_PER_SECOND` defaults to `100`.
     /// - `RATE_LIMIT_BURST_SIZE` defaults to `300`.
     /// - `METRICS_PORT` defaults to `8081`.
     pub fn from_env() -> Self {
+        let conf_dir = env::var("IN_DOCKER")
+            .map(|val| val == "true")
+            .unwrap_or(false)
+            .then(|| "config/".to_string())
+            .unwrap_or_else(|| env::var("CONFIG_DIR").unwrap_or_else(|_| "./config".to_string()));
+
+        let conf_dir = format!("{}/", conf_dir.trim_end_matches('/'));
+
+        // Get config filename (default: config.json), applies to both local and Docker
+        let config_file_name =
+            env::var("CONFIG_FILE_NAME").unwrap_or_else(|_| "config.json".to_string());
+
+        // Construct full path
+        let config_file_path = format!("{}{}", conf_dir, config_file_name);
+
         Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: env::var("APP_PORT")
@@ -47,8 +62,7 @@ impl ServerConfig {
                 .parse()
                 .unwrap_or(8080),
             redis_url: env::var("REDIS_URL").expect("REDIS_URL must be set"),
-            config_file_path: env::var("CONFIG_FILE_PATH")
-                .unwrap_or_else(|_| "config/config.json".to_string()),
+            config_file_path,
             api_key: SecretString::new(&env::var("API_KEY").expect("API_KEY must be set")),
             rate_limit_requests_per_second: env::var("RATE_LIMIT_REQUESTS_PER_SECOND")
                 .unwrap_or_else(|_| "100".to_string())

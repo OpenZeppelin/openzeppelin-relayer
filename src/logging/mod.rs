@@ -3,7 +3,7 @@
 //! Environment variables used:
 //! - LOG_MODE: "stdout" (default) or "file"
 //! - LOG_LEVEL: log level ("trace", "debug", "info", "warn", "error"); default is "info"
-//! - LOG_FILE_PATH: when using file mode, the path of the log file (default "logs/relayer.log")
+//! - LOG_DATA_DIR: when using file mode, the path of the log file (default "logs/relayer.log")
 
 use chrono::Utc;
 use log::info;
@@ -74,14 +74,14 @@ pub fn setup_logging() {
     if log_mode.to_lowercase() == "file" {
         info!("Logging to file: {}", log_level);
 
-        // Read LOG_FILE_PATH from environment or use default
-        let log_dir = env::var("LOG_FILE_PATH").unwrap_or_else(|_| "logs/".to_string());
-        // Ensure the directory ends with a '/'.
-        let log_dir = if log_dir.ends_with('/') {
-            log_dir
-        } else {
-            format!("{}/", log_dir)
-        };
+        // Use logs/ directly in container path, otherwise use LOG_DATA_DIR or default to logs/ for host path
+        let log_dir = env::var("IN_DOCKER")
+            .map(|val| val == "true")
+            .unwrap_or(false)
+            .then(|| "logs/".to_string())
+            .unwrap_or_else(|| env::var("LOG_DATA_DIR").unwrap_or_else(|_| "./logs".to_string()));
+
+        let log_dir = format!("{}/", log_dir.trim_end_matches('/'));
         // set dates
         let now = Utc::now();
         let date_str = now.format("%Y-%m-%d").to_string();
@@ -245,7 +245,7 @@ mod tests {
             // Set environment variables for testing
             env::set_var("LOG_MODE", "file");
             env::set_var("LOG_LEVEL", "info");
-            env::set_var("LOG_FILE_PATH", &log_path);
+            env::set_var("LOG_DATA_DIR", &log_path);
             env::set_var("LOG_MAX_SIZE", "1024"); // 1KB for testing
 
             // We don't call setup_logging() again, but we can test the directory creation logic
@@ -259,7 +259,7 @@ mod tests {
             // Clean up
             env::remove_var("LOG_MODE");
             env::remove_var("LOG_LEVEL");
-            env::remove_var("LOG_FILE_PATH");
+            env::remove_var("LOG_DATA_DIR");
             env::remove_var("LOG_MAX_SIZE");
         }
     }

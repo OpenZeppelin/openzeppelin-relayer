@@ -48,14 +48,18 @@ Beginner focused information can be found below in [Open a Pull Request](#openin
 ## Communication
 
 - [CODEOWNERS](./CODEOWNERS)
-- [Email](defender-support@openzeppelin.com)
+- [Telegram](t.me/openzeppelin_tg/2)
 - [Website](https://openzeppelin.com/)
 - [Blog](https://blog.openzeppelin.com/)
 - [X](https://x.com/OpenZeppelin)
 
 ## Development Workflow
 
-1. **Set Up Development Environment**:
+1. **Install Sodium**:
+   - Install stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
+   - Follow steps to install libsodium from the [libsodium installation guide](https://doc.libsodium.org/installation).
+
+2. **Set Up Development Environment**:
    - Install dependencies:
 
      ```sh
@@ -68,7 +72,7 @@ Beginner focused information can be found below in [Open a Pull Request](#openin
      cp .env.example .env
      ```
 
-2. **Run Tests**:
+3. **Run Tests**:
    - Unit tests:
 
      ```sh
@@ -83,13 +87,8 @@ Beginner focused information can be found below in [Open a Pull Request](#openin
 
     > Note: If you run into any issues with the tests, run the tests with `RUST_TEST_THREADS=1` to avoid any racing conditions between tests.
 
-   - (optional) Run tests with coverage:
 
-     ```sh
-     RUST_TEST_THREADS=1 cargo llvm-cov --locked --html --open
-     ```
-
-3. **Configure Pre commit Hooks**:
+4. **Configure Pre commit Hooks**:
 
    - Install & Configure Pre-Commit hooks
 
@@ -330,7 +329,7 @@ When reviewing PRs from others [The Gentle Art of Patch Review](http://sage.thes
 - Is the contribution architected correctly?
 - Is the contribution polished?
 
-Note: if your pull request isn't getting enough attention, you can email us at `defender-support@openzeppelin.com` to get help finding reviewers.
+Note: if your pull request isn't getting enough attention, you can contact us on [Telegram](t.me/openzeppelin_tg/2) to get help finding reviewers.
 
 ## Best practices
 
@@ -475,4 +474,4 @@ By contributing to this project, you agree that your contributions will be licen
 
 ## Code of Conduct
 
-This project and everyone participating in it is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report any unacceptable behavior to `defender-support@openzeppelin.com`
+This project and everyone participating in it is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report any unacceptable behavior on [Telegram](t.me/openzeppelin_tg/2).`

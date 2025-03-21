@@ -10,7 +10,6 @@ services:
       - 8080:8080/tcp
     environment:
       REDIS_URL: redis://redis:6379
-      CONFIG_FILE_PATH: config/config.json
       # Set `WEBHOOK_SIGNING_KEY` & `API_KEY` values in your .env file (recommended) and use that instead of hardcoding them here
       # To avoid accidentally committing sensitive information to your repository
       WEBHOOK_SIGNING_KEY: example-key
@@ -22,7 +21,7 @@ services:
       # Default: stdout
       LOG_MODE: file
       # Default: logs/
-      LOG_FILE_PATH: logs/
+      LOG_DATA_DIR: logs/
       # Set max log file size to rotate to new log file
       # Only used if LOG_MODE is file
       # Default: 1GB (1073741824 bytes)
@@ -33,9 +32,9 @@ services:
       - relayer-network
       - metrics-network
     volumes:
-      - ./config:/app/config/
+      - ${CONFIG_DIR:-./config}:/app/config/:ro
       # Mount logs folder to persist logs
-      - ./logs:/app/logs
+      - ${LOG_DATA_DIR:./logs:/app/logs}
     depends_on:
       - redis
     restart: on-failure:5

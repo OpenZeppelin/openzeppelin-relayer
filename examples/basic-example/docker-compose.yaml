@@ -10,7 +10,6 @@ services:
       - 8080:8080/tcp
     environment:
       REDIS_URL: redis://redis:6379
-      CONFIG_FILE_PATH: config/config.json
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 50
       # Set `WEBHOOK_SIGNING_KEY` & `API_KEY` values in your .env file (recommended ) and use that instead of hardcoding them here
