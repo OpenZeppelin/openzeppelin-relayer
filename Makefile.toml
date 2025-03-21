@@ -1,6 +1,7 @@
 [tasks.rust-antora]
 description = "Build Antora site and copy rust_docs"
 script = [
+  "apt-get install -y libsodium-dev",
   "cargo doc --target-dir docs/modules/ROOT/pages/rust_docs --no-deps --locked",
   "cd docs",
   "npx antora antora-playbook.yml",
