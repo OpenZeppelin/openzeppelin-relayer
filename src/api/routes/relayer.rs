@@ -19,7 +19,7 @@ use utoipa::ToSchema;
 /// Lists all relayers with pagination support.
 #[utoipa::path(
     get,
-    path = "/relayers",
+    path = "/api/v1/relayers",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -44,7 +44,7 @@ async fn list_relayers(
 /// Retrieves details of a specific relayer by ID.
 #[utoipa::path(
     get,
-    path = "/relayers/{relayer_id}",
+    path = "/api/v1/relayers/{relayer_id}",
     tag = "Relayers",
     security(
         ("bearer_auth" = []) 
@@ -66,7 +66,7 @@ async fn get_relayer(
 /// Updates a relayer's information based on the provided update request.
 #[utoipa::path(
     patch,
-    path = "/relayers/{relayer_id}",
+    path = "/api/v1/relayers/{relayer_id}",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -88,7 +88,7 @@ async fn update_relayer(
 /// Fetches the current status of a specific relayer.
 #[utoipa::path(
     get,
-    path = "/relayers/{relayer_id}/status",
+    path = "/api/v1/relayers/{relayer_id}/status",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -109,7 +109,7 @@ async fn get_relayer_status(
 /// Retrieves the balance of a specific relayer.
 #[utoipa::path(
     get,
-    path = "/relayers/{relayer_id}/balance",
+    path = "/api/v1/relayers/{relayer_id}/balance",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -130,7 +130,7 @@ async fn get_relayer_balance(
 /// Sends a transaction through the specified relayer.
 #[utoipa::path(
     post,
-    path = "/relayers/{relayer_id}/transactions",
+    path = "/api/v1/relayers/{relayer_id}/transactions",
     tag = "Relayers",
     security(
         ("bearer_auth" = ["read"])
@@ -159,7 +159,7 @@ pub struct TransactionPath {
 /// Retrieves a specific transaction by its ID.
 #[utoipa::path(
     get,
-    path = "/relayers/{relayer_id}/transactions/{transaction_id}",
+    path = "/api/v1/relayers/{relayer_id}/transactions/{transaction_id}",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -185,7 +185,7 @@ async fn get_transaction_by_id(
 /// Retrieves a transaction by its nonce value.
 #[utoipa::path(
     get,
-    path = "/relayers/{relayer_id}/transactions/by-nonce/{nonce}",
+    path = "/api/v1/relayers/{relayer_id}/transactions/by-nonce/{nonce}",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -211,7 +211,7 @@ async fn get_transaction_by_nonce(
 /// Lists all transactions for a specific relayer with pagination.
 #[utoipa::path(
     get,
-    path = "/relayers/{relayer_id}/transactions/",
+    path = "/api/v1/relayers/{relayer_id}/transactions/",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -238,7 +238,7 @@ async fn list_transactions(
 /// Deletes all pending transactions for a specific relayer.
 #[utoipa::path(
     delete,
-    path = "/relayers/{relayer_id}/transactions/pending",
+    path = "/api/v1/relayers/{relayer_id}/transactions/pending",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -259,10 +259,14 @@ async fn delete_pending_transactions(
 /// Cancels a specific transaction by its ID.
 #[utoipa::path(
     delete,
-    path = "/relayers/{relayer_id}/transactions/{transaction_id}",
+    path = "/api/v1/relayers/{relayer_id}/transactions/{transaction_id}",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The ID of the relayer"),
+        ("transaction_id" = String, Path, description = "The ID of the transaction")
     ),
     responses(
         (status = 200, description = "Cancel transaction", body = ApiResponse<TransactionResponse>),
@@ -281,10 +285,14 @@ async fn cancel_transaction(
 /// Replaces a specific transaction with a new one.
 #[utoipa::path(
     put,
-    path = "/relayers/{relayer_id}/transactions/{transaction_id}",
+    path = "/api/v1/relayers/{relayer_id}/transactions/{transaction_id}",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The ID of the relayer"),
+        ("transaction_id" = String, Path, description = "The ID of the transaction")
     ),
     responses(
         (status = 200, description = "Cancel transaction", body = ApiResponse<TransactionResponse>),
@@ -303,7 +311,7 @@ async fn replace_transaction(
 /// Signs data using the specified relayer.
 #[utoipa::path(
     post,
-    path = "/relayers/{relayer_id}/sign",
+    path = "/api/v1/relayers/{relayer_id}/sign",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -325,7 +333,7 @@ async fn sign(
 /// Signs typed data using the specified relayer.
 #[utoipa::path(
     post,
-    path = "/relayers/{relayer_id}/sign-typed-data",
+    path = "/api/v1/relayers/{relayer_id}/sign-typed-data",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
@@ -347,7 +355,7 @@ async fn sign_typed_data(
 /// Performs a JSON-RPC call using the specified relayer.
 #[utoipa::path(
     post,
-    path = "/relayers/{relayer_id}/rpc",
+    path = "/api/v1/relayers/{relayer_id}/rpc",
     tag = "Relayers",
     security(
         ("bearer_auth" = [])
