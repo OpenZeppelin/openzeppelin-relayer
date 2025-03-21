@@ -48,9 +48,12 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use openzeppelin_relayer::{
-    api, config,
+    api,
+    bootstrap::{
+        initialize_app_state, initialize_relayers, initialize_workers, process_config_file,
+    },
+    config,
     constants::PUBLIC_ENDPOINTS,
-    init::{initialize_app_state, initialize_relayers, initialize_workers, process_config_file},
     logging::setup_logging,
     metrics,
     openapi::ApiDoc,
