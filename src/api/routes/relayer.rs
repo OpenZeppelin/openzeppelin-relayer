@@ -553,6 +553,6 @@ mod tests {
             }))
             .to_request();
         let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
