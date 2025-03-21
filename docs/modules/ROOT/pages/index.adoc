@@ -633,7 +633,7 @@ NOTE: The OpenZeppelin Relayer is designed to function as a backend service and 
 
 == Support
 
-For support or inquiries, contact defender-support@openzeppelin.com
+For support or inquiries, contact us on link:https://t.me/openzeppelin_tg/2[Telegram].
 
 == License
 This project is licensed under the GNU Affero General Public License v3.0 - see the LICENSE file for details.

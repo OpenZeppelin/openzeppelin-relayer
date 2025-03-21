@@ -286,3 +286,44 @@ docker compose logs -f
 - To view prometheus metrics in a UI, you can use `http://localhost:9090` on your browser.
 
 - To view grafana dashboard, you can use `http://localhost:3000` on your browser.
+
+## Contributing
+
+We welcome contributions from the community! Here's how you can get involved:
+
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+If you are looking for a good place to start, find a good first issue [here](https://github.com/openzeppelin/openzeppelin-relayer/issues?q=is%3Aissue%20is%3Aopen%20label%3Agood-first-issue).
+
+You can open an issue for a [bug report](https://github.com/openzeppelin/openzeppelin-relayer/issues/new?assignees=&labels=T-bug%2CS-needs-triage&projects=&template=bug.yml), [feature request](https://github.com/openzeppelin/openzeppelin-relayer/issues/new?assignees=&labels=T-feature%2CS-needs-triage&projects=&template=feature.yml), or [documentation request](https://github.com/openzeppelin/openzeppelin-relayer/issues/new?assignees=&labels=T-documentation%2CS-needs-triage&projects=&template=docs.yml).
+
+You can find more details in our [Contributing](CONTRIBUTING.md) guide.
+
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md) and check the [Security Policy](SECURITY.md) for reporting vulnerabilities.
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+## Security
+
+For security concerns, please refer to our [Security Policy](SECURITY.md).
+
+## Get Help
+
+If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/).
+
+If the answer is not there:
+
+- Join the [Telegram](https://t.me/openzeppelin_tg/2) to get help, or
+- Open an issue with [the bug](https://github.com/openzeppelin/openzeppelin-relayer/issues/new?assignees=&labels=T-bug%2CS-needs-triage&projects=&template=bug.yml)
+
+We encourage you to reach out with any questions or feedback.
+
+## Maintainers
+
+See [CODEOWNERS](CODEOWNERS) file for the list of project maintainers.
