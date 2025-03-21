@@ -218,13 +218,111 @@ mod actix_tests {
 
     #[actix_rt::test]
     async fn test_gather_metrics_contains_expected_names() {
+        // Update system metrics
         update_system_metrics();
+
+        // Increment request counters to ensure they appear in output
+        REQUEST_COUNTER
+            .with_label_values(&["/test", "GET", "200"])
+            .inc();
+        RAW_REQUEST_COUNTER
+            .with_label_values(&["/test?param=value", "GET", "200"])
+            .inc();
+        REQUEST_LATENCY
+            .with_label_values(&["/test", "GET", "200"])
+            .observe(0.1);
+        ERROR_COUNTER
+            .with_label_values(&["/test", "GET", "500"])
+            .inc();
+
         let metrics = gather_metrics().expect("failed to gather metrics");
         let output = String::from_utf8(metrics).expect("metrics output is not valid UTF-8");
 
+        // System metrics
         assert!(output.contains("cpu_usage_percentage"));
+        assert!(output.contains("memory_usage_percentage"));
+        assert!(output.contains("memory_usage_bytes"));
         assert!(output.contains("total_memory_bytes"));
+        assert!(output.contains("available_memory_bytes"));
         assert!(output.contains("disk_usage_bytes"));
+        assert!(output.contains("disk_usage_percentage"));
+
+        // Request metrics
+        assert!(output.contains("requests_total"));
+        assert!(output.contains("raw_requests_total"));
+        assert!(output.contains("request_latency_seconds"));
+        assert!(output.contains("error_requests_total"));
+    }
+
+    #[actix_rt::test]
+    async fn test_update_system_metrics() {
+        // Reset metrics to ensure clean state
+        CPU_USAGE.set(0.0);
+        TOTAL_MEMORY.set(0.0);
+        AVAILABLE_MEMORY.set(0.0);
+        MEMORY_USAGE.set(0.0);
+        MEMORY_USAGE_PERCENT.set(0.0);
+        DISK_USAGE.set(0.0);
+        DISK_USAGE_PERCENT.set(0.0);
+
+        // Call the function we're testing
+        update_system_metrics();
+
+        // Verify that metrics have been updated with reasonable values
+
+        // CPU usage should be between 0 and 100
+        let cpu = CPU_USAGE.get();
+        assert!(
+            (0.0..=100.0).contains(&cpu),
+            "CPU usage should be between 0-100%, got {}",
+            cpu
+        );
+
+        // Memory values should be positive
+        assert!(TOTAL_MEMORY.get() > 0.0, "Total memory should be positive");
+        assert!(
+            AVAILABLE_MEMORY.get() > 0.0,
+            "Available memory should be positive"
+        );
+        assert!(
+            MEMORY_USAGE.get() >= 0.0,
+            "Memory usage should be non-negative"
+        );
+
+        // Memory percentage should be between 0 and 100
+        let mem_percent = MEMORY_USAGE_PERCENT.get();
+        assert!(
+            (0.0..=100.0).contains(&mem_percent),
+            "Memory usage percentage should be between 0-100%, got {}",
+            mem_percent
+        );
+
+        // Disk usage percentage should be between 0 and 100
+        let disk_percent = DISK_USAGE_PERCENT.get();
+        assert!(
+            (0.0..=100.0).contains(&disk_percent),
+            "Disk usage percentage should be between 0-100%, got {}",
+            disk_percent
+        );
+
+        // Disk usage should be non-negative
+        assert!(DISK_USAGE.get() >= 0.0, "Disk usage should be non-negative");
+
+        // Verify that memory calculations are consistent
+        let total = TOTAL_MEMORY.get();
+        let used = MEMORY_USAGE.get();
+        let available = AVAILABLE_MEMORY.get();
+
+        // Used + Available should approximately equal Total (allowing for small variations)
+        let diff = (total - (used + available)).abs();
+        let tolerance = total * 0.05; // 5% tolerance
+        assert!(
+            diff <= tolerance,
+            "Memory calculation inconsistency: total={}, used={}, available={}",
+            total,
+            used,
+            available
+        );
     }
 
     #[actix_rt::test]
