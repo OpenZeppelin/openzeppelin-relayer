@@ -15,7 +15,6 @@ services:
       APP_PORT: ${APP_PORT:-8080}
       METRICS_PORT: ${METRICS_PORT:-8081}
       REDIS_URL: redis://redis:6379
-      CONFIG_PATH: ${CONFIG_FILE_PATH:-config/config.json}
       RATE_LIMIT_REQUESTS_PER_SECOND: ${RATE_LIMIT_RPS:-10}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
@@ -23,18 +22,16 @@ services:
       API_KEY:
       # Options: trace, debug, info, warn, error
       # Default: info
+      # Options: trace, debug, info, warn, error
+      # Default: info
       LOG_LEVEL: ${RUST_LOG:-info}
       # Options: stdout, file
-      # Uncomment to write logs to file
       # Default: stdout
-      # LOG_MODE: file
-      # Default: logs/
-      # Uncomment to specify log file path dir where to store logs
-      # LOG_FILE_PATH: logs/
-      # Uncomment to set max log file size
+      LOG_MODE: ${LOG_MODE:-stdout}
       # Only used if LOG_MODE is file
       # Default: 1GB (1073741824 bytes)
-      # LOG_MAX_SIZE: 1073741824
+      LOG_MAX_SIZE: ${LOG_MAX_SIZE:-1073741824}
+      IN_DOCKER: 'true'
     depends_on:
       - redis
     restart: on-failure:5
@@ -42,10 +39,9 @@ services:
     security_opt:
       - no-new-privileges
     volumes:
-      - ./config:/app/config/:ro
-      # Uncomment to persist logs
+      - ${CONFIG_DIR:-./config}:/app/config/:ro
       # Default: writes to stdout/console
-      #- ${LOGS_DATA_DIR:-./logs}:/app/logs
+      - ${LOGS_DATA_DIR:-./logs}:/app/logs
     networks:
       - relayer-network
       - metrics-network

@@ -70,6 +70,7 @@ The project follows a standard Rust project layout:
 - Docker
 - Rust
 - Redis
+- [Sodium](https://doc.libsodium.org/)
 
 ### Setup
 
@@ -96,6 +97,11 @@ Run the following commands to install pre-commit hooks:
   ```sh
   rustup component add rustfmt
   ```
+
+### Install Sodium
+
+- Install stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
+- Follow steps to install libsodium from the [libsodium installation guide](https://doc.libsodium.org/installation).
 
 ### Run Tests
 
