@@ -1,4 +1,4 @@
 [build]
 base = "/"
-command = "cargo install cargo-make --locked --force && cd docs && npm ci --include dev && cd .. && cargo make rust-antora"
+command = "rustup default stable && cargo install cargo-make --locked --force && cd docs && npm ci --include dev && cd .. && cargo make rust-antora"
 publish = "docs/build/site"
