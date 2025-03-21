@@ -50,7 +50,7 @@ impl KeyExtractor for ApiKeyRateLimit {
         response.content_type(ContentType::json())
             .body(
                 format!(
-                    r#"{{ "success": false, "code":429, "error": "TooManyRequests", "message": "TooManyRequests", "after": {wait_time}}}"#
+                    r#"{{ "success": false, "code":429, "error": "TooManyRequests", "message": "Too Many Requests", "after": {wait_time}}}"#
                 )
             )
     }
@@ -127,7 +127,7 @@ mod tests {
         assert!(body_str.contains(r#""success": false"#));
         assert!(body_str.contains(r#""code":429"#));
         assert!(body_str.contains(r#""error": "TooManyRequests""#));
-        assert!(body_str.contains(r#""message": "TooManyRequests""#));
+        assert!(body_str.contains(r#""message": "Too Many Requests""#));
         assert!(body_str.contains(r#""after":"#));
     }
 }
