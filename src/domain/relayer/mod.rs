@@ -181,7 +181,7 @@ pub trait SolanaRelayerTrait {
 }
 
 pub enum NetworkRelayer {
-    Evm(EvmRelayer),
+    Evm(DefaultEvmRelayer),
     Solana(SolanaRelayer),
     Stellar(StellarRelayer),
 }
@@ -305,12 +305,12 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
-                let transaction_counter_service = TransactionCounterService::new(
+                let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
                     transaction_counter_store,
-                );
-                let relayer = EvmRelayer::new(
+                ));
+                let relayer = DefaultEvmRelayer::new(
                     relayer,
                     signer_service,
                     evm_provider,

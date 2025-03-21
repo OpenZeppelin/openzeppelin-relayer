@@ -469,6 +469,31 @@ where
 }
 
 #[cfg(test)]
+mockall::mock! {
+    pub RelayerRepository {}
+
+    #[async_trait]
+    impl Repository<RelayerRepoModel, String> for RelayerRepository {
+        async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn list_paginated(&self, query: PaginationQuery) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError>;
+        async fn update(&self, id: String, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
+        async fn count(&self) -> Result<usize, RepositoryError>;
+    }
+
+    #[async_trait]
+    impl RelayerRepository for RelayerRepository {
+        async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn partial_update(&self, id: String, update: RelayerUpdateRequest) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn disable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
