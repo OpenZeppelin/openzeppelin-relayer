@@ -426,33 +426,6 @@ impl SignTransactionResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum RpcMethod {
-    // Solana methods
-    FeeEstimate,
-    TransferTransaction,
-    PrepareTransaction,
-    SignTransaction,
-    SignAndSendTransaction,
-    GetSupportedTokens,
-    GetFeaturesEnabled,
-}
-
-impl RpcMethod {
-    pub fn as_str(&self) -> &str {
-        match self {
-            RpcMethod::FeeEstimate => "feeEstimate",
-            RpcMethod::TransferTransaction => "transferTransaction",
-            RpcMethod::PrepareTransaction => "prepareTransaction",
-            RpcMethod::SignTransaction => "signTransaction",
-            RpcMethod::SignAndSendTransaction => "signAndSendTransaction",
-            RpcMethod::GetSupportedTokens => "getSupportedTokens",
-            RpcMethod::GetFeaturesEnabled => "getFeaturesEnabled",
-        }
-    }
-}
-
 // JSON-RPC Request struct
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct JsonRpcRequest<T> {
