@@ -3,7 +3,7 @@
 //! This module contains functions for initializing the application state,
 //! including setting up repositories, job queues, and other necessary components.
 use crate::{
-    jobs::{self, Queue},
+    jobs::{self, JobProducer, Queue},
     models::AppState,
     repositories::{
         InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// Returns error if:
 /// - Repository initialization fails
 /// - Configuration loading fails
-pub async fn initialize_app_state() -> Result<web::ThinData<AppState>> {
+pub async fn initialize_app_state() -> Result<web::ThinData<AppState<JobProducer>>> {
     let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
         InMemoryRelayerRepository::new(),
     ));

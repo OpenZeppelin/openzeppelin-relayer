@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Clone)]
 pub struct PaginationMeta {
     pub current_page: u32,
     pub per_page: u32,
@@ -61,5 +61,81 @@ impl<T> ApiResponse<T> {
             error: None,
             pagination: Some(meta),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_with_data() {
+        let data = "test data";
+        let response = ApiResponse::new(Some(data), None, None);
+
+        assert!(response.success);
+        assert_eq!(response.data, Some(data));
+        assert_eq!(response.error, None);
+        assert_eq!(response.pagination, None);
+    }
+
+    #[test]
+    fn test_new_with_error() {
+        let error = "test error";
+        let response: ApiResponse<()> = ApiResponse::new(None, Some(error.to_string()), None);
+
+        assert!(!response.success);
+        assert_eq!(response.data, None);
+        assert_eq!(response.error, Some(error.to_string()));
+        assert_eq!(response.pagination, None);
+    }
+
+    #[test]
+    fn test_success() {
+        let data = "test data";
+        let response = ApiResponse::success(data);
+
+        assert!(response.success);
+        assert_eq!(response.data, Some(data));
+        assert_eq!(response.error, None);
+        assert_eq!(response.pagination, None);
+    }
+
+    #[test]
+    fn test_error() {
+        let error = "test error";
+        let response: ApiResponse<()> = ApiResponse::error(error);
+
+        assert!(!response.success);
+        assert_eq!(response.data, None);
+        assert_eq!(response.error, Some(error.to_string()));
+        assert_eq!(response.pagination, None);
+    }
+
+    #[test]
+    fn test_no_data() {
+        let response: ApiResponse<String> = ApiResponse::no_data();
+
+        assert!(response.success);
+        assert_eq!(response.data, None);
+        assert_eq!(response.error, None);
+        assert_eq!(response.pagination, None);
+    }
+
+    #[test]
+    fn test_paginated() {
+        let data = "test data";
+        let pagination = PaginationMeta {
+            current_page: 1,
+            per_page: 10,
+            total_items: 100,
+        };
+
+        let response = ApiResponse::paginated(data, pagination.clone());
+
+        assert!(response.success);
+        assert_eq!(response.data, Some(data));
+        assert_eq!(response.error, None);
+        assert_eq!(response.pagination, Some(pagination));
     }
 }

@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::{
     config::{Config, SignerFileConfig, SignerFileConfigEnum},
+    jobs::JobProducer,
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
         SignerConfig, SignerRepoModel, VaultTransitSignerConfig,
@@ -146,7 +147,10 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes signers in parallel using futures.
-async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
+async fn process_signers(
+    config_file: &Config,
+    app_state: &ThinData<AppState<JobProducer>>,
+) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
         let signer_repo_model = process_signer(signer).await?;
 
@@ -171,7 +175,10 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes notifications in parallel using futures.
-async fn process_notifications(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
+async fn process_notifications(
+    config_file: &Config,
+    app_state: &ThinData<AppState<JobProducer>>,
+) -> Result<()> {
     let notification_futures = config_file.notifications.iter().map(|notification| async {
         let notification_repo_model = NotificationRepoModel::try_from(notification.clone())
             .wrap_err("Failed to convert notification config")?;
@@ -200,7 +207,10 @@ async fn process_notifications(config_file: &Config, app_state: &ThinData<AppSta
 /// 5. Store the resulting model in the repository
 ///
 /// This function processes relayers in parallel using futures.
-async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
+async fn process_relayers(
+    config_file: &Config,
+    app_state: &ThinData<AppState<JobProducer>>,
+) -> Result<()> {
     let signers = app_state.signer_repository.list_all().await?;
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
@@ -237,7 +247,10 @@ async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) 
 /// 1. Process signers
 /// 2. Process notifications
 /// 3. Process relayers
-pub async fn process_config_file(config_file: Config, app_state: ThinData<AppState>) -> Result<()> {
+pub async fn process_config_file(
+    config_file: Config,
+    app_state: ThinData<AppState<JobProducer>>,
+) -> Result<()> {
     process_signers(&config_file, &app_state).await?;
     process_notifications(&config_file, &app_state).await?;
     process_relayers(&config_file, &app_state).await?;

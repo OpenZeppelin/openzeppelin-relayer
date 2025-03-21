@@ -348,6 +348,3 @@ impl Relayer for EvmRelayer {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {}
