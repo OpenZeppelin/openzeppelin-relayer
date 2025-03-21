@@ -69,3 +69,81 @@ where
 {
     Ok(Some(deserialize_u64(deserializer)?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::de::value::{
+        Error as ValueError, I64Deserializer, StringDeserializer, U64Deserializer,
+    };
+
+    #[test]
+    fn test_deserialize_u128_from_string() {
+        let input = "12345";
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_u128(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 12345);
+    }
+
+    #[test]
+    fn test_deserialize_u128_from_string_large_value() {
+        let input = "340282366920938463463374607431768211455"; // u128::MAX
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_u128(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), u128::MAX);
+    }
+
+    #[test]
+    fn test_deserialize_u128_from_invalid_string() {
+        let input = "not a number";
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_u128(deserializer);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_u128_from_u64() {
+        let input: u64 = 54321;
+        let deserializer = U64Deserializer::<ValueError>::new(input);
+        let result = deserialize_u128(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 54321u128);
+    }
+
+    #[test]
+    fn test_deserialize_u128_from_i64_positive() {
+        let input: i64 = 9876;
+        let deserializer = I64Deserializer::<ValueError>::new(input);
+        let result = deserialize_u128(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 9876u128);
+    }
+
+    #[test]
+    fn test_deserialize_u128_from_i64_negative() {
+        let input: i64 = -123;
+        let deserializer = I64Deserializer::<ValueError>::new(input);
+        let result = deserialize_u128(deserializer);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_optional_u128() {
+        let input = "12345";
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_optional_u128(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(12345u128));
+    }
+
+    #[test]
+    fn test_deserialize_optional_u64() {
+        let input = "12345";
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_optional_u64(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(12345u64));
+    }
+}

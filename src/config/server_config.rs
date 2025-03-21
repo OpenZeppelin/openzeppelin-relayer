@@ -79,3 +79,98 @@ impl ServerConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lazy_static::lazy_static;
+    use std::env;
+    use std::sync::Mutex;
+
+    // Use a mutex to ensure tests don't run in parallel when modifying env vars
+    lazy_static! {
+        static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    fn setup() {
+        // Clear all environment variables first
+        env::remove_var("HOST");
+        env::remove_var("APP_PORT");
+        env::remove_var("REDIS_URL");
+        env::remove_var("CONFIG_DIR");
+        env::remove_var("CONFIG_FILE_NAME");
+        env::remove_var("CONFIG_FILE_PATH");
+        env::remove_var("API_KEY");
+        env::remove_var("RATE_LIMIT_REQUESTS_PER_SECOND");
+        env::remove_var("RATE_LIMIT_BURST_SIZE");
+        env::remove_var("METRICS_PORT");
+
+        // Set required variables for most tests
+        env::set_var("REDIS_URL", "redis://localhost:6379");
+        env::set_var("API_KEY", "test_api_key");
+    }
+
+    #[test]
+    fn test_default_values() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        setup();
+
+        let config = ServerConfig::from_env();
+
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.redis_url, "redis://localhost:6379");
+        assert_eq!(config.config_file_path, "./config/config.json");
+        assert_eq!(config.api_key, SecretString::new("test_api_key"));
+        assert_eq!(config.rate_limit_requests_per_second, 100);
+        assert_eq!(config.rate_limit_burst_size, 300);
+        assert_eq!(config.metrics_port, 8081);
+    }
+
+    #[test]
+    fn test_invalid_port_values() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        setup();
+        env::set_var("REDIS_URL", "redis://localhost:6379");
+        env::set_var("API_KEY", "test_api_key");
+        env::set_var("APP_PORT", "not_a_number");
+        env::set_var("METRICS_PORT", "also_not_a_number");
+        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "invalid");
+        env::set_var("RATE_LIMIT_BURST_SIZE", "invalid");
+
+        let config = ServerConfig::from_env();
+
+        // Should fall back to defaults when parsing fails
+        assert_eq!(config.port, 8080);
+        assert_eq!(config.metrics_port, 8081);
+        assert_eq!(config.rate_limit_requests_per_second, 100);
+        assert_eq!(config.rate_limit_burst_size, 300);
+    }
+
+    #[test]
+    fn test_custom_values() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        setup();
+
+        env::set_var("HOST", "127.0.0.1");
+        env::set_var("APP_PORT", "9090");
+        env::set_var("REDIS_URL", "redis://custom:6379");
+        env::set_var("CONFIG_DIR", "custom");
+        env::set_var("CONFIG_FILE_NAME", "path.json");
+        env::set_var("API_KEY", "custom_api_key");
+        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "200");
+        env::set_var("RATE_LIMIT_BURST_SIZE", "500");
+        env::set_var("METRICS_PORT", "9091");
+
+        let config = ServerConfig::from_env();
+
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 9090);
+        assert_eq!(config.redis_url, "redis://custom:6379");
+        assert_eq!(config.config_file_path, "custom/path.json");
+        assert_eq!(config.api_key, SecretString::new("custom_api_key"));
+        assert_eq!(config.rate_limit_requests_per_second, 200);
+        assert_eq!(config.rate_limit_burst_size, 500);
+        assert_eq!(config.metrics_port, 9091);
+    }
+}
