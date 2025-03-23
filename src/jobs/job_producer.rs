@@ -48,6 +48,22 @@ pub struct JobProducer {
     queue: Mutex<Queue>,
 }
 
+impl Clone for JobProducer {
+    fn clone(&self) -> Self {
+        // We can't clone the Mutex directly, but we can create a new one with a cloned Queue
+        // This requires getting the lock first
+        let queue = self
+            .queue
+            .try_lock()
+            .expect("Failed to lock queue for cloning")
+            .clone();
+
+        Self {
+            queue: Mutex::new(queue),
+        }
+    }
+}
+
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait JobProducerTrait: Send + Sync {

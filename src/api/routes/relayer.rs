@@ -7,6 +7,7 @@ use crate::{
         BalanceResponse, JsonRpcRequest, JsonRpcResponse, RelayerUpdateRequest, SignDataRequest,
         SignDataResponse, SignTypedDataRequest,
     },
+    jobs::JobProducer,
     models::{
         ApiResponse, AppState, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
         PaginationQuery, RelayerResponse, TransactionResponse,
@@ -80,7 +81,7 @@ use utoipa::ToSchema;
 #[get("/relayers")]
 async fn list_relayers(
     query: web::Query<PaginationQuery>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::list_relayers(query.into_inner(), data).await
 }
@@ -158,7 +159,7 @@ async fn list_relayers(
 #[get("/relayers/{relayer_id}")]
 async fn get_relayer(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::get_relayer(relayer_id.into_inner(), data).await
 }
@@ -233,7 +234,7 @@ async fn get_relayer(
 async fn update_relayer(
     relayer_id: web::Path<String>,
     update_req: web::Json<RelayerUpdateRequest>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::update_relayer(relayer_id.into_inner(), update_req.into_inner(), data).await
 }
@@ -307,7 +308,7 @@ async fn update_relayer(
 #[get("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::get_relayer_status(relayer_id.into_inner(), data).await
 }
@@ -381,7 +382,7 @@ async fn get_relayer_status(
 #[get("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::get_relayer_balance(relayer_id.into_inner(), data).await
 }
@@ -457,7 +458,7 @@ async fn get_relayer_balance(
 async fn send_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::send_transaction(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -538,7 +539,7 @@ pub struct TransactionPath {
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_transaction_by_id(
     path: web::Path<TransactionPath>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, data).await
@@ -614,7 +615,7 @@ async fn get_transaction_by_id(
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_transaction_by_nonce(
     params: web::Path<(String, u64)>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     let params = params.into_inner();
     relayer::get_transaction_by_nonce(params.0, params.1, data).await
@@ -692,7 +693,7 @@ async fn get_transaction_by_nonce(
 async fn list_transactions(
     relayer_id: web::Path<String>,
     query: web::Query<PaginationQuery>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::list_transactions(relayer_id.into_inner(), query.into_inner(), data).await
 }
@@ -766,7 +767,7 @@ async fn list_transactions(
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::delete_pending_transactions(relayer_id.into_inner(), data).await
 }
@@ -841,7 +842,7 @@ async fn delete_pending_transactions(
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_transaction(
     path: web::Path<TransactionPath>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::cancel_transaction(path.relayer_id, path.transaction_id, data).await
@@ -917,7 +918,7 @@ async fn cancel_transaction(
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_transaction(
     path: web::Path<TransactionPath>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::replace_transaction(path.relayer_id, path.transaction_id, data).await
@@ -993,7 +994,7 @@ async fn replace_transaction(
 async fn sign(
     relayer_id: web::Path<String>,
     req: web::Json<SignDataRequest>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -1068,7 +1069,7 @@ async fn sign(
 async fn sign_typed_data(
     relayer_id: web::Path<String>,
     req: web::Json<SignTypedDataRequest>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -1154,7 +1155,7 @@ async fn sign_typed_data(
 async fn rpc(
     relayer_id: web::Path<String>,
     req: web::Json<JsonRpcRequest<NetworkRpcRequest>>,
-    data: web::ThinData<AppState>,
+    data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -1195,7 +1196,7 @@ mod tests {
     use std::sync::Arc;
 
     // Simple mock for AppState
-    async fn get_test_app_state() -> AppState {
+    async fn get_test_app_state() -> AppState<JobProducer> {
         AppState {
             relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
                 InMemoryRelayerRepository::new(),

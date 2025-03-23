@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::{
     config::{Config, SignerFileConfig, SignerFileConfigEnum},
+    jobs::JobProducerTrait,
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
         SignerConfig, SignerRepoModel, VaultTransitSignerConfig,
@@ -146,7 +147,10 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes signers in parallel using futures.
-async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
+async fn process_signers<J: JobProducerTrait>(
+    config_file: &Config,
+    app_state: &ThinData<AppState<J>>,
+) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
         let signer_repo_model = process_signer(signer).await?;
 
@@ -171,7 +175,10 @@ async fn process_signers(config_file: &Config, app_state: &ThinData<AppState>) -
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes notifications in parallel using futures.
-async fn process_notifications(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
+async fn process_notifications<J: JobProducerTrait>(
+    config_file: &Config,
+    app_state: &ThinData<AppState<J>>,
+) -> Result<()> {
     let notification_futures = config_file.notifications.iter().map(|notification| async {
         let notification_repo_model = NotificationRepoModel::try_from(notification.clone())
             .wrap_err("Failed to convert notification config")?;
@@ -200,7 +207,10 @@ async fn process_notifications(config_file: &Config, app_state: &ThinData<AppSta
 /// 5. Store the resulting model in the repository
 ///
 /// This function processes relayers in parallel using futures.
-async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) -> Result<()> {
+async fn process_relayers<J: JobProducerTrait>(
+    config_file: &Config,
+    app_state: &ThinData<AppState<J>>,
+) -> Result<()> {
     let signers = app_state.signer_repository.list_all().await?;
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
@@ -237,7 +247,10 @@ async fn process_relayers(config_file: &Config, app_state: &ThinData<AppState>) 
 /// 1. Process signers
 /// 2. Process notifications
 /// 3. Process relayers
-pub async fn process_config_file(config_file: Config, app_state: ThinData<AppState>) -> Result<()> {
+pub async fn process_config_file<J: JobProducerTrait>(
+    config_file: Config,
+    app_state: ThinData<AppState<J>>,
+) -> Result<()> {
     process_signers(&config_file, &app_state).await?;
     process_notifications(&config_file, &app_state).await?;
     process_relayers(&config_file, &app_state).await?;
@@ -249,14 +262,54 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            AwsKmsSignerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            AwsKmsSignerFileConfig, ConfigFileNetworkType, NotificationFileConfig,
+            RelayerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
             VaultTransitSignerFileConfig,
         },
+        jobs::MockJobProducerTrait,
         models::{PlainOrEnvValue, SecretString},
+        repositories::{
+            InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
+            InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        },
     };
     use serde_json::json;
+    use std::sync::Arc;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn create_test_app_state() -> AppState<MockJobProducerTrait> {
+        // Create a mock job producer
+        let mut mock_job_producer = MockJobProducerTrait::new();
+
+        // Set up expectations for the mock
+        mock_job_producer
+            .expect_produce_transaction_request_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        AppState {
+            relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
+                InMemoryRelayerRepository::default(),
+            )),
+            transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
+            signer_repository: Arc::new(InMemorySignerRepository::default()),
+            notification_repository: Arc::new(InMemoryNotificationRepository::default()),
+            transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
+            job_producer: Arc::new(mock_job_producer),
+        }
+    }
 
     #[tokio::test]
     async fn test_process_signer_test() {
@@ -461,6 +514,220 @@ mod tests {
             SignerConfig::Vault(_) => {}
             _ => panic!("Expected Vault config"),
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_signers() -> Result<()> {
+        // Create test signers
+        let signers = vec![
+            SignerFileConfig {
+                id: "test-signer-1".to_string(),
+                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+            },
+            SignerFileConfig {
+                id: "test-signer-2".to_string(),
+                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+            },
+        ];
+
+        // Create config
+        let config = Config {
+            signers,
+            relayers: vec![],
+            notifications: vec![],
+        };
+
+        // Create app state
+        let app_state = ThinData(create_test_app_state());
+
+        // Process signers
+        process_signers(&config, &app_state).await?;
+
+        // Verify signers were created
+        let stored_signers = app_state.signer_repository.list_all().await?;
+        assert_eq!(stored_signers.len(), 2);
+        assert!(stored_signers.iter().any(|s| s.id == "test-signer-1"));
+        assert!(stored_signers.iter().any(|s| s.id == "test-signer-2"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_notifications() -> Result<()> {
+        // Create test notifications
+        let notifications = vec![
+            NotificationFileConfig {
+                id: "test-notification-1".to_string(),
+                r#type: crate::config::NotificationFileConfigType::Webhook,
+                url: "https://hooks.slack.com/test1".to_string(),
+                signing_key: None,
+            },
+            NotificationFileConfig {
+                id: "test-notification-2".to_string(),
+                r#type: crate::config::NotificationFileConfigType::Webhook,
+                url: "https://hooks.slack.com/test2".to_string(),
+                signing_key: None,
+            },
+        ];
+
+        // Create config
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications,
+        };
+
+        // Create app state
+        let app_state = ThinData(create_test_app_state());
+
+        // Process notifications
+        process_notifications(&config, &app_state).await?;
+
+        // Verify notifications were created
+        let stored_notifications = app_state.notification_repository.list_all().await?;
+        assert_eq!(stored_notifications.len(), 2);
+        assert!(stored_notifications
+            .iter()
+            .any(|n| n.id == "test-notification-1"));
+        assert!(stored_notifications
+            .iter()
+            .any(|n| n.id == "test-notification-2"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_relayers() -> Result<()> {
+        // Create test signers
+        let signers = vec![SignerFileConfig {
+            id: "test-signer-1".to_string(),
+            config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+        }];
+
+        // Create test relayers
+        let relayers = vec![RelayerFileConfig {
+            id: "test-relayer-1".to_string(),
+            network_type: ConfigFileNetworkType::Evm,
+            signer_id: "test-signer-1".to_string(),
+            name: "test-relayer-1".to_string(),
+            network: "test-network".to_string(),
+            paused: false,
+            policies: None,
+            notification_id: None,
+        }];
+
+        // Create config
+        let config = Config {
+            signers: signers.clone(),
+            relayers,
+            notifications: vec![],
+        };
+
+        // Create app state
+        let app_state = ThinData(create_test_app_state());
+
+        // First process signers (required for relayers)
+        process_signers(&config, &app_state).await?;
+
+        // Process relayers
+        process_relayers(&config, &app_state).await?;
+
+        // Verify relayers were created
+        let stored_relayers = app_state.relayer_repository.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
+        assert_eq!(stored_relayers[0].signer_id, "test-signer-1");
+        assert!(!stored_relayers[0].address.is_empty()); // Address should be populated
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_config_file() -> Result<()> {
+        // Create test signers, relayers, and notifications
+        let signers = vec![SignerFileConfig {
+            id: "test-signer-1".to_string(),
+            config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+        }];
+
+        let relayers = vec![RelayerFileConfig {
+            id: "test-relayer-1".to_string(),
+            network_type: ConfigFileNetworkType::Evm,
+            signer_id: "test-signer-1".to_string(),
+            name: "test-relayer-1".to_string(),
+            network: "test-network".to_string(),
+            paused: false,
+            policies: None,
+            notification_id: None,
+        }];
+
+        let notifications = vec![NotificationFileConfig {
+            id: "test-notification-1".to_string(),
+            r#type: crate::config::NotificationFileConfigType::Webhook,
+            url: "https://hooks.slack.com/test1".to_string(),
+            signing_key: None,
+        }];
+
+        // Create config
+        let config = Config {
+            signers,
+            relayers,
+            notifications,
+        };
+
+        // Create shared repositories
+        let signer_repo = Arc::new(InMemorySignerRepository::default());
+        let relayer_repo = Arc::new(RelayerRepositoryStorage::in_memory(
+            InMemoryRelayerRepository::default(),
+        ));
+        let notification_repo = Arc::new(InMemoryNotificationRepository::default());
+        let transaction_repo = Arc::new(InMemoryTransactionRepository::default());
+        let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
+
+        // Create a mock job producer
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        mock_job_producer
+            .expect_produce_transaction_request_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        mock_job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let job_producer = Arc::new(mock_job_producer);
+
+        // Create app state
+        let app_state = ThinData(AppState {
+            signer_repository: signer_repo.clone(),
+            relayer_repository: relayer_repo.clone(),
+            notification_repository: notification_repo.clone(),
+            transaction_repository: transaction_repo.clone(),
+            transaction_counter_store: transaction_counter.clone(),
+            job_producer: job_producer.clone(),
+        });
+
+        // Process the entire config file
+        process_config_file(config, app_state).await?;
+
+        // Verify all repositories were populated
+        let stored_signers = signer_repo.list_all().await?;
+        assert_eq!(stored_signers.len(), 1);
+        assert_eq!(stored_signers[0].id, "test-signer-1");
+
+        let stored_relayers = relayer_repo.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
+        assert_eq!(stored_relayers[0].signer_id, "test-signer-1");
+
+        let stored_notifications = notification_repo.list_all().await?;
+        assert_eq!(stored_notifications.len(), 1);
+        assert_eq!(stored_notifications[0].id, "test-notification-1");
 
         Ok(())
     }
