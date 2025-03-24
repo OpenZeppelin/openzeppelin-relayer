@@ -1,18 +1,21 @@
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Serialize, PartialEq, Clone)]
+#[derive(Debug, Serialize, PartialEq, Clone, ToSchema)]
 pub struct PaginationMeta {
     pub current_page: u32,
     pub per_page: u32,
     pub total_items: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
+    #[schema(nullable = false)]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub pagination: Option<PaginationMeta>,
 }
 

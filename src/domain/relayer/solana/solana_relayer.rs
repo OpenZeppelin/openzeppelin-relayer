@@ -16,8 +16,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait},
     models::{
-        produce_relayer_disabled_payload, RelayerNetworkPolicy, RelayerRepoModel,
-        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaNetwork,
+        produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
+        RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+        SolanaNetwork,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepository,
@@ -191,7 +192,10 @@ impl SolanaRelayerTrait for SolanaRelayer {
         })
     }
 
-    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+    async fn rpc(
+        &self,
+        request: JsonRpcRequest<NetworkRpcRequest>,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         let response = self.rpc_handler.handle_request(request).await;
 
         match response {

@@ -1,6 +1,6 @@
 //! This module provides rate limiting functionality using API keys.
 
-use crate::constants::AUTHORIZATION_HEADER_NAME;
+use crate::constants::{AUTHORIZATION_HEADER_NAME, PUBLIC_ENDPOINTS};
 use actix_governor::{KeyExtractor, SimpleKeyExtractionError};
 use actix_web::{
     dev::ServiceRequest,
@@ -18,6 +18,14 @@ impl KeyExtractor for ApiKeyRateLimit {
     type KeyExtractionError = SimpleKeyExtractionError<&'static str>;
 
     fn extract(&self, req: &ServiceRequest) -> Result<Self::Key, Self::KeyExtractionError> {
+        let path = req.path();
+        let is_public_endpoint = PUBLIC_ENDPOINTS
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+
+        if is_public_endpoint {
+            return Ok("swagger-ui-exempt".to_string());
+        }
         req.headers()
             .get(AUTHORIZATION_HEADER_NAME)
             .and_then(|token| token.to_str().ok())
@@ -42,7 +50,7 @@ impl KeyExtractor for ApiKeyRateLimit {
         response.content_type(ContentType::json())
             .body(
                 format!(
-                    r#"{{ "success": false, "code":429, "error": "TooManyRequests", "message": "TooManyRequests", "after": {wait_time}}}"#
+                    r#"{{ "success": false, "code":429, "error": "TooManyRequests", "message": "Too Many Requests", "after": {wait_time}}}"#
                 )
             )
     }
@@ -119,7 +127,7 @@ mod tests {
         assert!(body_str.contains(r#""success": false"#));
         assert!(body_str.contains(r#""code":429"#));
         assert!(body_str.contains(r#""error": "TooManyRequests""#));
-        assert!(body_str.contains(r#""message": "TooManyRequests""#));
+        assert!(body_str.contains(r#""message": "Too Many Requests""#));
         assert!(body_str.contains(r#""after":"#));
     }
 }

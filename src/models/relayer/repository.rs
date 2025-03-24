@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use strum::Display;
+use utoipa::ToSchema;
 
 use crate::{
     constants::{
@@ -9,7 +10,7 @@ use crate::{
     models::RelayerError,
 };
 
-#[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize, Copy)]
+#[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize, Copy, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkType {
     Evm,
@@ -68,12 +69,16 @@ impl Default for RelayerEvmPolicy {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaAllowedTokensPolicy {
     pub mint: String,
+    #[schema(nullable = false)]
     pub decimals: Option<u8>,
+    #[schema(nullable = false)]
     pub symbol: Option<String>,
+    #[schema(nullable = false)]
     pub max_allowed_fee: Option<u64>,
+    #[schema(nullable = false)]
     pub conversion_slippage_percentage: Option<f32>,
 }
 

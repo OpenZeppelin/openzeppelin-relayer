@@ -10,12 +10,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, EvmTransactionDataSignature, NetworkTransactionRequest, NetworkType,
-        RelayerError, RelayerRepoModel, SignerRepoModel, TransactionError, TransactionRepoModel,
+        EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
+        TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -115,7 +117,10 @@ pub trait Relayer {
     ///
     /// A `Result` containing a `JsonRpcResponse` on success, or a
     /// `RelayerError` on failure.
-    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
+    async fn rpc(
+        &self,
+        request: JsonRpcRequest<NetworkRpcRequest>,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
 
     /// Retrieves the current status of the relayer.
     ///
@@ -163,7 +168,10 @@ pub trait SolanaRelayerTrait {
     ///
     /// A `Result` containing a `JsonRpcResponse` on success, or a
     /// `RelayerError` on failure.
-    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError>;
+    async fn rpc(
+        &self,
+        request: JsonRpcRequest<NetworkRpcRequest>,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError>;
 
     /// Initializes the relayer.
     ///
@@ -236,7 +244,10 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn rpc(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+    async fn rpc(
+        &self,
+        request: JsonRpcRequest<NetworkRpcRequest>,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.rpc(request).await,
             NetworkRelayer::Solana(relayer) => relayer.rpc(request).await,
@@ -359,12 +370,12 @@ impl RelayerFactoryTrait for RelayerFactory {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignDataRequest {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignDataResponseEvm {
     pub r: String,
     pub s: String,
@@ -372,19 +383,20 @@ pub struct SignDataResponseEvm {
     pub sig: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignDataResponseSolana {
     pub signature: String,
     pub public_key: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
 pub enum SignDataResponse {
     Evm(SignDataResponseEvm),
     Solana(SignDataResponseSolana),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignTypedDataRequest {
     pub domain_separator: String,
     pub hash_struct_message: String,
@@ -415,31 +427,42 @@ impl SignTransactionResponse {
 }
 
 // JSON-RPC Request struct
-#[derive(Serialize, Deserialize)]
-pub struct JsonRpcRequest {
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct JsonRpcRequest<T> {
     pub jsonrpc: String,
-    pub method: String,
-    pub params: serde_json::Value,
+    #[serde(flatten)]
+    pub params: T,
     pub id: u64,
 }
 
 // JSON-RPC Response struct
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JsonRpcResponse {
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct JsonRpcResponse<T> {
     pub jsonrpc: String,
-    pub result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub result: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub error: Option<JsonRpcError>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub id: Option<u64>,
 }
 
-impl JsonRpcResponse {
-    pub fn result<T: Serialize>(id: u64, result: T) -> Self {
-        let result_seriliazed = serde_json::to_value(result).unwrap();
+impl<T> JsonRpcResponse<T> {
+    /// Creates a new successful JSON-RPC response with the given result and id.
+    ///
+    /// # Arguments
+    /// * `id` - The request identifier
+    /// * `result` - The result value to include in the response
+    ///
+    /// # Returns
+    /// A new JsonRpcResponse with the specified result
+    pub fn result(id: u64, result: T) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
-            result: Some(result_seriliazed),
+            result: Some(result),
             error: None,
             id: Some(id),
         }
@@ -460,20 +483,22 @@ impl JsonRpcResponse {
 }
 
 // JSON-RPC Error struct
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     pub description: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BalanceResponse {
     pub balance: u128,
+    #[schema(example = "wei")]
     pub unit: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct RelayerUpdateRequest {
+    #[schema(nullable = false)]
     pub paused: Option<bool>,
 }

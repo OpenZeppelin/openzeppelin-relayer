@@ -15,8 +15,8 @@ use crate::{
     },
     jobs::JobProducer,
     models::{
-        ApiError, ApiResponse, AppState, NetworkTransactionRequest, NetworkType, PaginationMeta,
-        PaginationQuery, RelayerResponse, TransactionResponse,
+        ApiError, ApiResponse, AppState, NetworkRpcRequest, NetworkTransactionRequest, NetworkType,
+        PaginationMeta, PaginationQuery, RelayerResponse, TransactionResponse,
     },
     repositories::{RelayerRepository, Repository, TransactionRepository},
 };
@@ -105,7 +105,9 @@ pub async fn update_relayer(
         .partial_update(relayer_id.clone(), update_req)
         .await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(updated_relayer)))
+    let relayer_response: RelayerResponse = updated_relayer.into();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
 
 /// Retrieves the status of a specific relayer.
@@ -199,6 +201,11 @@ pub async fn get_transaction_by_id(
     transaction_id: String,
     state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
+    if relayer_id.is_empty() || transaction_id.is_empty() {
+        return Ok(HttpResponse::Ok().json(ApiResponse::<()>::error(
+            "Invalid relayer or transaction ID".to_string(),
+        )));
+    }
     // validation purpose only, checks if relayer exists
     get_relayer_by_id(relayer_id, &state).await?;
 
@@ -331,7 +338,9 @@ pub async fn cancel_transaction(
         .cancel_transaction(transaction_to_cancel)
         .await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(canceled_transaction)))
+    let transaction_response: TransactionResponse = canceled_transaction.into();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
 }
 
 /// Replaces a specific transaction for a relayer.
@@ -434,7 +443,7 @@ pub async fn sign_typed_data(
 /// The result of the JSON-RPC call.
 pub async fn relayer_rpc(
     relayer_id: String,
-    request: JsonRpcRequest,
+    request: JsonRpcRequest<NetworkRpcRequest>,
     state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
