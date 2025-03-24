@@ -93,7 +93,7 @@ async fn list_relayers(
     tag = "Relayers",
     operation_id = "getRelayer",
     security(
-        ("bearer_auth" = []) 
+        ("bearer_auth" = [])
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
