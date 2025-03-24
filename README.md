@@ -35,6 +35,23 @@ View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin_re
 
 View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#running_the_relayer) documentation for more information.
 
+### Examples
+
+The repository includes several ready-to-use examples to help you get started with different configurations:
+
+| Example | Description |
+|---------|-------------|
+| [`basic-example`](./examples/basic-example/) | Simple setup with Redis |
+| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging |
+| [`basic-example-metrics`](./examples/basic-example-metrics/) | Setup with Prometheus and Grafana metrics |
+| [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management |
+| [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing |
+
+Each example includes:
+- A README with step-by-step instructions
+- Docker Compose configuration
+- Required configuration files
+
 ## For Developers
 
 ### Technical Overview
