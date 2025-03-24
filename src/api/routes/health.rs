@@ -6,7 +6,7 @@ use actix_web::{get, web, HttpResponse};
 /// Handles the `/health` endpoint.
 ///
 /// Returns an `HttpResponse` with a status of `200 OK` and a body of `"OK"`.
-
+// LCOV_EXCL_START
 #[utoipa::path(
     get,
     path = "/v1/health",
@@ -16,6 +16,7 @@ use actix_web::{get, web, HttpResponse};
         (status = 500, description = "Internal server error", body = String),
     )
 )]
+// LCOV_EXCL_STOP
 #[get("/health")]
 async fn health() -> Result<HttpResponse, actix_web::Error> {
     Ok(HttpResponse::Ok().body("OK"))

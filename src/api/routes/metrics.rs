@@ -21,6 +21,7 @@ use prometheus::{Encoder, TextEncoder};
 /// # Returns
 ///
 /// An `HttpResponse` containing a JSON array of metric names.
+// LCOV_EXCL_START
 #[utoipa::path(
     get,
     path = "/metrics",
@@ -30,6 +31,7 @@ use prometheus::{Encoder, TextEncoder};
         (status = 401, description = "Unauthorized"),
     )
 )]
+// LCOV_EXCL_STOP
 #[get("/metrics")]
 async fn list_metrics() -> impl Responder {
     // Gather the metric families from the registry and extract metric names.
@@ -51,6 +53,7 @@ async fn list_metrics() -> impl Responder {
 ///
 /// An `HttpResponse` containing the metric details in plain text, or a 404 error if the metric is
 /// not found.
+// LCOV_EXCL_START
 #[utoipa::path(
     get,
     path = "/metrics/{metric_name}",
@@ -69,6 +72,7 @@ async fn list_metrics() -> impl Responder {
         ("bearer_auth" = ["metrics:read"])
     )
 )]
+// LCOV_EXCL_STOP
 #[get("/metrics/{metric_name}")]
 async fn metric_detail(path: web::Path<String>) -> impl Responder {
     let metric_name = path.into_inner();
@@ -95,6 +99,7 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
 ///
 /// An `HttpResponse` containing the updated metrics in plain text, or an error message if the
 /// update fails.
+// LCOV_EXCL_START
 #[utoipa::path(
     get,
     path = "/debug/metrics/scrape",
@@ -104,6 +109,7 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
         (status = 401, description = "Unauthorized")
     )
 )]
+// LCOV_EXCL_STOP
 #[get("/debug/metrics/scrape")]
 async fn scrape_metrics() -> impl Responder {
     update_system_metrics();
