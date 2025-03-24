@@ -157,14 +157,42 @@ Then update the following fields in your .env file:
 `API_KEY`: They api key used to authorize requests
 
 
-### Step 11 Configure Webhook URL
+### Step 11: Configure Webhook URL
 
 `examples/vault-secret-signer/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
 
 For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `examples/vault-secret-signer/config/config.json` with this value.
 
 
-### Step 12: Start Relayer and Redis services
+### Step 12: Configure Webhook Signing Key
+
+To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `examples/vault-secret-signer/.env` file.
+
+For development purposes, you can generate the signing key using:
+
+```bash
+cargo run --example generate_uuid
+```
+> Note: Alternatively, you can use any online UUID generator.
+
+
+Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `examples/vault-secret-signer/.env` file.
+
+
+### Step 13: Configure API Key
+
+Generate an API key signing key for development purposes using:
+
+```bash
+cargo run --example generate_uuid
+```
+> Note: Alternatively, you can use any online UUID generator.
+
+
+Copy the generated UUID and update the `API_KEY` entry in the `examples/vault-secret-signer/.env` file.
+
+
+### Step 14: Start Relayer and Redis services
 
 Start remaining docker-compose service with command:
 
@@ -173,6 +201,15 @@ docker compose -f examples/vault-secret-signer/docker-compose.yaml up -d
 
 ```
 
+### Step 15: Test the Relayer
+
+The service is available at `http://localhost:8080/api/v1`
+
+```bash
+curl -X GET http://localhost:8080/api/v1/relayers \
+  -H "Content-Type: application/json" \
+  -H "AUTHORIZATION: Bearer YOUR_API_KEY"
+```
 
 ### Additional Resources
 

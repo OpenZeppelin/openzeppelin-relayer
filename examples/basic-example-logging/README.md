@@ -69,7 +69,7 @@ For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL
 
 
 
-#### Configure Signing Key
+#### Configure Webhook Signing Key
 
 To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `examples/basic-example-logging/.env` file.
 

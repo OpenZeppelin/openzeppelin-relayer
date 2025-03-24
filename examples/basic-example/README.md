@@ -50,7 +50,7 @@ Then, update the `KEYSTORE_PASSPHRASE` field in the `examples/basic-example/.env
 For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `examples/basic-example/config/config.json` with this value.
 
 
-#### Configure Signing Key
+#### Configure Webhook Signing Key
 
 To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `examples/basic-example/.env` file.
 

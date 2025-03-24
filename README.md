@@ -145,9 +145,12 @@ cp config/config.example.json config/config.json
 
 Refer to the [Configuration References](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
 
-Create `config/keys/local-signer.json` and make sure to update this file with the correct values. Check the sample file `config/keys/local-signer.example.json`.
 
-Create `.env` with correct values according to your needs from `.env.example` file.
+Create `.env` with correct values according to your needs from `.env.example` file as a starting point:
+
+```sh
+cp .env.example .env
+```
 
 ### Creating a Signer
 
@@ -184,6 +187,40 @@ cargo run --example create_key -- \
     --force
 ```
 
+### Configure Webhook URL
+
+`/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
+
+For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `config/config.json` with this value.
+
+
+### Configure Webhook Signing Key
+
+To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
+
+For development purposes, you can generate the signing key using:
+
+```bash
+cargo run --example generate_uuid
+```
+> Note: Alternatively, you can use any online UUID generator.
+
+Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
+
+
+### Configure API Key
+
+Generate an API key signing key for development purposes using:
+
+```bash
+cargo run --example generate_uuid
+```
+> Note: Alternatively, you can use any online UUID generator.
+
+
+Copy the generated UUID and update the `API_KEY` entry in the `.env` file.
+
+
 ### Starting Redis manually (without docker compose)
 
 Run Redis container:
@@ -206,6 +243,16 @@ Run relayer:
 
 ```sh
 cargo run
+```
+
+## Test the Relayer
+
+The service is available at `http://localhost:8080/api/v1`
+
+```bash
+curl -X GET http://localhost:8080/api/v1/relayers \
+  -H "Content-Type: application/json" \
+  -H "AUTHORIZATION: Bearer YOUR_API_KEY"
 ```
 
 ### Running services with docker compose

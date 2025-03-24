@@ -58,8 +58,7 @@ Then, update the `KEYSTORE_PASSPHRASE` field in the `examples/basic-example-metr
 For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `examples/basic-example-metrics/config/config.json` with this value.
 
 
-
-#### Configure Signing Key
+#### Configure Webhook Signing Key
 
 To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `examples/basic-example-metrics/.env` file.
 
@@ -73,6 +72,20 @@ cargo run --example generate_uuid
 
 Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `examples/basic-example-metrics/.env` file.
 
+
+#### Configure Webhook Signing Key
+
+To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `examples/basic-example/.env` file.
+
+For development purposes, you can generate the signing key using:
+
+```bash
+cargo run --example generate_uuid
+```
+> Note: Alternatively, you can use any online UUID generator.
+
+
+Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `examples/basic-example/.env` file.
 
 
 ### Step 4: Configure API Key
