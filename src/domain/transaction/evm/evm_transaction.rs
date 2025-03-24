@@ -13,7 +13,7 @@ use super::{make_noop, PriceParams};
 use crate::{
     constants::DEFAULT_TX_VALID_TIMESPAN,
     domain::{
-        is_transaction_not_yet_mined,
+        is_pending_transaction,
         transaction::{
             evm::price_calculator::{PriceCalculator, PriceCalculatorTrait},
             Transaction,
@@ -21,9 +21,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        evm::Speed, produce_transaction_update_notification_payload, EvmNetwork,
-        EvmTransactionData, NetworkTransactionData, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
@@ -118,41 +118,29 @@ where
         evm_data: &mut EvmTransactionData,
         relayer: &RelayerRepoModel,
     ) -> Result<EvmTransactionData, TransactionError> {
-        // Get the nonce from the transaction
-        let nonce = evm_data.nonce.ok_or_else(|| {
-            TransactionError::UnexpectedError("Transaction nonce is missing".to_string())
-        })?;
-
-        // clean the price params and set speed to average for the cancellation
-        evm_data.gas_price = None;
-        evm_data.max_fee_per_gas = None;
-        evm_data.max_priority_fee_per_gas = None;
-        evm_data.speed = Some(Speed::Average);
-
         // Calculate gas price for cancellation (higher than original)
         let price_params: PriceParams = self
             .price_calculator
             .get_transaction_price_params(evm_data, relayer)
             .await?;
 
-        // Create a "noop" transaction with higher gas price
-        let mut cancel_tx_data = make_noop(
-            relayer.address.clone(),
+        // Update the transaction to be a noop with higher gas price
+        make_noop(
+            evm_data,
             price_params,
             EvmNetwork::from_id(evm_data.chain_id),
         )
         .await?;
 
-        // Set the nonce to match the original transaction
-        cancel_tx_data.nonce = Some(nonce);
-
-        // Sign the cancellation transaction
+        // Sign the updated transaction
         let sig_result = self
             .signer
-            .sign_transaction(NetworkTransactionData::Evm(cancel_tx_data.clone()))
+            .sign_transaction(NetworkTransactionData::Evm(evm_data.clone()))
             .await?;
 
-        Ok(cancel_tx_data.with_signed_transaction_data(sig_result.into_evm()?))
+        Ok(evm_data
+            .clone()
+            .with_signed_transaction_data(sig_result.into_evm()?))
     }
 
     /// Helper function to check if a transaction has enough confirmations
@@ -693,29 +681,34 @@ where
         info!("Cancelling transaction: {:?}", tx.id);
         info!("Transaction status: {:?}", tx.status);
         // Check if the transaction can be cancelled
-        if !is_transaction_not_yet_mined(tx.status.clone()) {
+        if !is_pending_transaction(&tx.status) {
             return Err(TransactionError::ValidationError(format!(
                 "Cannot cancel transaction with status: {:?}",
                 tx.status
             )));
         }
 
-        // If the transaction is in Pending state, we can just delete it from the database
-        // since it was never sent to the network
+        // If the transaction is in Pending state, we can just update its status
         if tx.status == TransactionStatus::Pending {
-            info!("Transaction is in Pending state, deleting it from the database");
+            info!("Transaction is in Pending state, updating status to Canceled");
 
-            // Store a copy of the transaction for notification purposes
-            let tx_copy = tx.clone();
+            // Update the transaction status to Canceled
+            let update = TransactionUpdateRequest {
+                status: Some(TransactionStatus::Canceled),
+                ..Default::default()
+            };
 
-            // Delete the transaction from the database
-            Repository::delete_by_id(&*self.transaction_repository, tx.id.clone()).await?;
+            let updated_tx = self
+                .transaction_repository
+                .partial_update(tx.id.clone(), update)
+                .await?;
 
             // Send notification if configured
-            self.send_transaction_update_notification(&tx_copy).await?;
+            self.send_transaction_update_notification(&updated_tx)
+                .await?;
 
-            info!("Transaction deleted successfully: {:?}", tx.id);
-            return Ok(tx_copy);
+            info!("Transaction status updated to Canceled: {:?}", tx.id);
+            return Ok(updated_tx);
         }
 
         // For transactions in Sent/Submitted state, we need to send a cancellation transaction
@@ -737,8 +730,8 @@ where
         // Update original transaction with the cancel/noop transaction data
         let update = TransactionUpdateRequest {
             network_data: Some(NetworkTransactionData::Evm(signed_cancel_tx_data)),
-            status: Some(TransactionStatus::Canceled), // Reset status to Canceled
-            sent_at: None, // Clear sent_at since it will be updated when the transaction is submitted
+            status: Some(TransactionStatus::Submitted),
+            sent_at: None,
             hashes: Some(hashes),
             priced_at: Some(Utc::now().to_rfc3339()),
             ..Default::default()
@@ -900,6 +893,7 @@ mod tests {
             priced_at: None,
             hashes: Vec::new(),
             noop_count: None,
+            is_canceled: Some(false),
         }
     }
 
@@ -1209,11 +1203,18 @@ mod tests {
             let mut test_tx = create_test_transaction();
             test_tx.status = TransactionStatus::Pending;
 
-            // Transaction repository should delete the transaction
+            // Transaction repository should update the transaction with Canceled status
+            let test_tx_clone = test_tx.clone();
             mock_transaction
-                .expect_delete_by_id()
-                .with(eq("test-tx-id".to_string()))
-                .returning(|_| Ok(()));
+                .expect_partial_update()
+                .withf(move |id, update| {
+                    id == "test-tx-id" && update.status == Some(TransactionStatus::Canceled)
+                })
+                .returning(move |_, update| {
+                    let mut updated_tx = test_tx_clone.clone();
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    Ok(updated_tx)
+                });
 
             // Job producer should send notification
             mock_job_producer
@@ -1237,7 +1238,7 @@ mod tests {
             assert!(result.is_ok());
             let cancelled_tx = result.unwrap();
             assert_eq!(cancelled_tx.id, "test-tx-id");
-            assert_eq!(cancelled_tx.status, TransactionStatus::Pending);
+            assert_eq!(cancelled_tx.status, TransactionStatus::Canceled);
         }
 
         // Test Case 2: Canceling a submitted transaction
@@ -1335,7 +1336,7 @@ mod tests {
 
             // Verify the cancellation transaction was properly created
             assert_eq!(cancelled_tx.id, "test-tx-id");
-            assert_eq!(cancelled_tx.status, TransactionStatus::Sent);
+            assert_eq!(cancelled_tx.status, TransactionStatus::Submitted);
 
             // Verify the network data was properly updated
             if let NetworkTransactionData::Evm(evm_data) = &cancelled_tx.network_data {

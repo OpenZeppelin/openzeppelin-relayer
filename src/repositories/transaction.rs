@@ -402,6 +402,7 @@ mod tests {
                 raw: None,
             }),
             noop_count: None,
+            is_canceled: Some(false),
         }
     }
 
@@ -434,6 +435,7 @@ mod tests {
                 raw: None,
             }),
             noop_count: None,
+            is_canceled: Some(false),
         }
     }
 

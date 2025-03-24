@@ -60,6 +60,7 @@ pub struct TransactionRepoModel {
     pub hashes: Vec<String>,
     pub network_type: NetworkType,
     pub noop_count: Option<u32>,
+    pub is_canceled: Option<bool>,
 }
 
 impl TransactionRepoModel {
@@ -195,6 +196,7 @@ impl Default for TransactionRepoModel {
             priced_at: None,
             hashes: Vec::new(),
             noop_count: None,
+            is_canceled: Some(false),
         }
     }
 }
@@ -276,6 +278,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     priced_at: None,
                     hashes: Vec::new(),
                     noop_count: None,
+                    is_canceled: Some(false),
                 })
             }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
@@ -296,6 +299,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 priced_at: None,
                 hashes: Vec::new(),
                 noop_count: None,
+                is_canceled: Some(false),
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
@@ -316,6 +320,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 priced_at: None,
                 hashes: Vec::new(),
                 noop_count: None,
+                is_canceled: Some(false),
             }),
         }
     }
