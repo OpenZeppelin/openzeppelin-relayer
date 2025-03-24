@@ -13,9 +13,10 @@ use crate::{
         Relayer, RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest,
         Transaction,
     },
+    jobs::JobProducer,
     models::{
-        ApiError, ApiResponse, AppState, NetworkTransactionRequest, NetworkType, PaginationMeta,
-        PaginationQuery, RelayerResponse, TransactionResponse,
+        ApiError, ApiResponse, AppState, NetworkRpcRequest, NetworkTransactionRequest, NetworkType,
+        PaginationMeta, PaginationQuery, RelayerResponse, TransactionResponse,
     },
     repositories::{RelayerRepository, Repository, TransactionRepository},
 };
@@ -34,7 +35,7 @@ use eyre::Result;
 /// A paginated list of relayers.
 pub async fn list_relayers(
     query: PaginationQuery,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayers = state.relayer_repository.list_paginated(query).await?;
 
@@ -63,7 +64,7 @@ pub async fn list_relayers(
 /// The details of the specified relayer.
 pub async fn get_relayer(
     relayer_id: String,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
 
@@ -86,7 +87,7 @@ pub async fn get_relayer(
 pub async fn update_relayer(
     relayer_id: String,
     update_req: RelayerUpdateRequest,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -104,7 +105,9 @@ pub async fn update_relayer(
         .partial_update(relayer_id.clone(), update_req)
         .await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(updated_relayer)))
+    let relayer_response: RelayerResponse = updated_relayer.into();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
 
 /// Retrieves the status of a specific relayer.
@@ -119,7 +122,7 @@ pub async fn update_relayer(
 /// The status of the specified relayer.
 pub async fn get_relayer_status(
     relayer_id: String,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
@@ -140,7 +143,7 @@ pub async fn get_relayer_status(
 /// The balance of the specified relayer.
 pub async fn get_relayer_balance(
     relayer_id: String,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
@@ -163,7 +166,7 @@ pub async fn get_relayer_balance(
 pub async fn send_transaction(
     relayer_id: String,
     request: serde_json::Value,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
     relayer_repo_model.validate_active_state()?;
@@ -196,8 +199,13 @@ pub async fn send_transaction(
 pub async fn get_transaction_by_id(
     relayer_id: String,
     transaction_id: String,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
+    if relayer_id.is_empty() || transaction_id.is_empty() {
+        return Ok(HttpResponse::Ok().json(ApiResponse::<()>::error(
+            "Invalid relayer or transaction ID".to_string(),
+        )));
+    }
     // validation purpose only, checks if relayer exists
     get_relayer_by_id(relayer_id, &state).await?;
 
@@ -222,7 +230,7 @@ pub async fn get_transaction_by_id(
 pub async fn get_transaction_by_nonce(
     relayer_id: String,
     nonce: u64,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -258,7 +266,7 @@ pub async fn get_transaction_by_nonce(
 pub async fn list_transactions(
     relayer_id: String,
     query: PaginationQuery,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -292,7 +300,7 @@ pub async fn list_transactions(
 /// A success response if the operation was successful.
 pub async fn delete_pending_transactions(
     relayer_id: String,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
     relayer.validate_active_state()?;
@@ -317,7 +325,7 @@ pub async fn delete_pending_transactions(
 pub async fn cancel_transaction(
     relayer_id: String,
     transaction_id: String,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -330,10 +338,9 @@ pub async fn cancel_transaction(
         .cancel_transaction(transaction_to_cancel)
         .await?;
 
-    // Transform the TransactionRepoModel into a TransactionResponse
-    let response = TransactionResponse::from(canceled_transaction);
+    let transaction_response: TransactionResponse = canceled_transaction.into();
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(response)))
+    Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
 }
 
 /// Replaces a specific transaction for a relayer.
@@ -350,7 +357,7 @@ pub async fn cancel_transaction(
 pub async fn replace_transaction(
     relayer_id: String,
     transaction_id: String,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -383,7 +390,7 @@ pub async fn replace_transaction(
 pub async fn sign_data(
     relayer_id: String,
     request: SignDataRequest,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -412,7 +419,7 @@ pub async fn sign_data(
 pub async fn sign_typed_data(
     relayer_id: String,
     request: SignTypedDataRequest,
-    state: web::ThinData<AppState>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -436,8 +443,8 @@ pub async fn sign_typed_data(
 /// The result of the JSON-RPC call.
 pub async fn relayer_rpc(
     relayer_id: String,
-    request: JsonRpcRequest,
-    state: web::ThinData<AppState>,
+    request: JsonRpcRequest<NetworkRpcRequest>,
+    state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;

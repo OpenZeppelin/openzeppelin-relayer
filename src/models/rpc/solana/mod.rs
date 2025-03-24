@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use solana_sdk::transaction::Transaction;
 use thiserror::Error;
+use utoipa::ToSchema;
 
 #[derive(Debug, Error, Deserialize, Serialize)]
 #[allow(clippy::enum_variant_names)]
@@ -14,7 +15,7 @@ pub enum SolanaEncodingError {
     Deserialize(String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct EncodedSerializedTransaction(String);
 
 impl EncodedSerializedTransaction {
@@ -54,20 +55,22 @@ impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transact
 }
 
 // feeEstimate
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FeeEstimateRequestParams {
     pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 pub struct FeeEstimateResult {
     pub estimated_fee: String,
     pub conversion_rate: String,
 }
 
 // transferTransaction
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TransferTransactionRequestParams {
     pub amount: u64,
     pub token: String,
@@ -75,7 +78,7 @@ pub struct TransferTransactionRequestParams {
     pub destination: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct TransferTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub fee_in_spl: String,
@@ -85,13 +88,14 @@ pub struct TransferTransactionResult {
 }
 
 // prepareTransaction
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PrepareTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
     pub fee_token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 pub struct PrepareTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub fee_in_spl: String,
@@ -101,52 +105,58 @@ pub struct PrepareTransactionResult {
 }
 
 // signTransaction
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SignTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone, ToSchema)]
 pub struct SignTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub signature: String,
 }
 
 // signAndSendTransaction
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SignAndSendTransactionRequestParams {
     pub transaction: EncodedSerializedTransaction,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SignAndSendTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub signature: String,
 }
 
 // getSupportedTokens
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetSupportedTokensRequestParams {}
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 pub struct GetSupportedTokensItem {
     pub mint: String,
     pub symbol: String,
     pub decimals: u8,
+    #[schema(nullable = false)]
     pub max_allowed_fee: Option<u64>,
+    #[schema(nullable = false)]
     pub conversion_slippage_percentage: Option<f32>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 pub struct GetSupportedTokensResult {
     pub tokens: Vec<GetSupportedTokensItem>,
 }
 
 // getFeaturesEnabled
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetFeaturesEnabledRequestParams {}
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, ToSchema)]
 pub struct GetFeaturesEnabledResult {
     pub features: Vec<String>,
 }
@@ -176,7 +186,34 @@ impl SolanaRpcMethod {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(tag = "method", content = "params")]
+#[schema(as = SolanaRpcRequest)]
+pub enum SolanaRpcRequest {
+    #[serde(rename = "feeEstimate")]
+    #[schema(example = "feeEstimate")]
+    FeeEstimate(FeeEstimateRequestParams),
+    #[serde(rename = "transferTransaction")]
+    #[schema(example = "transferTransaction")]
+    TransferTransaction(TransferTransactionRequestParams),
+    #[serde(rename = "prepareTransaction")]
+    #[schema(example = "prepareTransaction")]
+    PrepareTransaction(PrepareTransactionRequestParams),
+    #[serde(rename = "signTransaction")]
+    #[schema(example = "signTransaction")]
+    SignTransaction(SignTransactionRequestParams),
+    #[serde(rename = "signAndSendTransaction")]
+    #[schema(example = "signAndSendTransaction")]
+    SignAndSendTransaction(SignAndSendTransactionRequestParams),
+    #[serde(rename = "getSupportedTokens")]
+    #[schema(example = "getSupportedTokens")]
+    GetSupportedTokens(GetSupportedTokensRequestParams),
+    #[serde(rename = "getFeaturesEnabled")]
+    #[schema(example = "getFeaturesEnabled")]
+    GetFeaturesEnabled(GetFeaturesEnabledRequestParams),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(untagged)]
 pub enum SolanaRpcResult {
     FeeEstimate(FeeEstimateResult),

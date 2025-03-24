@@ -274,7 +274,7 @@ docker compose logs -f
 
 ### Logs
 
-- For logs, our app defaults to writing logs to stdout/console. You can also configure it to write logs to a file pathn by setting `LOG_MODE` to `file`. See [docker compose file](./docker-compose.yaml) for more details.
+- For logs, our app defaults to writing logs to stdout/console. You can also configure it to write logs to a file path by setting `LOG_MODE` to `file`. See [docker compose file](./docker-compose.yaml) for more details.
 
 ### Metrics
 
@@ -286,6 +286,28 @@ docker compose logs -f
 - To view prometheus metrics in a UI, you can use `http://localhost:9090` on your browser.
 
 - To view grafana dashboard, you can use `http://localhost:3000` on your browser.
+
+## API Documentation with Swagger UI
+
+The OpenZeppelin Relayer provides interactive API documentation using Swagger UI, making it easy to explore and test the available endpoints.
+
+
+### Enabling Swagger UI
+
+To enable Swagger UI, set the `ENABLE_SWAGGER` environment variable to `true`.
+
+`.env`file example:
+```sh
+ENABLE_SWAGGER=true
+```
+### Accessing Swagger UI
+
+Once enabled, access the API documentation through the following URLs:
+
+- Swagger UI: http://localhost:8080/swagger-ui/index.html
+- OpenAPI JSON: http://localhost:8080/api-docs/openapi.json
+
+> Note: Consider disabling Swagger UI in production environments for security reasons.
 
 ## Contributing
 

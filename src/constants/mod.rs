@@ -13,3 +13,6 @@ pub use authorization::*;
 
 mod transaction;
 pub use transaction::*;
+
+mod public_endpoints;
+pub use public_endpoints::*;

@@ -66,6 +66,8 @@ spl-associated-token-account = "6.0.0"
 itertools = "0.14.0"
 validator = { version = "0.20", features = ["derive"] }
 vaultrs = { version = "0.7.4" }
+utoipa = { version = "5.3", features = ["actix_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["actix-web", "debug-embed"] }
 secrets = { version = "1.2"}
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
@@ -96,6 +98,9 @@ path = "helpers/test_tx.rs"
 name = "create_key"
 path = "helpers/create_key.rs"
 
+[[example]]
+name = "generate_openapi"
+path = "helpers/generate_openapi.rs"
 
 [lib]
 path = "src/lib.rs"

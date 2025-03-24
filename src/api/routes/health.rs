@@ -6,6 +6,15 @@ use actix_web::{get, web, HttpResponse};
 /// Handles the `/health` endpoint.
 ///
 /// Returns an `HttpResponse` with a status of `200 OK` and a body of `"OK"`.
+#[utoipa::path(
+    get,
+    path = "/v1/health",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Service is healthy", body = String),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
 #[get("/health")]
 async fn health() -> Result<HttpResponse, actix_web::Error> {
     Ok(HttpResponse::Ok().body("OK"))

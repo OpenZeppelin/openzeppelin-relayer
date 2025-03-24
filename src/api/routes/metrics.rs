@@ -21,6 +21,15 @@ use prometheus::{Encoder, TextEncoder};
 /// # Returns
 ///
 /// An `HttpResponse` containing a JSON array of metric names.
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = "Metrics",
+    responses(
+        (status = 200, description = "Metric names list", body = Vec<String>),
+        (status = 401, description = "Unauthorized"),
+    )
+)]
 #[get("/metrics")]
 async fn list_metrics() -> impl Responder {
     // Gather the metric families from the registry and extract metric names.
@@ -42,6 +51,24 @@ async fn list_metrics() -> impl Responder {
 ///
 /// An `HttpResponse` containing the metric details in plain text, or a 404 error if the metric is
 /// not found.
+#[utoipa::path(
+    get,
+    path = "/metrics/{metric_name}",
+    tag = "Metrics",
+    params(
+        ("metric_name" = String, Path, description = "Name of the metric to retrieve, e.g. utopia_transactions_total")
+    ),
+    responses(
+        (status = 200, description = "Metric details in Prometheus text format", content_type = "text/plain", body = String),
+        (status = 401, description = "Unauthorized - missing or invalid API key"),
+        (status = 403, description = "Forbidden - insufficient permissions to access this metric"),
+        (status = 404, description = "Metric not found"),
+        (status = 429, description = "Too many requests - rate limit for metrics access exceeded")
+    ),
+    security(
+        ("bearer_auth" = ["metrics:read"])
+    )
+)]
 #[get("/metrics/{metric_name}")]
 async fn metric_detail(path: web::Path<String>) -> impl Responder {
     let metric_name = path.into_inner();
@@ -68,6 +95,15 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
 ///
 /// An `HttpResponse` containing the updated metrics in plain text, or an error message if the
 /// update fails.
+#[utoipa::path(
+    get,
+    path = "/debug/metrics/scrape",
+    tag = "Metrics",
+    responses(
+        (status = 200, description = "Complete metrics in Prometheus exposition format", content_type = "text/plain",   body = String),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 #[get("/debug/metrics/scrape")]
 async fn scrape_metrics() -> impl Responder {
     update_system_metrics();

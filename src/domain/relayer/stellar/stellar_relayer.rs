@@ -4,7 +4,10 @@ use crate::{
         SignTypedDataRequest,
     },
     jobs::JobProducer,
-    models::{NetworkTransactionRequest, RelayerRepoModel, StellarNetwork, TransactionRepoModel},
+    models::{
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel,
+        StellarNetwork, StellarRpcResult, TransactionRepoModel,
+    },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
@@ -92,12 +95,17 @@ impl Relayer for StellarRelayer {
         ))
     }
 
-    async fn rpc(&self, _request: JsonRpcRequest) -> Result<JsonRpcResponse, RelayerError> {
+    async fn rpc(
+        &self,
+        _request: JsonRpcRequest<NetworkRpcRequest>,
+    ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         println!("Stellar rpc...");
         Ok(JsonRpcResponse {
             id: Some(1),
             jsonrpc: "2.0".to_string(),
-            result: Some(serde_json::Value::Null),
+            result: Some(NetworkRpcResult::Stellar(
+                StellarRpcResult::GenericRpcResult("".to_string()),
+            )),
             error: None,
         })
     }

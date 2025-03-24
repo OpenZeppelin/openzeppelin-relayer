@@ -54,3 +54,63 @@ where
 {
     deserializer.deserialize_any(U64Visitor)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::de::value::{
+        Error as ValueError, I64Deserializer, StringDeserializer, U64Deserializer,
+    };
+
+    #[test]
+    fn test_deserialize_from_string() {
+        let input = "12345";
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_u64(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 12345);
+    }
+
+    #[test]
+    fn test_deserialize_from_string_max_u64() {
+        let input = "18446744073709551615"; // u64::MAX
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_u64(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), u64::MAX);
+    }
+
+    #[test]
+    fn test_deserialize_from_invalid_string() {
+        let input = "not a number";
+        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
+        let result = deserialize_u64(deserializer);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_from_u64() {
+        let input: u64 = 54321;
+        let deserializer = U64Deserializer::<ValueError>::new(input);
+        let result = deserialize_u64(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 54321);
+    }
+
+    #[test]
+    fn test_deserialize_from_i64_positive() {
+        let input: i64 = 9876;
+        let deserializer = I64Deserializer::<ValueError>::new(input);
+        let result = deserialize_u64(deserializer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 9876);
+    }
+
+    #[test]
+    fn test_deserialize_from_i64_negative() {
+        let input: i64 = -123;
+        let deserializer = I64Deserializer::<ValueError>::new(input);
+        let result = deserialize_u64(deserializer);
+        assert!(result.is_err());
+    }
+}
