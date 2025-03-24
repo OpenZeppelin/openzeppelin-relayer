@@ -1,3 +1,5 @@
+#[cfg_attr(coverage_nightly, coverage(off))]
+// LCOV_EXCL_START
 use crate::{
     api::routes::{metrics, relayer},
     models,
@@ -54,4 +56,6 @@ impl Modify for SecurityAddon {
     ),
     components(schemas(models::RelayerResponse, models::NetworkPolicyResponse, models::EvmPolicyResponse, models::SolanaPolicyResponse, models::StellarPolicyResponse))
 )]
+
 pub struct ApiDoc;
+// LCOV_EXCL_STOP
