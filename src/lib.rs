@@ -1,3 +1,4 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 //! Blockchain Transaction Service Library
 //!
 //! This library provides functionality for sending/broadcasting transactions to blockchain networks

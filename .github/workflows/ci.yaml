@@ -225,7 +225,7 @@ jobs:
       - name: Run Unit Tests and Generate Coverage Report
         env:
           LLVM_PROFILE_FILE: unit-%p-%m.profraw
-          RUSTFLAGS: "-Cinstrument-coverage -Zcoverage-attribute"
+          RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
         run: cargo +nightly hack llvm-cov --locked --lib --lcov --output-path unit-lcov.info
 
