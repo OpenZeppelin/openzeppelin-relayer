@@ -1,3 +1,4 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 //! This module defines the HTTP routes for relayer operations.
 //! It includes handlers for listing, retrieving, updating, and managing relayer transactions.
 //! The routes are integrated with the Actix-web framework and interact with the relayer controller.
