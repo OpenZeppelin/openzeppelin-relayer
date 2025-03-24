@@ -96,6 +96,11 @@ path = "helpers/test_tx.rs"
 name = "create_key"
 path = "helpers/create_key.rs"
 
+[[example]]
+name = "generate_uuid"
+path = "helpers/generate_uuid.rs"
+
+
 
 [lib]
 path = "src/lib.rs"

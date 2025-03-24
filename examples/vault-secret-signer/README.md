@@ -107,6 +107,8 @@ Retrieve the RoleID for your AppRole(store these values as they are needed for n
 vault read auth/approle/role/my-role/role-id
 ```
 
+Update 
+
 Then, generate a SecretID for your AppRole:
 
 ```bash
@@ -117,12 +119,37 @@ Use these credentials within your application to authenticate with Vault and acc
 
 ### Step 10: Configure Your Service to Use Vault
 
-Update your OpenZeppelin Relayer service configuration to utilize the Vault credentials obtained via AppRole authentication.
+Now that you have set up Vault with the appropriate permissions, configure your OpenZeppelin Relayer service to use the Vault credentials for authentication.
 
-Update `examples/vault-secret-signer/config/config.json` file. Replace `role_id` and `secret_id` placeholder values with values from step 9.
+Create an environment file by copying the example:
+
+```bash
+cp examples/vault-secret-signer/.env.example examples/vault-secret-signer/.env
+```
+
+Then edit this file and update the following variables with the values obtained in the previous step:
+
+`VAULT_ROLE_ID`: The Role ID retrieved from Vault
+`VAULT_SECRET_ID`: The Secret ID generated from Vault
+
+Generate random keys for API authentication and webhook signing by running the UUID generation script twice:
+```bash
+cargo run --example generate_uuid
+```
+
+Then update the following fields in your .env file:
+
+`WEBHOOK_SIGNING_KEY`: The key used for signing webhook notifications
+`API_KEY`: They api key used to authorize requests
+
+### Step 11 Configure Webhook URL
+
+`examples/vault-secret-signer/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
+
+For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `examples/vault-secret-signer/config/config.json` with this value.
 
 
-### Step 11: Start Relayer and Redis services
+### Step 12: Start Relayer and Redis services
 
 Start remaining docker-compose service with command:
 

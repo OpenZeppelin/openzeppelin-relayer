@@ -23,7 +23,7 @@ This relayer service enables interaction with blockchain networks through transa
 ## Supported networks
 
 - Solana
-- EVM
+- EVM (🚧 Partial support)
 
 ## For users
 
@@ -142,6 +142,8 @@ cargo run --example create_key -- \
     --output-dir config/keys \
     --filename local-signer.json
 ```
+
+Then update the `KEYSTORE_PASSPHRASE` field in your `.env` file with the password you used in the key creation example.
 
 The tool supports the following options:
 

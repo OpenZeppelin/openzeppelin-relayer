@@ -37,3 +37,6 @@ logs/
 # Ignore node_modules
 node_modules
 .qodo
+
+# Ignore local signer keystore files everywhere
+**/local-signer.json

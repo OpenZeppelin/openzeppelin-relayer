@@ -113,15 +113,53 @@ Then, generate a SecretID for your AppRole:
 vault write -f auth/approle/role/my-role/secret-id
 ```
 
+### Step 10: Configure the Relayer Service
 
-### Step 10: Configure Your Service to Use Vault
+#### Create and Update Environment File
 
-Update your OpenZeppelin Relayer service configuration to utilize the Vault credentials obtained via AppRole authentication.
+Create an environment file by copying the example:
 
-Update `examples/vault-transit-signer/config/config.json` file. Replace `role_id`,  `secret_id` and `pubkey` placeholder values with values from step 9.
+```bash
+cp examples/vault-transit-signer/.env.example examples/vault-transit-signer/.env
+```
+
+Edit the `examples/vault-transit-signer/.env` file and update the following variables:
+
+`VAULT_ROLE_ID`: The Role ID retrieved from Vault
+`VAULT_SECRET_ID`: The Secret ID generated from Vault
 
 
-### Step 10: Start Relayer and Redis services
+#### Update Configuration File
+
+Update `examples/vault-transit-signer/config/config.json` file. Replace `pubkey` placeholder value with `pubkey` value from step 9.
+
+#### Generate Security Keys
+
+Generate random keys for API authentication and webhook signing:
+
+
+```bash
+# Generate API key
+cargo run --example generate_uuid
+
+# Generate webhook signing key
+cargo run --example generate_uuid
+
+```
+
+Then update the following fields in your .env file:
+
+`WEBHOOK_SIGNING_KEY`: The key used for signing webhook notifications
+`API_KEY`: They api key used to authorize requests
+
+### Step 11 Configure Webhook URL
+
+`examples/vault-transit-signer/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
+
+For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `examples/vault-transit-signer/config/config.json` with this value.
+
+
+### Step 12: Start Relayer and Redis services
 
 Start remaining docker-compose service with command:
 

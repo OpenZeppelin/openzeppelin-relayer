@@ -11,16 +11,16 @@ services:
     secrets:
       - api_key
       - webhook_signing_key
+      - keystore_passphrase
     environment:
       METRICS_PORT: 8081
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL}
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 30
       METRICS_ENABLED: true
-      # Set `WEBHOOK_SIGNING_KEY` & `API_KEY` values in your .env file (recommended) and use that instead of hardcoding them here
-      # To avoid accidentally committing sensitive information to your repository
-      WEBHOOK_SIGNING_KEY: example-key
-      API_KEY: example-123456
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
     depends_on:
       - redis
     restart: on-failure:5
@@ -113,3 +113,6 @@ secrets:
     environment: API_KEY
   webhook_signing_key:
     environment: WEBHOOK_SIGNING_KEY
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE
+  
