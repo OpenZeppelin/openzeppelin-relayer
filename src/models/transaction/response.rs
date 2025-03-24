@@ -88,7 +88,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     gas_price: evm_data.gas_price,
                     gas_limit: evm_data.gas_limit,
                     nonce: evm_data.nonce,
-                    value: evm_data.value.into(),
+                    value: evm_data.value,
                     from: evm_data.from,
                     to: evm_data.to,
                     relayer_id: model.relayer_id,

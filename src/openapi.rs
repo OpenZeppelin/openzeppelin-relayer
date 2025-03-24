@@ -25,7 +25,7 @@ impl Modify for SecurityAddon {
     modifiers(&SecurityAddon),
     tags((name = "OpenZeppelin Relayer API")),
     info(description = "OpenZeppelin Relayer API", version = "0.1.0", title = "OpenZeppelin Relayer API",  license(
-        name = "AGPL-3.0 license", 
+        name = "AGPL-3.0 license",
         url = "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     ),
     contact(
@@ -54,5 +54,4 @@ impl Modify for SecurityAddon {
     ),
     components(schemas(models::RelayerResponse, models::NetworkPolicyResponse, models::EvmPolicyResponse, models::SolanaPolicyResponse, models::StellarPolicyResponse))
 )]
-
 pub struct ApiDoc;
