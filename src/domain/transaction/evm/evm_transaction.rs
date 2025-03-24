@@ -116,21 +116,10 @@ where
     async fn prepare_cancel_transaction(
         &self,
         evm_data: &mut EvmTransactionData,
-        relayer: &RelayerRepoModel,
+        _relayer: &RelayerRepoModel,
     ) -> Result<EvmTransactionData, TransactionError> {
-        // Calculate gas price for cancellation (higher than original)
-        let price_params: PriceParams = self
-            .price_calculator
-            .get_transaction_price_params(evm_data, relayer)
-            .await?;
-
         // Update the transaction to be a noop with higher gas price
-        make_noop(
-            evm_data,
-            price_params,
-            EvmNetwork::from_id(evm_data.chain_id),
-        )
-        .await?;
+        make_noop(evm_data, EvmNetwork::from_id(evm_data.chain_id)).await?;
 
         // Sign the updated transaction
         let sig_result = self

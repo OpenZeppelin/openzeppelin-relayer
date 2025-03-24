@@ -1,20 +1,16 @@
 use crate::models::{EvmNetwork, EvmTransactionData, TransactionError, TransactionStatus, U256};
 use eyre::Result;
 
-use super::PriceParams;
-
 /// Updates an existing transaction to be a "noop" transaction (transaction to self with zero value and no data)
 /// This is commonly used for cancellation and replacement transactions
 pub async fn make_noop(
     evm_data: &mut EvmTransactionData,
-    gas_params: PriceParams,
     network: EvmNetwork,
 ) -> Result<(), TransactionError> {
     // Keep the original nonce
     let nonce = evm_data.nonce;
 
     // Update the transaction to be a noop
-    evm_data.gas_price = gas_params.gas_price;
     evm_data.gas_limit = 21_000;
     evm_data.value = U256::from(0u64);
     evm_data.data = Some("0x".to_string());
@@ -23,8 +19,6 @@ pub async fn make_noop(
     evm_data.hash = None;
     evm_data.signature = None;
     evm_data.speed = None;
-    evm_data.max_fee_per_gas = gas_params.max_fee_per_gas;
-    evm_data.max_priority_fee_per_gas = gas_params.max_priority_fee_per_gas;
     evm_data.raw = None;
     evm_data.nonce = nonce;
 
@@ -62,14 +56,7 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let gas_params = PriceParams {
-            gas_price: Some(20_000_000_000),
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
-            is_min_bumped: None,
-        };
-
-        let result = make_noop(&mut evm_data, gas_params, network).await;
+        let result = make_noop(&mut evm_data, network).await;
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly
@@ -77,7 +64,7 @@ mod tests {
         assert_eq!(evm_data.to.unwrap(), evm_data.from); // Should send to self
         assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
         assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
-        assert_eq!(evm_data.gas_price, Some(20_000_000_000)); // Updated gas price
+        assert_eq!(evm_data.gas_price, Some(10_000_000_000));
         assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
         assert!(evm_data.hash.is_none()); // Hash cleared
         assert!(evm_data.signature.is_none()); // Signature cleared
