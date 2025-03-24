@@ -1,4 +1,3 @@
-#[cfg_attr(coverage, coverage(off))]
 // LCOV_EXCL_START
 use crate::{
     api::routes::{metrics, relayer},
