@@ -93,7 +93,7 @@ async fn list_relayers(
     tag = "Relayers",
     operation_id = "getRelayer",
     security(
-        ("bearer_auth" = []) 
+        ("bearer_auth" = [])
     ),
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
@@ -1196,8 +1196,9 @@ mod tests {
     use std::sync::Arc;
 
     // Simple mock for AppState
-    async fn get_test_app_state() -> AppState<JobProducer> {
-        AppState {
+    async fn get_test_app_state() -> Result<AppState<JobProducer>, color_eyre::eyre::Error> {
+        let queue = Queue::setup().await?;
+        Ok(AppState {
             relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
                 InMemoryRelayerRepository::new(),
             )),
@@ -1205,16 +1206,16 @@ mod tests {
             signer_repository: Arc::new(InMemorySignerRepository::new()),
             notification_repository: Arc::new(InMemoryNotificationRepository::new()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
-            job_producer: Arc::new(JobProducer::new(Queue::setup().await)),
-        }
+            job_producer: Arc::new(JobProducer::new(queue)),
+        })
     }
 
     #[actix_web::test]
-    async fn test_routes_are_registered() {
+    async fn test_routes_are_registered() -> Result<(), color_eyre::eyre::Error> {
         // Create a test app with our routes
         let app = test::init_service(
             App::new()
-                .app_data(web::Data::new(get_test_app_state()))
+                .app_data(web::Data::new(get_test_app_state().await?))
                 .configure(init),
         )
         .await;
@@ -1338,5 +1339,7 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        Ok(())
     }
 }
