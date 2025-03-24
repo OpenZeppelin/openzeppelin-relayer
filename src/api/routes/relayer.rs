@@ -1,4 +1,3 @@
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 //! This module defines the HTTP routes for relayer operations.
 //! It includes handlers for listing, retrieving, updating, and managing relayer transactions.
 //! The routes are integrated with the Actix-web framework and interact with the relayer controller.
@@ -19,7 +18,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 /// Lists all relayers with pagination support.
-// LCOV_EXCL_START
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     get,
     path = "/api/v1/relayers",
@@ -80,7 +79,6 @@ use utoipa::ToSchema;
         ),
     )
 )]
-#[cfg_attr(coverage_nightly, coverage(off))]
 #[get("/relayers")]
 async fn list_relayers(
     query: web::Query<PaginationQuery>,
@@ -88,10 +86,8 @@ async fn list_relayers(
 ) -> impl Responder {
     relayer::list_relayers(query.into_inner(), data).await
 }
-// LCOV_EXCL_STOP
 
 /// Retrieves details of a specific relayer by ID.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     get,
@@ -162,7 +158,6 @@ async fn list_relayers(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[get("/relayers/{relayer_id}")]
 async fn get_relayer(
     relayer_id: web::Path<String>,
@@ -172,7 +167,6 @@ async fn get_relayer(
 }
 
 /// Updates a relayer's information based on the provided update request.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     patch,
@@ -239,7 +233,6 @@ async fn get_relayer(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[patch("/relayers/{relayer_id}")]
 async fn update_relayer(
     relayer_id: web::Path<String>,
@@ -250,7 +243,6 @@ async fn update_relayer(
 }
 
 /// Fetches the current status of a specific relayer.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     get,
@@ -317,7 +309,6 @@ async fn update_relayer(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[get("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
@@ -327,7 +318,6 @@ async fn get_relayer_status(
 }
 
 /// Retrieves the balance of a specific relayer.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     get,
@@ -394,7 +384,6 @@ async fn get_relayer_status(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[get("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
@@ -404,7 +393,6 @@ async fn get_relayer_balance(
 }
 
 /// Sends a transaction through the specified relayer.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     post,
@@ -472,7 +460,6 @@ async fn get_relayer_balance(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[post("/relayers/{relayer_id}/transactions")]
 async fn send_transaction(
     relayer_id: web::Path<String>,
@@ -489,7 +476,6 @@ pub struct TransactionPath {
 }
 
 /// Retrieves a specific transaction by its ID.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     get,
@@ -557,7 +543,6 @@ pub struct TransactionPath {
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_transaction_by_id(
     path: web::Path<TransactionPath>,
@@ -568,7 +553,6 @@ async fn get_transaction_by_id(
 }
 
 /// Retrieves a transaction by its nonce value.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     get,
@@ -636,7 +620,6 @@ async fn get_transaction_by_id(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_transaction_by_nonce(
     params: web::Path<(String, u64)>,
@@ -647,7 +630,6 @@ async fn get_transaction_by_nonce(
 }
 
 /// Lists all transactions for a specific relayer with pagination.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     get,
@@ -716,7 +698,6 @@ async fn get_transaction_by_nonce(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_transactions(
     relayer_id: web::Path<String>,
@@ -727,7 +708,6 @@ async fn list_transactions(
 }
 
 /// Deletes all pending transactions for a specific relayer.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     delete,
@@ -794,7 +774,6 @@ async fn list_transactions(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
@@ -804,7 +783,6 @@ async fn delete_pending_transactions(
 }
 
 /// Cancels a specific transaction by its ID.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     delete,
@@ -872,7 +850,6 @@ async fn delete_pending_transactions(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_transaction(
     path: web::Path<TransactionPath>,
@@ -883,7 +860,6 @@ async fn cancel_transaction(
 }
 
 /// Replaces a specific transaction with a new one.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     put,
@@ -951,7 +927,6 @@ async fn cancel_transaction(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_transaction(
     path: web::Path<TransactionPath>,
@@ -962,7 +937,6 @@ async fn replace_transaction(
 }
 
 /// Signs data using the specified relayer.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     post,
@@ -1029,7 +1003,6 @@ async fn replace_transaction(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[post("/relayers/{relayer_id}/sign")]
 async fn sign(
     relayer_id: web::Path<String>,
@@ -1040,7 +1013,6 @@ async fn sign(
 }
 
 /// Signs typed data using the specified relayer.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     post,
@@ -1107,7 +1079,6 @@ async fn sign(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[post("/relayers/{relayer_id}/sign-typed-data")]
 async fn sign_typed_data(
     relayer_id: web::Path<String>,
@@ -1118,7 +1089,6 @@ async fn sign_typed_data(
 }
 
 /// Performs a JSON-RPC call using the specified relayer.
-// LCOV_EXCL_START
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[utoipa::path(
     post,
@@ -1196,7 +1166,6 @@ async fn sign_typed_data(
         ),
     )
 )]
-// LCOV_EXCL_STOP
 #[post("/relayers/{relayer_id}/rpc")]
 async fn rpc(
     relayer_id: web::Path<String>,
