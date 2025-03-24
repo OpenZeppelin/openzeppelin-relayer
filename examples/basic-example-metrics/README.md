@@ -2,13 +2,16 @@
 
 This guide demonstrates how to configure and use the OpenZeppelin Relayer service with metrics monitoring. In this example, we configure and utilize an Ethereum Sepolia Relayer integrated with Prometheus and Grafana for comprehensive performance tracking.
 
+
 ## Getting Started
+
 
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/)
 - [Docker Compose](https://docs.docker.com/compose/install/)
 - Rust (for key generation tools)
+
 
 ### Step 1: Clone the Repository
 
@@ -19,6 +22,7 @@ git clone https://github.com/OpenZeppelin/openzeppelin-relayer
 cd openzeppelin-relayer
 ```
  
+
 ### Step 2: Create a Signer
 
 Create a new signer keystore using the provided key generation tool:
@@ -43,13 +47,16 @@ cp examples/basic-example-metrics/.env.example examples/basic-example-metrics/.e
 Then, update the `KEYSTORE_PASSPHRASE` field in the `examples/basic-example-metrics/.env` file with the password you used.
 
 
+
 ### Step 3: Configure Notifications
+
 
 #### Configure Webhook URL
 
 `examples/basic-example-metrics/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
 
 For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `examples/basic-example-metrics/config/config.json` with this value.
+
 
 
 #### Configure Signing Key
@@ -67,6 +74,7 @@ cargo run --example generate_uuid
 Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `examples/basic-example-metrics/.env` file.
 
 
+
 ### Step 4: Configure API Key
 
 Generate an API key signing key for development purposes using:
@@ -80,6 +88,7 @@ cargo run --example generate_uuid
 Copy the generated UUID and update the `API_KEY` entry in the `examples/basic-example-metrics/.env` file.
 
 
+
 ### Step 5: Run the Service
 
 Start the service with Docker Compose:
@@ -87,6 +96,7 @@ Start the service with Docker Compose:
 ```bash
 docker compose -f examples/basic-example-metrics/docker-compose.yaml up
 ```
+
 
 ### Step 6: Test the Relayer
 
@@ -97,6 +107,7 @@ curl -X GET http://localhost:8080/api/v1/relayers \
   -H "Content-Type: application/json" \
   -H "AUTHORIZATION: Bearer YOUR_API_KEY"
 ```
+
 
 ### Step 7: Access Metrics Dashboards
 

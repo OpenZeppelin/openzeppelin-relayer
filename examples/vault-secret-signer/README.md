@@ -4,13 +4,17 @@ This example demonstrates how to use HashiCorp Vault for securely storing privat
 
 > **Note:** This example uses Vault in development mode which is not suitable for production environments. For production deployments, use a properly configured and sealed Vault instance with appropriate security measures.
 
+
 ## Getting Started
+
 
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/)
 - [Docker Compose](https://docs.docker.com/compose/install/)
 - [HashiCorp Vault CLI](https://developer.hashicorp.com/vault/tutorials/get-started/install-binary?productSlug=vault&tutorialSlug=getting-started&tutorialSlug=getting-started-install) (Optional, for advanced operations)
+
+
 
 ### Step 1: Clone the Repository
 
@@ -21,15 +25,18 @@ git clone https://github.com/OpenZeppelin/openzeppelin-relayer
 cd openzeppelin-relayer
 ```
 
+
 ### Step 2: Start the Docker Compose Vault Service
 
 Start the Vault service with the following command:
 
 ```bash
-docker compose up vault
+docker compose -f examples/vault-secret-signer/docker-compose.yaml up vault
+
 ```
 
 Vault will run in dev mode and bind to `0.0.0.0:8200`. You can access its UI by navigating to [http://localhost:8200](http://localhost:8200) in your browser.
+
 
 ### Step 3: Install and Configure the Vault CLI (Optional)
 
@@ -42,6 +49,7 @@ export VAULT_ADDR='http://0.0.0.0:8200'
 export VAULT_TOKEN='dev-only-token'  # This is the default token for dev mode defined in docker-compose fi;e
 ```
 
+
 ### Step 4: Enable the KV-v2 Secrets Engine
 
 Enable the KV-v2 secrets engine at the `secret` path:
@@ -49,6 +57,7 @@ Enable the KV-v2 secrets engine at the `secret` path:
 ```bash
 vault secrets enable -path=secret kv-v2
 ```
+
 
 ### Step 5: Create secret
 
@@ -59,6 +68,7 @@ vault kv put secret/my-app value=REPLACE_WITH_PRIVATE_KEY
 ```
 
 Note: For Solana, we can use this [tool](https://cyphr.me/ed25519_tool/ed.html) for development purposes to generate a key.
+
 
 ### Step 6: Create a Vault Policy
 
@@ -80,6 +90,7 @@ This policy allows:
 - Data operations (create, read, update, delete) on `secret/data/*`
 - Listing of secrets via the metadata endpoint `secret/metadata/*`
 
+
 ### Step 7: Enable AppRole Authentication
 
 Enable the AppRole authentication method in Vault, which allows your service to authenticate using a RoleID and SecretID:
@@ -87,6 +98,7 @@ Enable the AppRole authentication method in Vault, which allows your service to 
 ```bash
 vault auth enable approle
 ```
+
 
 ### Step 8: Create an AppRole
 
@@ -98,6 +110,7 @@ vault write auth/approle/role/my-role \
   token_ttl=1h \
   token_max_ttl=4h
 ```
+
 
 ### Step 9: Retrieve the RoleID and SecretID
 
@@ -116,6 +129,7 @@ vault write -f auth/approle/role/my-role/secret-id
 ```
 
 Use these credentials within your application to authenticate with Vault and access secrets securely.
+
 
 ### Step 10: Configure Your Service to Use Vault
 
@@ -142,6 +156,7 @@ Then update the following fields in your .env file:
 `WEBHOOK_SIGNING_KEY`: The key used for signing webhook notifications
 `API_KEY`: They api key used to authorize requests
 
+
 ### Step 11 Configure Webhook URL
 
 `examples/vault-secret-signer/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
@@ -154,7 +169,8 @@ For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL
 Start remaining docker-compose service with command:
 
 ```
-docker compose up -d
+docker compose -f examples/vault-secret-signer/docker-compose.yaml up -d
+
 ```
 
 
@@ -163,6 +179,7 @@ docker compose up -d
 - [HashiCorp Vault Documentation](https://www.vaultproject.io/docs/)
 - [KV Secrets Engine - Version 2](https://www.vaultproject.io/docs/secrets/kv/kv-v2)
 - [AppRole Authentication](https://www.vaultproject.io/docs/auth/approle)
+
 
 ## Troubleshooting
 

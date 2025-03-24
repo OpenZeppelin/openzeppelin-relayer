@@ -67,7 +67,7 @@ itertools = "0.14.0"
 validator = { version = "0.20", features = ["derive"] }
 vaultrs = { version = "0.7.4" }
 utoipa = { version = "5.3", features = ["actix_extras"] }
-utoipa-swagger-ui = { version = "9", features = ["actix-web", "debug-embed"] }
+utoipa-swagger-ui = { version = "9", features = ["actix-web", "debug-embed", "reqwest"] }
 secrets = { version = "1.2"}
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
