@@ -104,7 +104,3 @@ path = "helpers/generate_openapi.rs"
 
 [lib]
 path = "src/lib.rs"
-
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }

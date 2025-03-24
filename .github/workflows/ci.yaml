@@ -208,7 +208,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@9399c7bb15d4c7d47b27263d024f0a4978346ba4  # v1.11.0
         with:
-          toolchain: nightly
+          toolchain: stable
           components: llvm-tools-preview
           rustflags: ''
 
@@ -227,7 +227,7 @@ jobs:
           LLVM_PROFILE_FILE: unit-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
-        run: cargo +nightly hack llvm-cov --locked --lib --lcov --output-path unit-lcov.info
+        run: cargo hack llvm-cov --locked --lib --lcov --output-path unit-lcov.info
 
       # Integration tests coverage
       - name: Run Integration Tests and Generate Coverage Report

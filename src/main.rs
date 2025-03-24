@@ -1,4 +1,3 @@
-#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 //! Top-level crate documentation.
 //! # OpenZeppelin Relayer
 //!

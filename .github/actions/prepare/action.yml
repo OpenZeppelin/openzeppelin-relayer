@@ -9,9 +9,9 @@ runs:
   using: composite
   steps:
     - name: setup rust tool chain
-      uses: dtolnay/rust-toolchain@nightly
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: nightly
+        toolchain: stable
         components: rustfmt, clippy
 
     - name: Install libsodium

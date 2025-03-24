@@ -1,4 +1,3 @@
-// LCOV_EXCL_START
 use crate::{
     api::routes::{metrics, relayer},
     models,
@@ -57,4 +56,3 @@ impl Modify for SecurityAddon {
 )]
 
 pub struct ApiDoc;
-// LCOV_EXCL_STOP
