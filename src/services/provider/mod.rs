@@ -37,3 +37,26 @@ pub fn get_solana_network_provider_from_str(
 
     SolanaProvider::new(rpc_url)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_solana_network_provider_valid_network_mainnet_beta() {
+        let result = get_solana_network_provider_from_str("mainnet-beta");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_solana_network_provider_valid_network_testnet() {
+        let result = get_solana_network_provider_from_str("testnet");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_solana_network_provider_invalid_network() {
+        let result = get_solana_network_provider_from_str("invalid-network");
+        assert!(result.is_err());
+    }
+}
