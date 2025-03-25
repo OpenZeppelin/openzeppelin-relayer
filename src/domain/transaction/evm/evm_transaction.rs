@@ -673,23 +673,15 @@ where
 
         // For transactions in Sent/Submitted state, we need to send a cancellation transaction
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
-        let hash_previous = evm_data.hash.clone();
 
         // Prepare the cancellation transaction
         make_noop(&mut evm_data).await?;
-
-        // Track the new transaction hash in the hashes history
-        let mut hashes = tx.hashes.clone();
-        if let Some(hash) = hash_previous {
-            hashes.push(hash);
-        }
 
         // Update original transaction with the cancel/noop transaction data
         let update = TransactionUpdateRequest {
             network_data: Some(NetworkTransactionData::Evm(evm_data)),
             status: Some(TransactionStatus::Submitted),
             sent_at: None,
-            hashes: Some(hashes),
             priced_at: Some(Utc::now().to_rfc3339()),
             ..Default::default()
         };
