@@ -39,8 +39,6 @@ pub use solana::*;
 pub use stellar::*;
 pub use util::*;
 
-use self::price_calculator::PriceCalculator;
-
 /// A trait that defines the operations for handling transactions across different networks.
 #[async_trait]
 #[allow(dead_code)]
@@ -208,7 +206,6 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Stellar(relayer) => relayer.submit_transaction(tx).await,
         }
     }
-
     /// Resubmits a transaction with updated parameters based on the network type.
     ///
     /// # Arguments

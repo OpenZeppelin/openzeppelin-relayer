@@ -43,6 +43,25 @@ use crate::{
     services::{gas::EvmGasPriceServiceTrait, GasPrices},
 };
 
+#[cfg(test)]
+use mockall::automock;
+
+#[async_trait::async_trait]
+#[cfg_attr(test, automock)]
+pub trait PriceCalculatorTrait: Send + Sync {
+    async fn get_transaction_price_params(
+        &self,
+        tx_data: &EvmTransactionData,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError>;
+
+    async fn calculate_bumped_gas_price(
+        &self,
+        tx: &TransactionRepoModel,
+        relayer: &RelayerRepoModel,
+    ) -> Result<PriceParams, TransactionError>;
+}
+
 type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
 
 const PRECISION: u128 = 1_000_000_000; // 10^9 (similar to Gwei)
@@ -62,23 +81,6 @@ pub struct PriceParams {
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
 pub struct PriceCalculator<G: EvmGasPriceServiceTrait> {
     gas_price_service: G,
-}
-
-#[async_trait::async_trait]
-pub trait PriceCalculatorTrait {
-    /// Calculates transaction price parameters based on the transaction type and network conditions.
-    async fn get_transaction_price_params(
-        &self,
-        tx_data: &EvmTransactionData,
-        relayer: &RelayerRepoModel,
-    ) -> Result<PriceParams, TransactionError>;
-
-    /// Computes bumped gas price for transaction resubmission, factoring in network conditions.
-    async fn calculate_bumped_gas_price(
-        &self,
-        tx: &TransactionRepoModel,
-        relayer: &RelayerRepoModel,
-    ) -> Result<PriceParams, TransactionError>;
 }
 
 #[async_trait::async_trait]
@@ -406,6 +408,11 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             self.fetch_eip1559_speed_params(speed).await
         }
     }
+
+    /// Calculates EIP1559 gas prices based on the requested speed.
+    ///
+    /// Uses the gas price service to fetch current network conditions and calculates
+    /// appropriate max fee and priority fee based on the speed setting.
     async fn fetch_eip1559_speed_params(
         &self,
         speed: &Speed,

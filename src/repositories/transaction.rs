@@ -317,6 +317,12 @@ impl TransactionRepository for InMemoryTransactionRepository {
             if let Some(network_data) = update.network_data {
                 tx.network_data = network_data;
             }
+            if let Some(hashes) = update.hashes {
+                tx.hashes = hashes;
+            }
+            if let Some(is_canceled) = update.is_canceled {
+                tx.is_canceled = Some(is_canceled);
+            }
             Ok(tx.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
@@ -401,6 +407,8 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 raw: None,
             }),
+            noop_count: None,
+            is_canceled: Some(false),
         }
     }
 
@@ -432,6 +440,8 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 raw: None,
             }),
+            noop_count: None,
+            is_canceled: Some(false),
         }
     }
 
@@ -550,6 +560,8 @@ mod tests {
             network_data: None,
             hashes: None,
             priced_at: None,
+            noop_count: None,
+            is_canceled: None,
         };
         let updated_tx1 = repo
             .partial_update("test-tx-id".to_string(), update1)
@@ -566,6 +578,8 @@ mod tests {
             network_data: None,
             hashes: None,
             priced_at: None,
+            noop_count: None,
+            is_canceled: None,
         };
         let updated_tx2 = repo
             .partial_update("test-tx-id".to_string(), update2)
@@ -589,6 +603,8 @@ mod tests {
             network_data: None,
             hashes: None,
             priced_at: None,
+            noop_count: None,
+            is_canceled: None,
         };
         let result = repo
             .partial_update("non-existent-id".to_string(), update3)

@@ -162,6 +162,8 @@ mod tests {
             }),
             valid_until: None,
             network_type: NetworkType::Evm,
+            noop_count: None,
+            is_canceled: Some(false),
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -206,6 +208,8 @@ mod tests {
             }),
             valid_until: None,
             network_type: NetworkType::Solana,
+            noop_count: None,
+            is_canceled: Some(false),
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -246,6 +250,8 @@ mod tests {
             }),
             valid_until: None,
             network_type: NetworkType::Stellar,
+            noop_count: None,
+            is_canceled: Some(false),
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -286,6 +292,8 @@ mod tests {
             }),
             valid_until: None,
             network_type: NetworkType::Solana,
+            noop_count: None,
+            is_canceled: Some(false),
         };
 
         let response = TransactionResponse::from(model);

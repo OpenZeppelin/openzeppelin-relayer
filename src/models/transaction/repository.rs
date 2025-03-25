@@ -1,5 +1,5 @@
 use crate::{
-    domain::{price_calculator::PriceParams, SignTransactionResponseEvm},
+    domain::{PriceParams, SignTransactionResponseEvm},
     models::{
         AddressError, EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError,
         RelayerRepoModel, SignerError, TransactionError, U256,
@@ -21,6 +21,7 @@ use super::evm::Speed;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
+    Canceled,
     Pending,
     Sent,
     Submitted,
@@ -40,6 +41,10 @@ pub struct TransactionUpdateRequest {
     pub priced_at: Option<String>,
     /// History of transaction hashes
     pub hashes: Option<Vec<String>>,
+    /// Number of no-ops in the transaction
+    pub noop_count: Option<u32>,
+    /// Whether the transaction is canceled
+    pub is_canceled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,11 +57,13 @@ pub struct TransactionRepoModel {
     pub confirmed_at: Option<String>,
     pub valid_until: Option<String>,
     pub network_data: NetworkTransactionData,
-    pub network_type: NetworkType,
     /// Timestamp when gas price was determined
     pub priced_at: Option<String>,
     /// History of transaction hashes
     pub hashes: Vec<String>,
+    pub network_type: NetworkType,
+    pub noop_count: Option<u32>,
+    pub is_canceled: Option<bool>,
 }
 
 impl TransactionRepoModel {
@@ -146,7 +153,6 @@ impl EvmTransactionData {
         self.nonce = Some(nonce);
         self
     }
-
     pub fn with_signed_transaction_data(mut self, sig: SignTransactionResponseEvm) -> Self {
         self.signature = Some(sig.signature);
         self.hash = Some(sig.hash);
@@ -192,6 +198,8 @@ impl Default for TransactionRepoModel {
             network_type: NetworkType::Evm,
             priced_at: None,
             hashes: Vec::new(),
+            noop_count: None,
+            is_canceled: Some(false),
         }
     }
 }
@@ -272,6 +280,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     }),
                     priced_at: None,
                     hashes: Vec::new(),
+                    noop_count: None,
+                    is_canceled: Some(false),
                 })
             }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
@@ -291,6 +301,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 }),
                 priced_at: None,
                 hashes: Vec::new(),
+                noop_count: None,
+                is_canceled: Some(false),
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
@@ -310,6 +322,8 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 }),
                 priced_at: None,
                 hashes: Vec::new(),
+                noop_count: None,
+                is_canceled: Some(false),
             }),
         }
     }
