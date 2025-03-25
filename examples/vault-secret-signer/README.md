@@ -120,7 +120,7 @@ Retrieve the RoleID for your AppRole(store these values as they are needed for n
 vault read auth/approle/role/my-role/role-id
 ```
 
-Update 
+Update
 
 Then, generate a SecretID for your AppRole:
 
