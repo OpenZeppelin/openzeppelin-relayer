@@ -21,9 +21,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload, EvmNetwork, NetworkTransactionData,
+        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
+        TransactionUpdateRequest,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
@@ -101,35 +101,6 @@ where
             price_calculator,
             signer,
         })
-    }
-
-    /// Prepares a cancellation transaction with higher gas price to replace the original transaction
-    ///
-    /// # Arguments
-    ///
-    /// * `evm_data` - The original transaction's EVM data
-    /// * `relayer` - The relayer model
-    ///
-    /// # Returns
-    ///
-    /// A result containing the prepared cancellation transaction data or a `TransactionError`
-    async fn prepare_cancel_transaction(
-        &self,
-        evm_data: &mut EvmTransactionData,
-        _relayer: &RelayerRepoModel,
-    ) -> Result<EvmTransactionData, TransactionError> {
-        // Update the transaction to be a noop with higher gas price
-        make_noop(evm_data, EvmNetwork::from_id(evm_data.chain_id)).await?;
-
-        // Sign the updated transaction
-        let sig_result = self
-            .signer
-            .sign_transaction(NetworkTransactionData::Evm(evm_data.clone()))
-            .await?;
-
-        Ok(evm_data
-            .clone()
-            .with_signed_transaction_data(sig_result.into_evm()?))
     }
 
     /// Helper function to check if a transaction has enough confirmations
@@ -703,12 +674,9 @@ where
         // For transactions in Sent/Submitted state, we need to send a cancellation transaction
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
         let hash_previous = evm_data.hash.clone();
-        let relayer = self.relayer();
 
         // Prepare the cancellation transaction
-        let signed_cancel_tx_data = self
-            .prepare_cancel_transaction(&mut evm_data, relayer)
-            .await?;
+        make_noop(&mut evm_data).await?;
 
         // Track the new transaction hash in the hashes history
         let mut hashes = tx.hashes.clone();
@@ -718,7 +686,7 @@ where
 
         // Update original transaction with the cancel/noop transaction data
         let update = TransactionUpdateRequest {
-            network_data: Some(NetworkTransactionData::Evm(signed_cancel_tx_data)),
+            network_data: Some(NetworkTransactionData::Evm(evm_data)),
             status: Some(TransactionStatus::Submitted),
             sent_at: None,
             hashes: Some(hashes),
@@ -1061,117 +1029,6 @@ mod tests {
 
         // Test with empty created_at string
         assert!(!TestEvmTransaction::is_transaction_valid("", &valid_until));
-    }
-
-    #[tokio::test]
-    async fn test_prepare_transaction() {
-        // Create mocks for all dependencies
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mut mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-
-        // Create test relayer and transaction
-        let relayer = create_test_relayer();
-        let test_tx = create_test_transaction();
-
-        // Set up expectations for the mocks
-        mock_price_calculator
-            .expect_get_transaction_price_params()
-            .return_once(move |_, _| {
-                Ok(PriceParams {
-                    gas_price: Some(30000000000), // 30 Gwei
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                    is_min_bumped: None,
-                })
-            });
-
-        // Provider should be called for balance check
-        mock_provider
-            .expect_get_balance()
-            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64))))); // 1 ETH
-
-        // Transaction counter should increment and return a nonce
-        counter_service
-            .expect_get_and_increment()
-            .returning(|_, _| Ok(42u64)); // Return nonce 42
-
-        // Signer should be called to sign the transaction
-        mock_signer.expect_sign_transaction().returning(|_| {
-            Box::pin(ready(Ok(
-                crate::domain::relayer::SignTransactionResponse::Evm(
-                    crate::domain::relayer::SignTransactionResponseEvm {
-                        hash: "0xtxhash".to_string(),
-                        signature: crate::models::EvmTransactionDataSignature {
-                            r: "r".to_string(),
-                            s: "s".to_string(),
-                            v: 1,
-                            sig: "0xsignature".to_string(),
-                        },
-                        raw: vec![1, 2, 3],
-                    },
-                ),
-            )))
-        });
-
-        // Transaction repository should update the transaction
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .returning(move |tx_id, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.id = tx_id;
-                updated_tx.status = update.status.unwrap_or(updated_tx.status);
-                updated_tx.network_data = update.network_data.unwrap_or(updated_tx.network_data);
-                if let Some(hashes) = update.hashes {
-                    updated_tx.hashes = hashes;
-                }
-                Ok(updated_tx)
-            });
-
-        // Job producer should create a submit transaction job
-        mock_job_producer
-            .expect_produce_submit_transaction_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-        mock_job_producer
-            .expect_produce_send_notification_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-
-        // Set up EVM transaction with the mocks
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        // Call prepare_transaction and verify it succeeds
-        let result = evm_transaction.prepare_transaction(test_tx).await;
-
-        // Verify the transaction was successfully prepared
-        assert!(result.is_ok());
-
-        // Verify the transaction has the expected values
-        let prepared_tx = result.unwrap();
-        assert_eq!(prepared_tx.status, TransactionStatus::Sent);
-
-        // Verify the network data was properly updated
-        if let NetworkTransactionData::Evm(evm_data) = &prepared_tx.network_data {
-            assert_eq!(evm_data.nonce, Some(42));
-            assert!(evm_data.raw.is_some());
-            assert_eq!(evm_data.hash, Some("0xtxhash".to_string()));
-            assert!(evm_data.signature.is_some());
-        } else {
-            panic!("Expected EVM transaction data");
-        }
     }
 
     #[tokio::test]

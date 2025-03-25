@@ -1,26 +1,14 @@
-use crate::models::{EvmNetwork, EvmTransactionData, TransactionError, TransactionStatus, U256};
+use crate::models::{EvmTransactionData, TransactionError, TransactionStatus, U256};
 use eyre::Result;
 
 /// Updates an existing transaction to be a "noop" transaction (transaction to self with zero value and no data)
 /// This is commonly used for cancellation and replacement transactions
-pub async fn make_noop(
-    evm_data: &mut EvmTransactionData,
-    network: EvmNetwork,
-) -> Result<(), TransactionError> {
-    // Keep the original nonce
-    let nonce = evm_data.nonce;
-
+pub async fn make_noop(evm_data: &mut EvmTransactionData) -> Result<(), TransactionError> {
     // Update the transaction to be a noop
     evm_data.gas_limit = 21_000;
     evm_data.value = U256::from(0u64);
     evm_data.data = Some("0x".to_string());
     evm_data.to = Some(evm_data.from.clone());
-    evm_data.chain_id = network.id();
-    evm_data.hash = None;
-    evm_data.signature = None;
-    evm_data.speed = None;
-    evm_data.raw = None;
-    evm_data.nonce = nonce;
 
     Ok(())
 }
@@ -34,11 +22,10 @@ pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{evm::Speed, EvmNamedNetwork};
+    use crate::models::evm::Speed;
 
     #[tokio::test]
     async fn test_make_noop_standard_network() {
-        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
         let mut evm_data = EvmTransactionData {
             from: "0x1234567890123456789012345678901234567890".to_string(),
             to: Some("0xoriginal_destination".to_string()),
@@ -56,7 +43,7 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let result = make_noop(&mut evm_data, network).await;
+        let result = make_noop(&mut evm_data).await;
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly
