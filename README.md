@@ -15,6 +15,7 @@ This relayer service enables interaction with blockchain networks through transa
 - **Solana Gasless Transactions**: Support for gasless transactions on Solana, enabling users to interact without transaction fees.
 - **Transaction Nonce Management**: Handle nonce management to ensure transaction order.
 - **Transaction Status Monitoring**: Track the status of submitted transactions.
+- **SDK Integration**: Easily interact with the relayer through our companion JavaScript/TypeScript SDK.
 - **Extensible Architecture**: Easily add support for new blockchain networks.
 - **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
