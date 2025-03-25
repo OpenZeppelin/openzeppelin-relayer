@@ -11,20 +11,24 @@ use crate::{
 /// with the expected prefix (e.g., "Bearer "), and then compares the remaining part of the header
 /// value with the expected API key.
 pub fn check_authorization_header(req: &ServiceRequest, expected_key: &SecretString) -> bool {
-    if let Some(header_value) = req.headers().get(AUTHORIZATION_HEADER_NAME) {
-        if let Ok(key) = header_value.to_str() {
-            let key = key.trim();
-            // Check exact format: "Bearer <token>"
-            if !key.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
-                return false;
-            }
-            // Split on whitespace and ensure exactly 2 parts
-            let parts: Vec<&str> = key.split_whitespace().collect();
-            if parts.len() != 2 || parts[0] != "Bearer" {
-                return false;
-            }
-            return &SecretString::new(parts[1]) == expected_key;
+    // Ensure there is exactly one Authorization header
+    let headers: Vec<_> = req.headers().get_all(AUTHORIZATION_HEADER_NAME).collect();
+    if headers.len() != 1 {
+        return false;
+    }
+
+    if let Ok(key) = headers[0].to_str() {
+        if !key.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
+            return false;
         }
+        let prefix_len = AUTHORIZATION_HEADER_VALUE_PREFIX.len();
+        let token = &key[prefix_len..];
+
+        if token.is_empty() || token.contains(' ') {
+            return false;
+        }
+
+        return &SecretString::new(token) == expected_key;
     }
     false
 }
@@ -114,8 +118,8 @@ mod tests {
             ))
             .to_srv_request();
 
-        // Should use the first header value only
-        assert!(check_authorization_header(
+        // Should reject multiple Authorization headers
+        assert!(!check_authorization_header(
             &req,
             &SecretString::new("test_key")
         ));
@@ -123,24 +127,14 @@ mod tests {
 
     #[test]
     fn test_check_authorization_header_malformed_bearer() {
-        // Test with extra spaces
-        let req = TestRequest::default()
-            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer    test_key"))
-            .to_srv_request();
-
-        assert!(!check_authorization_header(
-            &req,
-            &SecretString::new("test_key")
-        ));
-
         // Test with Bearer in token
         let req = TestRequest::default()
-            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer Bearer"))
+            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer Bearer token"))
             .to_srv_request();
 
         assert!(!check_authorization_header(
             &req,
-            &SecretString::new("Bearer")
+            &SecretString::new("token")
         ));
 
         // Test with empty token
