@@ -6,7 +6,7 @@
 //! - Transaction status checks
 //! - Notifications
 use apalis_redis::{Config, RedisStorage};
-use color_eyre::eyre::{eyre, Result};
+use color_eyre::{eyre, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
@@ -28,15 +28,15 @@ impl Queue {
         namespace: &str,
     ) -> Result<RedisStorage<T>> {
         let redis_url = ServerConfig::from_env().redis_url.clone();
-        let redis_connection_timeout = ServerConfig::from_env().redis_connection_timeout;
-        let conn = match timeout(Duration::from_secs(redis_connection_timeout), apalis_redis::connect(redis_url.clone())).await {
+        let redis_connection_timeout_ms = ServerConfig::from_env().redis_connection_timeout_ms;
+        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
             Ok(result) => result.map_err(|e| {
                 error!("Failed to connect to Redis at {}: {}", redis_url, e);
-                eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
+                eyre::eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
             })?,
             Err(_) => {
                 error!("Timeout connecting to Redis at {}", redis_url);
-                return Err(eyre!("Timed out after {} seconds while connecting to Redis at {}", redis_connection_timeout, redis_url));
+                return Err(eyre::eyre!("Timed out after {} seconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
             }
         };
         let config = Config::default()

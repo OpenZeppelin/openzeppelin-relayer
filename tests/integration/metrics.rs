@@ -21,7 +21,7 @@ async fn test_authorization_middleware_success() {
         rate_limit_requests_per_second: 10,
         rate_limit_burst_size: 10,
         enable_swagger: false,
-        redis_connection_timeout: 5,
+        redis_connection_timeout_ms: 5000,
     });
 
     let app = test::init_service(
@@ -69,7 +69,7 @@ async fn test_authorization_middleware_failure() {
         rate_limit_requests_per_second: 10,
         rate_limit_burst_size: 10,
         enable_swagger: false,
-        redis_connection_timeout: 5,
+        redis_connection_timeout_ms: 5000,
     });
 
     let app = test::init_service(
