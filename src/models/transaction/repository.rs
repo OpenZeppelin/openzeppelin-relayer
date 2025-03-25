@@ -43,6 +43,8 @@ pub struct TransactionUpdateRequest {
     pub hashes: Option<Vec<String>>,
     /// Number of no-ops in the transaction
     pub noop_count: Option<u32>,
+    /// Whether the transaction is canceled
+    pub is_canceled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

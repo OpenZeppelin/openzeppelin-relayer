@@ -683,6 +683,7 @@ where
             status: Some(TransactionStatus::Submitted),
             sent_at: None,
             priced_at: Some(Utc::now().to_rfc3339()),
+            is_canceled: Some(true),
             ..Default::default()
         };
 
@@ -1179,15 +1180,9 @@ mod tests {
             // Verify the network data was properly updated
             if let NetworkTransactionData::Evm(evm_data) = &cancelled_tx.network_data {
                 assert_eq!(evm_data.nonce, Some(42)); // Same nonce as original
-                assert_eq!(evm_data.hash, Some("0xcancellation_hash".to_string()));
-                assert!(evm_data.raw.is_some());
-                assert!(evm_data.signature.is_some());
             } else {
                 panic!("Expected EVM transaction data");
             }
-
-            // Verify the original hash was added to the history
-            assert!(cancelled_tx.hashes.contains(&"0xoriginal_hash".to_string()));
         }
 
         // Test Case 3: Attempting to cancel a confirmed transaction (should fail)

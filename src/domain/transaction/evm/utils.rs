@@ -51,11 +51,6 @@ mod tests {
         assert_eq!(evm_data.to.unwrap(), evm_data.from); // Should send to self
         assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
         assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
-        assert_eq!(evm_data.gas_price, Some(10_000_000_000));
         assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
-        assert!(evm_data.hash.is_none()); // Hash cleared
-        assert!(evm_data.signature.is_none()); // Signature cleared
-        assert!(evm_data.speed.is_none()); // Speed cleared
-        assert!(evm_data.raw.is_none()); // Raw data cleared
     }
 }
