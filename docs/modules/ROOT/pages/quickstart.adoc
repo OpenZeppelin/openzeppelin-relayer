@@ -167,4 +167,3 @@ For documentation and examples on how to consume Relayer service via SDK check h
 == Additional Resources and Troubleshooting
 
 Troubleshooting: If you encounter issues during setup or deployment, verify your environment variables, check container logs, and review your configuration files for syntax errors.
-
