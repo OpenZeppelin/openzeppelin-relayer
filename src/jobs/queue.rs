@@ -36,7 +36,7 @@ impl Queue {
             })?,
             Err(_) => {
                 error!("Timeout connecting to Redis at {}", redis_url);
-                return Err(eyre::eyre!("Timed out after {} seconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
+                return Err(eyre::eyre!("Timed out after {} milliseconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
             }
         };
         let config = Config::default()
