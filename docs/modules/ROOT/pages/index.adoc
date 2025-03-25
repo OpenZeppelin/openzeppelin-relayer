@@ -16,6 +16,7 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 - **Solana Gasless Transactions**: Support for gasless transactions on Solana, enabling users to interact without transaction fees.
 - **Transaction Nonce Management**: Handle nonce management to ensure transaction order.
 - **Transaction Status Monitoring**: Track the status of submitted transactions.
+- **SDK Integration**: Easily interact with the relayer through our companion JavaScript/TypeScript SDK.
 - **Extensible Architecture**: Easily add support for new blockchain networks.
 - **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
@@ -69,6 +70,22 @@ For detailed information about each directory and its contents, see xref:structu
 
 * Rust 2021 edition
 * Docker (optional, for containerized deployment)
+
+
+[TIP]
+====
+*Ready-to-Use Example Configurations*
+
+For quick setup with various configurations, check the https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[examples directory] in our GitHub repository:
+
+* `basic-example`: Simple setup with Redis
+* `basic-example-logging`: Configuration with file-based logging
+* `basic-example-metrics`: Setup with Prometheus and Grafana metrics
+* `vault-secret-signer`: Using HashiCorp Vault for key management
+* `vault-transit-signer`: Using Vault Transit for secure signing
+
+Each example includes a README with step-by-step instructions and Docker Compose configuration.
+====
 
 === Installation
 
@@ -149,6 +166,18 @@ DOCKERFILE=Dockerfile.production docker compose up -d
 Most configuration files should live under `./config`, including the signer configurations, under `./config/keys`.
 Please ensure appropriate access permissions on all configuration files (for `./config/keys/*`, we recommend `0500`.
 
+[IMPORTANT]
+====
+The configuration system consists of two main components:
+
+1. **`config.json`**: Contains relayer definitions, signer configurations, and network policies
+2. **`.env`** file: Contains environment variables like API keys and connection strings
+
+Both files must be properly configured before starting the application. Changes to either file require restarting the container to take effect.
+
+For quick setup examples with pre-configured files, see the https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[examples directory] in our GitHub repository.
+====
+
 === Environment configuration (.env)
 
 This defines some base configurations for the Relayer application:
@@ -182,12 +211,12 @@ This table lists the environment variables and their default values.
 | File Name of the configuration file.
 
 | `RATE_LIMIT_RPS`
-| `10`
+| `100`
 | `<any value>`
 | Rate limit for the API in requests per second.
 
 | `RATE_LIMIT_BURST_SIZE`
-| `30`
+| `300`
 | `<any value>`
 | Rate limit burst size.
 
@@ -218,21 +247,47 @@ This table lists the environment variables and their default values.
 
 | `METRICS_ENABLED`
 | `false`
-| `true`
+| `bool`
 | Enable metrics server for external tools to scrape metrics.
 
 | `METRICS_PORT`
 | `8081`
 | `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>`
 | Port to use for metrics server.
+
+| `ENABLE_SWAGGER`
+| `false`
+| `bool`
+| Enable Swagger UI
 |===
 
-Make sure to, at least, choose your API key. Without it, you won't be able to interact with most of the API endpoints on the Relayer.
-If you change any of these value, you will need to restart the container to make them active.
+
+==== Environment configuration example
+
+`.env` file config example:
+
+```
+RUST_LOG=DEBUG
+REDIS_URL=redis://localhost:6379
+CONFIG_FILE_PATH=config/config.json
+WEBHOOK_SIGNING_KEY=e1d42480-6f74-4d0b-85f4-b7f0bb690fae
+API_KEY=5eefd216-0e44-4ca7-b421-2925f90d30d5
+RATE_LIMIT_REQUESTS_PER_SECOND=100
+RATE_LIMIT_BURST_SIZE=300
+METRICS_ENABLED=true
+ENABLE_SWAGGER=false
+```
 
 === Main configuration file (config.json)
 
 This file can exist in any directory, but the default location is `./config/config.json`.
+
+Copy the example config file and update values according to your needs
+
+[source,bash]
+----
+cp config/config.example.json config/config.json
+----
 
 There are 3 important sections in this file:
 
@@ -254,8 +309,8 @@ Example:
     "config": {
       "path": "config/keys/local-signer.json",
       "passphrase": {
-        "type": "plain",
-        "value": "test"
+        "type": "env",
+        "value": "KEYSTORE_PASSPHRASE"
       }
     }
   }
@@ -354,7 +409,8 @@ Available configuration fields
 | Type of value source (`env` or `plain`)
 
 | client_secret.value
-| StringThe Vault secret value, or the environment variable name where the secret value is stored.
+| String
+| The Vault secret value, or the environment variable name where the secret value is stored.
 
 | org_id
 | String
@@ -455,7 +511,7 @@ Available configuration fields
 |String
 |Type of key used in signing the notification (`env` or `plain`)
 
-|signing_key.name
+|signing_key.value
 |String
 |Signing key value, env variable name, ...
 |===
@@ -611,17 +667,71 @@ Policies
 |A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional)
 |===
 
-Example for allowed_tokens:
-[source,json]
-----
-"allowed_tokens": [
-  {
-    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "max_allowed_fee": 1000000,
-    "conversion_slippage_percentage": 1.0
-  }
-]
-----
+
+==== Config file full example
+
+Full `config/config.json` example with evm and solana relayers definitions using keystore signer:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "sepolia-example",
+      "name": "Sepolia Example",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "evm"
+    },
+    {
+      "id": "solana-example",
+      "name": "Solana Example",
+      "network": "devnet",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "solana",
+      "policies": {
+        "min_balance": 0,
+        "allowed_tokens": [
+          {
+            "mint": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
+            "max_allowed_fee": 100000000
+          },
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "https://webhook.site/1384d4d9-21b1-40a0-bcd1-d3f3b66be955",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ]
+}
+```
 
 == Important Considerations
 

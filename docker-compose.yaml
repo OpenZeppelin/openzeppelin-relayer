@@ -18,8 +18,8 @@ services:
       RATE_LIMIT_REQUESTS_PER_SECOND: ${RATE_LIMIT_RPS:-10}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
-      WEBHOOK_SIGNING_KEY:
-      API_KEY:
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
       # Options: trace, debug, info, warn, error
       # Default: info
       # Options: trace, debug, info, warn, error

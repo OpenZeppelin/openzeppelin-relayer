@@ -15,6 +15,7 @@ This relayer service enables interaction with blockchain networks through transa
 - **Solana Gasless Transactions**: Support for gasless transactions on Solana, enabling users to interact without transaction fees.
 - **Transaction Nonce Management**: Handle nonce management to ensure transaction order.
 - **Transaction Status Monitoring**: Track the status of submitted transactions.
+- **SDK Integration**: Easily interact with the relayer through our companion JavaScript/TypeScript SDK.
 - **Extensible Architecture**: Easily add support for new blockchain networks.
 - **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
@@ -23,7 +24,7 @@ This relayer service enables interaction with blockchain networks through transa
 ## Supported networks
 
 - Solana
-- EVM
+- EVM (🚧 Partial support)
 
 ## For users
 
@@ -34,6 +35,23 @@ View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin_re
 ### Usage
 
 View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#running_the_relayer) documentation for more information.
+
+### Examples
+
+The repository includes several ready-to-use examples to help you get started with different configurations:
+
+| Example | Description |
+|---------|-------------|
+| [`basic-example`](./examples/basic-example/) | Simple setup with Redis |
+| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging |
+| [`basic-example-metrics`](./examples/basic-example-metrics/) | Setup with Prometheus and Grafana metrics |
+| [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management |
+| [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing |
+
+Each example includes:
+- A README with step-by-step instructions
+- Docker Compose configuration
+- Required configuration files
 
 ## For Developers
 
@@ -128,9 +146,12 @@ cp config/config.example.json config/config.json
 
 Refer to the [Configuration References](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
 
-Create `config/keys/local-signer.json` and make sure to update this file with the correct values. Check the sample file `config/keys/local-signer.example.json`.
 
-Create `.env` with correct values according to your needs from `.env.example` file.
+Create `.env` with correct values according to your needs from `.env.example` file as a starting point:
+
+```sh
+cp .env.example .env
+```
 
 ### Creating a Signer
 
@@ -142,6 +163,8 @@ cargo run --example create_key -- \
     --output-dir config/keys \
     --filename local-signer.json
 ```
+
+Then update the `KEYSTORE_PASSPHRASE` field in your `.env` file with the password you used in the key creation example.
 
 The tool supports the following options:
 
@@ -165,6 +188,40 @@ cargo run --example create_key -- \
     --force
 ```
 
+### Configure Webhook URL
+
+`/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
+
+For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `config/config.json` with this value.
+
+
+### Configure Webhook Signing Key
+
+To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
+
+For development purposes, you can generate the signing key using:
+
+```bash
+cargo run --example generate_uuid
+```
+> Note: Alternatively, you can use any online UUID generator.
+
+Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
+
+
+### Configure API Key
+
+Generate an API key signing key for development purposes using:
+
+```bash
+cargo run --example generate_uuid
+```
+> Note: Alternatively, you can use any online UUID generator.
+
+
+Copy the generated UUID and update the `API_KEY` entry in the `.env` file.
+
+
 ### Starting Redis manually (without docker compose)
 
 Run Redis container:
@@ -187,6 +244,16 @@ Run relayer:
 
 ```sh
 cargo run
+```
+
+## Test the Relayer
+
+The service is available at `http://localhost:8080/api/v1`
+
+```bash
+curl -X GET http://localhost:8080/api/v1/relayers \
+  -H "Content-Type: application/json" \
+  -H "AUTHORIZATION: Bearer YOUR_API_KEY"
 ```
 
 ### Running services with docker compose
