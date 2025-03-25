@@ -13,12 +13,17 @@ use crate::{
 pub fn check_authorization_header(req: &ServiceRequest, expected_key: &SecretString) -> bool {
     if let Some(header_value) = req.headers().get(AUTHORIZATION_HEADER_NAME) {
         if let Ok(key) = header_value.to_str() {
-            let starts_with_bearer = key.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX);
-            let key_without_bearer = key.trim_start_matches(AUTHORIZATION_HEADER_VALUE_PREFIX);
-            if !starts_with_bearer {
+            let key = key.trim();
+            // Check exact format: "Bearer <token>"
+            if !key.starts_with(AUTHORIZATION_HEADER_VALUE_PREFIX) {
                 return false;
             }
-            return &SecretString::new(key_without_bearer) == expected_key;
+            // Split on whitespace and ensure exactly 2 parts
+            let parts: Vec<&str> = key.split_whitespace().collect();
+            if parts.len() != 2 || parts[0] != "Bearer" {
+                return false;
+            }
+            return &SecretString::new(parts[1]) == expected_key;
         }
     }
     false
@@ -79,5 +84,70 @@ mod tests {
             &req,
             &SecretString::new("test_key")
         ));
+    }
+
+    #[test]
+    fn test_check_authorization_header_multiple_bearer() {
+        let req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("Bearer Bearer {}", "test_key"),
+            ))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(
+            &req,
+            &SecretString::new("test_key")
+        ));
+    }
+
+    #[test]
+    fn test_check_authorization_header_multiple_headers() {
+        let req = TestRequest::default()
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "test_key"),
+            ))
+            .insert_header((
+                AUTHORIZATION_HEADER_NAME,
+                format!("{}{}", AUTHORIZATION_HEADER_VALUE_PREFIX, "another_key"),
+            ))
+            .to_srv_request();
+
+        // Should use the first header value only
+        assert!(check_authorization_header(
+            &req,
+            &SecretString::new("test_key")
+        ));
+    }
+
+    #[test]
+    fn test_check_authorization_header_malformed_bearer() {
+        // Test with extra spaces
+        let req = TestRequest::default()
+            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer    test_key"))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(
+            &req,
+            &SecretString::new("test_key")
+        ));
+
+        // Test with Bearer in token
+        let req = TestRequest::default()
+            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer Bearer"))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(
+            &req,
+            &SecretString::new("Bearer")
+        ));
+
+        // Test with empty token
+        let req = TestRequest::default()
+            .insert_header((AUTHORIZATION_HEADER_NAME, "Bearer "))
+            .to_srv_request();
+
+        assert!(!check_authorization_header(&req, &SecretString::new("")));
     }
 }
