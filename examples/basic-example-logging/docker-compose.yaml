@@ -1,31 +1,32 @@
 ---
-version: '3.9'
-
 services:
   relayer:
     build:
       context: ../../
       dockerfile: Dockerfile.development
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - keystore_passphrase
     ports:
       - 8080:8080/tcp
     environment:
-      REDIS_URL: redis://redis:6379
-      # Set `WEBHOOK_SIGNING_KEY` & `API_KEY` values in your .env file (recommended) and use that instead of hardcoding them here
-      # To avoid accidentally committing sensitive information to your repository
-      WEBHOOK_SIGNING_KEY: example-key
-      API_KEY: example-123456
+      REDIS_URL: ${REDIS_URL}
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
       # Options: trace, debug, info, warn, error
       # Default: info
-      LOG_LEVEL: info
+      LOG_LEVEL: ${LOG_LEVEL}
       # Options: stdout, file
       # Default: stdout
-      LOG_MODE: file
+      LOG_MODE: ${LOG_MODE}
       # Default: logs/
-      LOG_DATA_DIR: logs/
+      LOG_DATA_DIR: ${LOG_DATA_DIR}
       # Set max log file size to rotate to new log file
       # Only used if LOG_MODE is file
       # Default: 1GB (1073741824 bytes)
-      LOG_MAX_SIZE: 1073741824
+      LOG_MAX_SIZE: ${LOG_MAX_SIZE}
     security_opt:
       - no-new-privileges
     networks:
@@ -34,7 +35,9 @@ services:
     volumes:
       - ${CONFIG_DIR:-./config}:/app/config/:ro
       # Mount logs folder to persist logs
-      - ${LOG_DATA_DIR:./logs:/app/logs}
+      - type: bind
+        source: ${LOG_DATA_DIR:-./logs}
+        target: /app/logs
     depends_on:
       - redis
     restart: on-failure:5
@@ -70,3 +73,5 @@ secrets:
     environment: API_KEY
   webhook_signing_key:
     environment: WEBHOOK_SIGNING_KEY
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE

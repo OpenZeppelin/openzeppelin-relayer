@@ -244,7 +244,7 @@ mod tests {
             "id": "local-signer",
             "type": "local",
             "config": {
-                "path": "examples/basic-example/config/keys/local-signer.json",
+                "path": "tests/utils/test_keys/unit-test-local-signer.json",
                 "passphrase": {
                     "type": "plain",
                     "value": "secret",
@@ -264,7 +264,7 @@ mod tests {
             "id": "local-signer",
             "type": "local",
             "config": {
-                "path": "examples/basic-example/config/keys/local-signer.json",
+                "path": "tests/utils/test_keys/unit-test-local-signer.json",
                 "passphrase": {
                     "type": "env",
                     "value": "LOCAL_SIGNER_KEY_PASSPHRASE"
@@ -285,7 +285,7 @@ mod tests {
                   "id": "local-signer",
                   "type": "local",
                   "config": {
-                      "path": "examples/basic-example/config/keys/local-signer.json",
+                      "path": "tests/utils/test_keys/unit-test-local-signer.json",
                       "passphrase": {
                           "type": "plain",
                           "value": "secret",
@@ -296,7 +296,7 @@ mod tests {
                   "id": "local-signer",
                   "type": "local",
                   "config": {
-                      "path": "examples/basic-example/config/keys/local-signer.json",
+                      "path": "tests/utils/test_keys/unit-test-local-signer.json",
                       "passphrase": {
                           "type": "plain",
                           "value": "secret",
@@ -321,7 +321,7 @@ mod tests {
                   "id": "",
                   "type": "local",
                   "config": {
-                    "path": "examples/basic-example/config/keys/local-signer.json",
+                    "path": "tests/utils/test_keys/unit-test-local-signer.json",
                     "passphrase": {
                         "type": "plain",
                         "value": "secret",

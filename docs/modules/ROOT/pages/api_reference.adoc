@@ -31,6 +31,31 @@ NOTE: `relayer_id` is the name given to a relayer configuration in `./config/con
 * xref:solana_api[Solana]
 * xref:evm_api[EVM]
 
+[TIP]
+====
+*Interactive API Documentation with Swagger UI*
+
+You can explore and test the API interactively by enabling Swagger UI when running the service:
+
+[source,bash]
+----
+# Enable Swagger UI by setting this environment variable
+ENABLE_SWAGGER=true
+
+# Then run the service
+cargo run
+----
+
+Once running, access Swagger UI at: http://localhost:8080/swagger-ui/index.html
+
+This provides a user-friendly interface to:
+- Browse all available endpoints
+- Test API calls directly from your browser
+- View request/response schemas
+- Try out different parameters
+====
+
+
 [#common_actions]
 === Common actions
 These are a set of REST calls common to both Solana and EVM relayers.

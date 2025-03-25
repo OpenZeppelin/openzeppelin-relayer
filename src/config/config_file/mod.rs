@@ -258,7 +258,7 @@ mod tests {
                 SignerFileConfig {
                     id: "test-1".to_string(),
                     config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                        path: "examples/basic-example/config/keys/local-signer.json".to_string(),
+                        path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
                         passphrase: PlainOrEnvValue::Plain {
                             value: SecretString::new("test"),
                         },

@@ -7,7 +7,10 @@
       "paused": false,
       "notification_id": "notification-example",
       "signer_id": "local-signer",
-      "network_type": "evm"
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
     },
     {
       "id": "solana-example",
@@ -56,7 +59,7 @@
     {
       "id": "notification-example",
       "type": "webhook",
-      "url": "https://webhook.site/f95cf78d-742d-4b21-88b7-d683e6fd147b",
+      "url": "",
       "signing_key": {
         "type": "env",
         "value": "WEBHOOK_SIGNING_KEY"
@@ -68,10 +71,10 @@
       "id": "local-signer",
       "type": "local",
       "config": {
-        "path": "config/keys/local-signer.example.json",
+        "path": "config/keys/local-signer.json",
         "passphrase": {
-          "type": "plain",
-          "value": "test"
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
         }
       }
     }
