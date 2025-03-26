@@ -33,9 +33,7 @@ services:
     volumes:
       - ${CONFIG_DIR:-./config}:/app/config/:ro
       # Mount logs folder to persist logs
-      - type: bind
-        source: ${LOG_DATA_DIR:-./logs}
-        target: /app/logs
+      - ${LOG_DATA_DIR:-./logs}:/app/logs
     depends_on:
       - redis
     restart: on-failure:5
