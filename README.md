@@ -60,6 +60,100 @@ Each example includes:
 
 The OpenZeppelin Relayer is built using Actix-web and provides HTTP endpoints for transaction submission, in-memory repository implementations, and configurable network policies.
 
+The following diagram illustrates the architecture of the relayer service, highlighting key components and their interactions.
+
+```mermaid
+flowchart TB
+    subgraph "Client Applications"
+        client[Blockchain Client Apps]
+    end
+
+    subgraph "OpenZeppelin Relayer"
+        subgraph "API Layer"
+            api[API Routes & Controllers]
+            middleware[Middleware]
+        end
+
+        subgraph "Domain Layer"
+            domain[Domain Logic]
+            relayer[Relayer Services]
+            policies[Policy Enforcement]
+        end
+
+        subgraph "Infrastructure"
+            repositories[Repositories]
+            jobs[Job Queue System]
+            signer[Signer Services]
+            provider[Network Providers]
+        end
+    
+        subgraph "Services Layer"
+            transaction[Transaction Services]
+            vault[Vault Services]
+            webhook[Webhook Notifications]
+            monitoring[Monitoring & Metrics]
+        end
+
+        subgraph "Configuration"
+            config_files[Config Files]
+            env_vars[Environment Variables]
+        end
+    end
+
+    subgraph "External Systems"
+        blockchain[Blockchain Networks]
+        redis[Redis]
+        vault_ext[HashiCorp Vault]
+        metrics[Prometheus/Grafana]
+        notification[Notification Services]
+    end
+
+    %% Client connections
+    client -- "HTTP Requests" --> api
+
+    %% API Layer connections
+    api -- "Processes requests" --> middleware
+    middleware -- "Validates & routes" --> domain
+
+    %% Domain Layer connections
+    domain -- "Uses" --> relayer
+    domain -- "Enforces" --> policies
+    relayer -- "Processes" --> transaction
+    
+    %% Services Layer connections
+    transaction -- "Signs with" --> signer
+    transaction -- "Connects via" --> provider
+    transaction -- "Queues jobs" --> jobs
+    webhook -- "Notifies" --> notification
+    monitoring -- "Collects" --> metrics
+    signer -- "May use" --> vault
+
+    %% Infrastructure connections
+    repositories -- "Stores data" --> redis
+    jobs -- "Processes async" --> redis
+    vault -- "Secrets management" --> vault_ext
+    provider -- "Interacts with" --> blockchain
+
+    %% Configuration connections
+    config_files -- "Configures" --> domain
+    env_vars -- "Configures" --> domain
+
+    %% Styling
+    classDef apiClass fill:#f9f,stroke:#333,stroke-width:2px
+    classDef domainClass fill:#bbf,stroke:#333,stroke-width:2px
+    classDef infraClass fill:#bfb,stroke:#333,stroke-width:2px
+    classDef serviceClass fill:#fbf,stroke:#333,stroke-width:2px
+    classDef configClass fill:#fbb,stroke:#333,stroke-width:2px
+    classDef externalClass fill:#ddd,stroke:#333,stroke-width:1px
+
+    class api,middleware apiClass
+    class domain,relayer,policies domainClass
+    class repositories,jobs,signer,provider infraClass
+    class transaction,vault,webhook,monitoring serviceClass
+    class config_files,env_vars configClass
+    class blockchain,redis,vault_ext,metrics,notification externalClass
+```
+
 ### Project Structure
 
 The project follows a standard Rust project layout:
