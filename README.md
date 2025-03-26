@@ -30,11 +30,11 @@ This relayer service enables interaction with blockchain networks through transa
 
 ### Installation
 
-View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/quickstart) guide.
+View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/quickstart) guide.
 
 ### Usage
 
-View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#running_the_relayer) documentation for more information.
+View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/#running_the_relayer) documentation for more information.
 
 ### Examples
 
@@ -145,7 +145,7 @@ Create `config/config.json` file. You can use `config/config.example.json` as a 
 cp config/config.example.json config/config.json
 ```
 
-Refer to the [Configuration References](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
+Refer to the [Configuration References](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
 
 
 Create `.env` with correct values according to your needs from `.env.example` file as a starting point:
@@ -334,9 +334,9 @@ docker compose logs -f
   cargo make rust-antora
   ```
 
-- Site will be generated in `docs/build/site/openZeppelin_relayer/<version>/` directory.
+- Site will be generated in `docs/build/site/openzeppelin-relayer/<version>/` directory.
 
-- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
+- To view the documentation, open the `docs/build/site/openzeppelin-relayer/<version>/index.html` in your browser.
 
 ## Observability
 
@@ -388,7 +388,7 @@ For security concerns, please refer to our [Security Policy](SECURITY.md).
 
 ## Get Help
 
-If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/).
+If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/).
 
 If the answer is not there:
 

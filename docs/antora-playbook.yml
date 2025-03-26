@@ -1,7 +1,7 @@
 ---
 site:
   title: OpenZeppelin Relayer
-  start_page: openzeppelin_relayer:ROOT:index.adoc
+  start_page: openzeppelin-relayer:ROOT:index.adoc
 
 content:
   sources:
