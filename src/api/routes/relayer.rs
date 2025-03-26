@@ -1196,9 +1196,8 @@ mod tests {
     use std::sync::Arc;
 
     // Simple mock for AppState
-    async fn get_test_app_state() -> Result<AppState<JobProducer>, color_eyre::eyre::Error> {
-        let queue = Queue::setup().await?;
-        Ok(AppState {
+    async fn get_test_app_state() -> AppState<JobProducer> {
+        AppState {
             relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
                 InMemoryRelayerRepository::new(),
             )),
@@ -1206,8 +1205,8 @@ mod tests {
             signer_repository: Arc::new(InMemorySignerRepository::new()),
             notification_repository: Arc::new(InMemoryNotificationRepository::new()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
-            job_producer: Arc::new(JobProducer::new(queue)),
-        })
+            job_producer: Arc::new(JobProducer::new(Queue::setup().await.unwrap())),
+        }
     }
 
     #[actix_web::test]
@@ -1215,7 +1214,7 @@ mod tests {
         // Create a test app with our routes
         let app = test::init_service(
             App::new()
-                .app_data(web::Data::new(get_test_app_state().await?))
+                .app_data(web::Data::new(get_test_app_state()))
                 .configure(init),
         )
         .await;
