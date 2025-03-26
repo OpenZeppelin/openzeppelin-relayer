@@ -63,9 +63,17 @@ The OpenZeppelin Relayer is built using Actix-web and provides HTTP endpoints fo
 The following diagram illustrates the architecture of the relayer service, highlighting key components and their interactions.
 
 ```mermaid
+%%{init: {
+    'theme': 'base',
+    'themeVariables': {
+        'background': '#ffffff',
+        'mainBkg': '#ffffff',
+        'primaryBorderColor': '#cccccc'
+    }
+}}%%
 flowchart TB
-    subgraph "Client Applications"
-        client[Blockchain Client Apps]
+    subgraph "Clients"
+        client[API/SDK]
     end
 
     subgraph "OpenZeppelin Relayer"
