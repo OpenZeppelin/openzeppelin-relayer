@@ -121,7 +121,10 @@ mod tests {
 
     #[test]
     fn test_default_values() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         setup();
 
         let config = ServerConfig::from_env();
@@ -141,7 +144,10 @@ mod tests {
 
     #[test]
     fn test_invalid_port_values() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         setup();
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -161,7 +167,10 @@ mod tests {
 
     #[test]
     fn test_custom_values() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         setup();
 
         env::set_var("HOST", "127.0.0.1");
@@ -192,7 +201,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "Security error: API_KEY must be at least 32 characters long")]
     fn test_invalid_api_key_length() {
-        let _lock = ENV_MUTEX.lock().unwrap();
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         setup();
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "insufficient_length");
