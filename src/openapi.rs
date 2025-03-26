@@ -1,7 +1,4 @@
-use crate::{
-    api::routes::{metrics, relayer},
-    models,
-};
+use crate::{api::routes::docs::relayer_docs, models};
 use utoipa::{
     openapi::security::{Http, HttpAuthScheme, SecurityScheme},
     Modify, OpenApi,
@@ -34,23 +31,21 @@ impl Modify for SecurityAddon {
     ),
     terms_of_service = "https://www.openzeppelin.com/tos"),
     paths(
-        relayer::get_relayer,
-        relayer::list_relayers,
-        relayer::get_relayer_balance,
-        relayer::update_relayer,
-        relayer::get_transaction_by_nonce,
-        relayer::get_transaction_by_id,
-        relayer::list_transactions,
-        relayer::get_relayer_status,
-        relayer::sign_typed_data,
-        relayer::sign,
-        relayer::cancel_transaction,
-        relayer::delete_pending_transactions,
-        relayer::rpc,
-        relayer::send_transaction,
-        metrics::list_metrics,
-        metrics::metric_detail,
-        metrics::scrape_metrics,
+        relayer_docs::doc_get_relayer,
+        relayer_docs::doc_list_relayers,
+        relayer_docs::doc_get_relayer_balance,
+        relayer_docs::doc_update_relayer,
+        relayer_docs::doc_get_transaction_by_nonce,
+        relayer_docs::doc_get_transaction_by_id,
+        relayer_docs::doc_list_transactions,
+        relayer_docs::doc_get_relayer_status,
+        relayer_docs::doc_sign_typed_data,
+        relayer_docs::doc_sign,
+        relayer_docs::doc_cancel_transaction,
+        relayer_docs::doc_delete_pending_transactions,
+        relayer_docs::doc_rpc,
+        relayer_docs::doc_send_transaction,
+        relayer_docs::doc_replace_transaction,
     ),
     components(schemas(models::RelayerResponse, models::NetworkPolicyResponse, models::EvmPolicyResponse, models::SolanaPolicyResponse, models::StellarPolicyResponse))
 )]

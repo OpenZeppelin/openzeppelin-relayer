@@ -228,6 +228,7 @@ jobs:
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
         run: cargo hack llvm-cov --locked --lib --lcov --output-path unit-lcov.info
+          --ignore-filename-regex ".*/relayer_docs\.rs$"
 
       # Integration tests coverage
       - name: Run Integration Tests and Generate Coverage Report
