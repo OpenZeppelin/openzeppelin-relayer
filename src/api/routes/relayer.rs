@@ -18,6 +18,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 /// Lists all relayers with pagination support.
+// coverage:ignore-start
 #[utoipa::path(
     get,
     path = "/api/v1/relayers",
@@ -78,6 +79,7 @@ use utoipa::ToSchema;
         ),
     )
 )]
+// coverage:ignore-end
 #[get("/relayers")]
 async fn list_relayers(
     query: web::Query<PaginationQuery>,
