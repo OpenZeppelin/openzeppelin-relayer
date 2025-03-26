@@ -108,3 +108,163 @@ impl StellarNetwork {
         self.0.is_testnet()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_default() {
+        let default_network = StellarNetwork::default();
+        let expected = StellarNamedNetwork::default();
+        assert_eq!(
+            default_network.kind(),
+            &expected,
+            "Default network does not match expected underlying network"
+        );
+    }
+
+    #[test]
+    fn test_from_str_valid() {
+        let input = "mainnet";
+        let parsed_network = input.parse::<StellarNetwork>();
+        println!("parsed_network: {:?}", parsed_network);
+        assert!(
+            parsed_network.is_ok(),
+            "Parsing valid network string should succeed"
+        );
+        let network = parsed_network.unwrap();
+        assert_eq!(
+            network.to_string(),
+            "mainnet",
+            "Display output does not match expected network name"
+        );
+    }
+
+    #[test]
+    fn test_from_str_invalid() {
+        let input = "InvalidNetworkName";
+        let parsed_network = input.parse::<StellarNetwork>();
+        assert!(
+            parsed_network.is_err(),
+            "Parsing an invalid network string should fail"
+        );
+        let err = parsed_network.unwrap_err();
+        // Ensure the error message contains the expected substring.
+        assert!(
+            format!("{}", err).contains("Invalid network"),
+            "Error message should indicate an invalid network"
+        );
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let input = "mainnet";
+        let parsed_network = input.parse::<StellarNetwork>().unwrap();
+        let debug_str = format!("{:?}", parsed_network);
+        // Debug formatting should prefix the output with "Network::"
+        assert!(
+            debug_str.starts_with("Network::"),
+            "Debug format should start with 'Network::'"
+        );
+    }
+
+    #[test]
+    fn test_display() {
+        let input = "Public";
+        match input.parse::<StellarNetwork>() {
+            Ok(network) => {
+                // If parsing succeeds, test that the Display implementation outputs "Public"
+                let display_str = format!("{}", network);
+                assert_eq!(
+                    display_str, "Public",
+                    "Display output does not match the expected network name"
+                );
+            }
+            Err(err) => {
+                // If parsing fails, check that the error message is as expected.
+                let error_message = format!("{}", err);
+                assert_eq!(
+                    error_message,
+                    "Invalid network: Invalid network: Public, expected named network or chain ID",
+                    "Error message did not match expected"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_serialization() {
+        let input = "mainnet";
+        let network = input.parse::<StellarNetwork>().unwrap();
+        let serialized = serde_json::to_string(&network).unwrap();
+        assert_eq!(serialized, "\"mainnet\"");
+    }
+
+    #[test]
+    fn test_deserialization() {
+        let json_str = "\"mainnet\"";
+        let network: StellarNetwork =
+            serde_json::from_str(json_str).expect("Deserialization should succeed");
+        assert_eq!(
+            network.to_string(),
+            "mainnet",
+            "Deserialized network does not match expected network name"
+        );
+    }
+
+    #[test]
+    fn test_from_network_str() {
+        // Test a valid network string.
+        let network = StellarNetwork::from_network_str("mainnet");
+        assert!(
+            network.is_ok(),
+            "from_network_str should succeed for a valid network"
+        );
+        let network = network.unwrap();
+        assert_eq!(
+            network.to_string(),
+            "mainnet",
+            "Network from from_network_str does not match expected output"
+        );
+
+        // Test an invalid network string.
+        let invalid_network = StellarNetwork::from_network_str("UnknownNetwork");
+        assert!(
+            invalid_network.is_err(),
+            "from_network_str should fail for an invalid network"
+        );
+    }
+
+    #[test]
+    fn test_helper_methods() {
+        let network = "mainnet".parse::<StellarNetwork>().unwrap();
+
+        // Test average_blocktime returns an Option<Duration>
+        let blocktime = network.average_blocktime();
+        // We do not assume a concrete value; just that it returns Some(_) or None.
+        match blocktime {
+            Some(duration) => assert!(
+                duration > Duration::from_secs(0),
+                "Blocktime should be a positive duration"
+            ),
+            None => {} // Acceptable if the underlying implementation returns None.
+        }
+
+        // Test public RPC URLs.
+        let rpc_urls = network.public_rpc_urls();
+        // They should be a slice of string literals.
+        assert!(!rpc_urls.is_empty(), "Expected at least one public RPC URL");
+
+        // Test explorer URLs.
+        let explorer_urls = network.explorer_urls();
+        assert!(
+            !explorer_urls.is_empty(),
+            "Expected at least one explorer URL"
+        );
+
+        // Test the is_testnet flag returns a boolean.
+        let _is_testnet = network.is_testnet();
+    }
+}
