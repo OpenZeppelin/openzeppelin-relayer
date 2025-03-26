@@ -255,6 +255,26 @@ This table lists the environment variables and their default values.
 | `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>`
 | Port to use for metrics server.
 
+| `REDIS_URL`
+| `redis://localhost:6379`
+| `<redis connection string>`
+| Redis connection URL for the relayer.
+
+| `REDIS_CONNECTION_TIMEOUT_MS`
+| `10000`
+| `<timeout in milliseconds>`
+| Connection timeout for Redis in milliseconds.
+
+| `ENABLE_SWAGGER`
+| `false`
+| `true, false`
+| Enable or disable Swagger UI for API documentation.
+
+| `KEYSTORE_PASSPHRASE`
+| ``
+| `<keystore passphrase>`
+| Passphrase for the keystore file used for signing transactions.
+
 |===
 
 
@@ -264,13 +284,18 @@ This table lists the environment variables and their default values.
 
 ```
 RUST_LOG=DEBUG
-REDIS_URL=redis://localhost:6379
-CONFIG_FILE_PATH=config/config.json
+CONFIG_DIR=./config
+CONFIG_FILE_NAME=config.json
 WEBHOOK_SIGNING_KEY=e1d42480-6f74-4d0b-85f4-b7f0bb690fae
 API_KEY=5eefd216-0e44-4ca7-b421-2925f90d30d5
-RATE_LIMIT_REQUESTS_PER_SECOND=100
+RATE_LIMIT_RPS=100
 RATE_LIMIT_BURST_SIZE=300
 METRICS_ENABLED=true
+METRICS_PORT=8081
+REDIS_URL=redis://localhost:6379
+REDIS_CONNECTION_TIMEOUT_MS=10000
+ENABLE_SWAGGER=false
+KEYSTORE_PASSPHRASE=your_keystore_passphrase
 ```
 
 === Main configuration file (config.json)
@@ -383,7 +408,7 @@ Available configuration fields
 
 | key_name
 | String
-| The name of the cryptographic key within Vault’s Secret engine that is used for signing operations.
+| The name of the cryptographic key within Vault's Secret engine that is used for signing operations.
 
 | mount_point
 | String
@@ -452,7 +477,7 @@ Available configuration fields
 
 | key_name
 | String
-| The name of the cryptographic key within Vault’s Transit engine that is used for signing operations.
+| The name of the cryptographic key within Vault's Transit engine that is used for signing operations.
 
 | mount_point
 | String
@@ -464,7 +489,7 @@ Available configuration fields
 
 |pubkey
 |String
-|Public key of the cryptographic key within Vault’s Transit engine that is used for signing operations
+|Public key of the cryptographic key within Vault's Transit engine that is used for signing operations
 |===
 
 
