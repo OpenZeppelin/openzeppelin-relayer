@@ -281,7 +281,7 @@ mod tests {
         use std::env;
 
         let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
-        let valid_key = "C6D72367-EB3A-4D34-8900-DFF794A633F9"; // 36 chars
+        let valid_key = "C6D72367-EB3A-4D34-8900-DFF794A633F9"; // noboost
         env::set_var(env_var_name, valid_key);
 
         let config = json!({
