@@ -49,6 +49,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing |
 
 Each example includes:
+
 - A README with step-by-step instructions
 - Docker Compose configuration
 - Required configuration files
@@ -63,7 +64,7 @@ The OpenZeppelin Relayer is built using Actix-web and provides HTTP endpoints fo
 
 The project follows a standard Rust project layout:
 
-```
+```sh
 openzeppelin-relayer/
 ├── src/
 │   ├── api/              # Route and controllers logic
@@ -204,6 +205,7 @@ For development purposes, you can generate the signing key using:
 ```bash
 cargo run --example generate_uuid
 ```
+
 > Note: Alternatively, you can use any online UUID generator.
 
 Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
@@ -215,12 +217,13 @@ Generate an API key signing key for development purposes using:
 
 ```bash
 cargo run --example generate_uuid
+# or run this command to generate a UUID
+# uuidgen
 ```
+
 > Note: Alternatively, you can use any online UUID generator.
 
-
 Copy the generated UUID and update the `API_KEY` entry in the `.env` file.
-
 
 ### Starting Redis manually (without docker compose)
 
@@ -348,33 +351,14 @@ docker compose logs -f
 - Metrics server is started on port `8081` by default, which collects the metrics from the relayer server.
 
   - Exposes list of metrics on the `/metrics` endpoint.
+
+    > Note: By default, we don't map this port to the host machine. If you want to access the metrics server from the host machine, you can update the `docker-compose.yaml` file.
+
   - Exposes `/debug/metrics/scrape` endpoint for prometheus to scrape metrics.
 
 - To view prometheus metrics in a UI, you can use `http://localhost:9090` on your browser.
 
 - To view grafana dashboard, you can use `http://localhost:3000` on your browser.
-
-## API Documentation with Swagger UI
-
-The OpenZeppelin Relayer provides interactive API documentation using Swagger UI, making it easy to explore and test the available endpoints.
-
-
-### Enabling Swagger UI
-
-To enable Swagger UI, set the `ENABLE_SWAGGER` environment variable to `true`.
-
-`.env`file example:
-```sh
-ENABLE_SWAGGER=true
-```
-### Accessing Swagger UI
-
-Once enabled, access the API documentation through the following URLs:
-
-- Swagger UI: http://localhost:8080/swagger-ui/index.html
-- OpenAPI JSON: http://localhost:8080/api-docs/openapi.json
-
-> Note: Consider disabling Swagger UI in production environments for security reasons.
 
 ## Contributing
 

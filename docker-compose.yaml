@@ -10,6 +10,7 @@ services:
       - 8080:8080/tcp
     secrets:
       - api_key
+      - keystore_passphrase
       - webhook_signing_key
     environment:
       APP_PORT: ${APP_PORT:-8080}
@@ -18,13 +19,12 @@ services:
       RATE_LIMIT_REQUESTS_PER_SECOND: ${RATE_LIMIT_RPS:-10}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
-      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY:-/dev/null}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE:-/dev/null}
       API_KEY: ${API_KEY}
       # Options: trace, debug, info, warn, error
       # Default: info
-      # Options: trace, debug, info, warn, error
-      # Default: info
-      LOG_LEVEL: ${RUST_LOG:-info}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       # Options: stdout, file
       # Default: stdout
       LOG_MODE: ${LOG_MODE:-stdout}
@@ -75,7 +75,6 @@ services:
     restart: on-failure:5
 
   prometheus:
-    container_name: openzeppelin-relayer-prometheus
     image: prom/prometheus:v3.1.0
     security_opt:
       - no-new-privileges
@@ -124,3 +123,5 @@ secrets:
     environment: API_KEY
   webhook_signing_key:
     environment: WEBHOOK_SIGNING_KEY
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE

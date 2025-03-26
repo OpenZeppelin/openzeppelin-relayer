@@ -44,9 +44,6 @@ use dotenvy::dotenv;
 use log::info;
 use std::env;
 
-use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
-
 use openzeppelin_relayer::{
     api,
     bootstrap::{
@@ -56,7 +53,6 @@ use openzeppelin_relayer::{
     constants::PUBLIC_ENDPOINTS,
     logging::setup_logging,
     metrics,
-    openapi::ApiDoc,
     utils::check_authorization_header,
 };
 
@@ -106,15 +102,7 @@ async fn main() -> Result<()> {
         let app_state = app_state.clone();
         move || {
             let config = Arc::clone(&server_config);
-            let mut app = App::new();
-
-            if config.enable_swagger {
-                app = app
-                .service(
-                    SwaggerUi::new("/swagger-ui/{_:.*}")
-                        .url("/api-docs/openapi.json", ApiDoc::openapi()),
-                );
-            }
+            let app = App::new();
 
             app
             .wrap_fn(move |req, srv| {

@@ -11,7 +11,7 @@ services:
     ports:
       - 8080:8080/tcp
     environment:
-      REDIS_URL: ${REDIS_URL}
+      REDIS_URL: redis://redis:6379
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
@@ -21,8 +21,6 @@ services:
       # Options: stdout, file
       # Default: stdout
       LOG_MODE: ${LOG_MODE}
-      # Default: logs/
-      LOG_DATA_DIR: ${LOG_DATA_DIR}
       # Set max log file size to rotate to new log file
       # Only used if LOG_MODE is file
       # Default: 1GB (1073741824 bytes)
@@ -35,9 +33,7 @@ services:
     volumes:
       - ${CONFIG_DIR:-./config}:/app/config/:ro
       # Mount logs folder to persist logs
-      - type: bind
-        source: ${LOG_DATA_DIR:-./logs}
-        target: /app/logs
+      - ${LOG_DATA_DIR:-./logs}:/app/logs
     depends_on:
       - redis
     restart: on-failure:5
