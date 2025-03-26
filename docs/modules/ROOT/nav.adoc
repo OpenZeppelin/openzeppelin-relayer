@@ -2,4 +2,4 @@
 * xref:quickstart.adoc[Quickstart]
 * xref:api_reference.adoc[API Reference]
 * xref:structure.adoc[Project Structure]
-* link:rust_docs/doc/openzeppelin-relayer/index.html[Technical Rust Documentation]
+* link:rust_docs/doc/openzeppelin_relayer/index.html[Technical Rust Documentation]

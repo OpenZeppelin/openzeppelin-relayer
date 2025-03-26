@@ -1,7 +1,7 @@
 //! Deserialization utilities for u128 values
 //!
 //! This module provides a custom deserializer for u128 values.
-//! ```
+
 use std::fmt;
 
 use serde::{de, Deserializer};
