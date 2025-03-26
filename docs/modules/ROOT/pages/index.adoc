@@ -255,10 +255,6 @@ This table lists the environment variables and their default values.
 | `<any tcp port (preferably choose non-privileged ports i.e. (1024-65535))>`
 | Port to use for metrics server.
 
-| `ENABLE_SWAGGER`
-| `false`
-| `bool`
-| Enable Swagger UI
 |===
 
 
@@ -275,7 +271,6 @@ API_KEY=5eefd216-0e44-4ca7-b421-2925f90d30d5
 RATE_LIMIT_REQUESTS_PER_SECOND=100
 RATE_LIMIT_BURST_SIZE=300
 METRICS_ENABLED=true
-ENABLE_SWAGGER=false
 ```
 
 === Main configuration file (config.json)

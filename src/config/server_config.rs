@@ -21,8 +21,6 @@ pub struct ServerConfig {
     pub rate_limit_burst_size: u32,
     /// The port number for exposing metrics.
     pub metrics_port: u16,
-    /// Enable Swagger UI.
-    pub enable_swagger: bool,
 }
 
 impl ServerConfig {
@@ -78,9 +76,6 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "8081".to_string())
                 .parse()
                 .unwrap_or(8081),
-            enable_swagger: env::var("ENABLE_SWAGGER")
-                .map(|v| v.to_lowercase() == "true")
-                .unwrap_or(false),
         }
     }
 }
