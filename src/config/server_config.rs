@@ -1,7 +1,7 @@
 /// Configuration for the server, including network and rate limiting settings.
 use std::env;
 
-use crate::models::SecretString;
+use crate::{constants::MINIMUM_SECRET_VALUE_LENGTH, models::SecretString};
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -55,6 +55,15 @@ impl ServerConfig {
         // Construct full path
         let config_file_path = format!("{}{}", conf_dir, config_file_name);
 
+        let api_key = SecretString::new(&env::var("API_KEY").expect("API_KEY must be set"));
+
+        if !api_key.has_minimum_length(MINIMUM_SECRET_VALUE_LENGTH) {
+            panic!(
+                "Security error: API_KEY must be at least {} characters long",
+                MINIMUM_SECRET_VALUE_LENGTH
+            );
+        }
+
         Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: env::var("APP_PORT")
@@ -63,7 +72,7 @@ impl ServerConfig {
                 .unwrap_or(8080),
             redis_url: env::var("REDIS_URL").expect("REDIS_URL must be set"),
             config_file_path,
-            api_key: SecretString::new(&env::var("API_KEY").expect("API_KEY must be set")),
+            api_key,
             rate_limit_requests_per_second: env::var("RATE_LIMIT_REQUESTS_PER_SECOND")
                 .unwrap_or_else(|_| "100".to_string())
                 .parse()
@@ -107,7 +116,7 @@ mod tests {
 
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("API_KEY", "test_api_key");
+        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
     }
 
     #[test]
@@ -121,7 +130,10 @@ mod tests {
         assert_eq!(config.port, 8080);
         assert_eq!(config.redis_url, "redis://localhost:6379");
         assert_eq!(config.config_file_path, "./config/config.json");
-        assert_eq!(config.api_key, SecretString::new("test_api_key"));
+        assert_eq!(
+            config.api_key,
+            SecretString::new("7EF1CB7C-5003-4696-B384-C72AF8C3E15D")
+        );
         assert_eq!(config.rate_limit_requests_per_second, 100);
         assert_eq!(config.rate_limit_burst_size, 300);
         assert_eq!(config.metrics_port, 8081);
@@ -132,7 +144,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap();
         setup();
         env::set_var("REDIS_URL", "redis://localhost:6379");
-        env::set_var("API_KEY", "test_api_key");
+        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
         env::set_var("APP_PORT", "not_a_number");
         env::set_var("METRICS_PORT", "also_not_a_number");
         env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "invalid");
@@ -157,7 +169,7 @@ mod tests {
         env::set_var("REDIS_URL", "redis://custom:6379");
         env::set_var("CONFIG_DIR", "custom");
         env::set_var("CONFIG_FILE_NAME", "path.json");
-        env::set_var("API_KEY", "custom_api_key");
+        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
         env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "200");
         env::set_var("RATE_LIMIT_BURST_SIZE", "500");
         env::set_var("METRICS_PORT", "9091");
@@ -168,9 +180,29 @@ mod tests {
         assert_eq!(config.port, 9090);
         assert_eq!(config.redis_url, "redis://custom:6379");
         assert_eq!(config.config_file_path, "custom/path.json");
-        assert_eq!(config.api_key, SecretString::new("custom_api_key"));
+        assert_eq!(
+            config.api_key,
+            SecretString::new("7EF1CB7C-5003-4696-B384-C72AF8C3E15D")
+        );
         assert_eq!(config.rate_limit_requests_per_second, 200);
         assert_eq!(config.rate_limit_burst_size, 500);
         assert_eq!(config.metrics_port, 9091);
+    }
+
+    #[test]
+    #[should_panic(expected = "Security error: API_KEY must be at least 32 characters long")]
+    fn test_invalid_api_key_length() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        setup();
+        env::set_var("REDIS_URL", "redis://localhost:6379");
+        env::set_var("API_KEY", "insufficient_length");
+        env::set_var("APP_PORT", "8080");
+        env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "100");
+        env::set_var("RATE_LIMIT_BURST_SIZE", "300");
+        env::set_var("METRICS_PORT", "9091");
+
+        let _ = ServerConfig::from_env();
+
+        panic!("Test should have panicked before reaching here");
     }
 }

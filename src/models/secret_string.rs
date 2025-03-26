@@ -82,6 +82,16 @@ impl SecretString {
     pub fn is_empty(&self) -> bool {
         self.with_secret_vec(|secret_vec| secret_vec.is_empty())
     }
+
+    /// Check if the secret string meets a minimum length requirement
+    ///
+    /// Returns true if the string has at least the specified length.
+    pub fn has_minimum_length(&self, min_length: usize) -> bool {
+        self.with_secret_vec(|secret_vec| {
+            let bytes = secret_vec.borrow();
+            bytes.len() >= min_length
+        })
+    }
 }
 
 impl Serialize for SecretString {
@@ -285,5 +295,43 @@ mod tests {
         });
 
         assert_eq!(secret.0.lock().unwrap().len(), 100_000);
+    }
+
+    #[test]
+    fn test_has_minimum_length() {
+        // Create test strings of various lengths
+        let empty = SecretString::new("");
+        let short = SecretString::new("abc");
+        let medium = SecretString::new("abcdefghij"); // 10 characters
+        let long = SecretString::new("abcdefghijklmnopqrst"); // 20 characters
+
+        // Test with minimum length 0
+        assert!(empty.has_minimum_length(0));
+        assert!(short.has_minimum_length(0));
+        assert!(medium.has_minimum_length(0));
+        assert!(long.has_minimum_length(0));
+
+        // Test with minimum length 1
+        assert!(!empty.has_minimum_length(1));
+        assert!(short.has_minimum_length(1));
+        assert!(medium.has_minimum_length(1));
+        assert!(long.has_minimum_length(1));
+
+        // Test with exact length matches
+        assert!(empty.has_minimum_length(0));
+        assert!(short.has_minimum_length(3));
+        assert!(medium.has_minimum_length(10));
+        assert!(long.has_minimum_length(20));
+
+        // Test with length exceeding the string
+        assert!(!empty.has_minimum_length(1));
+        assert!(!short.has_minimum_length(4));
+        assert!(!medium.has_minimum_length(11));
+        assert!(!long.has_minimum_length(21));
+
+        // Test with significantly larger minimum length
+        assert!(!short.has_minimum_length(100));
+        assert!(!medium.has_minimum_length(100));
+        assert!(!long.has_minimum_length(100));
     }
 }

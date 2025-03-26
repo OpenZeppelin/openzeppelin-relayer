@@ -8,7 +8,10 @@
 //!   methods for validation and signing key retrieval.
 //! - `NotificationsFileConfig`: A struct for managing a collection of notification configurations,
 //!   with validation to ensure uniqueness and completeness.
-use crate::models::{PlainOrEnvValue, SecretString};
+use crate::{
+    constants::MINIMUM_SECRET_VALUE_LENGTH,
+    models::{PlainOrEnvValue, SecretString},
+};
 
 use super::ConfigFileError;
 use reqwest::Url;
@@ -41,17 +44,36 @@ impl NotificationFileConfig {
                             "Signing key environment variable name cannot be empty".into(),
                         ));
                     }
-                    if std::env::var(value).is_err() {
-                        return Err(ConfigFileError::MissingEnvVar(format!(
-                            "Environment variable {} not found",
-                            value
-                        )));
+
+                    match std::env::var(value) {
+                        Ok(key_value) => {
+                            // Validate the key length
+                            if key_value.len() < MINIMUM_SECRET_VALUE_LENGTH {
+                                return Err(ConfigFileError::InvalidFormat(
+                                    format!("Signing key must be at least {} characters long (found {})", 
+                                        MINIMUM_SECRET_VALUE_LENGTH, key_value.len()).into(),
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            return Err(ConfigFileError::MissingEnvVar(format!(
+                                "Environment variable '{}' not found: {}",
+                                value, e
+                            )));
+                        }
                     }
                 }
                 PlainOrEnvValue::Plain { value } => {
-                    if value.to_str().is_empty() {
+                    if value.is_empty() {
                         return Err(ConfigFileError::InvalidFormat(
                             "Signing key value cannot be empty".into(),
+                        ));
+                    }
+
+                    if !value.has_minimum_length(MINIMUM_SECRET_VALUE_LENGTH) {
+                        return Err(ConfigFileError::InvalidFormat(
+                            format!("Security error: Signing key value must be at least {} characters long", MINIMUM_SECRET_VALUE_LENGTH)
+                                .into(),
                         ));
                     }
                 }
@@ -210,5 +232,106 @@ mod tests {
             notifications_config.validate(),
             Err(ConfigFileError::MissingField(_))
         ));
+    }
+
+    #[test]
+    fn test_valid_webhook_signing_notification_configuration() {
+        let config = json!({
+            "id": "notification-test",
+            "type": "webhook",
+            "url": "https://api.example.com/notifications",
+            "signing_key": {
+                "type": "plain",
+                "value": "C6D72367-EB3A-4D34-8900-DFF794A633F9"
+            }
+        });
+
+        let notification: NotificationFileConfig = serde_json::from_value(config).unwrap();
+        assert!(notification.validate().is_ok());
+        assert_eq!(notification.id, "notification-test");
+        assert_eq!(notification.r#type, NotificationFileConfigType::Webhook);
+    }
+
+    #[test]
+    fn test_invalid_webhook_signing_notification_configuration() {
+        let config = json!({
+            "id": "notification-test",
+            "type": "webhook",
+            "url": "https://api.example.com/notifications",
+            "signing_key": {
+                "type": "plain",
+                "value": "insufficient_length"
+            }
+        });
+
+        let notification: NotificationFileConfig = serde_json::from_value(config).unwrap();
+
+        let validation_result = notification.validate();
+        assert!(validation_result.is_err());
+
+        if let Err(ConfigFileError::InvalidFormat(message)) = validation_result {
+            assert!(message.contains("32 characters long"));
+        } else {
+            panic!("Expected InvalidFormat error about key length");
+        }
+    }
+
+    #[test]
+    fn test_webhook_signing_key_from_env() {
+        use std::env;
+
+        let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
+        let valid_key = "C6D72367-EB3A-4D34-8900-DFF794A633F9"; // 36 chars
+        env::set_var(env_var_name, valid_key);
+
+        let config = json!({
+            "id": "notification-test",
+            "type": "webhook",
+            "url": "https://api.example.com/notifications",
+            "signing_key": {
+                "type": "env",
+                "value": env_var_name
+            }
+        });
+
+        let notification: NotificationFileConfig = serde_json::from_value(config).unwrap();
+
+        assert!(notification.validate().is_ok());
+
+        let signing_key = notification.get_signing_key();
+        assert!(signing_key.is_some());
+
+        env::remove_var(env_var_name);
+    }
+
+    #[test]
+    fn test_webhook_signing_key_from_env_insufficient_length() {
+        use std::env;
+
+        let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
+        let valid_key = "insufficient_length";
+        env::set_var(env_var_name, valid_key);
+
+        let config = json!({
+            "id": "notification-test",
+            "type": "webhook",
+            "url": "https://api.example.com/notifications",
+            "signing_key": {
+                "type": "env",
+                "value": env_var_name
+            }
+        });
+
+        let notification: NotificationFileConfig = serde_json::from_value(config).unwrap();
+
+        let validation_result = notification.validate();
+
+        assert!(validation_result.is_err());
+
+        if let Err(ConfigFileError::InvalidFormat(message)) = validation_result {
+            assert!(message.contains("32 characters long"));
+        } else {
+            panic!("Expected InvalidFormat error about key length");
+        }
     }
 }

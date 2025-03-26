@@ -1,0 +1,1 @@
+pub const MINIMUM_SECRET_VALUE_LENGTH: usize = 32;

@@ -164,7 +164,7 @@ Example request to pause a relayer:
 [source,bash]
 ----
 curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/balance' \
---header 'Authorization: Bearer example-123456'
+--header 'Authorization: Bearer <api_key>'
 ----
 
 Example response:
@@ -415,7 +415,7 @@ NOTE: The prepare transaction method returns a mocked value for the fee_in_spl r
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
---header 'Authorization: Bearer example-123456' \
+--header 'Authorization: Bearer <api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "jsonrpc": "2.0",
@@ -453,7 +453,7 @@ NOTE: The transfer transaction method returns a mocked value for the fee_in_spl 
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
---header 'Authorization: Bearer example-123456' \
+--header 'Authorization: Bearer <api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "jsonrpc": "2.0",
@@ -522,7 +522,7 @@ Example request to send transaction:
 [source,bash]
 ----
  curl --location --request POST 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
---header 'Authorization: Bearer example-123456' \
+--header 'Authorization: Bearer <api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
     "value": 1,
@@ -565,7 +565,7 @@ Example request to list relayer transactions:
 [source,bash]
 ----
 curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
---header 'Authorization: Bearer example-123456'
+--header 'Authorization: Bearer <api_key>'
 ----
 
 Example response:
@@ -607,7 +607,7 @@ Example request fetch relayer transaction by id:
 [source,bash]
 ----
 curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions/47f440b3-f4ce-4441-9489-55fc83be12cf' \
---header 'Authorization: Bearer example-123456'
+--header 'Authorization: Bearer <api_key>'
 ----
 
 Example response:
@@ -642,7 +642,7 @@ Example request fetch relayer transaction by nonce:
 [source,bash]
 ----
 curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions/by-nonce/0' \
---header 'Authorization: Bearer example-123456'
+--header 'Authorization: Bearer <api_key>'
 ----
 
 Example response:

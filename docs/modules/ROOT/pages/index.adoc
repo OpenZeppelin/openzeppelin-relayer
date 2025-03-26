@@ -222,13 +222,13 @@ This table lists the environment variables and their default values.
 
 | `API_KEY`
 | ``
-| `<Base32 or Base64 encoded string>`
-| API key to use for authentication to the relayer server.
+| `string`,
+| API key to use for authentication to the relayer server. Minimum length 32 characters.
 
 | `WEBHOOK_SIGNING_KEY`
 | ``
-| `<Base32 or Base64 encoded string>`
-| Signing key to use for webhook notifications.
+| `string`
+| Signing key to use for webhook notifications. Minimum length 32 characters.
 
 | `LOG_MODE`
 | `stdout`
