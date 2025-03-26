@@ -6,7 +6,10 @@
 //! - Transaction status checks
 //! - Notifications
 use apalis_redis::{Config, RedisStorage};
+use color_eyre::{eyre, Result};
+use log::error;
 use serde::{Deserialize, Serialize};
+use tokio::time::{timeout, Duration};
 
 use crate::config::ServerConfig;
 
@@ -21,25 +24,35 @@ pub struct Queue {
 }
 
 impl Queue {
-    async fn storage<T: Serialize + for<'de> Deserialize<'de>>(namespace: &str) -> RedisStorage<T> {
-        let conn = apalis_redis::connect(ServerConfig::from_env().redis_url.clone())
-            .await
-            .expect("Could not connect to Redis Jobs DB");
-
+    async fn storage<T: Serialize + for<'de> Deserialize<'de>>(
+        namespace: &str,
+    ) -> Result<RedisStorage<T>> {
+        let redis_url = ServerConfig::from_env().redis_url.clone();
+        let redis_connection_timeout_ms = ServerConfig::from_env().redis_connection_timeout_ms;
+        let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
+            Ok(result) => result.map_err(|e| {
+                error!("Failed to connect to Redis at {}: {}", redis_url, e);
+                eyre::eyre!("Failed to connect to Redis. Please ensure Redis is running and accessible at {}. Error: {}", redis_url, e)
+            })?,
+            Err(_) => {
+                error!("Timeout connecting to Redis at {}", redis_url);
+                return Err(eyre::eyre!("Timed out after {} milliseconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
+            }
+        };
         let config = Config::default()
             .set_namespace(namespace)
             .set_max_retries(5);
 
-        RedisStorage::new_with_config(conn, config)
+        Ok(RedisStorage::new_with_config(conn, config))
     }
 
-    pub async fn setup() -> Self {
-        Self {
-            transaction_request_queue: Self::storage("transaction_request_queue").await,
-            transaction_submission_queue: Self::storage("transaction_submission_queue").await,
-            transaction_status_queue: Self::storage("transaction_status_queue").await,
-            notification_queue: Self::storage("notification_queue").await,
-        }
+    pub async fn setup() -> Result<Self> {
+        Ok(Self {
+            transaction_request_queue: Self::storage("transaction_request_queue").await?,
+            transaction_submission_queue: Self::storage("transaction_submission_queue").await?,
+            transaction_status_queue: Self::storage("transaction_status_queue").await?,
+            notification_queue: Self::storage("notification_queue").await?,
+        })
     }
 }
 

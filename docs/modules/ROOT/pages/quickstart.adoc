@@ -99,6 +99,13 @@ cargo run --example generate_uuid
 
 [NOTE]
 ====
+You can also use UUID generator with a simple command on your terminal.
+
+[source,bash]
+----
+uuidgen
+----
+
 Alternatively, you can use any online UUID generator tool.
 ====
 

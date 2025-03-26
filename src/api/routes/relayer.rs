@@ -1205,12 +1205,12 @@ mod tests {
             signer_repository: Arc::new(InMemorySignerRepository::new()),
             notification_repository: Arc::new(InMemoryNotificationRepository::new()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
-            job_producer: Arc::new(JobProducer::new(Queue::setup().await)),
+            job_producer: Arc::new(JobProducer::new(Queue::setup().await.unwrap())),
         }
     }
 
     #[actix_web::test]
-    async fn test_routes_are_registered() {
+    async fn test_routes_are_registered() -> Result<(), color_eyre::eyre::Error> {
         // Create a test app with our routes
         let app = test::init_service(
             App::new()
@@ -1338,5 +1338,7 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        Ok(())
     }
 }

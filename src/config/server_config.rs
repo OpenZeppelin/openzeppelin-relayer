@@ -23,6 +23,8 @@ pub struct ServerConfig {
     pub metrics_port: u16,
     /// Enable Swagger UI.
     pub enable_swagger: bool,
+    /// The number of seconds to wait for a Redis connection.
+    pub redis_connection_timeout_ms: u64,
 }
 
 impl ServerConfig {
@@ -81,6 +83,10 @@ impl ServerConfig {
             enable_swagger: env::var("ENABLE_SWAGGER")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
+            redis_connection_timeout_ms: env::var("REDIS_CONNECTION_TIMEOUT_MS")
+                .unwrap_or_else(|_| "10000".to_string())
+                .parse()
+                .unwrap_or(10000),
         }
     }
 }
@@ -109,10 +115,11 @@ mod tests {
         env::remove_var("RATE_LIMIT_REQUESTS_PER_SECOND");
         env::remove_var("RATE_LIMIT_BURST_SIZE");
         env::remove_var("METRICS_PORT");
-
+        env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "test_api_key");
+        env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "5000");
     }
 
     #[test]
@@ -130,6 +137,7 @@ mod tests {
         assert_eq!(config.rate_limit_requests_per_second, 100);
         assert_eq!(config.rate_limit_burst_size, 300);
         assert_eq!(config.metrics_port, 8081);
+        assert_eq!(config.redis_connection_timeout_ms, 5000);
     }
 
     #[test]
@@ -142,7 +150,7 @@ mod tests {
         env::set_var("METRICS_PORT", "also_not_a_number");
         env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "invalid");
         env::set_var("RATE_LIMIT_BURST_SIZE", "invalid");
-
+        env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "invalid");
         let config = ServerConfig::from_env();
 
         // Should fall back to defaults when parsing fails
@@ -150,6 +158,7 @@ mod tests {
         assert_eq!(config.metrics_port, 8081);
         assert_eq!(config.rate_limit_requests_per_second, 100);
         assert_eq!(config.rate_limit_burst_size, 300);
+        assert_eq!(config.redis_connection_timeout_ms, 10000);
     }
 
     #[test]
@@ -166,6 +175,7 @@ mod tests {
         env::set_var("RATE_LIMIT_REQUESTS_PER_SECOND", "200");
         env::set_var("RATE_LIMIT_BURST_SIZE", "500");
         env::set_var("METRICS_PORT", "9091");
+        env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "10000");
 
         let config = ServerConfig::from_env();
 
@@ -177,5 +187,6 @@ mod tests {
         assert_eq!(config.rate_limit_requests_per_second, 200);
         assert_eq!(config.rate_limit_burst_size, 500);
         assert_eq!(config.metrics_port, 9091);
+        assert_eq!(config.redis_connection_timeout_ms, 10000);
     }
 }
