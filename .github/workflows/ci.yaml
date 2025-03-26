@@ -227,8 +227,8 @@ jobs:
           LLVM_PROFILE_FILE: unit-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
-        run: cargo hack llvm-cov --locked --lib --lcov --ignore-filename-regex ".*/relayer_docs\.rs$"
-          --output-path unit-lcov.info
+        run: cargo hack llvm-cov --locked --lib  --ignore-filename-regex ".*/relayer_docs\.rs$"
+          --lcov --output-path unit-lcov.info
 
       # Integration tests coverage
       - name: Run Integration Tests and Generate Coverage Report
@@ -236,8 +236,8 @@ jobs:
           LLVM_PROFILE_FILE: integration-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
-        run: cargo hack llvm-cov --locked --lcov --output-path integration-lcov.info
-          --test integration
+        run: cargo hack llvm-cov --locked --ignore-filename-regex ".*/relayer_docs\.rs$"
+          --lcov --output-path integration-lcov.info --test integration
 
       # Properties tests coverage
       - name: Run Properties Tests
@@ -245,8 +245,8 @@ jobs:
           LLVM_PROFILE_FILE: properties-%p-%m.profraw
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
-        run: cargo hack llvm-cov --locked --lcov --output-path properties-lcov.info
-          --test properties
+        run: cargo hack llvm-cov --locked --ignore-filename-regex ".*/relayer_docs\.rs$"
+          --lcov --output-path properties-lcov.info --test properties
 
       # Upload unit coverage
       - name: Upload Unit Coverage to Codecov
