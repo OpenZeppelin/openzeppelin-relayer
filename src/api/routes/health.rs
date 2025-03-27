@@ -3,6 +3,9 @@
 //! The `/health` endpoint can be used to verify that the service is running and responsive.
 use actix_web::{get, web, HttpResponse};
 
+/// Health routes implementation
+///
+/// Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file
 /// Handles the `/health` endpoint.
 ///
 /// Returns an `HttpResponse` with a status of `200 OK` and a body of `"OK"`.

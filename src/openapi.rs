@@ -1,4 +1,7 @@
-use crate::{api::routes::docs::relayer_docs, models};
+use crate::{
+    api::routes::{docs::relayer_docs, health, metrics},
+    models,
+};
 use utoipa::{
     openapi::security::{Http, HttpAuthScheme, SecurityScheme},
     Modify, OpenApi,
@@ -46,6 +49,10 @@ impl Modify for SecurityAddon {
         relayer_docs::doc_rpc,
         relayer_docs::doc_send_transaction,
         relayer_docs::doc_replace_transaction,
+        health::health,
+        metrics::list_metrics,
+        metrics::metric_detail,
+        metrics::scrape_metrics
     ),
     components(schemas(models::RelayerResponse, models::NetworkPolicyResponse, models::EvmPolicyResponse, models::SolanaPolicyResponse, models::StellarPolicyResponse))
 )]

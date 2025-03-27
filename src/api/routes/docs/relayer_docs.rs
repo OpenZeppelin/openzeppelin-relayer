@@ -5,7 +5,10 @@ use crate::{
         RelayerResponse, TransactionResponse,
     },
 };
-
+/// Relayer routes implementation
+///
+/// Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file
+///
 /// Lists all relayers with pagination support.
 #[utoipa::path(
     get,

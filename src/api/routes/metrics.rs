@@ -16,6 +16,9 @@ use crate::metrics::{update_system_metrics, REGISTRY};
 use actix_web::{get, web, HttpResponse, Responder};
 use prometheus::{Encoder, TextEncoder};
 
+/// Metrics routes implementation
+///
+/// Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file
 /// Returns a list of all available metric names in JSON format.
 ///
 /// # Returns
