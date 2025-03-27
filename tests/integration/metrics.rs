@@ -20,6 +20,8 @@ async fn test_authorization_middleware_success() {
         config_file_path: "./config/config.json".to_string(),
         rate_limit_requests_per_second: 10,
         rate_limit_burst_size: 10,
+        enable_swagger: false,
+        redis_connection_timeout_ms: 5000,
     });
 
     let app = test::init_service(
@@ -66,6 +68,8 @@ async fn test_authorization_middleware_failure() {
         config_file_path: "./config/config.json".to_string(),
         rate_limit_requests_per_second: 10,
         rate_limit_burst_size: 10,
+        enable_swagger: false,
+        redis_connection_timeout_ms: 5000,
     });
 
     let app = test::init_service(

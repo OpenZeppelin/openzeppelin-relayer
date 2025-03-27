@@ -385,9 +385,9 @@ Testing is the responsibility of all contributors as such all contributions must
   cargo make rust-antora
   ```
 
-- Site will be generated in `docs/build/site/openzeppelin_relayer/<version>/` directory.
+- Site will be generated in `docs/build/site/openzeppelin-relayer/<version>/` directory.
 
-- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
+- To view the documentation, open the `docs/build/site/openzeppelin-relayer/<version>/index.html` in your browser.
 
 ## Issue and Pull Request Labeling Guidelines
 

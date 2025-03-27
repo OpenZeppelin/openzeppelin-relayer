@@ -1,7 +1,7 @@
 //! Deserialization utilities for u64 values
 //!
 //! This module provides a custom deserializer for u64 values.
-//! ```
+
 use std::fmt;
 
 use serde::{de, Deserializer};

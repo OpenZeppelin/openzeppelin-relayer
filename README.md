@@ -6,6 +6,8 @@
 
 This relayer service enables interaction with blockchain networks through transaction submissions. It offers multi-chain support and an extensible architecture for adding new chains.
 
+[User Docs](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/) | [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/quickstart) | [Crate Docs](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/rust_docs/doc/openzeppelin_relayer/)
+
 ## Features
 
 - **Multi-Chain Support**: Interact with multiple blockchain networks, including Solana and EVM-based chains.
@@ -30,11 +32,11 @@ This relayer service enables interaction with blockchain networks through transa
 
 ### Installation
 
-View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/quickstart) guide.
+View the [Installation](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/quickstart) guide.
 
 ### Usage
 
-View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#running_the_relayer) documentation for more information.
+View the [Usage](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/#running_the_relayer) documentation for more information.
 
 ### Examples
 
@@ -59,6 +61,108 @@ Each example includes:
 ### Technical Overview
 
 The OpenZeppelin Relayer is built using Actix-web and provides HTTP endpoints for transaction submission, in-memory repository implementations, and configurable network policies.
+
+The following diagram illustrates the architecture of the relayer service, highlighting key components and their interactions.
+
+```mermaid
+%%{init: {
+    'theme': 'base',
+    'themeVariables': {
+        'background': '#ffffff',
+        'mainBkg': '#ffffff',
+        'primaryBorderColor': '#cccccc'
+    }
+}}%%
+flowchart TB
+    subgraph "Clients"
+        client[API/SDK]
+    end
+
+    subgraph "OpenZeppelin Relayer"
+        subgraph "API Layer"
+            api[API Routes & Controllers]
+            middleware[Middleware]
+        end
+
+        subgraph "Domain Layer"
+            domain[Domain Logic]
+            relayer[Relayer Services]
+            policies[Policy Enforcement]
+        end
+
+        subgraph "Infrastructure"
+            repositories[Repositories]
+            jobs[Job Queue System]
+            signer[Signer Services]
+            provider[Network Providers]
+        end
+    
+        subgraph "Services Layer"
+            transaction[Transaction Services]
+            vault[Vault Services]
+            webhook[Webhook Notifications]
+            monitoring[Monitoring & Metrics]
+        end
+
+        subgraph "Configuration"
+            config_files[Config Files]
+            env_vars[Environment Variables]
+        end
+    end
+
+    subgraph "External Systems"
+        blockchain[Blockchain Networks]
+        redis[Redis]
+        vault_ext[HashiCorp Vault]
+        metrics[Prometheus/Grafana]
+        notification[Notification Services]
+    end
+
+    %% Client connections
+    client -- "HTTP Requests" --> api
+
+    %% API Layer connections
+    api -- "Processes requests" --> middleware
+    middleware -- "Validates & routes" --> domain
+
+    %% Domain Layer connections
+    domain -- "Uses" --> relayer
+    domain -- "Enforces" --> policies
+    relayer -- "Processes" --> transaction
+    
+    %% Services Layer connections
+    transaction -- "Signs with" --> signer
+    transaction -- "Connects via" --> provider
+    transaction -- "Queues jobs" --> jobs
+    webhook -- "Notifies" --> notification
+    monitoring -- "Collects" --> metrics
+    signer -- "May use" --> vault
+
+    %% Infrastructure connections
+    repositories -- "Stores data" --> redis
+    jobs -- "Processes async" --> redis
+    vault -- "Secrets management" --> vault_ext
+    provider -- "Interacts with" --> blockchain
+
+    %% Configuration connections
+    config_files -- "Configures" --> domain
+    env_vars -- "Configures" --> domain
+
+    %% Styling
+    classDef apiClass fill:#f9f,stroke:#333,stroke-width:2px
+    classDef domainClass fill:#bbf,stroke:#333,stroke-width:2px
+    classDef infraClass fill:#bfb,stroke:#333,stroke-width:2px
+    classDef serviceClass fill:#fbf,stroke:#333,stroke-width:2px
+    classDef configClass fill:#fbb,stroke:#333,stroke-width:2px
+    classDef externalClass fill:#ddd,stroke:#333,stroke-width:1px
+
+    class api,middleware apiClass
+    class domain,relayer,policies domainClass
+    class repositories,jobs,signer,provider infraClass
+    class transaction,vault,webhook,monitoring serviceClass
+    class config_files,env_vars configClass
+    class blockchain,redis,vault_ext,metrics,notification externalClass
+```
 
 ### Project Structure
 
@@ -145,7 +249,7 @@ Create `config/config.json` file. You can use `config/config.example.json` as a 
 cp config/config.example.json config/config.json
 ```
 
-Refer to the [Configuration References](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
+Refer to the [Configuration References](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
 
 
 Create `.env` with correct values according to your needs from `.env.example` file as a starting point:
@@ -334,9 +438,9 @@ docker compose logs -f
   cargo make rust-antora
   ```
 
-- Site will be generated in `docs/build/site/openZeppelin_relayer/<version>/` directory.
+- Site will be generated in `docs/build/site/openzeppelin-relayer/<version>/` directory.
 
-- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
+- To view the documentation, open the `docs/build/site/openzeppelin-relayer/<version>/index.html` in your browser.
 
 ## Observability
 
@@ -388,7 +492,7 @@ For security concerns, please refer to our [Security Policy](SECURITY.md).
 
 ## Get Help
 
-If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/0.1.0/).
+If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/).
 
 If the answer is not there:
 

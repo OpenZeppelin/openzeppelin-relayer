@@ -14,5 +14,5 @@
   ```sh
   cargo make rust-antora
   ```
-- The site will be generated in `docs/build/site/openzeppelin_relayer/<version>/` directory.
-- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
+- The site will be generated in `docs/build/site/openzeppelin-relayer/<version>/` directory.
+- To view the documentation, open the `docs/build/site/openzeppelin-relayer/<version>/index.html` in your browser.
