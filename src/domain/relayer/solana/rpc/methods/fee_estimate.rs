@@ -135,6 +135,7 @@ async fn validate_fee_estimate_transaction(
 mod tests {
 
     use crate::{
+        constants::WRAPPED_SOL_MINT,
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
         services::{MockSolanaProviderTrait, QuoteResponse},
     };
@@ -348,14 +349,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fee_estimate_native_sol() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+    async fn test_fee_estimate_wrapped_sol() {
+        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
-        // Set up policy with SOL token
+        // Set up policy with W SOL token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: "So11111111111111111111111111111111111111112".to_string(), // Native SOL
+                mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
@@ -373,7 +374,26 @@ mod tests {
             .expect_calculate_total_fee()
             .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
 
-        // We don't expect any Jupiter quotes for native SOL
+        // Mock Jupiter quote
+        jupiter_service
+            .expect_get_sol_to_token_quote()
+            .with(
+                predicate::eq(WRAPPED_SOL_MINT),
+                predicate::eq(1_000_000u64),
+                predicate::eq(1.0f32),
+            )
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: WRAPPED_SOL_MINT.to_string(),
+                        in_amount: 1_000_000,
+                        out_amount: 1_000_000,
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
@@ -385,7 +405,7 @@ mod tests {
 
         let params = FeeEstimateRequestParams {
             transaction: encoded_tx,
-            fee_token: "So11111111111111111111111111111111111111112".to_string(),
+            fee_token: WRAPPED_SOL_MINT.to_string(),
         };
 
         let result = rpc.fee_estimate(params).await;

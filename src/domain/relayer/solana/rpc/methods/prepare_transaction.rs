@@ -181,7 +181,7 @@ mod tests {
     use std::str::FromStr;
 
     use crate::{
-        constants::SOL_MINT,
+        constants::WRAPPED_SOL_MINT,
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
     };
 
@@ -196,10 +196,10 @@ mod tests {
         let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
-        // Setup policy with SOL
+        // Setup policy with WSOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: SOL_MINT.to_string(),
+                mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
@@ -251,14 +251,14 @@ mod tests {
 
         let params = PrepareTransactionRequestParams {
             transaction: encoded_tx,
-            fee_token: SOL_MINT.to_string(),
+            fee_token: WRAPPED_SOL_MINT.to_string(),
         };
 
         let result = rpc.prepare_transaction(params).await;
         assert!(result.is_ok());
 
         let prepare_result = result.unwrap();
-        assert_eq!(prepare_result.fee_token, SOL_MINT);
+        assert_eq!(prepare_result.fee_token, WRAPPED_SOL_MINT);
         assert_eq!(prepare_result.fee_in_lamports, "5000");
         assert_eq!(prepare_result.fee_in_spl, "5000");
         assert_eq!(prepare_result.valid_until_blockheight, 100);
@@ -273,7 +273,7 @@ mod tests {
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             min_balance: 100_000_000, // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: SOL_MINT.to_string(),
+                mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
@@ -317,7 +317,7 @@ mod tests {
 
         let params = PrepareTransactionRequestParams {
             transaction: encoded_tx,
-            fee_token: SOL_MINT.to_string(),
+            fee_token: WRAPPED_SOL_MINT.to_string(),
         };
 
         let result = rpc.prepare_transaction(params).await;
@@ -332,7 +332,7 @@ mod tests {
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             min_balance: 100_000_000, // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: SOL_MINT.to_string(),
+                mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
@@ -378,6 +378,7 @@ mod tests {
                 })
             })
         });
+
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
             Arc::new(provider),
@@ -388,7 +389,7 @@ mod tests {
 
         let params = PrepareTransactionRequestParams {
             transaction: encoded_tx,
-            fee_token: SOL_MINT.to_string(),
+            fee_token: WRAPPED_SOL_MINT.to_string(),
         };
 
         let result = rpc.prepare_transaction(params).await;
@@ -414,7 +415,7 @@ mod tests {
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             min_balance: 100_000_000, // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: SOL_MINT.to_string(),
+                mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
@@ -469,7 +470,7 @@ mod tests {
 
         let params = PrepareTransactionRequestParams {
             transaction: encoded_tx,
-            fee_token: SOL_MINT.to_string(),
+            fee_token: WRAPPED_SOL_MINT.to_string(),
         };
 
         let result = rpc.prepare_transaction(params).await;
@@ -556,7 +557,7 @@ mod tests {
 
         let params = PrepareTransactionRequestParams {
             transaction: encoded_tx,
-            fee_token: SOL_MINT.to_string(),
+            fee_token: WRAPPED_SOL_MINT.to_string(),
         };
 
         let result = rpc.prepare_transaction(params).await;

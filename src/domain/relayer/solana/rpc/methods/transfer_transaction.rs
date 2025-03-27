@@ -30,10 +30,10 @@ use log::info;
 use solana_sdk::{pubkey::Pubkey, system_instruction};
 
 use crate::{
-    constants::SOL_MINT,
+    constants::{NATIVE_SOL, SYSTEM_PROGRAM_ID},
     models::{
-        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, SolanaWebhookRpcPayload,
-        TransferTransactionRequestParams, TransferTransactionResult,
+        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, RelayerSolanaPolicy,
+        SolanaWebhookRpcPayload, TransferTransactionRequestParams, TransferTransactionResult,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
@@ -52,32 +52,44 @@ where
         params: TransferTransactionRequestParams,
     ) -> Result<TransferTransactionResult, SolanaRpcError> {
         info!(
-            "Processing transfer transaction for token: {} and amount {}",
+            "Processing transfer transaction for: {} and amount {}",
             params.token, params.amount
         );
-        let token_mint = Pubkey::from_str(&params.token)
-            .map_err(|_| SolanaRpcError::InvalidParams("Invalid token mint address".to_string()))?;
         let source = Pubkey::from_str(&params.source)
             .map_err(|_| SolanaRpcError::InvalidParams("Invalid source address".to_string()))?;
         let destination = Pubkey::from_str(&params.destination).map_err(|_| {
             SolanaRpcError::InvalidParams("Invalid destination address".to_string())
         })?;
 
-        validate_token_transfer_transaction(
-            &params.source,
-            &params.destination,
-            &params.token,
-            params.amount,
-            &self.relayer,
-        )?;
+        let is_native_sol_transfer = params.token == NATIVE_SOL;
 
-        let instructions = if token_mint.to_string() == SOL_MINT {
+        if is_native_sol_transfer {
+            validate_native_sol_transfer_transaction(
+                &params.source,
+                &params.destination,
+                params.amount,
+                &self.relayer,
+            )?;
+        } else {
+            validate_token_transfer_transaction(
+                &params.source,
+                &params.destination,
+                &params.token,
+                params.amount,
+                &self.relayer,
+            )?;
+        }
+
+        let instructions = if is_native_sol_transfer {
             vec![system_instruction::transfer(
                 &source,
                 &destination,
                 params.amount,
             )]
         } else {
+            let token_mint = Pubkey::from_str(&params.token).map_err(|_| {
+                SolanaRpcError::InvalidParams("Invalid token mint address".to_string())
+            })?;
             self.handle_token_transfer(&source, &destination, &token_mint, params.amount)
                 .await?
         };
@@ -147,20 +159,17 @@ where
     }
 }
 
-/// Validates a token transfer transaction transaction
-fn validate_token_transfer_transaction(
+// Validates transfer transaction parameters
+fn validate_transaction(
     source: &str,
     destination: &str,
-    token_mint: &str,
     amount: u64,
-    relayer: &RelayerRepoModel,
+    policy: &RelayerSolanaPolicy,
 ) -> Result<(), SolanaTransactionValidationError> {
-    let policy = &relayer.policies.get_solana_policy();
     SolanaTransactionValidator::validate_allowed_account(source, policy)?;
     SolanaTransactionValidator::validate_disallowed_account(source, policy)?;
     SolanaTransactionValidator::validate_allowed_account(destination, policy)?;
     SolanaTransactionValidator::validate_disallowed_account(destination, policy)?;
-    SolanaTransactionValidator::validate_allowed_token(token_mint, policy)?;
 
     if amount == 0 {
         return Err(SolanaTransactionValidationError::ValidationError(
@@ -171,9 +180,45 @@ fn validate_token_transfer_transaction(
     Ok(())
 }
 
+/// Validates a token transfer transaction transaction
+fn validate_token_transfer_transaction(
+    source: &str,
+    destination: &str,
+    token_mint: &str,
+    amount: u64,
+    relayer: &RelayerRepoModel,
+) -> Result<(), SolanaTransactionValidationError> {
+    let policy = &relayer.policies.get_solana_policy();
+    validate_transaction(source, destination, amount, policy)?;
+    SolanaTransactionValidator::validate_allowed_token(token_mint, policy)?;
+
+    Ok(())
+}
+
+/// Validates a native sol transaction
+fn validate_native_sol_transfer_transaction(
+    source: &str,
+    destination: &str,
+    amount: u64,
+    relayer: &RelayerRepoModel,
+) -> Result<(), SolanaTransactionValidationError> {
+    let policy = &relayer.policies.get_solana_policy();
+    validate_transaction(source, destination, amount, policy)?;
+    if let Some(allowed_programs) = &policy.allowed_programs {
+        if !allowed_programs.contains(&SYSTEM_PROGRAM_ID.to_string()) {
+            return Err(SolanaTransactionValidationError::PolicyViolation(format!(
+                "System Program not allowed"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
+        constants::WRAPPED_SOL_MINT,
         models::{
             NetworkType, RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         },
@@ -197,13 +242,7 @@ mod tests {
 
         // Set up policy with SOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: SOL_MINT.to_string(),
-                symbol: Some("SOL".to_string()),
-                decimals: Some(9),
-                max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-            }]),
+            allowed_programs: Some(vec!["11111111111111111111111111111111".to_string()]),
             ..Default::default()
         });
 
@@ -235,7 +274,7 @@ mod tests {
         );
 
         let params = TransferTransactionRequestParams {
-            token: SOL_MINT.to_string(),
+            token: NATIVE_SOL.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
             amount: 1_000_000,
@@ -244,8 +283,138 @@ mod tests {
         assert!(result.is_ok());
 
         let transfer_result = result.unwrap();
-        assert_eq!(transfer_result.fee_token, SOL_MINT);
+        assert_eq!(transfer_result.fee_token, NATIVE_SOL);
         assert_eq!(transfer_result.fee_in_lamports, "5000");
+    }
+
+    #[tokio::test]
+    async fn test_transfer_sol_failure() {
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+
+        // Policy without allowed system program
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_programs: Some(vec![
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_string()
+            ]),
+            ..Default::default()
+        });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let params = TransferTransactionRequestParams {
+            token: NATIVE_SOL.to_string(),
+            source: Pubkey::new_unique().to_string(),
+            destination: Pubkey::new_unique().to_string(),
+            amount: 1_000_000_000,
+        };
+        let result = rpc.transfer_transaction(params).await;
+        assert!(result.is_err());
+
+        assert!(matches!(
+            result,
+            Err(SolanaRpcError::SolanaTransactionValidation(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_transfer_wsol_spl_token_success() {
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+        let test_token = WRAPPED_SOL_MINT;
+
+        // Create valid token account data
+        let token_account = spl_token::state::Account {
+            mint: Pubkey::from_str(test_token).unwrap(),
+            owner: Pubkey::new_unique(), // Source account owner
+            amount: 10_000_000_000,      // 10 WSOL
+            delegate: COption::None,
+            state: spl_token::state::AccountState::Initialized,
+            is_native: COption::None,
+            delegated_amount: 0,
+            close_authority: COption::None,
+        };
+
+        // Pack the account data
+        let mut account_data = vec![0; Account::LEN];
+        Account::pack(token_account, &mut account_data).unwrap();
+
+        // Set up policy
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: test_token.to_string(),
+                symbol: Some("SOL".to_string()),
+                decimals: Some(6),
+                max_allowed_fee: Some(1_000_000),
+                conversion_slippage_percentage: Some(1.0),
+            }]),
+            ..Default::default()
+        });
+
+        let signature = Signature::new_unique();
+
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
+
+        // Mock provider responses
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_commitment| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        provider
+            .expect_get_account_from_pubkey()
+            .returning(move |_| {
+                let account_data = account_data.clone();
+                Box::pin(async move {
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let params = TransferTransactionRequestParams {
+            token: test_token.to_string(),
+            source: Pubkey::new_unique().to_string(),
+            destination: Pubkey::new_unique().to_string(),
+            amount: 5000,
+        };
+
+        let result = rpc.transfer_transaction(params).await;
+        assert!(result.is_ok());
+
+        let transfer_result = result.unwrap();
+        assert_eq!(transfer_result.fee_in_spl, "5000");
+        assert_eq!(transfer_result.fee_in_lamports, "5000");
+        assert_eq!(transfer_result.fee_token, test_token);
+        assert_ne!(transfer_result.valid_until_blockheight, 0);
     }
 
     #[tokio::test]
@@ -323,7 +492,7 @@ mod tests {
             .returning(|_, _, _| {
                 Box::pin(async {
                     Ok(QuoteResponse {
-                        input_mint: SOL_MINT.to_string(),
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
                         output_mint: test_token.to_string(),
                         in_amount: 5000,
                         out_amount: 100_000,
@@ -447,7 +616,7 @@ mod tests {
             .returning(|_, _, _| {
                 Box::pin(async {
                     Ok(QuoteResponse {
-                        input_mint: SOL_MINT.to_string(),
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
                         output_mint: test_token.to_string(),
                         in_amount: 5000,
                         out_amount: 100_000,
@@ -574,13 +743,7 @@ mod tests {
 
         // Set up policy with SOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: SOL_MINT.to_string(),
-                symbol: Some("SOL".to_string()),
-                decimals: Some(9),
-                max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-            }]),
+            allowed_programs: Some(vec![NATIVE_SOL.to_string()]),
             ..Default::default()
         });
 
@@ -616,17 +779,17 @@ mod tests {
         );
 
         let params = TransferTransactionRequestParams {
-            token: SOL_MINT.to_string(),
+            token: NATIVE_SOL.to_string(),
             source: Pubkey::new_unique().to_string(),
             destination: Pubkey::new_unique().to_string(),
-            amount: 1_000_000,
+            amount: 1_000_000_000,
         };
 
         let result = rpc.transfer_transaction(params).await;
         assert!(result.is_ok());
 
         let transfer_result = result.unwrap();
-        assert_eq!(transfer_result.fee_token, SOL_MINT);
+        assert_eq!(transfer_result.fee_token, NATIVE_SOL);
         assert_eq!(transfer_result.fee_in_lamports, "5000");
     }
 }
