@@ -29,6 +29,12 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 
 [NOTE]
 ====
+For information about our development plans and upcoming features, see xref:roadmap.adoc[Project Roadmap].
+====
+
+
+[NOTE]
+====
 To get started immediately, see xref:quickstart.adoc[Quickstart].
 ====
 

@@ -28,6 +28,9 @@ This relayer service enables interaction with blockchain networks through transa
 - Solana
 - EVM (🚧 Partial support)
 
+> For details about current development status and upcoming features, check our [Project Roadmap](https://openzeppelin-relayer.netlify.app/openzeppelin-relayer/0.1.0/roadmap).
+
+
 ## For users
 
 ### Installation
