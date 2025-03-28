@@ -1,5 +1,8 @@
 use crate::{
-    domain::{BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataResponse},
+    domain::{
+        BalanceResponse, JsonRpcRequest, JsonRpcResponse, RelayerUpdateRequest, SignDataRequest,
+        SignDataResponse, SignTypedDataRequest,
+    },
     models::{
         ApiResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
         RelayerResponse, TransactionResponse,
@@ -158,6 +161,7 @@ fn doc_get_relayer() {}
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
+    request_body = RelayerUpdateRequest,
     responses(
         (status = 200, description = "Relayer updated successfully", body = ApiResponse<RelayerResponse>),
         (
@@ -855,6 +859,7 @@ fn doc_replace_transaction() {}
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
     ),
+    request_body = SignDataRequest,
     responses(
         (status = 200, description = "Relayer signed data successfully", body = ApiResponse<SignDataResponse>),
         (
@@ -924,6 +929,7 @@ fn doc_sign() {}
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
     ),
+    request_body = SignTypedDataRequest,
     responses(
         (status = 200, description = "Relayer signed typed data successfully", body = ApiResponse<SignDataResponse>),
         (

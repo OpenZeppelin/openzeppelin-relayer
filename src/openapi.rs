@@ -1,6 +1,6 @@
 use crate::{
     api::routes::{docs::relayer_docs, health, metrics},
-    models,
+    domain, models,
 };
 use utoipa::{
     openapi::security::{Http, HttpAuthScheme, SecurityScheme},
@@ -54,6 +54,15 @@ impl Modify for SecurityAddon {
         metrics::metric_detail,
         metrics::scrape_metrics
     ),
-    components(schemas(models::RelayerResponse, models::NetworkPolicyResponse, models::EvmPolicyResponse, models::SolanaPolicyResponse, models::StellarPolicyResponse))
+    components(schemas(
+        models::RelayerResponse,
+        models::NetworkPolicyResponse,
+        models::EvmPolicyResponse,
+        models::SolanaPolicyResponse,
+        models::StellarPolicyResponse,
+        domain::RelayerUpdateRequest,
+        domain::SignDataRequest,
+        domain::SignTypedDataRequest
+    ))
 )]
 pub struct ApiDoc;
