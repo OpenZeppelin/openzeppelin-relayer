@@ -311,6 +311,30 @@ impl EvmNamedNetwork {
         }
     }
 
+    pub const fn is_rollup(self) -> bool {
+        use EvmNamedNetwork::*;
+
+        match self {
+            // Optimism-based (Bedrock) networks
+            Optimism | OptimismSepolia | Base | BaseSepolia | UnichainSepolia => true,
+
+            // Arbitrum networks
+            Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova => true,
+
+            // ZkSync networks
+            ZkSync | ZkSyncTestnet => true,
+
+            // Linea networks
+            Linea | LineaSepolia => true,
+
+            // Mantle networks
+            Mantle | MantleTestnet | MantleSepolia => true,
+
+            // All other networks are not rollups
+            _ => false,
+        }
+    }
+
     pub const fn explorer_urls(self) -> Option<&'static [&'static str]> {
         use EvmNamedNetwork::*;
 
@@ -815,5 +839,63 @@ mod tests {
             .unwrap()
             .contains(&"https://eth-sepolia.api.onfinality.io/public"));
         assert_eq!(EvmNamedNetwork::MoonbeamDev.public_rpc_urls(), None);
+    }
+
+    #[test]
+    fn is_rollup_check() {
+        // Test Optimism-based networks
+        for net in [
+            EvmNamedNetwork::Optimism,
+            EvmNamedNetwork::OptimismSepolia,
+            EvmNamedNetwork::Base,
+            EvmNamedNetwork::BaseSepolia,
+            EvmNamedNetwork::UnichainSepolia,
+        ] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test Arbitrum networks
+        for net in [
+            EvmNamedNetwork::Arbitrum,
+            EvmNamedNetwork::ArbitrumTestnet,
+            EvmNamedNetwork::ArbitrumSepolia,
+            EvmNamedNetwork::ArbitrumNova,
+        ] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test ZkSync networks
+        for net in [EvmNamedNetwork::ZkSync, EvmNamedNetwork::ZkSyncTestnet] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test Linea networks
+        for net in [EvmNamedNetwork::Linea, EvmNamedNetwork::LineaSepolia] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test Mantle networks
+        for net in [
+            EvmNamedNetwork::Mantle,
+            EvmNamedNetwork::MantleTestnet,
+            EvmNamedNetwork::MantleSepolia,
+        ] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test non-rollup networks
+        for net in [
+            EvmNamedNetwork::Mainnet,
+            EvmNamedNetwork::Sepolia,
+            EvmNamedNetwork::BinanceSmartChain,
+            EvmNamedNetwork::Polygon,
+            EvmNamedNetwork::Avalanche,
+            EvmNamedNetwork::Fantom,
+            EvmNamedNetwork::Moonbeam,
+            EvmNamedNetwork::Celo,
+            EvmNamedNetwork::Aurora,
+        ] {
+            assert!(!net.is_rollup(), "{} should not be a rollup", net);
+        }
     }
 }

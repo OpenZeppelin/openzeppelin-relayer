@@ -3,15 +3,15 @@
 //! It includes methods for preparing, submitting, handling status, and
 //! managing notifications for transactions. The module leverages various
 //! services and repositories to perform these operations asynchronously.
+
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::Utc;
 use eyre::Result;
 use log::{debug, info, warn};
 use std::sync::Arc;
 
-use super::{make_noop, PriceParams};
+use super::PriceParams;
 use crate::{
-    constants::DEFAULT_TX_VALID_TIMESPAN,
     domain::{
         is_pending_transaction,
         transaction::{
@@ -21,16 +21,14 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, EvmNetwork, NetworkTransactionData,
-        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
-    utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
 #[allow(dead_code)]
@@ -103,144 +101,6 @@ where
         })
     }
 
-    /// Helper function to check if a transaction has enough confirmations
-    ///
-    /// # Arguments
-    ///
-    /// * `tx_block_number` - Block number where the transaction was mined
-    /// * `current_block_number` - Current block number
-    /// * `chain_id` - The chain ID to determine confirmation requirements
-    ///
-    /// # Returns
-    ///
-    /// `true` if the transaction has enough confirmations for the given network
-    fn has_enough_confirmations(
-        tx_block_number: u64,
-        current_block_number: u64,
-        chain_id: u64,
-    ) -> bool {
-        let network = EvmNetwork::from_id(chain_id);
-        let required_confirmations = network.required_confirmations();
-        current_block_number >= tx_block_number + required_confirmations
-    }
-
-    /// Checks if a transaction is still valid based on its valid_until timestamp.
-    /// If valid_until is not set, it uses the default timespan from constants.
-    ///
-    /// # Arguments
-    ///
-    /// * `created_at` - When the transaction was created
-    /// * `valid_until` - Optional timestamp string when the transaction expires
-    ///
-    /// # Returns
-    ///
-    /// `true` if the transaction is still valid, `false` if it has expired
-    fn is_transaction_valid(created_at: &str, valid_until: &Option<String>) -> bool {
-        // If valid_until is provided, use it to determine validity
-        if let Some(valid_until_str) = valid_until {
-            match DateTime::parse_from_rfc3339(valid_until_str) {
-                Ok(valid_until_time) => {
-                    // Valid if current time is before valid_until time
-                    return Utc::now() < valid_until_time;
-                }
-                Err(e) => {
-                    warn!("Failed to parse valid_until timestamp: {}", e);
-                    return false;
-                }
-            }
-        }
-
-        // If we get here valid_until wasn't provided
-        match DateTime::parse_from_rfc3339(created_at) {
-            Ok(created_time) => {
-                // Calculate default expiration time
-                let default_valid_until =
-                    created_time + Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN);
-                // Valid if current time is before default expiration
-                Utc::now() < default_valid_until
-            }
-            Err(e) => {
-                warn!("Failed to parse created_at timestamp: {}", e);
-                false
-            }
-        }
-    }
-
-    /// Checks transaction confirmation status.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - The transaction repository model containing metadata like valid_until.
-    ///
-    /// # Returns
-    ///
-    /// A result containing either:
-    /// - `Ok(TransactionStatus::Confirmed)` if the transaction succeeded with enough confirmations
-    /// - `Ok(TransactionStatus::Mined)` if the transaction is mined but doesn't have enough
-    ///   confirmations
-    /// - `Ok(TransactionStatus::Submitted)` if the transaction is not yet mined
-    /// - `Ok(TransactionStatus::Failed)` if the transaction has failed
-    /// - `Ok(TransactionStatus::Expired)` if the transaction has expired
-    /// - `Err(TransactionError)` if an error occurred
-    async fn check_transaction_status(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<TransactionStatus, TransactionError> {
-        if tx.status == TransactionStatus::Expired
-            || tx.status == TransactionStatus::Failed
-            || tx.status == TransactionStatus::Confirmed
-        {
-            return Ok(tx.status.clone());
-        }
-
-        // Check if the transaction has expired
-        if !Self::is_transaction_valid(&tx.created_at, &tx.valid_until) {
-            info!("Transaction expired: {}", tx.id);
-            return Ok(TransactionStatus::Expired);
-        }
-
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
-        let tx_hash = evm_data
-            .hash
-            .as_ref()
-            .ok_or(TransactionError::UnexpectedError(
-                "Transaction hash is missing".to_string(),
-            ))?;
-
-        // Check if transaction is mined
-        let receipt_result = self.provider.get_transaction_receipt(tx_hash).await?;
-
-        // Use if let Some to extract the receipt if it exists
-        if let Some(receipt) = receipt_result {
-            // If transaction failed, return Failed status
-            if !receipt.status() {
-                return Ok(TransactionStatus::Failed);
-            }
-
-            let last_block_number = self.provider.get_block_number().await?;
-            let tx_block_number = receipt
-                .block_number
-                .ok_or(TransactionError::UnexpectedError(
-                    "Transaction receipt missing block number".to_string(),
-                ))?;
-            if !Self::has_enough_confirmations(
-                tx_block_number,
-                last_block_number,
-                evm_data.chain_id,
-            ) {
-                info!("Transaction mined but not confirmed: {}", tx_hash);
-                return Ok(TransactionStatus::Mined);
-            }
-
-            // Transaction is confirmed
-            Ok(TransactionStatus::Confirmed)
-        } else {
-            // If we get here, there's no receipt, so the transaction is not yet mined
-            info!("Transaction not yet mined: {}", tx_hash);
-            Ok(TransactionStatus::Submitted)
-        }
-    }
-
     /// Returns a reference to the provider.
     pub fn provider(&self) -> &P {
         &self.provider
@@ -251,93 +111,13 @@ where
         &self.relayer
     }
 
-    /// Helper method to send a transaction update notification if a notification ID is configured.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - The transaction model to send a notification for.
-    ///
-    /// # Returns
-    ///
-    /// A result indicating success or a `TransactionError`.
-    async fn send_transaction_update_notification(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<(), TransactionError> {
-        if let Some(notification_id) = &self.relayer.notification_id {
-            self.job_producer
-                .produce_send_notification_job(
-                    produce_transaction_update_notification_payload(notification_id, tx),
-                    None,
-                )
-                .await?;
-        }
-        Ok(())
+    /// Returns a reference to the job producer.
+    pub fn job_producer(&self) -> &J {
+        &self.job_producer
     }
 
-    async fn update_transaction_status(
-        &self,
-        tx: TransactionRepoModel,
-        new_status: TransactionStatus,
-        confirmed_at: Option<String>,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        let update_request = TransactionUpdateRequest {
-            status: Some(new_status),
-            confirmed_at,
-            ..Default::default()
-        };
-
-        let updated_tx = self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update_request)
-            .await?;
-
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
-        Ok(updated_tx)
-    }
-
-    /// Gets the age of a transaction since it was sent
-    fn get_age_of_sent_at(&self, tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
-        let now = Utc::now();
-        let sent_at_str = tx.sent_at.as_ref().ok_or_else(|| {
-            TransactionError::UnexpectedError("Transaction sent_at time is missing".to_string())
-        })?;
-        let sent_time = DateTime::parse_from_rfc3339(sent_at_str)
-            .map_err(|_| {
-                TransactionError::UnexpectedError("Error parsing sent_at time".to_string())
-            })?
-            .with_timezone(&Utc);
-        Ok(now.signed_duration_since(sent_time))
-    }
-
-    /// Determines if a transaction should be resubmitted
-    /// Returns true if the transaction should be resubmitted
-    async fn should_resubmit(&self, tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
-        if tx.status != TransactionStatus::Submitted {
-            return Err(TransactionError::UnexpectedError(format!(
-                "Transaction must be in Submitted status to resubmit, found: {:?}",
-                tx.status
-            )));
-        }
-
-        let age = self.get_age_of_sent_at(tx)?;
-
-        // Check for speed and determine timeout
-        let timeout = match tx.network_data.get_evm_transaction_data() {
-            Ok(data) => get_resubmit_timeout_for_speed(&data.speed),
-            Err(e) => return Err(e),
-        };
-
-        let timeout_with_backoff = get_resubmit_timeout_with_backoff(timeout, tx.hashes.len());
-
-        // If the transaction has been waiting for more than our timeout, resubmit it
-        if age > Duration::milliseconds(timeout_with_backoff) {
-            info!("Transaction has been pending for too long, resubmitting");
-            return Ok(true);
-        }
-
-        Ok(false)
+    pub fn transaction_repository(&self) -> &T {
+        &self.transaction_repository
     }
 }
 
@@ -490,70 +270,8 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Checking transaction status for tx: {:?}", tx.id);
-
-        let status = self.check_transaction_status(&tx).await?;
-
-        match status {
-            TransactionStatus::Submitted => {
-                // Check if transaction needs resubmission
-                if self.should_resubmit(&tx).await? {
-                    self.job_producer
-                        .produce_submit_transaction_job(
-                            TransactionSend::resubmit(tx.id.clone(), tx.relayer_id.clone()),
-                            None,
-                        )
-                        .await?;
-                }
-
-                // Otherwise, continue with normal status check
-                self.job_producer
-                    .produce_check_transaction_status_job(
-                        TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                        Some(Utc::now().timestamp() + 5),
-                    )
-                    .await?;
-
-                if tx.status != status {
-                    return self.update_transaction_status(tx, status, None).await;
-                }
-
-                Ok(tx)
-            }
-            TransactionStatus::Mined => {
-                // For mined transactions, just schedule the next check
-                self.job_producer
-                    .produce_check_transaction_status_job(
-                        TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                        Some(Utc::now().timestamp() + 5),
-                    )
-                    .await?;
-
-                if tx.status != status {
-                    return self.update_transaction_status(tx, status, None).await;
-                }
-
-                Ok(tx)
-            }
-            TransactionStatus::Confirmed
-            | TransactionStatus::Failed
-            | TransactionStatus::Expired => {
-                let confirmed_at = if status == TransactionStatus::Confirmed {
-                    Some(Utc::now().to_rfc3339())
-                } else {
-                    None
-                };
-
-                self.update_transaction_status(tx, status, confirmed_at)
-                    .await
-            }
-            _ => Err(TransactionError::UnexpectedError(format!(
-                "Unexpected transaction status: {:?}",
-                status
-            ))),
-        }
+        self.handle_status_impl(tx).await
     }
-
     /// Resubmits a transaction with updated parameters.
     ///
     /// # Arguments
@@ -651,42 +369,12 @@ where
         // If the transaction is in Pending state, we can just update its status
         if tx.status == TransactionStatus::Pending {
             info!("Transaction is in Pending state, updating status to Canceled");
-
-            // Update the transaction status to Canceled
-            let update = TransactionUpdateRequest {
-                status: Some(TransactionStatus::Canceled),
-                ..Default::default()
-            };
-
-            let updated_tx = self
-                .transaction_repository
-                .partial_update(tx.id.clone(), update)
-                .await?;
-
-            // Send notification if configured
-            self.send_transaction_update_notification(&updated_tx)
-                .await?;
-
-            info!("Transaction status updated to Canceled: {:?}", tx.id);
-            return Ok(updated_tx);
+            return self
+                .update_transaction_status(tx, TransactionStatus::Canceled, None)
+                .await;
         }
 
-        // For transactions in Sent/Submitted state, we need to send a cancellation transaction
-        let mut evm_data = tx.network_data.get_evm_transaction_data()?;
-
-        // Prepare the cancellation transaction
-        make_noop(&mut evm_data).await?;
-
-        // Update original transaction with the cancel/noop transaction data
-        let update = TransactionUpdateRequest {
-            network_data: Some(NetworkTransactionData::Evm(evm_data)),
-            status: Some(TransactionStatus::Submitted),
-            sent_at: None,
-            priced_at: Some(Utc::now().to_rfc3339()),
-            is_canceled: Some(true),
-            ..Default::default()
-        };
-
+        let update = self.prepare_noop_update_request(&tx, true).await?;
         let updated_tx = self
             .transaction_repository
             .partial_update(tx.id.clone(), update)
@@ -781,6 +469,7 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
 mod tests {
     use super::*;
     use crate::{
+        constants::DEFAULT_TX_VALID_TIMESPAN,
         domain::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
         models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy, U256},
