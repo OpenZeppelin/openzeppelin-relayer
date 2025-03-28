@@ -353,7 +353,7 @@ mod tests {
         let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
-        // Set up policy with W SOL token
+        // Set up policy with WSOL token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
@@ -373,27 +373,6 @@ mod tests {
         provider
             .expect_calculate_total_fee()
             .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
-
-        // Mock Jupiter quote
-        jupiter_service
-            .expect_get_sol_to_token_quote()
-            .with(
-                predicate::eq(WRAPPED_SOL_MINT),
-                predicate::eq(1_000_000u64),
-                predicate::eq(1.0f32),
-            )
-            .returning(|_, _, _| {
-                Box::pin(async {
-                    Ok(QuoteResponse {
-                        input_mint: WRAPPED_SOL_MINT.to_string(),
-                        output_mint: WRAPPED_SOL_MINT.to_string(),
-                        in_amount: 1_000_000,
-                        out_amount: 1_000_000,
-                        price_impact_pct: 0.1,
-                        other_amount_threshold: 0,
-                    })
-                })
-            });
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
