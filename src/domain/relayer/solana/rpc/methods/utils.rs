@@ -38,7 +38,9 @@ use spl_associated_token_account::{
 use spl_token::{amount_to_ui_amount, state::Account};
 
 use crate::{
-    constants::{DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_DECIMALS, SOL_MINT},
+    constants::{
+        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, NATIVE_SOL, SOLANA_DECIMALS, WRAPPED_SOL_MINT,
+    },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
@@ -226,8 +228,8 @@ where
         token: &str,
         total_fee: u64,
     ) -> Result<FeeQuote, SolanaRpcError> {
-        // If token is SOL, return direct conversion
-        if token == SOL_MINT {
+        // If token is WSOL/SOL, return direct conversion
+        if token == NATIVE_SOL || token == WRAPPED_SOL_MINT {
             return Ok(FeeQuote {
                 fee_in_spl: total_fee,
                 fee_in_spl_ui: amount_to_ui_amount(total_fee, SOLANA_DECIMALS).to_string(),
@@ -354,7 +356,13 @@ where
         let destination_ata = get_associated_token_address(destination, token_mint);
 
         // Verify source account and balance
-        let source_account = self.provider.get_account_from_pubkey(&source_ata).await?;
+        let source_account = self
+            .provider
+            .get_account_from_pubkey(&source_ata)
+            .await
+            .map_err(|e| {
+                SolanaRpcError::TokenAccount(format!("Invalid source token account: {}", e))
+            })?;
         let unpacked_source_account = Account::unpack(&source_account.data)
             .map_err(|e| SolanaRpcError::InvalidParams(format!("Invalid token account: {}", e)))?;
 
@@ -412,6 +420,7 @@ where
 mod tests {
 
     use crate::{
+        constants::WRAPPED_SOL_MINT,
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
         services::QuoteResponse,
     };
@@ -467,7 +476,7 @@ mod tests {
         // Setup policy with SOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: SOL_MINT.to_string(),
+                mint: NATIVE_SOL.to_string(),
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
@@ -484,7 +493,7 @@ mod tests {
             Arc::new(job_producer),
         );
 
-        let result = rpc.get_fee_token_quote(SOL_MINT, 1_000_000).await;
+        let result = rpc.get_fee_token_quote(NATIVE_SOL, 1_000_000).await;
         assert!(result.is_ok());
 
         let quote = result.unwrap();
@@ -511,13 +520,12 @@ mod tests {
             ..Default::default()
         });
 
-        // let test_token = test_token.to_string();
         jupiter_service
             .expect_get_sol_to_token_quote()
             .returning(move |_, amount, _| {
                 Box::pin(async move {
                     Ok(QuoteResponse {
-                        input_mint: SOL_MINT.to_string(),
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
                         output_mint: test_token.to_string(),
                         in_amount: amount,
                         out_amount: 2_000_000, // 1 SOL = 2 USDC

@@ -135,6 +135,7 @@ async fn validate_fee_estimate_transaction(
 mod tests {
 
     use crate::{
+        constants::WRAPPED_SOL_MINT,
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
         services::{MockSolanaProviderTrait, QuoteResponse},
     };
@@ -348,14 +349,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fee_estimate_native_sol() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+    async fn test_fee_estimate_wrapped_sol() {
+        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
-        // Set up policy with SOL token
+        // Set up policy with WSOL token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: "So11111111111111111111111111111111111111112".to_string(), // Native SOL
+                mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
@@ -373,8 +374,6 @@ mod tests {
             .expect_calculate_total_fee()
             .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
 
-        // We don't expect any Jupiter quotes for native SOL
-
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
             Arc::new(provider),
@@ -385,7 +384,7 @@ mod tests {
 
         let params = FeeEstimateRequestParams {
             transaction: encoded_tx,
-            fee_token: "So11111111111111111111111111111111111111112".to_string(),
+            fee_token: WRAPPED_SOL_MINT.to_string(),
         };
 
         let result = rpc.fee_estimate(params).await;

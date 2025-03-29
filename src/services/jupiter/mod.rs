@@ -3,7 +3,7 @@
 //! Jupiter is not supported on devnet/testnet, so a mock service is used instead
 //! The mock service returns a quote with the same input and output amount
 use crate::{
-    constants::{JUPITER_API_URL, SOL_MINT},
+    constants::{JUPITER_API_URL, WRAPPED_SOL_MINT},
     utils::field_as_string,
 };
 use async_trait::async_trait;
@@ -114,7 +114,7 @@ impl JupiterServiceTrait for MainnetJupiterService {
         slippage: f32,
     ) -> Result<QuoteResponse> {
         let request = QuoteRequest {
-            input_mint: SOL_MINT.to_string(),
+            input_mint: WRAPPED_SOL_MINT.to_string(),
             output_mint: output_mint.to_string(),
             amount,
             slippage,
@@ -163,7 +163,7 @@ impl JupiterServiceTrait for MockJupiterService {
         slippage: f32,
     ) -> Result<QuoteResponse> {
         let request = QuoteRequest {
-            input_mint: SOL_MINT.to_string(),
+            input_mint: WRAPPED_SOL_MINT.to_string(),
             output_mint: output_mint.to_string(),
             amount,
             slippage,

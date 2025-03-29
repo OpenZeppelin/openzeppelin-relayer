@@ -39,6 +39,8 @@ pub enum SolanaRpcError {
     Signature(String),
     #[error("Token fetch error: {0}")]
     TokenFetch(String),
+    #[error("Token Account error: {0}")]
+    TokenAccount(String),
     #[error("Send error: {0}")]
     Send(String),
     #[error("Transaction validation error: {0}")]
