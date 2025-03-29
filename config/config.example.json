@@ -21,6 +21,7 @@
       "signer_id": "local-signer",
       "network_type": "solana",
       "policies": {
+        "fee_payment": "user",
         "min_balance": 0,
         "allowed_tokens": [
           {

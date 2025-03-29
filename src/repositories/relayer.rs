@@ -7,7 +7,8 @@
 //! The `RelayerRepository` trait is designed to be implemented by any storage backend,
 //! allowing for flexibility in how relayers are stored and managed. The in-memory
 //! implementation is useful for testing and development purposes.
-use crate::models::PaginationQuery;
+use crate::config::ConfigFileRelayerSolanaFeePayment;
+use crate::models::{PaginationQuery, SolanaFeePayment};
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
     constants::{
@@ -323,7 +324,15 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                             })
                             .collect::<Vec<_>>()
                     });
+                let fee_payment = solana
+                    .fee_payment
+                    .clone()
+                    .map_or(SolanaFeePayment::User, |fp| match fp {
+                        ConfigFileRelayerSolanaFeePayment::User => SolanaFeePayment::User,
+                        ConfigFileRelayerSolanaFeePayment::Relayer => SolanaFeePayment::Relayer,
+                    });
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                    fee_payment,
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
                     allowed_accounts: solana.allowed_accounts.clone(),
                     allowed_programs: solana.allowed_programs.clone(),

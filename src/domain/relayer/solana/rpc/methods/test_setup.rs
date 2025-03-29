@@ -8,7 +8,7 @@ use crate::{
     jobs::MockJobProducerTrait,
     models::{
         EncodedSerializedTransaction, NetworkType, RelayerNetworkPolicy, RelayerRepoModel,
-        RelayerSolanaPolicy,
+        RelayerSolanaPolicy, SolanaFeePayment,
     },
     services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
 };
@@ -35,6 +35,7 @@ pub fn setup_test_context() -> (
         paused: false,
         network_type: NetworkType::Solana,
         policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment: SolanaFeePayment::User,
             allowed_accounts: None,
             allowed_tokens: None,
             min_balance: 10000,

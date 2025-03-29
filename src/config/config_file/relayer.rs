@@ -39,8 +39,17 @@ pub struct AllowedToken {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ConfigFileRelayerSolanaFeePayment {
+    User,
+    Relayer,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaPolicy {
+    /// Determines if the relayer pays the transaction fee or the user. Optional.
+    pub fee_payment: Option<ConfigFileRelayerSolanaFeePayment>,
+
     /// Minimum balance required for the relayer (in lamports). Optional.
     pub min_balance: Option<u64>,
 
