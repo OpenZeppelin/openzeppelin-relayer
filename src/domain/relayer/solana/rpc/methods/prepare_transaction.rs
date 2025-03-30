@@ -33,7 +33,7 @@ use std::str::FromStr;
 use crate::{
     models::{
         EncodedSerializedTransaction, PrepareTransactionRequestParams, PrepareTransactionResult,
-        SolanaFeePayment,
+        SolanaFeePaymentStrategy,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
@@ -116,7 +116,7 @@ where
         fee_token: &str,
     ) -> Result<(Transaction, (Hash, u64), u64, FeeQuote), SolanaRpcError> {
         let policies = self.relayer.policies.get_solana_policy();
-        let user_pays_fee = policies.fee_payment == SolanaFeePayment::User;
+        let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
 
         let result = if user_pays_fee {
             // First create draft transaction with minimal fee to get structure right

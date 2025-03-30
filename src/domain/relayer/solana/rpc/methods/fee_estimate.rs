@@ -30,7 +30,9 @@ use solana_sdk::{
 use crate::{
     domain::SolanaRpcError,
     jobs::JobProducerTrait,
-    models::{FeeEstimateRequestParams, FeeEstimateResult, RelayerRepoModel, SolanaFeePayment},
+    models::{
+        FeeEstimateRequestParams, FeeEstimateResult, RelayerRepoModel, SolanaFeePaymentStrategy,
+    },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
@@ -106,7 +108,7 @@ where
         fee_token: &str,
     ) -> Result<(Transaction, FeeQuote), SolanaRpcError> {
         let policies = self.relayer.policies.get_solana_policy();
-        let user_pays_fee = policies.fee_payment == SolanaFeePayment::User;
+        let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
 
         // Get latest blockhash
         let recent_blockhash = self

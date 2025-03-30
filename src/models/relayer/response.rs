@@ -118,7 +118,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
 #[cfg(test)]
 mod tests {
     use crate::models::{
-        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePayment,
+        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
     };
 
     use super::*;
@@ -178,7 +178,7 @@ mod tests {
             network_type: NetworkType::Solana,
             paused: true,
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                fee_payment: SolanaFeePayment::User,
+                fee_payment_strategy: SolanaFeePaymentStrategy::User,
                 min_balance: 5000,
                 allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                     mint: "mint-address".to_string(),

@@ -32,7 +32,7 @@ use solana_sdk::{hash::Hash, pubkey::Pubkey, transaction::Transaction};
 use crate::{
     domain::relayer::solana::rpc::methods::utils::FeeQuote,
     models::{
-        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, SolanaFeePayment,
+        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, SolanaFeePaymentStrategy,
         SolanaWebhookRpcPayload, TransferTransactionRequestParams, TransferTransactionResult,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
@@ -139,7 +139,7 @@ where
         amount: u64,
     ) -> Result<(Transaction, (Hash, u64), u64, FeeQuote), SolanaRpcError> {
         let policies = self.relayer.policies.get_solana_policy();
-        let user_pays_fee = policies.fee_payment == SolanaFeePayment::User;
+        let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
         let token_transfer_instruction = self
             .handle_token_transfer(&source, &destination, &token_mint, amount)
             .await?;
@@ -579,7 +579,7 @@ mod tests {
             paused: false,
             network_type: NetworkType::Solana,
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                fee_payment: SolanaFeePayment::Relayer,
+                fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
                 allowed_accounts: None,
                 allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                     mint: test_token.to_string(),
