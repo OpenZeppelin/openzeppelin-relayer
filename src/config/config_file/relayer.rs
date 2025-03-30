@@ -252,7 +252,7 @@ impl RelayerFileConfig {
         fee_margin_percentage: Option<f32>,
     ) -> Result<(), ConfigFileError> {
         if let Some(value) = fee_margin_percentage {
-            if value < 0f32 || value > 100f32 {
+            if value <= 0f32 || value >= 100f32 {
                 return Err(ConfigFileError::InvalidPolicy(
                     "Value must be between 0 and 100".into(),
                 ));

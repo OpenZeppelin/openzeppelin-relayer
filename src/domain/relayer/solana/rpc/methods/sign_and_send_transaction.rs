@@ -26,7 +26,8 @@ use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use crate::{
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction,
-        SignAndSendTransactionRequestParams, SignAndSendTransactionResult, SolanaWebhookRpcPayload,
+        SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
+        SolanaFeePaymentStrategy, SolanaWebhookRpcPayload,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
@@ -50,23 +51,25 @@ where
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
             .await?;
 
+        let policy = self.relayer.policies.get_solana_policy();
         let total_fee = self
-            .estimate_fee_payer_total_fee(&transaction_request)
+            .estimate_fee_with_margin(&transaction_request, policy.fee_margin_percentage)
             .await
             .map_err(|e| {
                 error!("Failed to estimate total fee: {}", e);
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        let lamports_outflow = self
-            .estimate_relayer_lampart_outflow(&transaction_request)
-            .await?;
+        let user_pays_fee = policy.fee_payment_strategy == SolanaFeePaymentStrategy::User;
 
-        let total_outflow = total_fee + lamports_outflow;
+        if user_pays_fee {
+            self.confirm_user_fee_payment(&transaction_request, total_fee)
+                .await?;
+        }
 
         // Validate relayer has sufficient balance
         SolanaTransactionValidator::validate_sufficient_relayer_balance(
-            total_outflow,
+            total_fee,
             &self.relayer.address,
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,

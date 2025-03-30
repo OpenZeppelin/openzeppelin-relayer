@@ -464,12 +464,11 @@ where
     }
 
     /// Estimates fee for a transaction and converts it to the specified token
-    pub(crate) async fn estimate_and_convert_fee(
+    pub(crate) async fn estimate_fee_with_margin(
         &self,
         transaction: &Transaction,
-        fee_token: &str,
         fee_margin_percentage: Option<f32>,
-    ) -> Result<(FeeQuote, u64), SolanaRpcError> {
+    ) -> Result<u64, SolanaRpcError> {
         // Estimate the fee
         let total_fee = self
             .estimate_fee_payer_total_fee(transaction)
@@ -488,9 +487,23 @@ where
             total_fee
         };
 
+        Ok(buffered_fee)
+    }
+
+    /// Estimates fee for a transaction and converts it to the specified token
+    pub(crate) async fn estimate_and_convert_fee(
+        &self,
+        transaction: &Transaction,
+        fee_token: &str,
+        fee_margin_percentage: Option<f32>,
+    ) -> Result<(FeeQuote, u64), SolanaRpcError> {
+        let fee_with_margin = self
+            .estimate_fee_with_margin(transaction, fee_margin_percentage)
+            .await?;
+
         // Convert to token quote
         let fee_quote = self
-            .get_fee_token_quote(fee_token, buffered_fee)
+            .get_fee_token_quote(fee_token, fee_with_margin)
             .await
             .map_err(|e| {
                 error!("Failed to fee quote: {}", e);
@@ -499,10 +512,10 @@ where
 
         debug!(
             "Fee estimate: {} {} (SOL fee: {} lamports, conversion rate: {})",
-            fee_quote.fee_in_spl_ui, fee_token, total_fee, fee_quote.conversion_rate
+            fee_quote.fee_in_spl_ui, fee_token, fee_with_margin, fee_quote.conversion_rate
         );
 
-        Ok((fee_quote, total_fee))
+        Ok((fee_quote, fee_with_margin))
     }
 
     pub(crate) fn convert_compiled_instruction(
@@ -611,6 +624,154 @@ where
 
         // Create new transaction with the modified message
         Ok((transaction, recent_blockhash))
+    }
+
+    /// Validates that the transaction includes a proper fee payment instruction
+    /// when user is required to pay fees
+    pub(crate) async fn confirm_user_fee_payment(
+        &self,
+        transaction: &Transaction,
+        estimated_fee: u64,
+    ) -> Result<(), SolanaRpcError> {
+        let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
+            .map_err(|_| SolanaRpcError::Internal("Invalid relayer address".to_string()))?;
+
+        // Check if transaction contains a SOL transfer to the relayer
+        let sol_payment = self.find_sol_payment_to_relayer(transaction, &relayer_pubkey);
+
+        // Find any token transfers to the relayer
+        let token_payments = self
+            .find_token_payments_to_relayer(transaction, &relayer_pubkey)
+            .await?;
+
+        // Check if either SOL payment or token payment is sufficient
+        if let Some(sol_amount) = sol_payment {
+            if sol_amount >= estimated_fee {
+                // SOL payment is sufficient
+                return Ok(());
+            }
+        }
+
+        // Check if any token payment is sufficient
+        if !token_payments.is_empty() {
+            for (token_mint, amount) in token_payments {
+                // Get the conversion rate for this token
+                let fee_quote = self
+                    .get_fee_token_quote(&token_mint.to_string(), estimated_fee)
+                    .await?;
+
+                if amount >= fee_quote.fee_in_spl {
+                    return Ok(());
+                }
+            }
+        }
+
+        // If we reach here, no sufficient payment was found
+        Err(SolanaRpcError::InvalidParams(
+            "Transaction doesn't contain required fee payment instruction or payment amount is insufficient".to_string(),
+        ))
+    }
+
+    /// Finds SOL transfers to the relayer in the transaction
+    pub(crate) fn find_sol_payment_to_relayer(
+        &self,
+        transaction: &Transaction,
+        relayer_pubkey: &Pubkey,
+    ) -> Option<u64> {
+        // Look for system program transfers to relayer
+        for (_ix_index, ix) in transaction.message.instructions.iter().enumerate() {
+            let program_id = transaction.message.account_keys[ix.program_id_index as usize];
+
+            // Check if it's system program
+            if program_id == system_program::id() {
+                if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
+                    if let SystemInstruction::Transfer { lamports } = system_ix {
+                        // Check destination account
+                        if ix.accounts.len() >= 2 {
+                            let dest_idx = ix.accounts[1] as usize;
+                            if dest_idx < transaction.message.account_keys.len() {
+                                let dest = transaction.message.account_keys[dest_idx];
+                                if dest == *relayer_pubkey {
+                                    return Some(lamports);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Finds SPL token transfers to the relayer in the transaction
+    pub(crate) async fn find_token_payments_to_relayer(
+        &self,
+        transaction: &Transaction,
+        relayer_pubkey: &Pubkey,
+    ) -> Result<Vec<(Pubkey, u64)>, SolanaRpcError> {
+        let mut payments = Vec::new();
+
+        // Get relayer's token accounts for allowed tokens
+        let policy = self.relayer.policies.get_solana_policy();
+        let allowed_tokens = match &policy.allowed_tokens {
+            Some(tokens) => tokens,
+            None => return Ok(payments), // No allowed tokens defined
+        };
+
+        for ix in &transaction.message.instructions {
+            let program_id = transaction.message.account_keys[ix.program_id_index as usize];
+
+            if program_id == spl_token::id() {
+                if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
+                    match token_ix {
+                        spl_token::instruction::TokenInstruction::Transfer { amount }
+                        | spl_token::instruction::TokenInstruction::TransferChecked {
+                            amount,
+                            ..
+                        } => {
+                            if ix.accounts.len() >= 2 {
+                                let dest_token_idx = ix.accounts[1] as usize;
+                                if dest_token_idx < transaction.message.account_keys.len() {
+                                    let dest_token_account =
+                                        transaction.message.account_keys[dest_token_idx];
+
+                                    // Check if destination token account belongs to relayer
+                                    if let Ok(account_info) = self
+                                        .provider
+                                        .get_account_from_pubkey(&dest_token_account)
+                                        .await
+                                    {
+                                        if account_info.owner == *relayer_pubkey {
+                                            // Found a token transfer to relayer
+                                            // Get token mint
+                                            let token_account =
+                                            Account::unpack(&account_info.data).map_err(|e| {
+                                                SolanaTransactionValidationError::ValidationError(format!(
+                                                    "Invalid token account: {}",
+                                                    e
+                                                ))
+                                            })?;
+                                            let token_mint = token_account.mint;
+
+                                            // Check if this token mint is in allowed tokens
+                                            if allowed_tokens
+                                                .iter()
+                                                .any(|t| t.mint == token_mint.to_string())
+                                            {
+                                                payments.push((token_mint, amount));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => continue,
+                    }
+                }
+            }
+        }
+
+        Ok(payments)
     }
 }
 
