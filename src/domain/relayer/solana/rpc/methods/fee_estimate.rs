@@ -79,8 +79,13 @@ where
 
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
-        validate_fee_estimate_transaction(&transaction_request, &params.fee_token, &self.relayer)
-            .await?;
+        validate_fee_estimate_transaction(
+            &transaction_request,
+            &params.fee_token,
+            &self.relayer,
+            &*self.provider,
+        )
+        .await?;
 
         let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
             .map_err(|_| SolanaRpcError::Internal("Invalid relayer address".to_string()))?;
@@ -160,10 +165,11 @@ where
 }
 
 /// Validates a transaction before estimating fee.
-async fn validate_fee_estimate_transaction(
+async fn validate_fee_estimate_transaction<P: SolanaProviderTrait + Send + Sync>(
     tx: &Transaction,
     token_mint: &str,
     relayer: &RelayerRepoModel,
+    provider: &P,
 ) -> Result<(), SolanaTransactionValidationError> {
     let policy = &relayer.policies.get_solana_policy();
 
@@ -177,8 +183,16 @@ async fn validate_fee_estimate_transaction(
         Ok::<(), SolanaTransactionValidationError>(())
     };
 
+    let relayer_pubkey = Pubkey::from_str(&relayer.address).map_err(|_| {
+        SolanaTransactionValidationError::ValidationError("Invalid relayer address".to_string())
+    })?;
+
     // Run all validations concurrently.
-    try_join!(sync_validations)?;
+    try_join!(
+        sync_validations,
+        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
+    )?;
 
     Ok(())
 }

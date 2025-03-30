@@ -48,7 +48,7 @@ where
         let transaction_request = Transaction::try_from(params.transaction)?;
 
         validate_sign_transaction(&transaction_request, &self.relayer, &*self.provider).await?;
-        
+
         let policy = self.relayer.policies.get_solana_policy();
         let total_fee = self
             .estimate_fee_with_margin(&transaction_request, policy.fee_margin_percentage)
@@ -139,7 +139,7 @@ async fn validate_sign_transaction<P: SolanaProviderTrait + Send + Sync>(
         sync_validations,
         SolanaTransactionValidator::validate_blockhash(tx, provider),
         SolanaTransactionValidator::simulate_transaction(tx, provider),
-        SolanaTransactionValidator::validate_lamports_transfers(tx, policy, &relayer_pubkey),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
         SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
     )?;
 

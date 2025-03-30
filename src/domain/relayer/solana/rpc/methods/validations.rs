@@ -253,19 +253,11 @@ impl SolanaTransactionValidator {
         Ok(())
     }
 
-    /// Validates that the transaction's lamports transfers are within policy limits.
+    /// Validates that the relayer is not used as source in lamports transfers.
     pub async fn validate_lamports_transfers(
         tx: &Transaction,
-        policy: &RelayerSolanaPolicy,
         relayer_account: &Pubkey,
     ) -> Result<(), SolanaTransactionValidationError> {
-        // early return if no policy is set
-        let Some(max_allowed_transfer_amount_lamports) =
-            policy.max_allowed_transfer_amount_lamports
-        else {
-            return Ok(());
-        };
-
         // Iterate over each instruction in the transaction
         for (ix_index, ix) in tx.message.instructions.iter().enumerate() {
             let program_id = tx.message.account_keys[ix.program_id_index as usize];
@@ -286,14 +278,10 @@ impl SolanaTransactionValidator {
                         let source_pubkey = &tx.message.account_keys[*source_index as usize];
 
                         // Only validate transfers where the source is the relayer fee account.
-                        if source_pubkey == relayer_account
-                            && lamports > max_allowed_transfer_amount_lamports
-                        {
+                        if source_pubkey == relayer_account {
                             return Err(SolanaTransactionValidationError::PolicyViolation(
                                 format!(
-                                    "Lamports transfer amount {} exceeds max allowed fee {} in \
-                                     instruction {}",
-                                    lamports, max_allowed_transfer_amount_lamports, ix_index
+                                    "Lamports transfers are not allowed from the relayer account",
                                 ),
                             ));
                         }
@@ -384,6 +372,12 @@ impl SolanaTransactionValidator {
                             if tx.message.is_signer(source_index) {
                                 return Err(SolanaTransactionValidationError::ValidationError(
                                     "Source account must not be signer".to_string(),
+                                ));
+                            }
+
+                            if source_pubkey == relayer_account {
+                                return Err(SolanaTransactionValidationError::PolicyViolation(
+                                    "Relayer account cannot be source".to_string(),
                                 ));
                             }
 
@@ -494,7 +488,25 @@ impl SolanaTransactionValidator {
                                 }
                             }
                         }
-                        _ => continue, // Not a transfer instruction
+                        _ => {
+                            // For any other token instruction, verify relayer account is not used
+                            // as a source by checking if it's marked as writable
+                            for (_i, account) in ix.accounts.iter().enumerate() {
+                                let account_index = *account as usize;
+                                if account_index < tx.message.account_keys.len() {
+                                    let pubkey = &tx.message.account_keys[account_index];
+                                    if pubkey == relayer_account
+                                        && tx.message.is_maybe_writable(account_index, None)
+                                        && !tx.message.is_signer(account_index)
+                                    {
+                                        // It's ok if relayer is just signing
+                                        return Err(SolanaTransactionValidationError::PolicyViolation(
+                                            "Relayer account cannot be used as writable account in token instructions".to_string(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1239,12 +1251,9 @@ mod tests {
     async fn test_validate_lamports_transfers_success() {
         let (transaction, policy, relayer_pubkey) = setup_lamports_transfer_test(1000, Some(2000));
 
-        let result = SolanaTransactionValidator::validate_lamports_transfers(
-            &transaction,
-            &policy,
-            &relayer_pubkey,
-        )
-        .await;
+        let result =
+            SolanaTransactionValidator::validate_lamports_transfers(&transaction, &relayer_pubkey)
+                .await;
 
         assert!(result.is_ok());
     }
@@ -1253,12 +1262,9 @@ mod tests {
     async fn test_validate_lamports_transfers_exceeds_max() {
         let (transaction, policy, relayer_pubkey) = setup_lamports_transfer_test(2000, Some(1000));
 
-        let result = SolanaTransactionValidator::validate_lamports_transfers(
-            &transaction,
-            &policy,
-            &relayer_pubkey,
-        )
-        .await;
+        let result =
+            SolanaTransactionValidator::validate_lamports_transfers(&transaction, &relayer_pubkey)
+                .await;
 
         match result {
             Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
@@ -1276,12 +1282,9 @@ mod tests {
     async fn test_validate_lamports_transfers_no_max_limit() {
         let (transaction, policy, relayer_pubkey) = setup_lamports_transfer_test(1000000, None);
 
-        let result = SolanaTransactionValidator::validate_lamports_transfers(
-            &transaction,
-            &policy,
-            &relayer_pubkey,
-        )
-        .await;
+        let result =
+            SolanaTransactionValidator::validate_lamports_transfers(&transaction, &relayer_pubkey)
+                .await;
 
         assert!(result.is_ok());
     }
@@ -1293,7 +1296,6 @@ mod tests {
 
         let result = SolanaTransactionValidator::validate_lamports_transfers(
             &transaction,
-            &policy,
             &different_account,
         )
         .await;
@@ -1321,7 +1323,6 @@ mod tests {
 
         let result = SolanaTransactionValidator::validate_lamports_transfers(
             &transaction,
-            &policy,
             &relayer.pubkey(),
         )
         .await;

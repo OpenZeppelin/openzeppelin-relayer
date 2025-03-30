@@ -148,7 +148,7 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
         sync_validations,
         SolanaTransactionValidator::validate_blockhash(tx, provider),
         SolanaTransactionValidator::simulate_transaction(tx, provider),
-        SolanaTransactionValidator::validate_lamports_transfers(tx, policy, &relayer_pubkey),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
         SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
     )?;
 

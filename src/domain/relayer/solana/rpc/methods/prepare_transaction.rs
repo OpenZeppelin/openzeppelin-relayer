@@ -208,7 +208,7 @@ async fn validate_prepare_transaction<P: SolanaProviderTrait + Send + Sync>(
     try_join!(
         sync_validations,
         SolanaTransactionValidator::simulate_transaction(tx, provider),
-        SolanaTransactionValidator::validate_lamports_transfers(tx, policy, &relayer_pubkey),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
         SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
     )?;
 
