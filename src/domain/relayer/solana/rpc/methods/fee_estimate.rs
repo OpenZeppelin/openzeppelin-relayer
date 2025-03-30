@@ -148,7 +148,11 @@ where
 
         // Estimate fee for the transaction
         let (fee_quote, _) = self
-            .estimate_and_convert_fee(&final_transaction, &fee_token, None)
+            .estimate_and_convert_fee(
+                &final_transaction,
+                &fee_token,
+                policies.fee_margin_percentage,
+            )
             .await?;
 
         Ok((final_transaction, fee_quote))

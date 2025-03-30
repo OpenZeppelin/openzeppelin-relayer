@@ -158,7 +158,11 @@ where
                 .await?;
 
             let (fee_quote, buffered_base_fee) = self
-                .estimate_and_convert_fee(&draft_transaction, token_mint_str, None)
+                .estimate_and_convert_fee(
+                    &draft_transaction,
+                    token_mint_str,
+                    policies.fee_margin_percentage,
+                )
                 .await?;
 
             // Create the real fee payment instruction with the correct amount
@@ -182,7 +186,11 @@ where
                 .create_and_sign_transaction(token_transfer_instruction)
                 .await?;
             let (estimated_fee_quote, buffered_total_fee) = self
-                .estimate_and_convert_fee(&transaction, &token_mint_str, None)
+                .estimate_and_convert_fee(
+                    &transaction,
+                    &token_mint_str,
+                    policies.fee_margin_percentage,
+                )
                 .await?;
 
             Ok((
@@ -580,6 +588,7 @@ mod tests {
             network_type: NetworkType::Solana,
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                 fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+                fee_margin_percentage: Some(0.5),
                 allowed_accounts: None,
                 allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                     mint: test_token.to_string(),

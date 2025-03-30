@@ -131,7 +131,11 @@ where
 
             // Calculate actual fee needed
             let (fee_quote, buffered_total_fee) = self
-                .estimate_and_convert_fee(&draft_transaction, fee_token, None)
+                .estimate_and_convert_fee(
+                    &draft_transaction,
+                    fee_token,
+                    policies.fee_margin_percentage,
+                )
                 .await?;
 
             // Create final transaction with correct fee amount
@@ -168,7 +172,7 @@ where
             };
 
             let (fee_quote, buffered_total_fee) = self
-                .estimate_and_convert_fee(&transaction, &fee_token, None)
+                .estimate_and_convert_fee(&transaction, &fee_token, policies.fee_margin_percentage)
                 .await?;
 
             (transaction, recent_blockhash, buffered_total_fee, fee_quote)

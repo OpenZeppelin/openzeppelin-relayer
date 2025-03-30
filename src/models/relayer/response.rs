@@ -2,7 +2,9 @@ use crate::models::NetworkType;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{RelayerNetworkPolicy, RelayerRepoModel, SolanaAllowedTokensPolicy};
+use super::{
+    RelayerNetworkPolicy, RelayerRepoModel, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
@@ -41,6 +43,9 @@ pub struct EvmPolicyResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaPolicyResponse {
+    fee_payment_strategy: SolanaFeePaymentStrategy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee_margin_percentage: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
@@ -83,6 +88,8 @@ impl From<RelayerRepoModel> for RelayerResponse {
             }),
             RelayerNetworkPolicy::Solana(solana) => {
                 NetworkPolicyResponse::Solana(SolanaPolicyResponse {
+                    fee_payment_strategy: solana.fee_payment_strategy,
+                    fee_margin_percentage: solana.fee_margin_percentage,
                     min_balance: solana.min_balance,
                     allowed_tokens: solana.allowed_tokens,
                     allowed_programs: solana.allowed_programs,
@@ -179,6 +186,7 @@ mod tests {
             paused: true,
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                 fee_payment_strategy: SolanaFeePaymentStrategy::User,
+                fee_margin_percentage: Some(0.5),
                 min_balance: 5000,
                 allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                     mint: "mint-address".to_string(),

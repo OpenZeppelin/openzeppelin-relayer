@@ -468,7 +468,7 @@ where
         &self,
         transaction: &Transaction,
         fee_token: &str,
-        buffer_factor: Option<f64>,
+        fee_margin_percentage: Option<f32>,
     ) -> Result<(FeeQuote, u64), SolanaRpcError> {
         // Estimate the fee
         let total_fee = self
@@ -482,8 +482,8 @@ where
         debug!("Estimated SOL fee: {} lamports", total_fee);
 
         // Apply buffer if specified
-        let buffered_fee = if let Some(factor) = buffer_factor {
-            (total_fee as f64 * factor) as u64
+        let buffered_fee = if let Some(factor) = fee_margin_percentage {
+            (total_fee as f64 * (1.0 + factor as f64 / 100.0)) as u64
         } else {
             total_fee
         };

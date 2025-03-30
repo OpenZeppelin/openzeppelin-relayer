@@ -117,7 +117,7 @@ impl SolanaAllowedTokensPolicy {
     }
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub enum SolanaFeePaymentStrategy {
     User,
     Relayer,
@@ -127,6 +127,7 @@ pub enum SolanaFeePaymentStrategy {
 #[serde(deny_unknown_fields)]
 pub struct RelayerSolanaPolicy {
     pub fee_payment_strategy: SolanaFeePaymentStrategy,
+    pub fee_margin_percentage: Option<f32>,
     pub min_balance: u64,
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     pub allowed_programs: Option<Vec<String>>,
@@ -187,6 +188,7 @@ impl Default for RelayerSolanaPolicy {
     fn default() -> Self {
         Self {
             fee_payment_strategy: SolanaFeePaymentStrategy::User,
+            fee_margin_percentage: None,
             min_balance: DEFAULT_SOLANA_MIN_BALANCE,
             allowed_tokens: None,
             allowed_programs: None,

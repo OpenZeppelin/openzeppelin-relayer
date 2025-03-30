@@ -50,6 +50,9 @@ pub struct ConfigFileRelayerSolanaPolicy {
     /// Determines if the relayer pays the transaction fee or the user. Optional.
     pub fee_payment_strategy: Option<ConfigFileRelayerSolanaFeePaymentStrategy>,
 
+    /// Fee margin percentage for the relayer. Optional.
+    pub fee_margin_percentage: Option<f32>,
+
     /// Minimum balance required for the relayer (in lamports). Optional.
     pub min_balance: Option<u64>,
 
@@ -244,6 +247,20 @@ impl RelayerFileConfig {
         Ok(())
     }
 
+    fn validate_solana_fee_margin_percentage(
+        &self,
+        fee_margin_percentage: Option<f32>,
+    ) -> Result<(), ConfigFileError> {
+        if let Some(value) = fee_margin_percentage {
+            if value < 0f32 || value > 100f32 {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "Value must be between 0 and 100".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_policies(&self) -> Result<(), ConfigFileError> {
         match self.network_type {
             ConfigFileNetworkType::Solana => {
@@ -258,6 +275,7 @@ impl RelayerFileConfig {
                     });
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
+                    self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(

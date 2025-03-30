@@ -337,6 +337,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                 );
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                     fee_payment_strategy,
+                    fee_margin_percentage: solana.fee_margin_percentage,
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
                     allowed_accounts: solana.allowed_accounts.clone(),
                     allowed_programs: solana.allowed_programs.clone(),

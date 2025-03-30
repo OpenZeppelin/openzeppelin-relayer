@@ -36,6 +36,7 @@ pub fn setup_test_context() -> (
         network_type: NetworkType::Solana,
         policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             fee_payment_strategy: SolanaFeePaymentStrategy::User,
+            fee_margin_percentage: Some(0.5),
             allowed_accounts: None,
             allowed_tokens: None,
             min_balance: 10000,
