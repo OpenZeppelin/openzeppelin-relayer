@@ -65,6 +65,10 @@ where
                 .await?;
         }
 
+        SolanaTransactionValidator::validate_max_fee(
+            total_fee,
+            &self.relayer.policies.get_solana_policy(),
+        )?;
         // Validate relayer has sufficient balance
         SolanaTransactionValidator::validate_sufficient_relayer_balance(
             total_fee,
@@ -670,13 +674,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_exceeds_max_lamports_transfer() {
+    // TODO
+    async fn test_sign_transaction_exceeds_max_lamports_fee() {
         let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
 
         // Set max allowed transfer amount in policy
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            max_allowed_transfer_amount_lamports: Some(500),
+            max_allowed_fee_lamports: Some(500),
             ..Default::default()
         });
 

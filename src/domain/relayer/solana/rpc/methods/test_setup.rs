@@ -43,7 +43,7 @@ pub fn setup_test_context() -> (
             allowed_programs: None,
             max_signatures: Some(10),
             disallowed_accounts: None,
-            max_allowed_transfer_amount_lamports: None,
+            max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
         }),
         signer_id: "test".to_string(),

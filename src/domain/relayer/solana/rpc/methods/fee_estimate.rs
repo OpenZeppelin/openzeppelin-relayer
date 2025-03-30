@@ -99,6 +99,11 @@ where
             )
             .await?;
 
+        SolanaTransactionValidator::validate_max_fee(
+            fee_quote.fee_in_lamports,
+            &self.relayer.policies.get_solana_policy(),
+        )?;
+
         Ok(FeeEstimateResult {
             estimated_fee: fee_quote.fee_in_spl_ui,
             conversion_rate: fee_quote.conversion_rate.to_string(),

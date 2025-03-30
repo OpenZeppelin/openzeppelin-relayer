@@ -65,7 +65,7 @@ pub struct SolanaPolicyResponse {
     pub min_balance: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub max_allowed_transfer_amount_lamports: Option<u64>,
+    pub max_allowed_fee_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -97,8 +97,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
                     disallowed_accounts: solana.disallowed_accounts,
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size,
-                    max_allowed_transfer_amount_lamports: solana
-                        .max_allowed_transfer_amount_lamports,
+                    max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
                 })
             }
             RelayerNetworkPolicy::Stellar(stellar) => {
@@ -200,7 +199,7 @@ mod tests {
                 disallowed_accounts: Some(vec!["bad-account".to_string()]),
                 max_signatures: Some(10),
                 max_tx_data_size: 1024,
-                max_allowed_transfer_amount_lamports: Some(10000),
+                max_allowed_fee_lamports: Some(10000),
             }),
             address: "solana-address".to_string(),
             system_disabled: false,
@@ -228,8 +227,8 @@ mod tests {
                 assert_eq!(solana.max_signatures, expected.max_signatures);
                 assert_eq!(solana.max_tx_data_size, expected.max_tx_data_size);
                 assert_eq!(
-                    solana.max_allowed_transfer_amount_lamports,
-                    expected.max_allowed_transfer_amount_lamports
+                    solana.max_allowed_fee_lamports,
+                    expected.max_allowed_fee_lamports
                 );
             } else {
                 panic!("Expected Solana policy");

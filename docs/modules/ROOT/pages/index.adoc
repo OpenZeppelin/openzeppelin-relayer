@@ -751,9 +751,9 @@ Policies
 |Minimum balance (in lamports or wei) required for the relayer to operate. Optional.
 
 |solana
-|max_allowed_transfer_amount_lamports
+|max_allowed_fee_lamports
 |unsigned 64
-|Maximum allowed transfer amount (in lamports) for a transaction. Optional.
+|Maximum allowed fee (in lamports) for a transaction. Optional.
 
 |solana
 |allowed_tokens

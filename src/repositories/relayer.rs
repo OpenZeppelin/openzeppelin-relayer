@@ -345,8 +345,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     disallowed_accounts: solana.disallowed_accounts.clone(),
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
-                    max_allowed_transfer_amount_lamports: solana
-                        .max_allowed_transfer_amount_lamports,
+                    max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {

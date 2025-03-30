@@ -67,6 +67,10 @@ where
                 .await?;
         }
 
+        SolanaTransactionValidator::validate_max_fee(
+            total_fee,
+            &self.relayer.policies.get_solana_policy(),
+        )?;
         // Validate relayer has sufficient balance
         SolanaTransactionValidator::validate_sufficient_relayer_balance(
             total_fee,
