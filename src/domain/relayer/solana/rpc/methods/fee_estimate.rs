@@ -18,17 +18,26 @@
 //!
 //! * `estimated_fee` - A string with the fee amount in the token's UI units.
 //! * `conversion_rate` - A string with the conversion rate from SOL to the specified token.use
+use std::str::FromStr;
+
 use futures::try_join;
-use log::{debug, info};
-use solana_sdk::transaction::Transaction;
+use log::info;
+use solana_sdk::{
+    commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
+    transaction::Transaction,
+};
 
 use crate::{
+    domain::SolanaRpcError,
     jobs::JobProducerTrait,
-    models::{FeeEstimateRequestParams, FeeEstimateResult},
+    models::{FeeEstimateRequestParams, FeeEstimateResult, RelayerRepoModel, SolanaFeePayment},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
-use super::*;
+use super::{
+    utils::FeeQuote, SolanaRpcMethodsImpl, SolanaTransactionValidationError,
+    SolanaTransactionValidator,
+};
 
 impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
@@ -71,39 +80,76 @@ where
         validate_fee_estimate_transaction(&transaction_request, &params.fee_token, &self.relayer)
             .await?;
 
-        let mut transaction = transaction_request.clone();
+        let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
+            .map_err(|_| SolanaRpcError::Internal("Invalid relayer address".to_string()))?;
 
-        let recent_blockhash = self.provider.get_latest_blockhash().await?;
-
-        // update tx blockhash
-        transaction.message.recent_blockhash = recent_blockhash;
-
-        let total_fee = self
-            .estimate_fee_payer_total_fee(&transaction)
-            .await
-            .map_err(|e| {
-                error!("Failed to estimate total fee: {}", e);
-                SolanaRpcError::Estimation(e.to_string())
-            })?;
-        debug!("Estimated SOL fee: {} lamports", total_fee);
-
-        let fee_quota = self
-            .get_fee_token_quote(&params.fee_token, total_fee)
-            .await
-            .map_err(|e| {
-                error!("Failed to fee quote: {}", e);
-                SolanaRpcError::Estimation(e.to_string())
-            })?;
-
-        info!(
-            "Fee estimate: {} {} (SOL fee: {} lamports, conversion rate: {})",
-            fee_quota.fee_in_spl_ui, params.fee_token, total_fee, fee_quota.conversion_rate
-        );
+        // Create transaction based on fee payment policy
+        let (_, fee_quote) = self
+            .create_fee_estimation_transaction(
+                &transaction_request,
+                &relayer_pubkey,
+                &params.fee_token,
+            )
+            .await?;
 
         Ok(FeeEstimateResult {
-            estimated_fee: fee_quota.fee_in_spl_ui,
-            conversion_rate: fee_quota.conversion_rate.to_string(),
+            estimated_fee: fee_quote.fee_in_spl_ui,
+            conversion_rate: fee_quote.conversion_rate.to_string(),
         })
+    }
+
+    /// Creates a transaction for fee estimation based on the fee payment policy
+    async fn create_fee_estimation_transaction(
+        &self,
+        transaction_request: &Transaction,
+        relayer_pubkey: &Pubkey,
+        fee_token: &str,
+    ) -> Result<(Transaction, FeeQuote), SolanaRpcError> {
+        let policies = self.relayer.policies.get_solana_policy();
+        let user_pays_fee = policies.fee_payment == SolanaFeePayment::User;
+
+        // Get latest blockhash
+        let recent_blockhash = self
+            .provider
+            .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+            .await?;
+
+        // Create the appropriate transaction based on fee payment policy
+        let transaction = if user_pays_fee {
+            // If user pays fee, add a token transfer instruction for fee payment
+            self.create_transaction_with_user_fee_payment(
+                relayer_pubkey,
+                transaction_request,
+                fee_token,
+                1, // Minimal amount for estimation
+            )
+            .await?
+            .0 // Take just the transaction, not the blockhash
+        } else {
+            // Otherwise use the original transaction with relayer as fee payer
+            let mut message = transaction_request.message.clone();
+            message.recent_blockhash = recent_blockhash.0;
+
+            // Update fee payer if needed
+            if message.account_keys[0] != *relayer_pubkey {
+                message.account_keys[0] = *relayer_pubkey;
+            }
+            Transaction {
+                signatures: vec![Signature::default()],
+                message,
+            }
+        };
+
+        // Update transaction blockhash
+        let mut final_transaction = transaction;
+        final_transaction.message.recent_blockhash = recent_blockhash.0;
+
+        // Estimate fee for the transaction
+        let (fee_quote, _) = self
+            .estimate_and_convert_fee(&final_transaction, &fee_token, None)
+            .await?;
+
+        Ok((final_transaction, fee_quote))
     }
 }
 
@@ -134,8 +180,11 @@ async fn validate_fee_estimate_transaction(
 #[cfg(test)]
 mod tests {
 
+    use std::sync::Arc;
+
     use crate::{
         constants::WRAPPED_SOL_MINT,
+        domain::{setup_test_context, SolanaRpcMethods},
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
         services::{MockSolanaProviderTrait, QuoteResponse},
     };

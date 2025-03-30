@@ -27,10 +27,18 @@ use std::str::FromStr;
 
 use super::*;
 
+use log::debug;
 use solana_sdk::{
-    commitment_config::CommitmentConfig, hash::Hash, instruction::Instruction, message::Message,
-    program_pack::Pack, pubkey::Pubkey, signature::Signature,
-    system_instruction::SystemInstruction, system_program, transaction::Transaction,
+    commitment_config::CommitmentConfig,
+    hash::Hash,
+    instruction::{AccountMeta, CompiledInstruction, Instruction},
+    message::{Message, MessageHeader},
+    program_pack::Pack,
+    pubkey::Pubkey,
+    signature::Signature,
+    system_instruction::SystemInstruction,
+    system_program,
+    transaction::Transaction,
 };
 use spl_associated_token_account::{
     get_associated_token_address, instruction::create_associated_token_account,
@@ -49,6 +57,17 @@ pub struct FeeQuote {
     pub fee_in_spl_ui: String,
     pub fee_in_lamports: u64,
     pub conversion_rate: f64,
+}
+
+impl Default for FeeQuote {
+    fn default() -> Self {
+        Self {
+            fee_in_spl: 0,
+            fee_in_spl_ui: "0".to_string(),
+            fee_in_lamports: 0,
+            conversion_rate: 0.0,
+        }
+    }
 }
 
 impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
@@ -297,7 +316,7 @@ where
     /// This function will return an error if:
     /// * The provider fails to get the latest blockhash
     /// * The transaction signing fails
-    pub(crate) async fn create_and_sign_transaction(
+    pub(crate) async fn create_transaction(
         &self,
         instructions: Vec<Instruction>,
     ) -> Result<(Transaction, (Hash, u64)), SolanaRpcError> {
@@ -313,6 +332,35 @@ where
             Message::new_with_blockhash(&instructions, Some(&relayer_pubkey), &recent_blockhash.0);
 
         let transaction = Transaction::new_unsigned(message);
+
+        Ok((transaction, recent_blockhash))
+    }
+
+    /// Creates and signs a transaction with the provided instructions.
+    ///
+    /// This function constructs a transaction using the given instructions, signs it with
+    /// the relayer's keypair, and returns the signed transaction along with the recent blockhash.
+    ///
+    /// # Arguments
+    ///
+    /// * `instructions` - A vector of Solana instructions to include in the transaction.
+    ///
+    /// # Returns
+    ///
+    /// Returns a result containing:
+    /// * A tuple with the signed transaction and the recent blockhash on success
+    /// * A `SolanaRpcError` on failure
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// * The provider fails to get the latest blockhash
+    /// * The transaction signing fails
+    pub(crate) async fn create_and_sign_transaction(
+        &self,
+        instructions: Vec<Instruction>,
+    ) -> Result<(Transaction, (Hash, u64)), SolanaRpcError> {
+        let (transaction, recent_blockhash) = self.create_transaction(instructions).await?;
 
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction).await?;
 
@@ -413,6 +461,156 @@ where
         );
 
         Ok(instructions)
+    }
+
+    /// Estimates fee for a transaction and converts it to the specified token
+    pub(crate) async fn estimate_and_convert_fee(
+        &self,
+        transaction: &Transaction,
+        fee_token: &str,
+        buffer_factor: Option<f64>,
+    ) -> Result<(FeeQuote, u64), SolanaRpcError> {
+        // Estimate the fee
+        let total_fee = self
+            .estimate_fee_payer_total_fee(transaction)
+            .await
+            .map_err(|e| {
+                error!("Failed to estimate total fee: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
+        debug!("Estimated SOL fee: {} lamports", total_fee);
+
+        // Apply buffer if specified
+        let buffered_fee = if let Some(factor) = buffer_factor {
+            (total_fee as f64 * factor) as u64
+        } else {
+            total_fee
+        };
+
+        // Convert to token quote
+        let fee_quote = self
+            .get_fee_token_quote(fee_token, buffered_fee)
+            .await
+            .map_err(|e| {
+                error!("Failed to fee quote: {}", e);
+                SolanaRpcError::Estimation(e.to_string())
+            })?;
+
+        debug!(
+            "Fee estimate: {} {} (SOL fee: {} lamports, conversion rate: {})",
+            fee_quote.fee_in_spl_ui, fee_token, total_fee, fee_quote.conversion_rate
+        );
+
+        Ok((fee_quote, total_fee))
+    }
+
+    pub(crate) fn convert_compiled_instruction(
+        &self,
+        compiled_instruction: &CompiledInstruction,
+        account_keys: &[Pubkey],
+        header: &MessageHeader,
+    ) -> Instruction {
+        // Retrieve the program id using the program_id_index
+        let program_id = account_keys[compiled_instruction.program_id_index as usize];
+
+        let account_metas = compiled_instruction
+            .accounts
+            .iter()
+            .map(|&index| {
+                let key = account_keys[index as usize];
+                let is_signer = (index as usize) < header.num_required_signatures as usize;
+
+                let is_writable = if is_signer {
+                    // Writable signers are first (total_signers - readonly_signers)
+                    (index as usize)
+                        < header.num_required_signatures as usize
+                            - header.num_readonly_signed_accounts as usize
+                } else {
+                    // Writable non-signers are first (total_non_signers - readonly_unsigned)
+                    let non_signer_index =
+                        (index as usize) - header.num_required_signatures as usize;
+                    non_signer_index
+                        < (account_keys.len() - header.num_required_signatures as usize)
+                            - header.num_readonly_unsigned_accounts as usize
+                };
+
+                AccountMeta {
+                    pubkey: key,
+                    is_signer,
+                    is_writable,
+                }
+            })
+            .collect();
+
+        Instruction {
+            program_id,
+            accounts: account_metas,
+            data: compiled_instruction.data.clone(),
+        }
+    }
+
+    /// Creates a modified transaction with user fee payment instruction
+    pub(crate) async fn create_transaction_with_user_fee_payment(
+        &self,
+        relayer_pubkey: &Pubkey,
+        transaction_request: &Transaction,
+        fee_token: &str,
+        amount: u64,
+    ) -> Result<(Transaction, (Hash, u64)), SolanaRpcError> {
+        // Get source address (fee payer) from the transaction
+        let source = transaction_request.message.account_keys[0];
+
+        // Create dummy instruction to move tokens to relayer address
+        let token_mint = Pubkey::from_str(fee_token)
+            .map_err(|_| SolanaRpcError::InvalidParams("Invalid token mint address".to_string()))?;
+
+        if &source == relayer_pubkey {
+            return Err(SolanaRpcError::InvalidParams(
+                "Relayer cannot pay fee to itself".to_string(),
+            ));
+        }
+
+        let draft_fee_instructions = self
+            .handle_token_transfer(&source, &relayer_pubkey, &token_mint, amount)
+            .await?;
+
+        let original_instructions = transaction_request
+            .message
+            .instructions
+            .iter()
+            .map(|ci| {
+                self.convert_compiled_instruction(
+                    ci,
+                    &transaction_request.message.account_keys,
+                    &transaction_request.message.header,
+                )
+            })
+            .collect::<Vec<Instruction>>();
+
+        let mut all_instructions =
+            Vec::with_capacity(draft_fee_instructions.len() + original_instructions.len());
+        all_instructions.extend(draft_fee_instructions);
+        all_instructions.extend(original_instructions);
+
+        let recent_blockhash = self
+            .provider
+            .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+            .await?;
+
+        let message = solana_sdk::message::Message::new_with_blockhash(
+            &all_instructions,
+            Some(&relayer_pubkey), // Set relayer as fee payer
+            &recent_blockhash.0,
+        );
+
+        let transaction = Transaction {
+            signatures: vec![solana_sdk::signature::Signature::default()], // Placeholder signature
+            message,
+        };
+
+        // Create new transaction with the modified message
+        Ok((transaction, recent_blockhash))
     }
 }
 

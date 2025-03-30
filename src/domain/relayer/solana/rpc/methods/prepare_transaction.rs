@@ -25,7 +25,7 @@
 use futures::try_join;
 use log::info;
 use solana_sdk::{
-    commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature,
+    commitment_config::CommitmentConfig, hash::Hash, pubkey::Pubkey, signature::Signature,
     transaction::Transaction,
 };
 use std::str::FromStr;
@@ -33,11 +33,12 @@ use std::str::FromStr;
 use crate::{
     models::{
         EncodedSerializedTransaction, PrepareTransactionRequestParams, PrepareTransactionResult,
+        SolanaFeePayment,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
-use super::*;
+use super::{utils::FeeQuote, *};
 
 impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
@@ -56,7 +57,6 @@ where
         );
 
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
-
         let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
             .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
 
@@ -68,40 +68,17 @@ where
         )
         .await?;
 
-        let recent_blockhash = self
-            .provider
-            .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+        let (transaction, recent_blockhash, total_fee, fee_quote) = self
+            .prepare_transaction_with_fee_strategy(
+                &transaction_request,
+                &relayer_pubkey,
+                &params.fee_token,
+            )
             .await?;
-
-        // Create new transaction message with relayer as fee payer
-        let mut message = transaction_request.message.clone();
-        message.recent_blockhash = recent_blockhash.0;
-        // Update fee payer
-        if message.account_keys[0] != relayer_pubkey {
-            message.account_keys[0] = relayer_pubkey;
-        }
-
-        // Create new transaction with single signature slot
-        let transaction = Transaction {
-            signatures: vec![Signature::default()],
-            message,
-        };
-
-        let total_fee = self
-            .estimate_fee_payer_total_fee(&transaction)
-            .await
-            .map_err(|e| {
-                error!("Failed to estimate total fee: {}", e);
-                SolanaRpcError::Estimation(e.to_string())
-            })?;
-
-        let lamports_outflow = self.estimate_relayer_lampart_outflow(&transaction).await?;
-
-        let total_outflow = total_fee + lamports_outflow;
 
         // Validate relayer has sufficient balance
         SolanaTransactionValidator::validate_sufficient_relayer_balance(
-            total_outflow,
+            total_fee,
             &self.relayer.address,
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
@@ -111,15 +88,6 @@ where
             error!("Insufficient funds: {}", e);
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
-
-        // Get fee quote
-        let fee_quote = self
-            .get_fee_token_quote(&params.fee_token, total_fee)
-            .await
-            .map_err(|e| {
-                error!("Failed to estimate fee quote: {}", e);
-                SolanaRpcError::Estimation(e.to_string())
-            })?;
 
         // Sign transaction
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction).await?;
@@ -139,6 +107,74 @@ where
             fee_token: params.fee_token,
             valid_until_blockheight: recent_blockhash.1,
         })
+    }
+
+    async fn prepare_transaction_with_fee_strategy(
+        &self,
+        transaction_request: &Transaction,
+        relayer_pubkey: &Pubkey,
+        fee_token: &str,
+    ) -> Result<(Transaction, (Hash, u64), u64, FeeQuote), SolanaRpcError> {
+        let policies = self.relayer.policies.get_solana_policy();
+        let user_pays_fee = policies.fee_payment == SolanaFeePayment::User;
+
+        let result = if user_pays_fee {
+            // First create draft transaction with minimal fee to get structure right
+            let (draft_transaction, _) = self
+                .create_transaction_with_user_fee_payment(
+                    relayer_pubkey,
+                    transaction_request,
+                    fee_token,
+                    1, // Minimal amount for estimation
+                )
+                .await?;
+
+            // Calculate actual fee needed
+            let (fee_quote, buffered_total_fee) = self
+                .estimate_and_convert_fee(&draft_transaction, fee_token, None)
+                .await?;
+
+            // Create final transaction with correct fee amount
+            let (transaction, recent_blockhash) = self
+                .create_transaction_with_user_fee_payment(
+                    relayer_pubkey,
+                    transaction_request,
+                    fee_token,
+                    fee_quote.fee_in_spl,
+                )
+                .await?;
+
+            (transaction, recent_blockhash, buffered_total_fee, fee_quote)
+        } else {
+            // Get latest blockhash for transaction
+            let recent_blockhash = self
+                .provider
+                .get_latest_blockhash_with_commitment(CommitmentConfig::finalized())
+                .await?;
+
+            // Create new transaction message with relayer as fee payer
+            let mut message = transaction_request.message.clone();
+            message.recent_blockhash = recent_blockhash.0;
+
+            // Update fee payer if needed
+            if message.account_keys[0] != *relayer_pubkey {
+                message.account_keys[0] = *relayer_pubkey;
+            }
+
+            // Create transaction with updated message
+            let transaction = Transaction {
+                signatures: vec![Signature::default()],
+                message,
+            };
+
+            let (fee_quote, buffered_total_fee) = self
+                .estimate_and_convert_fee(&transaction, &fee_token, None)
+                .await?;
+
+            (transaction, recent_blockhash, buffered_total_fee, fee_quote)
+        };
+
+        Ok(result)
     }
 }
 
