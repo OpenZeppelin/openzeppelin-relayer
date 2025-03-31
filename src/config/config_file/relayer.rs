@@ -90,7 +90,6 @@ pub struct RelayerFileConfig {
     pub signer_id: String,
     #[serde(default)]
     pub notification_id: Option<String>,
-    /// Optional private RPC URL for the network. If provided, this will be used instead of the public RPC URLs.
     #[serde(default)]
     pub custom_rpc_url: Option<String>,
 }

@@ -422,8 +422,10 @@ impl RelayerTransactionFactory {
                 )?))
             }
             NetworkType::Solana => {
-                let solana_provider =
-                    Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+                let solana_provider = Arc::new(get_solana_network_provider_from_str(
+                    &relayer.network,
+                    relayer.custom_rpc_url.clone(),
+                )?);
 
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                     relayer,
