@@ -209,7 +209,7 @@ impl EvmProviderTrait for EvmProvider {
 
     async fn get_block_by_number(&self) -> Result<BlockResponse> {
         self.provider
-            .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Full)
+            .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
             .await
             .map_err(|e| eyre!("Failed to get block by number: {}", e))?
             .ok_or_else(|| eyre!("Block not found"))

@@ -499,14 +499,8 @@ impl EvmNamedNetwork {
                 "https://testnet.snowtrace.io",
             ],
 
-            Optimism => &[
-                "https://api-optimistic.etherscan.io/api",
-                "https://optimistic.etherscan.io",
-            ],
-            OptimismSepolia => &[
-                "https://api-sepolia-optimistic.etherscan.io/api",
-                "https://sepolia-optimism.etherscan.io",
-            ],
+            Optimism => &["https://mainnet.optimism.io"],
+            OptimismSepolia => &["https://sepolia.optimism.io"],
 
             Fantom => &["https://api.ftmscan.com/api", "https://ftmscan.com"],
             FantomTestnet => &[
