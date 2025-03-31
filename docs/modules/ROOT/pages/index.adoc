@@ -875,19 +875,19 @@ The relayer supports two ways to configure RPC URLs:
 
 1. **Public RPC URLs**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
 
-2. **Private RPC URL**: You can specify a custom RPC URL using the `custom_rpc_url` field in the relayer configuration. This is useful when you want to:
+2. **Custom RPC URL**: You can specify a custom RPC URL using the `custom_rpc_url` field in the relayer configuration. This is useful when you want to:
    * Use your own RPC node
    * Use a paid service provider for better reliability and performance
    * Override the default public RPC URLs
-   * Access private or custom network endpoints
+   * Access custom network endpoints
 
 When both are available, the relayer will:
 1. First attempt to use the `custom_rpc_url` if configured
-2. Fall back to the public RPC URLs if no private URL is configured or if it's not accessible
+2. Fall back to the public RPC URLs if no custom URL is configured or if it's not accessible
 
 [IMPORTANT]
 ====
-When using private RPC URLs:
+When using custom RPC URLs:
 
 * Ensure the URL is secure (HTTPS) when accessing over public networks
 * Keep your API keys and authentication tokens secure

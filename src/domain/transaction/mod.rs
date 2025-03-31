@@ -388,7 +388,6 @@ impl RelayerTransactionFactory {
                     Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
                 };
 
-                // Try private RPC URL first, then fall back to public RPC URLs
                 let rpc_url = relayer
                     .custom_rpc_url
                     .clone()
