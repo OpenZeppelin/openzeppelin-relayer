@@ -133,6 +133,10 @@ pub enum EvmNamedNetwork {
     #[strum(to_string = "unichain-sepolia")]
     #[serde(alias = "unichain-sepolia")]
     UnichainSepolia = 1301,
+
+    #[strum(serialize = "worldchain-sepolia")]
+    #[serde(alias = "worldchain-sepolia")]
+    WorldChainSepolia = 4801,
 }
 
 impl Default for EvmNamedNetwork {
@@ -160,7 +164,7 @@ impl EvmNamedNetwork {
 
         matches!(
             self,
-            Optimism | OptimismSepolia | Base | BaseSepolia | UnichainSepolia
+            Optimism | OptimismSepolia | Base | BaseSepolia | UnichainSepolia | WorldChainSepolia
         )
     }
 
@@ -182,7 +186,8 @@ impl EvmNamedNetwork {
 
             Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova => 260,
 
-            Optimism | OptimismSepolia | Base | BaseSepolia | Mantle | MantleSepolia => 2_000,
+            Optimism | OptimismSepolia | Base | BaseSepolia | Mantle | MantleSepolia
+            | WorldChainSepolia => 2_000,
 
             Polygon | PolygonAmoy => 2_100,
 
@@ -237,7 +242,7 @@ impl EvmNamedNetwork {
             Mainnet | Sepolia | Holesky | Base | BaseSepolia | Optimism | OptimismSepolia
             | Polygon | PolygonAmoy | Avalanche | AvalancheFuji | Arbitrum | ArbitrumSepolia
             | ArbitrumNova | Linea | LineaSepolia | Gnosis | Mantle | MantleSepolia | Scroll
-            | ScrollSepolia | UnichainSepolia => false,
+            | ScrollSepolia | UnichainSepolia | WorldChainSepolia => false,
 
             // Unknown / not applicable, default to false for backwards compatibility.
             Moonbeam | MoonbeamDev | Moonriver | Moonbase | Aurora | AuroraTestnet => false,
@@ -268,7 +273,8 @@ impl EvmNamedNetwork {
             | PolygonZkEvmTestnet
             | ScrollSepolia
             | UnichainSepolia
-            | ZkSyncTestnet => true,
+            | ZkSyncTestnet
+            | WorldChainSepolia => true,
 
             // Mainnets.
             Mainnet | Optimism | Arbitrum | ArbitrumNova | BinanceSmartChain | Scroll | Gnosis
@@ -302,12 +308,38 @@ impl EvmNamedNetwork {
             | PolygonZkEvmTestnet
             | ScrollSepolia
             | UnichainSepolia
-            | ZkSyncTestnet => true,
+            | ZkSyncTestnet
+            | WorldChainSepolia => true,
 
             // Mainnets.
             Mainnet | Optimism | Arbitrum | ArbitrumNova | BinanceSmartChain | Scroll | Gnosis
             | Polygon | PolygonZkEvm | Fantom | Moonbeam | Moonriver | Moonbase | Avalanche
             | Celo | Aurora | Base | Linea | ZkSync | Mantle => false,
+        }
+    }
+
+    pub const fn is_rollup(self) -> bool {
+        use EvmNamedNetwork::*;
+
+        match self {
+            // Optimism-based (Bedrock) networks
+            Optimism | OptimismSepolia | Base | BaseSepolia | UnichainSepolia
+            | WorldChainSepolia => true,
+
+            // Arbitrum networks
+            Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova => true,
+
+            // ZkSync networks
+            ZkSync | ZkSyncTestnet => true,
+
+            // Linea networks
+            Linea | LineaSepolia => true,
+
+            // Mantle networks
+            Mantle | MantleTestnet | MantleSepolia => true,
+
+            // All other networks are not rollups
+            _ => false,
         }
     }
 
@@ -456,6 +488,10 @@ impl EvmNamedNetwork {
                 "https://sepolia.uniscan.xyz",
                 "https://api-sepolia.uniscan.xyz/api",
             ],
+            WorldChainSepolia => &[
+                "https://worldchain-sepolia.explorer.alchemy.com",
+                "https://worldchain-sepolia.explorer.alchemy.com/api", // Assuming API path, might need verification
+            ],
             MoonbeamDev => {
                 return None;
             }
@@ -603,6 +639,7 @@ impl EvmNamedNetwork {
                 "https://sepolia.uniscan.xyz",
                 "https://api-sepolia.uniscan.xyz/api",
             ],
+            WorldChainSepolia => &["https://worldchain-sepolia.g.alchemy.com/public"],
             MoonbeamDev => {
                 return None;
             }
@@ -635,6 +672,7 @@ impl EvmNamedNetwork {
             Avalanche | AvalancheFuji => "AVAX",
             Gnosis => "xDAI",
             UnichainSepolia => "ETH",
+            WorldChainSepolia => "ETH",
             Aurora | AuroraTestnet => "ETH",
         }
     }
@@ -705,6 +743,7 @@ mod tests {
     fn is_testnet() {
         assert!(!EvmNamedNetwork::Mainnet.is_testnet());
         assert!(EvmNamedNetwork::Sepolia.is_testnet());
+        assert!(EvmNamedNetwork::WorldChainSepolia.is_testnet());
     }
 
     #[test]
@@ -731,6 +770,10 @@ mod tests {
         assert_eq!(EvmNamedNetwork::Mainnet.native_currency_symbol(), "ETH");
         assert_eq!(EvmNamedNetwork::Sepolia.native_currency_symbol(), "ETH");
         assert_eq!(
+            EvmNamedNetwork::WorldChainSepolia.native_currency_symbol(),
+            "ETH"
+        );
+        assert_eq!(
             EvmNamedNetwork::BinanceSmartChain.native_currency_symbol(),
             "BNB"
         );
@@ -745,6 +788,7 @@ mod tests {
             EvmNamedNetwork::Base,
             EvmNamedNetwork::BaseSepolia,
             EvmNamedNetwork::UnichainSepolia,
+            EvmNamedNetwork::WorldChainSepolia,
         ] {
             assert!(net.is_optimism());
         }
@@ -776,6 +820,10 @@ mod tests {
             EvmNamedNetwork::Optimism.average_blocktime(),
             Some(Duration::from_millis(2000))
         );
+        assert_eq!(
+            EvmNamedNetwork::WorldChainSepolia.average_blocktime(),
+            Some(Duration::from_millis(2000))
+        );
     }
 
     #[test]
@@ -784,12 +832,14 @@ mod tests {
         assert!(EvmNamedNetwork::Celo.is_legacy());
         assert!(!EvmNamedNetwork::Mainnet.is_legacy());
         assert!(!EvmNamedNetwork::Polygon.is_legacy());
+        assert!(!EvmNamedNetwork::WorldChainSepolia.is_legacy());
     }
 
     #[test]
     fn is_deprecated_check() {
         assert!(EvmNamedNetwork::Sepolia.is_deprecated());
         assert!(EvmNamedNetwork::ArbitrumTestnet.is_deprecated());
+        assert!(EvmNamedNetwork::WorldChainSepolia.is_deprecated());
         assert!(!EvmNamedNetwork::Mainnet.is_deprecated());
         assert!(!EvmNamedNetwork::Optimism.is_deprecated());
     }
@@ -799,6 +849,8 @@ mod tests {
         let mainnet = EvmNamedNetwork::Mainnet.explorer_urls().unwrap();
         assert!(mainnet.contains(&"https://api.etherscan.io/api"));
         assert!(mainnet.contains(&"https://etherscan.io"));
+        let wc_sep = EvmNamedNetwork::WorldChainSepolia.explorer_urls().unwrap();
+        assert!(wc_sep.contains(&"https://worldchain-sepolia.explorer.alchemy.com"));
         assert_eq!(EvmNamedNetwork::MoonbeamDev.explorer_urls(), None);
     }
 
@@ -808,6 +860,69 @@ mod tests {
             .public_rpc_urls()
             .unwrap()
             .contains(&"https://eth-sepolia.api.onfinality.io/public"));
+        assert!(EvmNamedNetwork::WorldChainSepolia
+            .public_rpc_urls()
+            .unwrap()
+            .contains(&"https://worldchain-sepolia.g.alchemy.com/public"));
         assert_eq!(EvmNamedNetwork::MoonbeamDev.public_rpc_urls(), None);
+    }
+
+    #[test]
+    fn is_rollup_check() {
+        // Test Optimism-based networks
+        for net in [
+            EvmNamedNetwork::Optimism,
+            EvmNamedNetwork::OptimismSepolia,
+            EvmNamedNetwork::Base,
+            EvmNamedNetwork::BaseSepolia,
+            EvmNamedNetwork::UnichainSepolia,
+            EvmNamedNetwork::WorldChainSepolia,
+        ] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test Arbitrum networks
+        for net in [
+            EvmNamedNetwork::Arbitrum,
+            EvmNamedNetwork::ArbitrumTestnet,
+            EvmNamedNetwork::ArbitrumSepolia,
+            EvmNamedNetwork::ArbitrumNova,
+        ] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test ZkSync networks
+        for net in [EvmNamedNetwork::ZkSync, EvmNamedNetwork::ZkSyncTestnet] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test Linea networks
+        for net in [EvmNamedNetwork::Linea, EvmNamedNetwork::LineaSepolia] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test Mantle networks
+        for net in [
+            EvmNamedNetwork::Mantle,
+            EvmNamedNetwork::MantleTestnet,
+            EvmNamedNetwork::MantleSepolia,
+        ] {
+            assert!(net.is_rollup(), "{} should be a rollup", net);
+        }
+
+        // Test non-rollup networks
+        for net in [
+            EvmNamedNetwork::Mainnet,
+            EvmNamedNetwork::Sepolia,
+            EvmNamedNetwork::BinanceSmartChain,
+            EvmNamedNetwork::Polygon,
+            EvmNamedNetwork::Avalanche,
+            EvmNamedNetwork::Fantom,
+            EvmNamedNetwork::Moonbeam,
+            EvmNamedNetwork::Celo,
+            EvmNamedNetwork::Aurora,
+        ] {
+            assert!(!net.is_rollup(), "{} should not be a rollup", net);
+        }
     }
 }
