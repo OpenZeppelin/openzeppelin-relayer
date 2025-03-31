@@ -390,7 +390,7 @@ impl RelayerTransactionFactory {
 
                 // Try private RPC URL first, then fall back to public RPC URLs
                 let rpc_url = relayer
-                    .private_rpc_url
+                    .custom_rpc_url
                     .clone()
                     .or_else(|| {
                         network

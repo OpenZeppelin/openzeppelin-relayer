@@ -701,9 +701,9 @@ Available configuration fields
 |String
 |Network the relayer will connect to. Please refer to xref:supported_networks[`Supported networks`].
 
-|private_rpc_url
+|custom_rpc_url
 |String
-|Optional private RPC URL for the network. If provided, this will be used instead of the public RPC URLs. This is useful for using your own RPC node or a paid service provider.
+|Optional custom RPC URL for the network. If provided, this will be used instead of the public RPC URLs. This is useful for using your own RPC node or a paid service provider.
 
 |policies
 |list
@@ -813,7 +813,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "evm",
-      "private_rpc_url": "https://your-private-rpc-url.example.com",
+      "custom_rpc_url": "https://your-private-rpc-url.example.com",
       "policies": {
         "gas_price_cap": 30000000000000,
         "eip1559_pricing": true
@@ -827,7 +827,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "solana",
-      "private_rpc_url": "https://your-private-solana-rpc.example.com",
+      "custom_rpc_url": "https://your-private-solana-rpc.example.com",
       "policies": {
         "min_balance": 0,
         "allowed_tokens": [
@@ -875,14 +875,14 @@ The relayer supports two ways to configure RPC URLs:
 
 1. **Public RPC URLs**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
 
-2. **Private RPC URL**: You can specify a custom RPC URL using the `private_rpc_url` field in the relayer configuration. This is useful when you want to:
+2. **Private RPC URL**: You can specify a custom RPC URL using the `custom_rpc_url` field in the relayer configuration. This is useful when you want to:
    * Use your own RPC node
    * Use a paid service provider for better reliability and performance
    * Override the default public RPC URLs
    * Access private or custom network endpoints
 
 When both are available, the relayer will:
-1. First attempt to use the `private_rpc_url` if configured
+1. First attempt to use the `custom_rpc_url` if configured
 2. Fall back to the public RPC URLs if no private URL is configured or if it's not accessible
 
 [IMPORTANT]

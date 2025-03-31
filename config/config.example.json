@@ -53,7 +53,7 @@
           }
         ]
       },
-      "private_rpc_url": "https://test-rpc-url"
+      "custom_rpc_url": "https://test-rpc-url"
     }
   ],
   "notifications": [

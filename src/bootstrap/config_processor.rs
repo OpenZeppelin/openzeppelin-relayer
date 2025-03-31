@@ -616,7 +616,7 @@ mod tests {
             paused: false,
             policies: None,
             notification_id: None,
-            private_rpc_url: None,
+            custom_rpc_url: None,
         }];
 
         // Create config
@@ -662,7 +662,7 @@ mod tests {
             paused: false,
             policies: None,
             notification_id: None,
-            private_rpc_url: None,
+            custom_rpc_url: None,
         }];
 
         let notifications = vec![NotificationFileConfig {

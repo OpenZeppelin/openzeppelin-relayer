@@ -598,7 +598,7 @@ mod tests {
             notification_id: None,
             signer_id: "test-signer".to_string(),
             system_disabled: false,
-            private_rpc_url: None,
+            custom_rpc_url: None,
         }
     }
 

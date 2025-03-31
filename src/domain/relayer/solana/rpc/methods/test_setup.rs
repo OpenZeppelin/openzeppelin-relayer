@@ -48,7 +48,7 @@ pub fn setup_test_context() -> (
         address: payer.pubkey().to_string(),
         notification_id: None,
         system_disabled: false,
-        private_rpc_url: None,
+        custom_rpc_url: None,
     };
 
     // Setup mock signer
