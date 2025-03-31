@@ -244,12 +244,11 @@ mod tests {
         // Test average_blocktime returns an Option<Duration>
         let blocktime = network.average_blocktime();
         // We do not assume a concrete value; just that it returns Some(_) or None.
-        match blocktime {
-            Some(duration) => assert!(
+        if let Some(duration) = blocktime {
+            assert!(
                 duration > Duration::from_secs(0),
                 "Blocktime should be a positive duration"
-            ),
-            None => {} // Acceptable if the underlying implementation returns None.
+            )
         }
 
         // Test public RPC URLs.

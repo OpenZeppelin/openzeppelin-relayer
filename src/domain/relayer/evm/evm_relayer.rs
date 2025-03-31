@@ -429,6 +429,7 @@ mod tests {
                 private_transactions: false,
             }),
             network_type: NetworkType::Evm,
+            private_rpc_url: None,
         }
     }
 

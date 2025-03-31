@@ -193,6 +193,7 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
+            private_rpc_url: Some("https://test-rpc-url".to_string()),
         }
     }
 

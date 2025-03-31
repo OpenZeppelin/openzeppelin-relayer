@@ -90,6 +90,9 @@ pub struct RelayerFileConfig {
     pub signer_id: String,
     #[serde(default)]
     pub notification_id: Option<String>,
+    /// Optional private RPC URL for the network. If provided, this will be used instead of the public RPC URLs.
+    #[serde(default)]
+    pub private_rpc_url: Option<String>,
 }
 use serde::{de, Deserializer};
 use serde_json::Value;
@@ -172,6 +175,11 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             Ok(None) // `policies` is optional
         }?;
 
+        let private_rpc_url = value
+            .get("private_rpc_url")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+
         Ok(RelayerFileConfig {
             id,
             name,
@@ -181,6 +189,7 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             policies,
             signer_id,
             notification_id,
+            private_rpc_url,
         })
     }
 }

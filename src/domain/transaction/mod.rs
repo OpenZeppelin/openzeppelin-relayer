@@ -387,13 +387,23 @@ impl RelayerTransactionFactory {
                     Ok(network) => network,
                     Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
                 };
-                let rpc_url = network
-                    .public_rpc_urls()
-                    .and_then(|urls| urls.first().cloned())
+
+                // Try private RPC URL first, then fall back to public RPC URLs
+                let rpc_url = relayer
+                    .private_rpc_url
+                    .clone()
+                    .or_else(|| {
+                        network
+                            .public_rpc_urls()
+                            .and_then(|urls| urls.first().cloned())
+                            .map(String::from)
+                    })
                     .ok_or_else(|| {
                         TransactionError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
-                let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
+
+                println!("Using RPC URL: {:?}", rpc_url);
+                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
