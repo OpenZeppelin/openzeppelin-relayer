@@ -1,7 +1,10 @@
-use crate::constants::{MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS};
-use crate::models::{
-    EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
+use crate::constants::{
+    DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
+use crate::models::{
+    EvmNetwork, EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
+};
+use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 
 /// Updates an existing transaction to be a "noop" transaction (transaction to self with zero value and no data)
@@ -38,6 +41,53 @@ pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
     tx_status == &TransactionStatus::Pending
         || tx_status == &TransactionStatus::Sent
         || tx_status == &TransactionStatus::Submitted
+}
+
+/// Helper function to check if a transaction has enough confirmations.
+pub fn has_enough_confirmations(
+    tx_block_number: u64,
+    current_block_number: u64,
+    chain_id: u64,
+) -> bool {
+    let network = EvmNetwork::from_id(chain_id);
+    let required_confirmations = network.required_confirmations();
+    current_block_number >= tx_block_number + required_confirmations
+}
+
+/// Checks if a transaction is still valid based on its valid_until timestamp.
+pub fn is_transaction_valid(created_at: &str, valid_until: &Option<String>) -> bool {
+    if let Some(valid_until_str) = valid_until {
+        match DateTime::parse_from_rfc3339(valid_until_str) {
+            Ok(valid_until_time) => return Utc::now() < valid_until_time,
+            Err(e) => {
+                log::warn!("Failed to parse valid_until timestamp: {}", e);
+                return false;
+            }
+        }
+    }
+    match DateTime::parse_from_rfc3339(created_at) {
+        Ok(created_time) => {
+            let default_valid_until =
+                created_time + Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN);
+            Utc::now() < default_valid_until
+        }
+        Err(e) => {
+            log::warn!("Failed to parse created_at timestamp: {}", e);
+            false
+        }
+    }
+}
+
+/// Gets the age of a transaction since it was sent.
+pub fn get_age_of_sent_at(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
+    let now = Utc::now();
+    let sent_at_str = tx.sent_at.as_ref().ok_or_else(|| {
+        TransactionError::UnexpectedError("Transaction sent_at time is missing".to_string())
+    })?;
+    let sent_time = DateTime::parse_from_rfc3339(sent_at_str)
+        .map_err(|_| TransactionError::UnexpectedError("Error parsing sent_at time".to_string()))?
+        .with_timezone(&Utc);
+    Ok(now.signed_duration_since(sent_time))
 }
 
 #[cfg(test)]
@@ -202,5 +252,115 @@ mod tests {
         // Test with too many NOOP attempts
         tx.noop_count = Some(MAXIMUM_NOOP_RETRY_ATTEMPTS + 1);
         assert!(too_many_noop_attempts(&tx));
+    }
+
+    #[test]
+    fn test_has_enough_confirmations() {
+        // Test Ethereum Mainnet (requires 12 confirmations)
+        let chain_id = 1; // Ethereum Mainnet
+
+        // Not enough confirmations
+        let tx_block_number = 100;
+        let current_block_number = 110; // Only 10 confirmations
+        assert!(!has_enough_confirmations(
+            tx_block_number,
+            current_block_number,
+            chain_id
+        ));
+
+        // Exactly enough confirmations
+        let current_block_number = 112; // Exactly 12 confirmations
+        assert!(has_enough_confirmations(
+            tx_block_number,
+            current_block_number,
+            chain_id
+        ));
+
+        // More than enough confirmations
+        let current_block_number = 120; // 20 confirmations
+        assert!(has_enough_confirmations(
+            tx_block_number,
+            current_block_number,
+            chain_id
+        ));
+    }
+
+    #[test]
+    fn test_is_transaction_valid_with_future_timestamp() {
+        let now = Utc::now();
+        let valid_until = Some((now + Duration::hours(1)).to_rfc3339());
+        let created_at = now.to_rfc3339();
+
+        assert!(is_transaction_valid(&created_at, &valid_until));
+    }
+
+    #[test]
+    fn test_is_transaction_valid_with_past_timestamp() {
+        let now = Utc::now();
+        let valid_until = Some((now - Duration::hours(1)).to_rfc3339());
+        let created_at = now.to_rfc3339();
+
+        assert!(!is_transaction_valid(&created_at, &valid_until));
+    }
+
+    #[test]
+    fn test_is_transaction_valid_with_valid_until() {
+        // Test with valid_until in the future
+        let created_at = Utc::now().to_rfc3339();
+        let valid_until = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
+        assert!(is_transaction_valid(&created_at, &valid_until));
+
+        // Test with valid_until in the past
+        let valid_until = Some((Utc::now() - Duration::hours(1)).to_rfc3339());
+        assert!(!is_transaction_valid(&created_at, &valid_until));
+
+        // Test with valid_until exactly at current time (should be invalid)
+        let valid_until = Some(Utc::now().to_rfc3339());
+        assert!(!is_transaction_valid(&created_at, &valid_until));
+
+        // Test with valid_until very far in the future
+        let valid_until = Some((Utc::now() + Duration::days(365)).to_rfc3339());
+        assert!(is_transaction_valid(&created_at, &valid_until));
+
+        // Test with invalid valid_until format
+        let valid_until = Some("invalid-date-format".to_string());
+        assert!(!is_transaction_valid(&created_at, &valid_until));
+
+        // Test with empty valid_until string
+        let valid_until = Some("".to_string());
+        assert!(!is_transaction_valid(&created_at, &valid_until));
+    }
+
+    #[test]
+    fn test_is_transaction_valid_without_valid_until() {
+        // Test with created_at within the default timespan
+        let created_at = Utc::now().to_rfc3339();
+        let valid_until = None;
+        assert!(is_transaction_valid(&created_at, &valid_until));
+
+        // Test with created_at older than the default timespan (8 hours)
+        let old_created_at =
+            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN + 1000)).to_rfc3339();
+        assert!(!is_transaction_valid(&old_created_at, &valid_until));
+
+        // Test with created_at exactly at the boundary
+        let boundary_created_at =
+            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN)).to_rfc3339();
+        assert!(!is_transaction_valid(&boundary_created_at, &valid_until));
+
+        // Test with created_at just within the default timespan
+        let within_boundary_created_at =
+            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN - 1000)).to_rfc3339();
+        assert!(is_transaction_valid(
+            &within_boundary_created_at,
+            &valid_until
+        ));
+
+        // Test with invalid created_at format
+        let invalid_created_at = "invalid-date-format";
+        assert!(!is_transaction_valid(invalid_created_at, &valid_until));
+
+        // Test with empty created_at string
+        assert!(!is_transaction_valid("", &valid_until));
     }
 }

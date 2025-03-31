@@ -21,8 +21,8 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
@@ -118,6 +118,101 @@ where
 
     pub fn transaction_repository(&self) -> &T {
         &self.transaction_repository
+    }
+
+    /// Helper method to schedule a transaction status check job.
+    pub(super) async fn schedule_status_check(
+        &self,
+        tx: &TransactionRepoModel,
+        delay_seconds: Option<i64>,
+    ) -> Result<(), TransactionError> {
+        let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
+        self.job_producer()
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                delay,
+            )
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to schedule status check: {}", e))
+            })
+    }
+
+    /// Helper method to produce a submit transaction job.
+    pub(super) async fn send_transaction_submit_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        let job = TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone());
+
+        self.job_producer()
+            .produce_submit_transaction_job(job, None)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to produce submit job: {}", e))
+            })
+    }
+
+    /// Helper method to produce a resubmit transaction job.
+    pub(super) async fn send_transaction_resubmit_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        let job = TransactionSend::resubmit(tx.id.clone(), tx.relayer_id.clone());
+
+        self.job_producer()
+            .produce_submit_transaction_job(job, None)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to produce resubmit job: {}", e))
+            })
+    }
+
+    /// Updates a transaction's status.
+    pub(super) async fn update_transaction_status(
+        &self,
+        tx: TransactionRepoModel,
+        new_status: TransactionStatus,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let confirmed_at = if new_status == TransactionStatus::Confirmed {
+            Some(Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(new_status),
+            confirmed_at,
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository()
+            .partial_update(tx.id.clone(), update_request)
+            .await?;
+
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+        Ok(updated_tx)
+    }
+
+    /// Sends a transaction update notification if a notification ID is configured.
+    pub(super) async fn send_transaction_update_notification(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        if let Some(notification_id) = &self.relayer().notification_id {
+            self.job_producer()
+                .produce_send_notification_job(
+                    produce_transaction_update_notification_payload(notification_id, tx),
+                    None,
+                )
+                .await
+                .map_err(|e| {
+                    TransactionError::UnexpectedError(format!("Failed to send notification: {}", e))
+                })?;
+        }
+        Ok(())
     }
 }
 
@@ -370,23 +465,18 @@ where
         if tx.status == TransactionStatus::Pending {
             info!("Transaction is in Pending state, updating status to Canceled");
             return self
-                .update_transaction_status(tx, TransactionStatus::Canceled, None)
+                .update_transaction_status(tx, TransactionStatus::Canceled)
                 .await;
         }
 
         let update = self.prepare_noop_update_request(&tx, true).await?;
         let updated_tx = self
-            .transaction_repository
+            .transaction_repository()
             .partial_update(tx.id.clone(), update)
             .await?;
 
         // Submit the updated transaction to the network using the resubmit job
-        self.job_producer
-            .produce_submit_transaction_job(
-                TransactionSend::resubmit(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                None,
-            )
-            .await?;
+        self.send_transaction_resubmit_job(&updated_tx).await?;
 
         // Send notification for the updated transaction
         self.send_transaction_update_notification(&updated_tx)
@@ -464,23 +554,19 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
     InMemoryTransactionCounter,
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
 >;
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        constants::DEFAULT_TX_VALID_TIMESPAN,
         domain::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
         models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy, U256},
         repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
         services::{MockEvmProviderTrait, MockSigner},
     };
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
     use futures::future::ready;
     use mockall::{mock, predicate::*};
-
-    type TestEvmTransaction = DefaultEvmTransaction;
 
     // Create a mock for PriceCalculatorTrait
     mock! {
@@ -556,161 +642,6 @@ mod tests {
             }),
             network_type: NetworkType::Evm,
         }
-    }
-
-    // Test for the is_transaction_valid functionality
-    #[test]
-    fn test_is_transaction_valid_with_future_timestamp() {
-        let now = Utc::now();
-        let valid_until = Some((now + Duration::hours(1)).to_rfc3339());
-        let created_at = now.to_rfc3339();
-
-        assert!(TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-    }
-
-    #[test]
-    fn test_is_transaction_valid_with_past_timestamp() {
-        let now = Utc::now();
-        let valid_until = Some((now - Duration::hours(1)).to_rfc3339());
-        let created_at = now.to_rfc3339();
-
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-    }
-
-    #[test]
-    fn test_has_enough_confirmations() {
-        // Test Ethereum Mainnet (requires 12 confirmations)
-        let chain_id = 1; // Ethereum Mainnet
-
-        // Not enough confirmations
-        let tx_block_number = 100;
-        let current_block_number = 110; // Only 10 confirmations
-        assert!(!TestEvmTransaction::has_enough_confirmations(
-            tx_block_number,
-            current_block_number,
-            chain_id
-        ));
-
-        // Exactly enough confirmations
-        let current_block_number = 112; // Exactly 12 confirmations
-        assert!(TestEvmTransaction::has_enough_confirmations(
-            tx_block_number,
-            current_block_number,
-            chain_id
-        ));
-
-        // More than enough confirmations
-        let current_block_number = 120; // 20 confirmations
-        assert!(TestEvmTransaction::has_enough_confirmations(
-            tx_block_number,
-            current_block_number,
-            chain_id
-        ));
-    }
-
-    #[test]
-    fn test_is_transaction_valid_with_valid_until() {
-        // Test with valid_until in the future
-        let created_at = Utc::now().to_rfc3339();
-        let valid_until = Some((Utc::now() + Duration::hours(1)).to_rfc3339());
-
-        assert!(TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-
-        // Test with valid_until in the past
-        let valid_until = Some((Utc::now() - Duration::hours(1)).to_rfc3339());
-
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-
-        // Test with valid_until exactly at current time (should be invalid)
-        let valid_until = Some(Utc::now().to_rfc3339());
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-
-        // Test with valid_until very far in the future
-        let valid_until = Some((Utc::now() + Duration::days(365)).to_rfc3339());
-        assert!(TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-
-        // Test with invalid valid_until format
-        let valid_until = Some("invalid-date-format".to_string());
-
-        // Should return false when parsing fails
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-
-        // Test with empty valid_until string
-        let valid_until = Some("".to_string());
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-    }
-
-    #[test]
-    fn test_is_transaction_valid_without_valid_until() {
-        // Test with created_at within the default timespan
-        let created_at = Utc::now().to_rfc3339();
-        let valid_until = None;
-
-        assert!(TestEvmTransaction::is_transaction_valid(
-            &created_at,
-            &valid_until
-        ));
-
-        // Test with created_at older than the default timespan (8 hours)
-        let old_created_at =
-            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN + 1000)).to_rfc3339();
-
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            &old_created_at,
-            &valid_until
-        ));
-
-        // Test with created_at exactly at the boundary of default timespan
-        let boundary_created_at =
-            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN)).to_rfc3339();
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            &boundary_created_at,
-            &valid_until
-        ));
-
-        // Test with created_at just within the default timespan
-        let within_boundary_created_at =
-            (Utc::now() - Duration::milliseconds(DEFAULT_TX_VALID_TIMESPAN - 1000)).to_rfc3339();
-        assert!(TestEvmTransaction::is_transaction_valid(
-            &within_boundary_created_at,
-            &valid_until
-        ));
-
-        // Test with invalid created_at format
-        let invalid_created_at = "invalid-date-format";
-
-        // Should return false when parsing fails
-        assert!(!TestEvmTransaction::is_transaction_valid(
-            invalid_created_at,
-            &valid_until
-        ));
-
-        // Test with empty created_at string
-        assert!(!TestEvmTransaction::is_transaction_valid("", &valid_until));
     }
 
     #[tokio::test]
