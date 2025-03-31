@@ -310,8 +310,9 @@ impl RelayerFactoryTrait for RelayerFactory {
 
                 // Try custom RPC URL first, then fall back to public RPC URLs
                 let rpc_url = relayer
-                    .custom_rpc_url
-                    .clone()
+                    .custom_rpc_urls
+                    .as_ref()
+                    .and_then(|urls| urls.first().cloned())
                     .or_else(|| {
                         network
                             .public_rpc_urls()
@@ -346,7 +347,7 @@ impl RelayerFactoryTrait for RelayerFactory {
             NetworkType::Solana => {
                 let provider = Arc::new(get_solana_network_provider_from_str(
                     &relayer.network,
-                    relayer.custom_rpc_url.clone(),
+                    relayer.custom_rpc_urls.clone(),
                 )?);
                 let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
                 let jupiter_service = JupiterService::new_from_network(relayer.network.as_str());

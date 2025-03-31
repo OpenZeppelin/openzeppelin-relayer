@@ -253,7 +253,7 @@ mod tests {
                 policies: None,
                 signer_id: "test-1".to_string(),
                 notification_id: Some("test-1".to_string()),
-                custom_rpc_url: None,
+                custom_rpc_urls: None,
             }],
             signers: vec![
                 SignerFileConfig {

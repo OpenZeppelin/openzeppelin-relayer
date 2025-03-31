@@ -284,7 +284,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
                                       * relayer */
             notification_id: config.notification_id,
             system_disabled: false,
-            custom_rpc_url: config.custom_rpc_url,
+            custom_rpc_urls: config.custom_rpc_urls,
         })
     }
 }
@@ -516,7 +516,7 @@ mod tests {
             address: "0x".to_string(),
             notification_id: None,
             system_disabled: false,
-            custom_rpc_url: None,
+            custom_rpc_urls: None,
         }
     }
 

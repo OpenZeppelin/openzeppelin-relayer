@@ -21,14 +21,15 @@ pub enum ProviderError {
 
 pub fn get_solana_network_provider_from_str(
     network: &str,
-    custom_rpc_url: Option<String>,
+    custom_rpc_urlss: Option<Vec<String>>,
 ) -> Result<SolanaProvider, ProviderError> {
     let network = match SolanaNetwork::from_network_str(network) {
         Ok(network) => network,
         Err(e) => return Err(ProviderError::NetworkConfiguration(e.to_string())),
     };
 
-    let rpc_url = custom_rpc_url
+    let rpc_url = custom_rpc_urlss
+        .and_then(|urls| urls.first().cloned())
         .or_else(|| network.public_rpc_urls().first().copied().map(String::from))
         .ok_or(ProviderError::NetworkConfiguration(
             "No RPC URLs configured".to_string(),
@@ -54,12 +55,20 @@ mod tests {
     }
 
     #[test]
-    fn test_get_solana_network_provider_with_custom_url() {
-        let result = get_solana_network_provider_from_str(
-            "testnet",
-            Some("https://custom-rpc.example.com".to_string()),
-        );
+    fn test_get_solana_network_provider_with_custom_urls() {
+        let custom_urls = vec![
+            "https://custom-rpc1.example.com".to_string(),
+            "https://custom-rpc2.example.com".to_string(),
+        ];
+        let result = get_solana_network_provider_from_str("testnet", Some(custom_urls));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_solana_network_provider_with_empty_custom_urls() {
+        let custom_urls: Vec<String> = vec![];
+        let result = get_solana_network_provider_from_str("testnet", Some(custom_urls));
+        assert!(result.is_ok()); // Should fall back to public URLs
     }
 
     #[test]

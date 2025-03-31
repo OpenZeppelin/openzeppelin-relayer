@@ -389,8 +389,9 @@ impl RelayerTransactionFactory {
                 };
 
                 let rpc_url = relayer
-                    .custom_rpc_url
-                    .clone()
+                    .custom_rpc_urls
+                    .as_ref()
+                    .and_then(|urls| urls.first().cloned())
                     .or_else(|| {
                         network
                             .public_rpc_urls()
@@ -423,7 +424,7 @@ impl RelayerTransactionFactory {
             NetworkType::Solana => {
                 let solana_provider = Arc::new(get_solana_network_provider_from_str(
                     &relayer.network,
-                    relayer.custom_rpc_url.clone(),
+                    relayer.custom_rpc_urls.clone(),
                 )?);
 
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(

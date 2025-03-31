@@ -221,8 +221,7 @@ pub struct RelayerRepoModel {
     pub address: String,
     pub notification_id: Option<String>,
     pub system_disabled: bool,
-    /// Optional custom RPC URL for the network. If provided, this will be used instead of the public RPC URLs.
-    pub custom_rpc_url: Option<String>,
+    pub custom_rpc_urls: Option<Vec<String>>,
 }
 
 impl RelayerRepoModel {
@@ -252,7 +251,7 @@ impl Default for RelayerRepoModel {
             address: "0x".to_string(),
             notification_id: None,
             system_disabled: false,
-            custom_rpc_url: None,
+            custom_rpc_urls: None,
         }
     }
 }
@@ -273,7 +272,7 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
-            custom_rpc_url: None,
+            custom_rpc_urls: None,
         }
     }
 

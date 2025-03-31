@@ -91,7 +91,7 @@ pub struct RelayerFileConfig {
     #[serde(default)]
     pub notification_id: Option<String>,
     #[serde(default)]
-    pub custom_rpc_url: Option<String>,
+    pub custom_rpc_urls: Option<Vec<String>>,
 }
 use serde::{de, Deserializer};
 use serde_json::Value;
@@ -174,10 +174,14 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             Ok(None) // `policies` is optional
         }?;
 
-        let custom_rpc_url = value
-            .get("custom_rpc_url")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string());
+        let custom_rpc_urls = value
+            .get("custom_rpc_urls")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
 
         Ok(RelayerFileConfig {
             id,
@@ -188,7 +192,7 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             policies,
             signer_id,
             notification_id,
-            custom_rpc_url,
+            custom_rpc_urls,
         })
     }
 }
