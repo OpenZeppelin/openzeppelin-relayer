@@ -44,7 +44,7 @@ This roadmap represents our current plans and is subject to change. We will upda
 * Basic Transaction Submission
 * Fee Estimation
 * Transaction Status Tracking
-* Limited Network Support(Ethereum Mainnet, Sepolia, Holesky)
+* Limited Network Support(Ethereum Mainnet, Sepolia, Holesky, Optimism, Optimism Sepolia, Worldchain Sepolia)
 
 ==== Upcoming Features
 ** Enhanced Transaction Status Logic

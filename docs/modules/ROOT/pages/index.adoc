@@ -25,7 +25,10 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 **Supported Networks**
 
 - Solana
-- EVM (Basic support for Ethereum)
+- EVM (Basic support for Ethereum and other EVM-compatible chains):
+  * Ethereum (Mainnet, Sepolia, Holesky)
+  * Optimism (Mainnet, Sepolia)
+  * Worldchain (Sepolia)
 
 [NOTE]
 ====
@@ -73,7 +76,7 @@ flowchart TB
             signer[Signer Services]
             provider[Network Providers]
         end
-    
+
         subgraph "Services Layer"
             transaction[Transaction Services]
             vault[Vault Services]
@@ -106,7 +109,7 @@ flowchart TB
     domain -- "Uses" --> relayer
     domain -- "Enforces" --> policies
     relayer -- "Processes" --> transaction
-    
+
     %% Services Layer connections
     transaction -- "Signs with" --> signer
     transaction -- "Connects via" --> provider
