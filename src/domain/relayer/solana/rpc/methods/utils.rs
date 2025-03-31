@@ -703,7 +703,6 @@ where
         None
     }
 
-    /// Finds SPL token transfers to the relayer in the transaction
     pub(crate) async fn find_token_payments_to_relayer(
         &self,
         transaction: &Transaction,
@@ -715,58 +714,128 @@ where
         let policy = self.relayer.policies.get_solana_policy();
         let allowed_tokens = match &policy.allowed_tokens {
             Some(tokens) => tokens,
-            None => return Ok(payments), // No allowed tokens defined
+            None => return Ok(payments),
         };
 
         for ix in &transaction.message.instructions {
             let program_id = transaction.message.account_keys[ix.program_id_index as usize];
 
-            if program_id == spl_token::id() {
-                if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
-                    match token_ix {
-                        spl_token::instruction::TokenInstruction::Transfer { amount }
-                        | spl_token::instruction::TokenInstruction::TransferChecked {
-                            amount,
-                            ..
-                        } => {
-                            if ix.accounts.len() >= 2 {
-                                let dest_token_idx = ix.accounts[1] as usize;
-                                if dest_token_idx < transaction.message.account_keys.len() {
-                                    let dest_token_account =
-                                        transaction.message.account_keys[dest_token_idx];
+            if program_id != spl_token::id() {
+                continue;
+            }
 
-                                    // Check if destination token account belongs to relayer
-                                    if let Ok(account_info) = self
-                                        .provider
-                                        .get_account_from_pubkey(&dest_token_account)
-                                        .await
-                                    {
-                                        if account_info.owner == *relayer_pubkey {
-                                            // Found a token transfer to relayer
-                                            // Get token mint
-                                            let token_account =
-                                            Account::unpack(&account_info.data).map_err(|e| {
-                                                SolanaTransactionValidationError::ValidationError(format!(
-                                                    "Invalid token account: {}",
-                                                    e
-                                                ))
-                                            })?;
-                                            let token_mint = token_account.mint;
+            if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
+                match token_ix {
+                    spl_token::instruction::TokenInstruction::Transfer { amount }
+                    | spl_token::instruction::TokenInstruction::TransferChecked {
+                        amount, ..
+                    } => {
+                        if ix.accounts.len() < 2 {
+                            continue;
+                        }
 
-                                            // Check if this token mint is in allowed tokens
-                                            if allowed_tokens
-                                                .iter()
-                                                .any(|t| t.mint == token_mint.to_string())
-                                            {
-                                                payments.push((token_mint, amount));
-                                            }
+                        // Get source and destination token accounts from instruction
+                        let source_token_idx = ix.accounts[0] as usize;
+                        let dest_token_idx = ix.accounts[1] as usize;
+
+                        if dest_token_idx >= transaction.message.account_keys.len()
+                            || source_token_idx >= transaction.message.account_keys.len()
+                        {
+                            continue;
+                        }
+
+                        let source_token_account =
+                            transaction.message.account_keys[source_token_idx];
+                        let dest_token_account = transaction.message.account_keys[dest_token_idx];
+
+                        // Check destination account first
+                        match self
+                            .provider
+                            .get_account_from_pubkey(&dest_token_account)
+                            .await
+                        {
+                            Ok(dest_account) => {
+                                if dest_account.owner != spl_token::id() {
+                                    continue;
+                                }
+
+                                let dest_token_account = match Account::unpack(&dest_account.data) {
+                                    Ok(account) => account,
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to unpack destination token account: {}",
+                                            e
+                                        );
+                                        continue;
+                                    }
+                                };
+
+                                // Check if destination token account is owned by relayer
+                                if dest_token_account.owner != *relayer_pubkey {
+                                    debug!(
+                                        "Token account owner {} is not relayer {}",
+                                        dest_token_account.owner, relayer_pubkey
+                                    );
+                                    continue;
+                                }
+
+                                // Now check source account balance
+                                match self
+                                    .provider
+                                    .get_account_from_pubkey(&source_token_account)
+                                    .await
+                                {
+                                    Ok(source_account) => {
+                                        if source_account.owner != spl_token::id() {
+                                            continue;
                                         }
+
+                                        let source_token_account =
+                                            match Account::unpack(&source_account.data) {
+                                                Ok(account) => account,
+                                                Err(e) => {
+                                                    error!(
+                                                        "Failed to unpack source token account: {}",
+                                                        e
+                                                    );
+                                                    continue;
+                                                }
+                                            };
+
+                                        // Check if source has enough tokens
+                                        if source_token_account.amount < amount {
+                                            continue;
+                                        }
+
+                                        let token_mint = dest_token_account.mint;
+
+                                        // Check if this token mint is in allowed tokens
+                                        if allowed_tokens
+                                            .iter()
+                                            .any(|t| t.mint == token_mint.to_string())
+                                        {
+                                            payments.push((token_mint, amount));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to get source token account: {}",
+                                            e
+                                        );
+                                        continue;
                                     }
                                 }
                             }
+                            Err(e) => {
+                                error!(
+                                    "Failed to get destination token account: {}",
+                                    e
+                                );
+                                continue;
+                            }
                         }
-                        _ => continue,
                     }
+                    _ => continue,
                 }
             }
         }
@@ -1296,5 +1365,1112 @@ mod tests {
         assert!(result.is_ok());
         let (signed_tx, _) = result.unwrap();
         assert_eq!(signed_tx.message.instructions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_fee_with_margin_no_margin() {
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+            setup_test_context();
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let transaction = Transaction::try_from(tx).unwrap();
+
+        let result = rpc.estimate_fee_with_margin(&transaction, None).await;
+
+        assert!(result.is_ok(), "Fee estimation should succeed");
+        assert_eq!(
+            result.unwrap(),
+            5000,
+            "Fee without margin should equal base fee"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_fee_with_margin_zero_margin() {
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+            setup_test_context();
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let transaction = Transaction::try_from(tx).unwrap();
+
+        let result = rpc.estimate_fee_with_margin(&transaction, Some(0.0)).await;
+
+        assert!(result.is_ok(), "Fee estimation should succeed");
+        assert_eq!(
+            result.unwrap(),
+            5000,
+            "Fee with 0% margin should equal base fee"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_fee_with_margin_ten_percent() {
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+            setup_test_context();
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let transaction = Transaction::try_from(tx).unwrap();
+
+        let result = rpc.estimate_fee_with_margin(&transaction, Some(10.0)).await;
+
+        assert!(result.is_ok(), "Fee estimation should succeed");
+        assert_eq!(result.unwrap(), 5500, "Fee with 10% margin should be 5500");
+    }
+
+    #[tokio::test]
+    async fn test_estimate_fee_with_margin_large_percentage() {
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+            setup_test_context();
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1000u64) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let transaction = Transaction::try_from(tx).unwrap();
+
+        let result = rpc.estimate_fee_with_margin(&transaction, Some(50.0)).await;
+
+        assert!(result.is_ok(), "Fee estimation should succeed");
+        assert_eq!(result.unwrap(), 1500, "Fee with 50% margin should be 1500");
+    }
+
+    #[tokio::test]
+    async fn test_estimate_and_convert_fee_sol_with_no_margin() {
+        let (mut relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+            setup_test_context();
+
+        // Setup policy with SOL
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: WRAPPED_SOL_MINT.to_string(),
+                symbol: Some("SOL".to_string()),
+                decimals: Some(9),
+                max_allowed_fee: None,
+                conversion_slippage_percentage: None,
+            }]),
+            fee_margin_percentage: None,
+            ..Default::default()
+        });
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let transaction = Transaction::try_from(tx).unwrap();
+
+        let result = rpc
+            .estimate_and_convert_fee(&transaction, WRAPPED_SOL_MINT, None)
+            .await;
+
+        assert!(result.is_ok(), "Fee estimation should succeed");
+        let (fee_quote, lamports) = result.unwrap();
+
+        assert_eq!(lamports, 5000, "Lamports should equal base fee");
+        assert_eq!(
+            fee_quote.fee_in_spl, 5000,
+            "SPL fee should equal lamports for SOL"
+        );
+        assert_eq!(
+            fee_quote.fee_in_lamports, 5000,
+            "Lamports in quote should match"
+        );
+        assert_eq!(
+            fee_quote.fee_in_spl_ui, "0.000005",
+            "UI amount should be formatted correctly"
+        );
+        assert_eq!(
+            fee_quote.conversion_rate, 1.0,
+            "SOL to SOL conversion rate should be 1.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_and_convert_fee_token_with_margin() {
+        let (mut relayer, signer, mut provider, mut jupiter_service, tx, job_producer) =
+            setup_test_context();
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: test_token.to_string(),
+                symbol: Some("USDC".to_string()),
+                decimals: Some(6),
+                max_allowed_fee: Some(10_000_000_000),
+                conversion_slippage_percentage: Some(1.0),
+            }]),
+            ..Default::default()
+        });
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        // Setup Jupiter mock to return a fixed quote
+        jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(move |_, amount, _| {
+                Box::pin(async move {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: test_token.to_string(),
+                        in_amount: amount,
+                        out_amount: 2_000_000, // 1 SOL = 2 USDC
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let transaction = Transaction::try_from(tx).unwrap();
+
+        // Test with Token and 20% margin
+        let result = rpc
+            .estimate_and_convert_fee(&transaction, test_token, Some(20.0))
+            .await;
+
+        assert!(result.is_ok(), "Fee estimation should succeed");
+        let (fee_quote, lamports) = result.unwrap();
+
+        assert_eq!(lamports, 6000, "Lamports should include 20% margin");
+        assert_eq!(
+            fee_quote.fee_in_spl, 2000000,
+            "SPL fee should be converted using rate with margin applied"
+        );
+        assert_eq!(
+            fee_quote.fee_in_lamports, 6000,
+            "Lamports in quote should match with margin"
+        );
+        assert_eq!(
+            fee_quote.fee_in_spl_ui, "2",
+            "UI amount should be formatted correctly for 6 decimals"
+        );
+        assert_eq!(
+            fee_quote.conversion_rate, 333333.3333333333,
+            "Conversion rate should be 2.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_convert_compiled_instruction_basic() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        // Create sample account keys
+        let account_keys = vec![
+            Pubkey::new_unique(), // fee payer (signer, writable)
+            Pubkey::new_unique(), // another signer (signer, writable)
+            Pubkey::new_unique(), // read-only signer
+            Pubkey::new_unique(), // program id
+            Pubkey::new_unique(), // writable non-signer
+            Pubkey::new_unique(), // read-only non-signer
+        ];
+
+        // Define message header
+        let header = MessageHeader {
+            num_required_signatures: 3,
+            num_readonly_signed_accounts: 1,
+            num_readonly_unsigned_accounts: 1,
+        };
+
+        let compiled_instruction = CompiledInstruction {
+            program_id_index: 3,
+            accounts: vec![0, 1, 4, 2, 5],
+            data: vec![1, 2, 3, 4],
+        };
+
+        let instruction =
+            rpc.convert_compiled_instruction(&compiled_instruction, &account_keys, &header);
+
+        assert_eq!(instruction.program_id, account_keys[3]);
+        assert_eq!(instruction.data, vec![1, 2, 3, 4]);
+
+        assert_eq!(instruction.accounts.len(), 5);
+
+        // Check each account meta
+        // fee payer (index 0): signer, writable
+        assert_eq!(instruction.accounts[0].pubkey, account_keys[0]);
+        assert!(instruction.accounts[0].is_signer);
+        assert!(instruction.accounts[0].is_writable);
+
+        // another signer (index 1): signer, writable
+        assert_eq!(instruction.accounts[1].pubkey, account_keys[1]);
+        assert!(instruction.accounts[1].is_signer);
+        assert!(instruction.accounts[1].is_writable);
+
+        // writable non-signer (index 4)
+        assert_eq!(instruction.accounts[2].pubkey, account_keys[4]);
+        assert!(!instruction.accounts[2].is_signer);
+        assert!(instruction.accounts[2].is_writable);
+
+        // read-only signer (index 2)
+        assert_eq!(instruction.accounts[3].pubkey, account_keys[2]);
+        assert!(instruction.accounts[3].is_signer);
+        assert!(!instruction.accounts[3].is_writable);
+
+        // read-only non-signer (index 5)
+        assert_eq!(instruction.accounts[4].pubkey, account_keys[5]);
+        assert!(!instruction.accounts[4].is_signer);
+        assert!(!instruction.accounts[4].is_writable);
+    }
+
+    #[tokio::test]
+    async fn test_convert_compiled_instruction_transfer_example() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+        let amount = 1_000_000;
+
+        let transfer_ix = system_instruction::transfer(&payer.pubkey(), &recipient, amount);
+
+        let message = Message::new(&[transfer_ix.clone()], Some(&payer.pubkey()));
+
+        let compiled_instruction = &message.instructions[0];
+
+        let converted_ix = rpc.convert_compiled_instruction(
+            compiled_instruction,
+            &message.account_keys,
+            &message.header,
+        );
+        assert_eq!(converted_ix.program_id, system_program::id());
+
+        let decoded_ix = bincode::deserialize::<SystemInstruction>(&converted_ix.data).unwrap();
+        match decoded_ix {
+            SystemInstruction::Transfer { lamports } => {
+                assert_eq!(lamports, amount);
+            }
+            _ => panic!("Expected Transfer instruction"),
+        }
+
+        assert_eq!(converted_ix.accounts.len(), 2);
+        assert_eq!(converted_ix.accounts[0].pubkey, payer.pubkey());
+        assert!(converted_ix.accounts[0].is_signer);
+        assert!(converted_ix.accounts[0].is_writable);
+
+        assert_eq!(converted_ix.accounts[1].pubkey, recipient);
+        assert!(!converted_ix.accounts[1].is_signer);
+        assert!(converted_ix.accounts[1].is_writable);
+
+        assert_eq!(converted_ix.program_id, transfer_ix.program_id);
+        assert_eq!(converted_ix.data, transfer_ix.data);
+
+        let original_source = transfer_ix
+            .accounts
+            .iter()
+            .find(|a| a.pubkey == payer.pubkey())
+            .unwrap();
+        let original_dest = transfer_ix
+            .accounts
+            .iter()
+            .find(|a| a.pubkey == recipient)
+            .unwrap();
+
+        let converted_source = converted_ix
+            .accounts
+            .iter()
+            .find(|a| a.pubkey == payer.pubkey())
+            .unwrap();
+        let converted_dest = converted_ix
+            .accounts
+            .iter()
+            .find(|a| a.pubkey == recipient)
+            .unwrap();
+
+        assert_eq!(original_source.is_signer, converted_source.is_signer);
+        assert_eq!(original_source.is_writable, converted_source.is_writable);
+        assert_eq!(original_dest.is_signer, converted_dest.is_signer);
+        assert_eq!(original_dest.is_writable, converted_dest.is_writable);
+    }
+
+    #[tokio::test]
+    async fn test_convert_compiled_instruction_spl_token_transfer() {
+        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let payer = Keypair::new();
+        let owner = Keypair::new();
+        let mint = Pubkey::new_unique();
+        let source = get_associated_token_address(&payer.pubkey(), &mint);
+        let destination = get_associated_token_address(&Pubkey::new_unique(), &mint);
+        let amount = 1_000_000;
+
+        let transfer_ix = spl_token::instruction::transfer_checked(
+            &spl_token::id(),
+            &source,
+            &mint,
+            &destination,
+            &owner.pubkey(),
+            &[],
+            amount,
+            9, // decimals
+        )
+        .unwrap();
+
+        let message = Message::new_with_blockhash(
+            &[transfer_ix.clone()],
+            Some(&payer.pubkey()),
+            &Hash::new_unique(),
+        );
+
+        let compiled_instruction = &message.instructions[0];
+        let converted_ix = rpc.convert_compiled_instruction(
+            compiled_instruction,
+            &message.account_keys,
+            &message.header,
+        );
+
+        assert_eq!(converted_ix.program_id, spl_token::id());
+
+        let decoded_ix =
+            spl_token::instruction::TokenInstruction::unpack(&converted_ix.data).unwrap();
+
+        match decoded_ix {
+            spl_token::instruction::TokenInstruction::TransferChecked {
+                amount: decoded_amount,
+                decimals,
+                ..
+            } => {
+                assert_eq!(decoded_amount, amount);
+                assert_eq!(decimals, 9);
+            }
+            _ => panic!("Expected TransferChecked instruction"),
+        }
+
+        assert!(converted_ix
+            .accounts
+            .iter()
+            .any(|a| a.pubkey == source && a.is_writable));
+        assert!(converted_ix
+            .accounts
+            .iter()
+            .any(|a| a.pubkey == destination && a.is_writable));
+        assert!(converted_ix
+            .accounts
+            .iter()
+            .any(|a| a.pubkey == mint && !a.is_writable));
+        assert!(converted_ix
+            .accounts
+            .iter()
+            .any(|a| a.pubkey == owner.pubkey() && a.is_signer));
+    }
+
+    #[tokio::test]
+    async fn test_create_transaction_with_user_fee_payment_token() {
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: test_token.to_string(),
+                symbol: Some("USDC".to_string()),
+                decimals: Some(6),
+                max_allowed_fee: Some(10_000_000),
+                conversion_slippage_percentage: Some(1.0),
+            }]),
+            ..Default::default()
+        });
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+        let user_keypair = Keypair::new();
+        let user_pubkey = user_keypair.pubkey().clone();
+        let relayer_pubkey = relayer_keypair.pubkey().clone();
+
+        let token_mint = Pubkey::from_str(test_token).unwrap();
+
+        let user_token_account = get_associated_token_address(&user_keypair.pubkey(), &token_mint);
+        let relayer_token_account =
+            get_associated_token_address(&relayer_keypair.pubkey(), &token_mint);
+
+        let expected_blockhash = Hash::new_unique();
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(move |_| Box::pin(async move { Ok((expected_blockhash, 100u64)) }));
+
+        provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                Box::pin(async move {
+                    // Create a token account with sufficient balance
+                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut token_account = Account {
+                        mint: token_mint,
+                        owner: user_pubkey,
+                        amount: 10_000_000,
+                        state: spl_token::state::AccountState::Initialized,
+                        ..Default::default()
+                    };
+                    if pubkey == user_token_account {
+                        token_account.owner = user_pubkey;
+                    } else if pubkey == relayer_token_account {
+                        token_account.owner = relayer_pubkey;
+                    }
+
+                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer.clone(),
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+        let recipient = Pubkey::new_unique();
+        let ix = system_instruction::transfer(&user_pubkey, &recipient, 1000);
+        let message = Message::new(&[ix], Some(&user_pubkey));
+        let transaction = Transaction::new_unsigned(message);
+
+        let fee_amount = 2_000_000; // 2.0 USDC
+
+        let result = rpc
+            .create_transaction_with_user_fee_payment(
+                &relayer_pubkey,
+                &transaction,
+                test_token,
+                fee_amount,
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Should successfully create transaction with token fee payment"
+        );
+
+        let (modified_tx, _) = result.unwrap();
+
+        assert_eq!(
+            modified_tx.message.account_keys[0],
+            relayer_keypair.pubkey(),
+            "Relayer should be fee payer"
+        );
+
+        let has_original_instruction = modified_tx.message.instructions.iter().any(|ix| {
+            let program_idx = ix.program_id_index as usize;
+
+            if program_idx < modified_tx.message.account_keys.len()
+                && modified_tx.message.account_keys[program_idx] == system_program::id()
+            {
+                if let Ok(SystemInstruction::Transfer { lamports }) = bincode::deserialize(&ix.data)
+                {
+                    if lamports == 1000 {
+                        return true;
+                    }
+                }
+            }
+            false
+        });
+        assert!(
+            has_original_instruction,
+            "Transaction should include original instruction"
+        );
+
+        let has_token_transfer = modified_tx.message.instructions.iter().any(|ix| {
+            let program_idx = ix.program_id_index as usize;
+
+            if program_idx < modified_tx.message.account_keys.len()
+                && modified_tx.message.account_keys[program_idx] == spl_token::id()
+            {
+                if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
+                    match token_ix {
+                        spl_token::instruction::TokenInstruction::TransferChecked {
+                            amount,
+                            ..
+                        } => {
+                            return amount == fee_amount;
+                        }
+                        _ => return false,
+                    }
+                }
+            }
+            false
+        });
+
+        assert!(
+            has_token_transfer,
+            "Transaction should include token transfer instruction"
+        );
+
+        let includes_correct_token_accounts = modified_tx
+            .message
+            .account_keys
+            .iter()
+            .any(|key| *key == user_token_account)
+            && modified_tx
+                .message
+                .account_keys
+                .iter()
+                .any(|key| *key == relayer_token_account)
+            && modified_tx
+                .message
+                .account_keys
+                .iter()
+                .any(|key| *key == token_mint);
+
+        assert!(
+            includes_correct_token_accounts,
+            "Transaction should reference correct token accounts"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_transaction_with_user_fee_payment_relayer_is_source() {
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer.clone(),
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let recipient = Pubkey::new_unique();
+        let ix = system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, 1000);
+        let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let fee_amount = 5000;
+
+        let result = rpc
+            .create_transaction_with_user_fee_payment(
+                &relayer_keypair.pubkey(),
+                &transaction,
+                NATIVE_SOL,
+                fee_amount,
+            )
+            .await;
+
+        assert!(result.is_err(), "Should fail when relayer is the source");
+        match result {
+            Err(SolanaRpcError::InvalidParams(msg)) => {
+                assert!(
+                    msg.contains("Relayer cannot pay fee to itself"),
+                    "Error message should mention relayer can't pay itself"
+                );
+            }
+            _ => panic!("Expected InvalidParams error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_transaction_with_user_fee_payment_insufficient_balance() {
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: test_token.to_string(),
+                symbol: Some("USDC".to_string()),
+                decimals: Some(6),
+                max_allowed_fee: Some(10_000_000),
+                conversion_slippage_percentage: Some(1.0),
+            }]),
+            ..Default::default()
+        });
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+        let user_keypair = Keypair::new();
+        let user_pubkey = user_keypair.pubkey().clone();
+        let relayer_pubkey = relayer_keypair.pubkey().clone();
+
+        let token_mint = Pubkey::from_str(test_token).unwrap();
+
+        let user_token_account = get_associated_token_address(&user_keypair.pubkey(), &token_mint);
+        let relayer_token_account =
+            get_associated_token_address(&relayer_keypair.pubkey(), &token_mint);
+
+        let expected_blockhash = Hash::new_unique();
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(move |_| Box::pin(async move { Ok((expected_blockhash, 100u64)) }));
+
+        provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                Box::pin(async move {
+                    // Create a token account with sufficient balance
+                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut token_account = Account {
+                        mint: token_mint,
+                        owner: user_pubkey,
+                        amount: 1_000,
+                        state: spl_token::state::AccountState::Initialized,
+                        ..Default::default()
+                    };
+                    if pubkey == user_token_account {
+                        token_account.owner = user_pubkey;
+                    } else if pubkey == relayer_token_account {
+                        token_account.owner = relayer_pubkey;
+                    }
+
+                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer.clone(),
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+        // Create a simple transaction from user
+        let recipient = Pubkey::new_unique();
+        let ix = system_instruction::transfer(&user_pubkey, &recipient, 1000);
+        let message = Message::new(&[ix], Some(&user_pubkey));
+        let transaction = Transaction::new_unsigned(message);
+
+        let fee_amount = 2_000_000; // 2.0 USDC
+
+        // Call function to create transaction with user fee payment
+        let result = rpc
+            .create_transaction_with_user_fee_payment(
+                &relayer_pubkey,
+                &transaction,
+                test_token,
+                fee_amount,
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Should fail when token balance is insufficient"
+        );
+        match result {
+            Err(SolanaRpcError::InsufficientFunds(_)) => {}
+            _ => panic!("Expected InsufficientFunds error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_user_fee_payment_sol_sufficient() {
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let payer = Keypair::new();
+        let fee_amount = 5000;
+
+        let payment_ix =
+            system_instruction::transfer(&payer.pubkey(), &relayer_keypair.pubkey(), fee_amount);
+
+        let recipient = Pubkey::new_unique();
+        let regular_ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+
+        let message = Message::new(&[payment_ix, regular_ix], Some(&payer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.confirm_user_fee_payment(&transaction, fee_amount).await;
+
+        assert!(result.is_ok(), "Should accept sufficient SOL payment");
+    }
+
+    #[tokio::test]
+    async fn test_confirm_user_fee_payment_sol_insufficient() {
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        // Create transaction with SOL payment to relayer (but insufficient)
+        let payer = Keypair::new();
+        let payment_amount = 4000; // Less than required
+        let required_amount = 5000;
+
+        // Create SOL transfer to relayer instruction
+        let payment_ix = system_instruction::transfer(
+            &payer.pubkey(),
+            &relayer_keypair.pubkey(),
+            payment_amount,
+        );
+
+        let message = Message::new(&[payment_ix], Some(&payer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc
+            .confirm_user_fee_payment(&transaction, required_amount)
+            .await;
+
+        assert!(result.is_err(), "Should reject insufficient SOL payment");
+        match result {
+            Err(SolanaRpcError::InvalidParams(msg)) => {
+                assert!(
+                    msg.contains("insufficient"),
+                    "Error should mention payment insufficiency"
+                );
+            }
+            _ => panic!("Expected InvalidParams error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirm_user_fee_payment_token_sufficient() {
+        let (mut relayer, signer, mut provider, mut jupiter_service, _, job_producer) =
+            setup_test_context();
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: test_token.to_string(),
+                symbol: Some("USDC".to_string()),
+                decimals: Some(6),
+                max_allowed_fee: Some(10_000_000),
+                conversion_slippage_percentage: Some(1.0),
+            }]),
+            ..Default::default()
+        });
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+        let user_keypair = Keypair::new();
+        let user_pubkey = user_keypair.pubkey();
+        let relayer_pubkey = relayer_keypair.pubkey();
+
+        let token_mint = Pubkey::from_str(test_token).unwrap();
+
+        let user_token_account = get_associated_token_address(&user_keypair.pubkey(), &token_mint);
+        let relayer_token_account =
+            get_associated_token_address(&relayer_keypair.pubkey(), &token_mint);
+
+        jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(move |_, amount, _| {
+                Box::pin(async move {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: test_token.to_string(),
+                        in_amount: amount,
+                        out_amount: amount * 2, // 1 SOL = 2 USDC
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+
+        provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                Box::pin(async move {
+                    // Create a token account with sufficient balance
+                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut token_account = Account {
+                        mint: token_mint,
+                        owner: user_pubkey,
+                        amount: 10000000,
+                        state: spl_token::state::AccountState::Initialized,
+                        ..Default::default()
+                    };
+                    if pubkey == user_token_account {
+                        token_account.owner = user_pubkey;
+                    } else {
+                        token_account.owner = relayer_pubkey;
+                    }
+
+                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let token_payment = 1_000_000; // Amount in token units
+        let sol_fee = 5000; // Equivalent amount in SOL
+
+        let transfer_ix = spl_token::instruction::transfer_checked(
+            &spl_token::id(),
+            &user_token_account,
+            &token_mint,
+            &relayer_token_account,
+            &user_keypair.pubkey(),
+            &[],
+            token_payment,
+            6, // decimals
+        )
+        .unwrap();
+
+        let message = Message::new(&[transfer_ix], Some(&user_keypair.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.confirm_user_fee_payment(&transaction, sol_fee).await;
+
+        assert!(result.is_ok(), "Should accept sufficient token payment");
+    }
+
+    #[tokio::test]
+    async fn test_confirm_user_fee_payment_no_payment() {
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        // Create transaction WITHOUT payment to relayer
+        let payer = Keypair::new();
+        let recipient = Pubkey::new_unique();
+
+        let regular_ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+
+        let message = Message::new(&[regular_ix], Some(&payer.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc.confirm_user_fee_payment(&transaction, 5000).await;
+
+        assert!(result.is_err(), "Should reject transaction with no payment");
+        match result {
+            Err(SolanaRpcError::InvalidParams(msg)) => {
+                assert!(
+                    msg.contains("doesn't contain required fee payment"),
+                    "Error should mention missing payment"
+                );
+            }
+            _ => panic!("Expected InvalidParams error"),
+        }
+    }
+    #[tokio::test]
+    async fn test_find_token_payments_to_relayer() {
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        // Setup policy with token
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: test_token.to_string(),
+                symbol: Some("USDC".to_string()),
+                decimals: Some(6),
+                max_allowed_fee: Some(10_000_000),
+                conversion_slippage_percentage: Some(1.0),
+            }]),
+            ..Default::default()
+        });
+
+        let relayer_keypair = Keypair::new();
+        relayer.address = relayer_keypair.pubkey().to_string();
+        let relayer_pubkey = relayer_keypair.pubkey();
+        let user_keypair = Keypair::new();
+        let user_pubkey = user_keypair.pubkey();
+
+        println!("relayer pubkey: {}", relayer_pubkey);
+        println!("user pubkey: {}", user_keypair.pubkey());
+
+        // Create token mint
+        let token_mint = Pubkey::from_str(test_token).unwrap();
+
+        // Get token accounts
+        let user_token_account = get_associated_token_address(&user_keypair.pubkey(), &token_mint);
+        let relayer_token_account = get_associated_token_address(&relayer_pubkey, &token_mint);
+
+        provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                Box::pin(async move {
+                    // Create a token account with sufficient balance
+                    let mut account_data = vec![0; spl_token::state::Account::LEN];
+                    let mut token_account = Account {
+                        mint: token_mint,
+                        owner: user_pubkey,
+                        amount: 10000000,
+                        state: spl_token::state::AccountState::Initialized,
+                        ..Default::default()
+                    };
+                    if pubkey == user_token_account {
+                        token_account.owner = user_pubkey;
+                    } else {
+                        token_account.owner = relayer_pubkey;
+                    }
+
+                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer.clone(),
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+        let token_payment = 1_000_000; // 1 USDC
+
+        let transfer_ix = spl_token::instruction::transfer_checked(
+            &spl_token::id(),
+            &user_token_account,
+            &token_mint,
+            &relayer_token_account,
+            &user_keypair.pubkey(),
+            &[],
+            token_payment,
+            6, // decimals
+        )
+        .unwrap();
+
+        let message = Message::new(&[transfer_ix], Some(&user_keypair.pubkey()));
+        let transaction = Transaction::new_unsigned(message);
+
+        let result = rpc
+            .find_token_payments_to_relayer(&transaction, &relayer_pubkey)
+            .await;
+
+        assert!(result.is_ok(), "Token payment detection should succeed");
+        let payments = result.unwrap();
+
+        assert_eq!(payments.len(), 1, "Should find one token payment");
+        assert_eq!(payments[0].0, token_mint, "Token mint should match");
+        assert_eq!(payments[0].1, token_payment, "Payment amount should match");
     }
 }
