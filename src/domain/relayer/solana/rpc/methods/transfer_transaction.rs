@@ -206,9 +206,9 @@ fn validate_native_sol_transfer_transaction(
     validate_transaction(source, destination, amount, policy)?;
     if let Some(allowed_programs) = &policy.allowed_programs {
         if !allowed_programs.contains(&SYSTEM_PROGRAM_ID.to_string()) {
-            return Err(SolanaTransactionValidationError::PolicyViolation(format!(
-                "System Program not allowed"
-            )));
+            return Err(SolanaTransactionValidationError::PolicyViolation(
+                "System Program not allowed".to_string(),
+            ));
         }
     }
 

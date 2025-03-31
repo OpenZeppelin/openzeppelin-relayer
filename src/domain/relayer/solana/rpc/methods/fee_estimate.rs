@@ -350,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_wrapped_sol() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Set up policy with WSOL token
