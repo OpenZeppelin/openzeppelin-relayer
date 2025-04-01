@@ -353,7 +353,7 @@ mod tests {
         let mut env_file = File::create(&env_path).unwrap();
         writeln!(
             env_file,
-            "TEST_SIGNER_PASSPHRASE_SPECIAL=#super#secret#passphrase"
+            "TEST_SIGNER_PASSPHRASE_SPECIAL=super#secret#passphrase"
         )
         .unwrap();
 
@@ -368,5 +368,15 @@ mod tests {
         };
 
         assert!(config.validate().is_ok());
+        // Validate that the value from config matches the environment variable
+        if let PlainOrEnvValue::Env { value } = &config.passphrase {
+            assert_eq!(
+                std::env::var(value).unwrap(),
+                "super#secret#passphrase",
+                "Environment variable value should match the expected value"
+            );
+        } else {
+            panic!("Expected Env passphrase variant");
+        }
     }
 }
