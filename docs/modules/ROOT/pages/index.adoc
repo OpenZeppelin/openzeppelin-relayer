@@ -419,7 +419,7 @@ There are 3 important sections in this file:
 
 - Signers: Defines transaction signing methods.
 - Notifications: Sets up status alerts
-- Relayers: Configures networks, noftications channels, policies & singers.
+- Relayers: Configures networks, notifications channels, policies & singers.
 
 
 ==== 1. Signers
@@ -829,6 +829,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "signer_id": "local-signer",
       "network_type": "solana",
       "policies": {
+        "fee_payment_strategy": "user",
         "min_balance": 0,
         "allowed_tokens": [
           {

@@ -8,6 +8,7 @@
       "signer_id": "local-vault",
       "network_type": "solana",
       "policies": {
+        "fee_payment_strategy": "user",
         "min_balance": 0,
         "allowed_tokens": [
           {
