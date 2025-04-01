@@ -24,8 +24,8 @@ use crate::{
         RelayerRepositoryStorage,
     },
     services::{
-        get_solana_network_provider_from_str, EvmSignerFactory, JupiterService,
-        SolanaSignerFactory, TransactionCounterService,
+        get_solana_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
+        TransactionCounterService,
     },
 };
 
@@ -309,16 +309,8 @@ impl RelayerFactoryTrait for RelayerFactory {
                 };
 
                 // Try custom RPC URL first, then fall back to public RPC URLs
-                let rpc_url = relayer
-                    .custom_rpc_urls
-                    .as_ref()
-                    .and_then(|urls| urls.first().cloned())
-                    .or_else(|| {
-                        network
-                            .public_rpc_urls()
-                            .and_then(|urls| urls.first().cloned())
-                            .map(String::from)
-                    })
+                let rpc_url = network
+                    .get_rpc_url(relayer.custom_rpc_urls.clone())
                     .ok_or_else(|| {
                         RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
@@ -345,7 +337,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let provider = Arc::new(get_solana_network_provider_from_str(
+                let provider = Arc::new(get_solana_network_provider(
                     &relayer.network,
                     relayer.custom_rpc_urls.clone(),
                 )?);

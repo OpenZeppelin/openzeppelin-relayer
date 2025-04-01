@@ -52,8 +52,7 @@
             "mint": "So11111111111111111111111111111111111111112"
           }
         ]
-      },
-      "custom_rpc_urls": ["https://test-rpc-url"]
+      }
     }
   ],
   "notifications": [

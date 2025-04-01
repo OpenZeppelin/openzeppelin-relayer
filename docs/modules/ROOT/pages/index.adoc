@@ -703,7 +703,7 @@ Available configuration fields
 
 |custom_rpc_urls
 |list
-|Optional custom RPC URL for the network. If provided, this will be used instead of the public RPC URLs. This is useful for using your own RPC node or a paid service provider. The first url of the list is going to be used as the default
+|Optional custom RPC URLs for the network. If provided, this will be used instead of the public RPC URLs. This is useful for using your own RPC node or a paid service provider. The first url of the list is going to be used as the default
 
 |policies
 |list

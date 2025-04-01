@@ -276,6 +276,17 @@ impl RelayerFileConfig {
         Ok(())
     }
 
+    fn validate_custom_rpc_urls(&self) -> Result<(), ConfigFileError> {
+        if let Some(urls) = &self.custom_rpc_urls {
+            for url in urls {
+                reqwest::Url::parse(url).map_err(|_| {
+                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", url))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     // TODO add validation that multiple relayers on same network cannot use same signer
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         if self.id.is_empty() {
@@ -304,8 +315,8 @@ impl RelayerFileConfig {
         }
 
         self.validate_network()?;
-
         self.validate_policies()?;
+        self.validate_custom_rpc_urls()?;
         Ok(())
     }
 }
@@ -477,5 +488,80 @@ mod tests {
         });
 
         let _relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+    }
+
+    #[test]
+    fn test_valid_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": [
+                "https://api.example.com/rpc",
+                "https://rpc.example.com"
+            ]
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": [
+                "not-a-url",
+                "https://api.example.com/rpc"
+            ]
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(ConfigFileError::InvalidFormat(msg)) = result {
+            assert!(msg.contains("Invalid RPC URL"));
+        } else {
+            panic!("Expected ConfigFileError::InvalidFormat");
+        }
+    }
+
+    #[test]
+    fn test_empty_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": []
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_no_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
     }
 }
