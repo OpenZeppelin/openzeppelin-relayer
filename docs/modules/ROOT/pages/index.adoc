@@ -8,7 +8,6 @@ CAUTION: This software is in alpha stage. Use in production environments at your
 OpenZeppelin Relayer is a service that provides infrastructure to relay transactions to the EVM & Non-EVM networks. It is designed to be used as a backend for dApps that need to interact with these networks.
 
 **Features**
-
 - **Multi-Chain Support**: Interact with multiple blockchain networks, including Solana and EVM-based chains.
 - **Transaction Relaying**: Submit transactions to supported blockchain networks efficiently.
 - **Transaction Signing**: Securely sign transactions using configurable key management.
@@ -196,25 +195,23 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 Each example includes a README with step-by-step instructions and Docker Compose configuration.
 ====
 
-=== Installation
-
-==== Local Setup
+=== Install Locally
 
 . Clone the repository:
-
++
 [source,bash]
 ----
 git clone https://github.com/openzeppelin/openzeppelin-relayer
 cd openzeppelin-relayer
 ----
 
-. Verify you have sodium libs installed. If not follow instructions:
-
-* Install stable libsodium version from link:https://download.libsodium.org/libsodium/releases/[here].
-* Follow steps to install libsodium from the link:https://doc.libsodium.org/installation[libsodium installation guide].
+. Verify you have sodium libs installed. If not, follow these instructions:
++
+* Install a stable libsodium version from link:https://download.libsodium.org/libsodium/releases/[here].
+* Follow the steps in the link:https://doc.libsodium.org/installation[libsodium installation guide].
 
 . Install dependencies:
-
++
 [source,bash]
 ----
 cargo build
@@ -222,7 +219,7 @@ cargo build
 
 == Running the Relayer
 
-=== Local Execution
+=== Option 1: Run Locally
 
 
 [source,bash]
@@ -232,16 +229,16 @@ cargo run
 
 NOTE: Before executing the command, ensure that the `.env` and `config.json` files are configured as detailed in the xref:index.adoc#configuration_references[Configuration References] section.
 
-=== Docker Deployment
+=== Option 2: Run with Docker
 
 The Relayer can be run as either a development or production container using the corresponding Dockerfile (`Dockerfile.development` or `Dockerfile.production`).
 
-==== Environment Configuration
+==== Step 1: Configure Environment
 
 * Edit `.env` at the root of the repository to adjust environment variables
 * The appropriate .env file will be included during image build
 
-==== Building the Image
+==== Step 2: Build the Image
 
 You can build using Docker Compose (v2).
 
@@ -254,7 +251,7 @@ docker compose build
 DOCKERFILE=Dockerfile.production docker compose build
 ----
 
-==== Running the Container
+==== Step 3: Run the Container
 
 Use Docker Compose to run the container:
 
@@ -420,11 +417,12 @@ cp config/config.example.json config/config.json
 
 There are 3 important sections in this file:
 
-- signers
-- relayers
-- notifications
+- Signers: Defines transaction signing methods.
+- Notifications: Sets up status alerts
+- Relayers: Configures networks, noftications channels, policies & singers.
 
-==== Signers
+
+==== 1. Signers
 
 * `signers` array, which must contain, at least, one valid signer configuration:
 
@@ -602,7 +600,7 @@ Available configuration fields
 |===
 
 
-==== Notifications
+==== 2. Notifications
 
 * `notifications` array, which should contain, at least, one valid configuration:
 [source,json]
@@ -645,7 +643,7 @@ Available configuration fields
 |Signing key value, env variable name, ...
 |===
 
-==== Relayers
+==== 3. Relayers
 
 * `relayers` array, containing at least one valid relayer configuration:
 [source,json]
@@ -795,7 +793,6 @@ Policies
 |Vector<String>
 |A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional)
 |===
-
 
 ==== Config file full example
 
