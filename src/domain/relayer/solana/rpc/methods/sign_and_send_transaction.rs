@@ -502,7 +502,15 @@ mod tests {
             Err(SolanaRpcError::SolanaTransactionValidation(err)) => {
                 let error_string = err.to_string();
                 assert!(
-                    error_string.contains("Insufficient balance for transfer: 1000000 < 5000000"),
+                    error_string
+                        .contains("Insufficient balance for cumulative transfers: account "),
+                    "Unexpected error message: {}",
+                    err
+                );
+                assert!(
+                    error_string.contains(
+                        "has balance 1000000 but requires 6000000 across all instructions"
+                    ),
                     "Unexpected error message: {}",
                     err
                 );

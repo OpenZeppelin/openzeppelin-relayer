@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Validator for Solana transactions that enforces relayer policies and transaction
 /// constraints.
 ///
@@ -348,6 +350,10 @@ impl SolanaTransactionValidator {
             _ => return Ok(()), // No token restrictions
         };
 
+        // Track cumulative transfers from each source account
+        let mut account_transfers: HashMap<Pubkey, u64> = HashMap::new();
+        let mut account_balances: HashMap<Pubkey, u64> = HashMap::new();
+
         for ix in &tx.message.instructions {
             let program_id = tx.message.account_keys[ix.program_id_index as usize];
 
@@ -412,55 +418,54 @@ impl SolanaTransactionValidator {
                                 ));
                             }
 
-                            // Get mint address from token account
-                            let source_account = provider
-                                .get_account_from_pubkey(source_pubkey)
-                                .await
-                                .map_err(|e| {
-                                    SolanaTransactionValidationError::ValidationError(e.to_string())
-                                })?;
+                            // Get mint address from token account - only once per source account
+                            if !account_balances.contains_key(source_pubkey) {
+                                let source_account = provider
+                                    .get_account_from_pubkey(source_pubkey)
+                                    .await
+                                    .map_err(|e| {
+                                        SolanaTransactionValidationError::ValidationError(
+                                            e.to_string(),
+                                        )
+                                    })?;
 
-                            let token_account =
-                                Account::unpack(&source_account.data).map_err(|e| {
-                                    SolanaTransactionValidationError::ValidationError(format!(
-                                        "Invalid token account: {}",
-                                        e
-                                    ))
-                                })?;
+                                let token_account =
+                                    Account::unpack(&source_account.data).map_err(|e| {
+                                        SolanaTransactionValidationError::ValidationError(format!(
+                                            "Invalid token account: {}",
+                                            e
+                                        ))
+                                    })?;
 
-                            if token_account.is_frozen() {
-                                return Err(SolanaTransactionValidationError::PolicyViolation(
-                                    "Token account is frozen".to_string(),
-                                ));
-                            }
+                                if token_account.is_frozen() {
+                                    return Err(SolanaTransactionValidationError::PolicyViolation(
+                                        "Token account is frozen".to_string(),
+                                    ));
+                                }
 
-                            let token_config = allowed_tokens
-                                .iter()
-                                .find(|t| t.mint == token_account.mint.to_string());
+                                let token_config = allowed_tokens
+                                    .iter()
+                                    .find(|t| t.mint == token_account.mint.to_string());
 
-                            // check if token is allowed by policy
-                            if token_config.is_none() {
-                                return Err(SolanaTransactionValidationError::PolicyViolation(
-                                    format!(
-                                        "Token {} not allowed for transfers",
-                                        token_account.mint
-                                    ),
-                                ));
-                            }
+                                // check if token is allowed by policy
+                                if token_config.is_none() {
+                                    return Err(SolanaTransactionValidationError::PolicyViolation(
+                                        format!(
+                                            "Token {} not allowed for transfers",
+                                            token_account.mint
+                                        ),
+                                    ));
+                                }
+                                // Store the balance for later use
+                                account_balances.insert(*source_pubkey, token_account.amount);
 
-                            if token_account.amount < amount {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    format!(
-                                        "Insufficient balance for transfer: {} < {}",
-                                        token_account.amount, amount
-                                    ),
-                                ));
-                            }
-
-                            if let Some(config) = token_config {
-                                if let TokenInstruction::TransferChecked { decimals, .. } = token_ix
+                                // Validate decimals for TransferChecked
+                                if let (
+                                    Some(config),
+                                    TokenInstruction::TransferChecked { decimals, .. },
+                                ) = (token_config, &token_ix)
                                 {
-                                    if Some(decimals) != config.decimals {
+                                    if Some(*decimals) != config.decimals {
                                         return Err(
                                             SolanaTransactionValidationError::ValidationError(
                                                 format!(
@@ -475,21 +480,25 @@ impl SolanaTransactionValidator {
                                 // if relayer is destination, check max fee
                                 if destination_pubkey == relayer_account {
                                     // Check max fee if configured
-                                    if let Some(max_fee) = config.max_allowed_fee {
-                                        if amount > max_fee {
-                                            return Err(
-                                                SolanaTransactionValidationError::PolicyViolation(
-                                                    format!(
-                                                        "Transfer amount {} exceeds max fee \
-                                                         allowed {} for token {}",
-                                                        amount, max_fee, token_account.mint
-                                                    ),
-                                                ),
-                                            );
+                                    if let Some(config) = token_config {
+                                        if let Some(max_fee) = config.max_allowed_fee {
+                                            if amount > max_fee {
+                                                return Err(
+                     SolanaTransactionValidationError::PolicyViolation(
+                         format!(
+                             "Transfer amount {} exceeds max fee \
+                              allowed {} for token {}",
+                             amount, max_fee, token_account.mint
+                         ),
+                     ),
+                 );
+                                            }
                                         }
                                     }
                                 }
                             }
+
+                            *account_transfers.entry(*source_pubkey).or_insert(0) += amount;
                         }
                         _ => {
                             // For any other token instruction, verify relayer account is not used
@@ -515,6 +524,19 @@ impl SolanaTransactionValidator {
             }
         }
 
+        // validate that cumulative transfers don't exceed balances
+        for (account, total_transfer) in account_transfers {
+            let balance = *account_balances.get(&account).unwrap();
+
+            if balance < total_transfer {
+                return Err(SolanaTransactionValidationError::ValidationError(
+            format!(
+                "Insufficient balance for cumulative transfers: account {} has balance {} but requires {} across all instructions",
+                account, balance, total_transfer
+            ),
+        ));
+            }
+        }
         Ok(())
     }
 
@@ -1142,7 +1164,12 @@ mod tests {
         match result {
             Err(SolanaTransactionValidationError::ValidationError(msg)) => {
                 assert!(
-                    msg.contains("Insufficient balance for transfer: 999 < 2000"),
+                    msg.contains("Insufficient balance for cumulative transfers: account "),
+                    "Unexpected error message: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("has balance 999 but requires 2000 across all instructions"),
                     "Unexpected error message: {}",
                     msg
                 );
