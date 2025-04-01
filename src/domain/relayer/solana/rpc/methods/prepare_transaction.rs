@@ -177,7 +177,7 @@ where
             };
 
             let (fee_quote, buffered_total_fee) = self
-                .estimate_and_convert_fee(&transaction, &fee_token, policies.fee_margin_percentage)
+                .estimate_and_convert_fee(&transaction, fee_token, policies.fee_margin_percentage)
                 .await?;
 
             (transaction, recent_blockhash, buffered_total_fee, fee_quote)

@@ -587,7 +587,7 @@ where
         }
 
         let draft_fee_instructions = self
-            .handle_token_transfer(&source, &relayer_pubkey, &token_mint, amount)
+            .handle_token_transfer(&source, relayer_pubkey, &token_mint, amount)
             .await?;
 
         let original_instructions = transaction_request
@@ -615,7 +615,7 @@ where
 
         let message = solana_sdk::message::Message::new_with_blockhash(
             &all_instructions,
-            Some(&relayer_pubkey), // Set relayer as fee payer
+            Some(relayer_pubkey), // Set relayer as fee payer
             &recent_blockhash.0,
         );
 
@@ -681,21 +681,21 @@ where
         relayer_pubkey: &Pubkey,
     ) -> Option<u64> {
         // Look for system program transfers to relayer
-        for (_ix_index, ix) in transaction.message.instructions.iter().enumerate() {
+        for ix in transaction.message.instructions.iter() {
             let program_id = transaction.message.account_keys[ix.program_id_index as usize];
 
             // Check if it's system program
             if program_id == system_program::id() {
-                if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
-                    if let SystemInstruction::Transfer { lamports } = system_ix {
-                        // Check destination account
-                        if ix.accounts.len() >= 2 {
-                            let dest_idx = ix.accounts[1] as usize;
-                            if dest_idx < transaction.message.account_keys.len() {
-                                let dest = transaction.message.account_keys[dest_idx];
-                                if dest == *relayer_pubkey {
-                                    return Some(lamports);
-                                }
+                if let Ok(SystemInstruction::Transfer { lamports }) =
+                    bincode::deserialize::<SystemInstruction>(&ix.data)
+                {
+                    // Check destination account
+                    if ix.accounts.len() >= 2 {
+                        let dest_idx = ix.accounts[1] as usize;
+                        if dest_idx < transaction.message.account_keys.len() {
+                            let dest = transaction.message.account_keys[dest_idx];
+                            if dest == *relayer_pubkey {
+                                return Some(lamports);
                             }
                         }
                     }
@@ -1845,8 +1845,8 @@ mod tests {
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
         let user_keypair = Keypair::new();
-        let user_pubkey = user_keypair.pubkey().clone();
-        let relayer_pubkey = relayer_keypair.pubkey().clone();
+        let user_pubkey = user_keypair.pubkey();
+        let relayer_pubkey = relayer_keypair.pubkey();
 
         let token_mint = Pubkey::from_str(test_token).unwrap();
 
@@ -2059,8 +2059,8 @@ mod tests {
         let relayer_keypair = Keypair::new();
         relayer.address = relayer_keypair.pubkey().to_string();
         let user_keypair = Keypair::new();
-        let user_pubkey = user_keypair.pubkey().clone();
-        let relayer_pubkey = relayer_keypair.pubkey().clone();
+        let user_pubkey = user_keypair.pubkey();
+        let relayer_pubkey = relayer_keypair.pubkey();
 
         let token_mint = Pubkey::from_str(test_token).unwrap();
 

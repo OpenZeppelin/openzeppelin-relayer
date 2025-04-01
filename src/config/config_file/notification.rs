@@ -49,10 +49,11 @@ impl NotificationFileConfig {
                         Ok(key_value) => {
                             // Validate the key length
                             if key_value.len() < MINIMUM_SECRET_VALUE_LENGTH {
-                                return Err(ConfigFileError::InvalidFormat(
-                                    format!("Signing key must be at least {} characters long (found {})", 
-                                        MINIMUM_SECRET_VALUE_LENGTH, key_value.len()).into(),
-                                ));
+                                return Err(ConfigFileError::InvalidFormat(format!(
+                                    "Signing key must be at least {} characters long (found {})",
+                                    MINIMUM_SECRET_VALUE_LENGTH,
+                                    key_value.len()
+                                )));
                             }
                         }
                         Err(e) => {
@@ -71,10 +72,10 @@ impl NotificationFileConfig {
                     }
 
                     if !value.has_minimum_length(MINIMUM_SECRET_VALUE_LENGTH) {
-                        return Err(ConfigFileError::InvalidFormat(
-                            format!("Security error: Signing key value must be at least {} characters long", MINIMUM_SECRET_VALUE_LENGTH)
-                                .into(),
-                        ));
+                        return Err(ConfigFileError::InvalidFormat(format!(
+                            "Security error: Signing key value must be at least {} characters long",
+                            MINIMUM_SECRET_VALUE_LENGTH
+                        )));
                     }
                 }
             },

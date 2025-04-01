@@ -280,9 +280,8 @@ impl SolanaTransactionValidator {
                         // Only validate transfers where the source is the relayer fee account.
                         if source_pubkey == relayer_account {
                             return Err(SolanaTransactionValidationError::PolicyViolation(
-                                format!(
-                                    "Lamports transfers are not allowed from the relayer account",
-                                ),
+                                "Lamports transfers are not allowed from the relayer account"
+                                    .to_string(),
                             ));
                         }
                     }
@@ -491,7 +490,7 @@ impl SolanaTransactionValidator {
                         _ => {
                             // For any other token instruction, verify relayer account is not used
                             // as a source by checking if it's marked as writable
-                            for (_i, account) in ix.accounts.iter().enumerate() {
+                            for account in ix.accounts.iter() {
                                 let account_index = *account as usize;
                                 if account_index < tx.message.account_keys.len() {
                                     let pubkey = &tx.message.account_keys[account_index];

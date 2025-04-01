@@ -145,7 +145,7 @@ where
         let policies = self.relayer.policies.get_solana_policy();
         let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
         let token_transfer_instruction = self
-            .handle_token_transfer(&source, &destination, &token_mint, amount)
+            .handle_token_transfer(source, destination, token_mint, amount)
             .await?;
 
         if user_pays_fee {
@@ -192,7 +192,7 @@ where
             let (estimated_fee_quote, buffered_total_fee) = self
                 .estimate_and_convert_fee(
                     &transaction,
-                    &token_mint_str,
+                    token_mint_str,
                     policies.fee_margin_percentage,
                 )
                 .await?;

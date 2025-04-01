@@ -160,7 +160,7 @@ where
         let (fee_quote, _) = self
             .estimate_and_convert_fee(
                 &final_transaction,
-                &fee_token,
+                fee_token,
                 policies.fee_margin_percentage,
             )
             .await?;
