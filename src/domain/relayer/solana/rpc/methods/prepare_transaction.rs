@@ -114,6 +114,11 @@ where
         })
     }
 
+    /// Prepares a transaction with the appropriate fee strategy.
+    ///
+    /// This function creates a transaction based on the fee payment strategy defined in the relayer's
+    /// policies. It either uses the relayer as the fee payer or allows the user to pay the fee.
+    /// It also estimates the fee and returns the transaction, recent blockhash, total fee, and fee quote.
     async fn prepare_transaction_with_fee_strategy(
         &self,
         transaction_request: &Transaction,
@@ -315,7 +320,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_success_user_fee_strategy() {
-        let mut ctx = setup_test_context_fee_estimate_user_fee_strategy();
+        let mut ctx = setup_test_context_single_tx_user_fee_strategy();
 
         ctx.provider
             .expect_get_account_from_pubkey()

@@ -21,6 +21,9 @@ use crate::{
     services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
 };
 
+/// Creates a test context for Solana RPC methods
+/// It includes a test transaction, relayer, and mock services
+/// Used for testing methods with relayer fee strategy
 pub fn setup_test_context() -> (
     RelayerRepoModel,
     MockSolanaSignTrait,
@@ -81,7 +84,6 @@ pub fn setup_test_context() -> (
     )
 }
 
-/// A struct containing all the test context for user fee strategy tests
 pub struct UserFeeStrategyTestContext {
     pub relayer: RelayerRepoModel,
     pub signer: MockSolanaSignTrait,
@@ -99,6 +101,10 @@ pub struct UserFeeStrategyTestContext {
     pub fee_amount: u64,
 }
 
+/// This test context is for user fee strategy
+/// It creates a transaction with two instructions:
+/// 1. Main transfer from user to recipient
+/// 2. Fee transfer from user to relayer
 pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     let token_owner = Keypair::new();
     let relayer_keypair = Keypair::new();
@@ -220,7 +226,7 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     }
 }
 
-pub struct UserFeeStrategyFeeEstimateTestContext {
+pub struct UserFeeStrategySingleTxTestContext {
     pub relayer: RelayerRepoModel,
     pub signer: MockSolanaSignTrait,
     pub provider: MockSolanaProviderTrait,
@@ -239,8 +245,8 @@ pub struct UserFeeStrategyFeeEstimateTestContext {
     pub fee_amount: u64,
 }
 
-pub fn setup_test_context_fee_estimate_user_fee_strategy() -> UserFeeStrategyFeeEstimateTestContext
-{
+// This test context is for a single transaction used in rpc methods like prepare transactions and fee estimate
+pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingleTxTestContext {
     let payer_keypair = Keypair::new(); // This will pay transaction fees only
     let token_owner = Keypair::new(); // This will own the token account
     let relayer_keypair = Keypair::new();
@@ -324,7 +330,7 @@ pub fn setup_test_context_fee_estimate_user_fee_strategy() -> UserFeeStrategyFee
     let jupiter_service = MockJupiterServiceTrait::new();
     let job_producer = MockJobProducerTrait::new();
 
-    UserFeeStrategyFeeEstimateTestContext {
+    UserFeeStrategySingleTxTestContext {
         relayer,
         signer: mock_signer,
         provider,

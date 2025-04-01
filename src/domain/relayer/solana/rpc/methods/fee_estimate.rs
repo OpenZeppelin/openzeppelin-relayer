@@ -210,7 +210,7 @@ mod tests {
     use crate::{
         constants::WRAPPED_SOL_MINT,
         domain::{
-            setup_test_context, setup_test_context_fee_estimate_user_fee_strategy, SolanaRpcMethods,
+            setup_test_context, setup_test_context_single_tx_user_fee_strategy, SolanaRpcMethods,
         },
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
         services::{MockSolanaProviderTrait, QuoteResponse, SolanaProviderError},
@@ -293,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_with_allowed_token_user_fee_strategy() {
-        let mut ctx = setup_test_context_fee_estimate_user_fee_strategy();
+        let mut ctx = setup_test_context_single_tx_user_fee_strategy();
 
         ctx.provider
             .expect_get_account_from_pubkey()

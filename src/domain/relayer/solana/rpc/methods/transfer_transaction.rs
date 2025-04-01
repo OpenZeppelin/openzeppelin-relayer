@@ -133,6 +133,11 @@ where
         Ok(result)
     }
 
+    /// Creates a transfer transaction with the specified fee strategy.
+    ///
+    /// This function handles the creation of a transfer transaction, including the fee payment
+    /// strategy. It constructs the transaction based on the relayer's policies and the user's
+    /// preferences.
     async fn create_transfer_transaction_with_fee_strategy(
         &self,
         source: &Pubkey,

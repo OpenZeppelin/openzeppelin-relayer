@@ -465,7 +465,7 @@ where
         Ok(instructions)
     }
 
-    /// Estimates fee for a transaction and converts it to the specified token
+    /// This function estimates the fee for a transaction and applies a margin if specified.
     pub(crate) async fn estimate_fee_with_margin(
         &self,
         transaction: &Transaction,
@@ -520,6 +520,7 @@ where
         Ok((fee_quote, fee_with_margin))
     }
 
+    /// Converts a compiled instruction to a Solana SDK instruction.
     pub(crate) fn convert_compiled_instruction(
         &self,
         compiled_instruction: &CompiledInstruction,
@@ -576,7 +577,6 @@ where
         // Get source address (fee payer) from the transaction
         let source = transaction_request.message.account_keys[0];
 
-        // Create dummy instruction to move tokens to relayer address
         let token_mint = Pubkey::from_str(fee_token)
             .map_err(|_| SolanaRpcError::InvalidParams("Invalid token mint address".to_string()))?;
 
@@ -674,7 +674,7 @@ where
         ))
     }
 
-    /// Finds SOL transfers to the relayer in the transaction
+    /// Finds SOL payment to the relayer in the transaction
     pub(crate) fn find_sol_payment_to_relayer(
         &self,
         transaction: &Transaction,
@@ -705,6 +705,11 @@ where
         None
     }
 
+    /// Finds token payments to the relayer in the transaction
+    ///
+    /// This function checks the transaction instructions for token transfers to the relayer's
+    /// token accounts. It verifies that the destination token account is owned by the relayer
+    /// and that the source token account has sufficient balance.
     pub(crate) async fn find_token_payments_to_relayer(
         &self,
         transaction: &Transaction,
