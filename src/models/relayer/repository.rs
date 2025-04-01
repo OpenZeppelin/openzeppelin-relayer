@@ -118,6 +118,7 @@ impl SolanaAllowedTokensPolicy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum SolanaFeePaymentStrategy {
     User,
     Relayer,

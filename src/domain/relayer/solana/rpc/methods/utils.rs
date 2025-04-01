@@ -436,7 +436,7 @@ where
                 relayer_pubkey,
                 destination,
                 token_mint,
-                destination,
+                &spl_token::id(),
             ));
         }
         let token_decimals = self
@@ -743,7 +743,12 @@ where
 
                         // Get source and destination token accounts from instruction
                         let source_token_idx = ix.accounts[0] as usize;
-                        let dest_token_idx = ix.accounts[1] as usize;
+                        let dest_token_idx = match token_ix {
+                            spl_token::instruction::TokenInstruction::TransferChecked {
+                                ..
+                            } => ix.accounts[2] as usize,
+                            _ => ix.accounts[1] as usize,
+                        };
 
                         if dest_token_idx >= transaction.message.account_keys.len()
                             || source_token_idx >= transaction.message.account_keys.len()

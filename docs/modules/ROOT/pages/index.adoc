@@ -755,7 +755,7 @@ Policies
 
 |solana
 |fee_margin_percentage
-|f32 (Values between 0 and 100)
+|f32
 |Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional.
 
 |solana

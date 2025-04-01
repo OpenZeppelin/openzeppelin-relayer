@@ -39,6 +39,7 @@ pub struct AllowedToken {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
 pub enum ConfigFileRelayerSolanaFeePaymentStrategy {
     User,
     Relayer,
@@ -252,9 +253,9 @@ impl RelayerFileConfig {
         fee_margin_percentage: Option<f32>,
     ) -> Result<(), ConfigFileError> {
         if let Some(value) = fee_margin_percentage {
-            if !(0f32..=100f32).contains(&value) {
+            if value < 0f32 {
                 return Err(ConfigFileError::InvalidPolicy(
-                    "Value must be between 0 and 100".into(),
+                    "Negative values are not accepted".into(),
                 ));
             }
         }

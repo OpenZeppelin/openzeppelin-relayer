@@ -380,7 +380,10 @@ impl SolanaTransactionValidator {
                                 ));
                             }
 
-                            let dest_index = ix.accounts[1] as usize;
+                            let dest_index = match token_ix {
+                                TokenInstruction::TransferChecked { .. } => ix.accounts[2] as usize,
+                                _ => ix.accounts[1] as usize,
+                            };
                             let destination_pubkey = &tx.message.account_keys[dest_index];
 
                             // Validate destination account is writable but not signer
@@ -395,16 +398,17 @@ impl SolanaTransactionValidator {
                                 ));
                             }
 
-                            let owner_index = ix.accounts[2] as usize;
+                            let owner_index = match token_ix {
+                                TokenInstruction::TransferChecked { .. } => ix.accounts[3] as usize,
+                                _ => ix.accounts[2] as usize,
+                            };
                             // Validate owner is signer but not writable
                             if !tx.message.is_signer(owner_index) {
                                 return Err(SolanaTransactionValidationError::ValidationError(
-                                    "Owner must be signer".to_string(),
-                                ));
-                            }
-                            if tx.message.is_maybe_writable(owner_index, None) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    "Owner must not be writable".to_string(),
+                                    format!(
+                                        "Owner must be signer {}",
+                                        &tx.message.account_keys[owner_index]
+                                    ),
                                 ));
                             }
 
