@@ -251,7 +251,7 @@ mod tests {
     use spl_token::state::Account;
 
     #[tokio::test]
-    async fn test_transfer_wsol_spl_token_success() {
+    async fn test_transfer_wsol_spl_token_success_relayer_fee_strategy() {
         let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
         let test_token = WRAPPED_SOL_MINT;
@@ -292,6 +292,98 @@ mod tests {
         });
 
         // Mock provider responses
+        provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_commitment| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
+
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        provider
+            .expect_get_account_from_pubkey()
+            .returning(move |_| {
+                let account_data = account_data.clone();
+                Box::pin(async move {
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            Arc::new(provider),
+            Arc::new(signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+        );
+
+        let params = TransferTransactionRequestParams {
+            token: test_token.to_string(),
+            source: Pubkey::new_unique().to_string(),
+            destination: Pubkey::new_unique().to_string(),
+            amount: 5000,
+        };
+
+        let result = rpc.transfer_transaction(params).await;
+        assert!(result.is_ok());
+
+        let transfer_result = result.unwrap();
+        assert_eq!(transfer_result.fee_in_spl, "5000");
+        assert_eq!(transfer_result.fee_in_lamports, "5000");
+        assert_eq!(transfer_result.fee_token, test_token);
+        assert_ne!(transfer_result.valid_until_blockheight, 0);
+    }
+
+    #[tokio::test]
+    async fn test_transfer_wsol_spl_token_success_user_fee_strategy() {
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+            setup_test_context();
+        let test_token = WRAPPED_SOL_MINT;
+
+        // Create valid token account data
+        let token_account = spl_token::state::Account {
+            mint: Pubkey::from_str(test_token).unwrap(),
+            owner: Pubkey::new_unique(), // Source account owner
+            amount: 10_000_000_000,
+            delegate: COption::None,
+            state: spl_token::state::AccountState::Initialized,
+            is_native: COption::None,
+            delegated_amount: 0,
+            close_authority: COption::None,
+        };
+
+        let mut account_data = vec![0; Account::LEN];
+        Account::pack(token_account, &mut account_data).unwrap();
+
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::User,
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: test_token.to_string(),
+                symbol: Some("SOL".to_string()),
+                decimals: Some(6),
+                max_allowed_fee: Some(1_000_000),
+                conversion_slippage_percentage: Some(1.0),
+            }]),
+            ..Default::default()
+        });
+
+        let signature = Signature::new_unique();
+
+        signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
+
         provider
             .expect_get_latest_blockhash_with_commitment()
             .returning(|_commitment| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
@@ -476,6 +568,7 @@ mod tests {
 
         // Set up policy
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: test_token.to_string(),
                 symbol: Some("USDC".to_string()),
@@ -661,64 +754,4 @@ mod tests {
         let result = rpc.transfer_transaction(params).await;
         assert!(matches!(result, Err(SolanaRpcError::InsufficientFunds(_))));
     }
-
-    // #[tokio::test]
-    // async fn test_transfer_transaction_with_webhook() {
-    //     let (mut relayer, mut signer, mut provider, jupiter_service, _, mut job_producer) =
-    //         setup_test_context();
-
-    //     // Set notification ID in relayer config
-    //     relayer.notification_id = Some("test-webhook".to_string());
-
-    //     // Set up policy with SOL
-    //     relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-    //         allowed_programs: Some(vec![NATIVE_SOL.to_string()]),
-    //         ..Default::default()
-    //     });
-
-    //     let signature = Signature::new_unique();
-    //     signer.expect_sign().returning(move |_| {
-    //         let signature_clone = signature;
-    //         Box::pin(async move { Ok(signature_clone) })
-    //     });
-
-    //     // Mock provider responses
-    //     provider
-    //         .expect_get_latest_blockhash_with_commitment()
-    //         .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
-
-    //     provider
-    //         .expect_calculate_total_fee()
-    //         .returning(|_| Box::pin(async { Ok(5000u64) }));
-
-    //     provider
-    //         .expect_get_balance()
-    //         .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
-
-    //     job_producer
-    //         .expect_produce_send_notification_job()
-    //         .returning(|_, _| Box::pin(async { Ok(()) }))
-    //         .times(1);
-    //     let rpc = SolanaRpcMethodsImpl::new_mock(
-    //         relayer,
-    //         Arc::new(provider),
-    //         Arc::new(signer),
-    //         Arc::new(jupiter_service),
-    //         Arc::new(job_producer),
-    //     );
-
-    //     let params = TransferTransactionRequestParams {
-    //         token: NATIVE_SOL.to_string(),
-    //         source: Pubkey::new_unique().to_string(),
-    //         destination: Pubkey::new_unique().to_string(),
-    //         amount: 1_000_000_000,
-    //     };
-
-    //     let result = rpc.transfer_transaction(params).await;
-    //     assert!(result.is_ok());
-
-    //     let transfer_result = result.unwrap();
-    //     assert_eq!(transfer_result.fee_token, NATIVE_SOL);
-    //     assert_eq!(transfer_result.fee_in_lamports, "5000");
-    // }
 }

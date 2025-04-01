@@ -266,7 +266,7 @@ impl SolanaTransactionValidator {
             #[allow(clippy::collapsible_match)]
             if program_id == system_program::id() {
                 if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
-                    if let SystemInstruction::Transfer { lamports } = system_ix {
+                    if let SystemInstruction::Transfer { .. } = system_ix {
                         // In a system transfer instruction, the first account is the source and the
                         // second is the destination.
                         let source_index = ix.accounts.first().ok_or_else(|| {

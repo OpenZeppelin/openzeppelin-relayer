@@ -183,6 +183,7 @@ where
     /// This function will return an error if:
     /// * The relayer's public key cannot be parsed
     /// * The transaction contains invalid instructions
+    #[allow(dead_code)]
     pub(crate) async fn estimate_relayer_lampart_outflow(
         &self,
         tx: &Transaction,
@@ -415,9 +416,10 @@ where
             .map_err(|e| SolanaRpcError::InvalidParams(format!("Invalid token account: {}", e)))?;
 
         if unpacked_source_account.amount < amount {
-            return Err(SolanaRpcError::InsufficientFunds(
-                "Insufficient token balance".to_string(),
-            ));
+            return Err(SolanaRpcError::InsufficientFunds(format!(
+                "Insufficient token balance: required {} but found {}",
+                amount, unpacked_source_account.amount
+            )));
         }
 
         // Create destination ATA if needed
@@ -762,10 +764,7 @@ where
                                 let dest_token_account = match Account::unpack(&dest_account.data) {
                                     Ok(account) => account,
                                     Err(e) => {
-                                        error!(
-                                            "Failed to unpack destination token account: {}",
-                                            e
-                                        );
+                                        error!("Failed to unpack destination token account: {}", e);
                                         continue;
                                     }
                                 };
@@ -818,19 +817,13 @@ where
                                         }
                                     }
                                     Err(e) => {
-                                        error!(
-                                            "Failed to get source token account: {}",
-                                            e
-                                        );
+                                        error!("Failed to get source token account: {}", e);
                                         continue;
                                     }
                                 }
                             }
                             Err(e) => {
-                                error!(
-                                    "Failed to get destination token account: {}",
-                                    e
-                                );
+                                error!("Failed to get destination token account: {}", e);
                                 continue;
                             }
                         }

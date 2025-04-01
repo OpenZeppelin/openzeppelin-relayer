@@ -209,21 +209,26 @@ mod tests {
 
     use crate::{
         constants::WRAPPED_SOL_MINT,
-        domain::{setup_test_context, SolanaRpcMethods},
+        domain::{
+            setup_test_context, setup_test_context_fee_estimate_user_fee_strategy, SolanaRpcMethods,
+        },
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
-        services::{MockSolanaProviderTrait, QuoteResponse},
+        services::{MockSolanaProviderTrait, QuoteResponse, SolanaProviderError},
     };
 
     use super::*;
     use mockall::predicate::{self};
-    use solana_sdk::hash::Hash;
+    use solana_sdk::{hash::Hash, program_pack::Pack, signer::Signer};
+    use spl_token::state::Account;
+
     #[tokio::test]
-    async fn test_fee_estimate_with_allowed_token() {
+    async fn test_fee_estimate_with_allowed_token_relayer_fee_strategy() {
         let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Set up policy with allowed token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "USDC".to_string(),
                 symbol: Some("USDC".to_string()),
@@ -236,8 +241,8 @@ mod tests {
 
         // Mock provider methods
         provider
-            .expect_get_latest_blockhash()
-            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
 
         provider
             .expect_calculate_total_fee()
@@ -278,6 +283,133 @@ mod tests {
         };
 
         let result = rpc.fee_estimate(params).await;
+
+        assert!(result.is_ok());
+
+        let fee_estimate = result.unwrap();
+        assert_eq!(fee_estimate.estimated_fee, "80");
+        assert_eq!(fee_estimate.conversion_rate, "160");
+    }
+
+    #[tokio::test]
+    async fn test_fee_estimate_with_allowed_token_user_fee_strategy() {
+        let mut ctx = setup_test_context_fee_estimate_user_fee_strategy();
+
+        ctx.provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                let relayer_pubkey = ctx.relayer_keypair.pubkey();
+                let user_pubkey = ctx.user_keypair.pubkey();
+                let payer_pubkey = ctx.payer_keypair.pubkey();
+                Box::pin(async move {
+                    let mut account_data = vec![0; Account::LEN];
+
+                    if pubkey == ctx.relayer_token_account {
+                        // Create relayer's token account
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: relayer_pubkey,
+                            amount: 0, // Current balance doesn't matter
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.user_token_account {
+                        // Create user's token account with sufficient balance
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: user_pubkey,
+                            amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.payer_token_account {
+                        // Create payers's token account with sufficient balance
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: payer_pubkey,
+                            amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else {
+                        Err(SolanaProviderError::RpcError(
+                            "Account not found".to_string(),
+                        ))
+                    }
+                })
+            });
+
+        ctx.provider
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
+
+        ctx.provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(500000000u64) }));
+
+        ctx.jupiter_service
+            .expect_get_sol_to_token_quote()
+            .with(
+                predicate::eq(ctx.token.clone()),
+                predicate::eq(502499999u64),
+                predicate::eq(1.0f32),
+            )
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Ok(QuoteResponse {
+                        input_mint: "SOL".to_string(),
+                        output_mint: "USDC".to_string(),
+                        in_amount: 500000000,
+                        out_amount: 80000000,
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            ctx.relayer,
+            Arc::new(ctx.provider),
+            Arc::new(ctx.signer),
+            Arc::new(ctx.jupiter_service),
+            Arc::new(ctx.job_producer),
+        );
+
+        let token_test = &ctx.token;
+
+        let params = FeeEstimateRequestParams {
+            transaction: ctx.encoded_tx,
+            fee_token: token_test.clone(),
+        };
+
+        let result = rpc.fee_estimate(params).await;
+
         assert!(result.is_ok());
 
         let fee_estimate = result.unwrap();
@@ -291,6 +423,7 @@ mod tests {
             setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // USDT mint
                 symbol: Some("USDT".to_string()),
@@ -304,8 +437,8 @@ mod tests {
         let mut provider = MockSolanaProviderTrait::new();
 
         provider
-            .expect_get_latest_blockhash()
-            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
 
         provider
             .expect_calculate_total_fee()
@@ -361,6 +494,7 @@ mod tests {
 
         // Set up policy with UNI token (decimals = 8)
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "8qJSyQprMC57TWKaYEmetUR3UUiTP2M3hXW6D2evU9Tt".to_string(), // UNI mint
                 symbol: Some("UNI".to_string()),
@@ -372,8 +506,8 @@ mod tests {
         });
 
         provider
-            .expect_get_latest_blockhash()
-            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
 
         provider
             .expect_calculate_total_fee()
@@ -415,6 +549,7 @@ mod tests {
         };
 
         let result = rpc.fee_estimate(params).await;
+
         assert!(result.is_ok());
 
         let fee_estimate = result.unwrap();
@@ -424,11 +559,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_wrapped_sol() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Set up policy with WSOL token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -441,8 +577,8 @@ mod tests {
 
         // Mock provider methods - expect 0.001 SOL fee (1_000_000 lamports)
         provider
-            .expect_get_latest_blockhash()
-            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+            .expect_get_latest_blockhash_with_commitment()
+            .returning(|_| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
 
         provider
             .expect_calculate_total_fee()
