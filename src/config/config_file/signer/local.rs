@@ -87,9 +87,8 @@ impl SignerConfigValidate for LocalSignerFileConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::SecretString;
-
     use super::*;
+    use crate::models::SecretString;
     use std::env;
     use std::fs::File;
     use std::io::Write;
@@ -340,5 +339,44 @@ mod tests {
             },
         };
         assert!(config3.validate_passphrase().is_err());
+    }
+
+    #[test]
+    fn test_env_var_passphrase_with_special_chars() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("test-keystore.json");
+        let mut file = File::create(&file_path).unwrap();
+        writeln!(file, "{{\"mock\": \"keystore\"}}").unwrap();
+
+        // Create a temporary .env file
+        let env_path = temp_dir.path().join(".env");
+        let mut env_file = File::create(&env_path).unwrap();
+        writeln!(
+            env_file,
+            "TEST_SIGNER_PASSPHRASE_SPECIAL=super#secret#passphrase"
+        )
+        .unwrap();
+
+        // Load the .env file
+        dotenvy::from_path(&env_path).unwrap();
+
+        let config = LocalSignerFileConfig {
+            path: file_path.to_str().unwrap().to_string(),
+            passphrase: PlainOrEnvValue::Env {
+                value: "TEST_SIGNER_PASSPHRASE_SPECIAL".to_string(),
+            },
+        };
+
+        assert!(config.validate().is_ok());
+        // Validate that the value from config matches the environment variable
+        if let PlainOrEnvValue::Env { value } = &config.passphrase {
+            assert_eq!(
+                std::env::var(value).unwrap(),
+                "super#secret#passphrase",
+                "Environment variable value should match the expected value"
+            );
+        } else {
+            panic!("Expected Env passphrase variant");
+        }
     }
 }
