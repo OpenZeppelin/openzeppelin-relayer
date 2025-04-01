@@ -104,10 +104,36 @@ where
         &self,
         mut transaction: Transaction,
     ) -> Result<(Transaction, Signature), SolanaRpcError> {
+        // Parse relayer public key
+        let relayer_pubkey = Pubkey::from_str(&self.relayer.address)
+            .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
+        
+        // Find the position of the relayer's public key in account_keys
+        let signer_index = transaction.message.account_keys
+            .iter()
+            .position(|key| *key == relayer_pubkey)
+            .ok_or_else(|| SolanaRpcError::Internal(
+                "Relayer public key not found in transaction signers".to_string()
+            ))?;
+        
+        // Check if this is a signer position (within num_required_signatures)
+        if signer_index >= transaction.message.header.num_required_signatures as usize {
+            return Err(SolanaRpcError::Internal(
+                "Relayer is not marked as a required signer in the transaction".to_string()
+            ));
+        }
+        
+        // Generate signature
         let signature = self.signer.sign(&transaction.message_data()).await?;
-
-        transaction.signatures[0] = signature;
-
+        
+        // Ensure signatures array has enough elements
+        while transaction.signatures.len() <= signer_index {
+            transaction.signatures.push(Signature::default());
+        }
+        
+        // Place signature in the correct position
+        transaction.signatures[signer_index] = signature;
+        
         Ok((transaction, signature))
     }
 
@@ -868,11 +894,10 @@ mod tests {
     async fn test_relayer_sign_transaction() {
         let (relayer, mut signer, provider, jupiter_service, _, job_producer) =
             setup_test_context();
-
-        let payer = Keypair::new();
+        let relayer_pubkey = Pubkey::from_str(&relayer.address).unwrap();
         let recipient = Pubkey::new_unique();
-        let instruction = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
-        let message = Message::new(&[instruction], Some(&payer.pubkey()));
+        let instruction = system_instruction::transfer(&relayer_pubkey, &recipient, 1000);
+        let message = Message::new(&[instruction], Some(&relayer_pubkey));
         let transaction = Transaction::new_unsigned(message);
         signer.expect_sign().returning(move |_| {
             let signature = Signature::new_unique();
