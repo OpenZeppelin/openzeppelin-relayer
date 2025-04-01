@@ -749,6 +749,16 @@ Policies
 |Minimum balance (in lamports or wei) required for the relayer to operate. Optional.
 
 |solana
+|fee_payment_strategy
+|enum(user | relayer)
+|Defines which entity pays for transaction fees. When set to "user", the transaction sender pays fees. When set to "relayer", the relayer service covers transaction fees. Default is "user".
+
+|solana
+|fee_margin_percentage
+|f32 (Values between 0 and 100)
+|Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional.
+
+|solana
 |max_allowed_fee_lamports
 |unsigned 64
 |Maximum allowed fee (in lamports) for a transaction. Optional.
