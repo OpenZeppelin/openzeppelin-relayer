@@ -1,13 +1,7 @@
 //! Test setup for solana rpc methods
 use solana_sdk::{
-    hash::Hash,
-    instruction::{AccountMeta, Instruction},
-    message::Message,
-    pubkey::Pubkey,
-    signature::Keypair,
-    signer::Signer,
-    system_instruction,
-    transaction::Transaction,
+    hash::Hash, message::Message, pubkey::Pubkey, signature::Keypair, signer::Signer,
+    system_instruction, transaction::Transaction,
 };
 use spl_associated_token_account::get_associated_token_address;
 use std::str::FromStr;
@@ -121,47 +115,30 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
     let fee_amount = 1_000_000u64; // Fee amount (1 USDC)
 
-    // Accounts for main transfer
-    let main_transfer_accounts = vec![
-        AccountMeta::new(source_token_account, false), // Source token account (writable)
-        AccountMeta::new(destination_token_account, false), // Destination token account (writable)
-        AccountMeta::new_readonly(token_owner.pubkey(), true), // Owner of source account (signer)
-        AccountMeta::new_readonly(token_mint, false),  // Token mint (readonly)
-    ];
+    let main_transfer_ix = spl_token::instruction::transfer_checked(
+        &spl_token::id(),           // Token program ID
+        &source_token_account,      // Source token account
+        &token_mint,                // Token mint
+        &destination_token_account, // Destination token account
+        &token_owner.pubkey(),      // Owner of the source token account
+        &[],                        // Additional signers (empty array)
+        main_transfer_amount,       // Amount to transfer
+        6,                          // Decimals (6 for USDC)
+    )
+    .unwrap();
 
-    // Create main transfer instruction
-    let main_transfer_data = spl_token::instruction::TokenInstruction::TransferChecked {
-        amount: main_transfer_amount,
-        decimals: 6,
-    }
-    .pack();
-
-    let main_transfer_ix = Instruction {
-        program_id: spl_token::id(),
-        accounts: main_transfer_accounts,
-        data: main_transfer_data,
-    };
-
-    // Accounts for fee transfer
-    let fee_transfer_accounts = vec![
-        AccountMeta::new(source_token_account, false), // Source token account (writable)
-        AccountMeta::new(relayer_token_account, false), // Relayer token account (writable)
-        AccountMeta::new_readonly(token_owner.pubkey(), true), // Owner of source account (signer)
-        AccountMeta::new_readonly(token_mint, false),  // Token mint (readonly)
-    ];
-
-    // Create fee transfer instruction
-    let fee_transfer_data = spl_token::instruction::TokenInstruction::TransferChecked {
-        amount: fee_amount,
-        decimals: 6,
-    }
-    .pack();
-
-    let fee_transfer_ix = Instruction {
-        program_id: spl_token::id(),
-        accounts: fee_transfer_accounts,
-        data: fee_transfer_data,
-    };
+    // Create fee transfer instruction using standard SPL Token method
+    let fee_transfer_ix = spl_token::instruction::transfer_checked(
+        &spl_token::id(),       // Token program ID
+        &source_token_account,  // Source token account
+        &token_mint,            // Token mint
+        &relayer_token_account, // Relayer's token account
+        &token_owner.pubkey(),  // Owner of the source token account
+        &[],                    // Additional signers (empty array)
+        fee_amount,             // Fee amount
+        6,                      // Decimals (6 for USDC)
+    )
+    .unwrap();
 
     // Create the message with both instructions, making sure all accounts are properly marked
     let message = Message::new_with_blockhash(
@@ -265,26 +242,17 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
     let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
     let fee_amount = 1_000_000u64; // Fee amount (1 USDC)
 
-    // Create manual token transfer instruction
-    let transfer_accounts = vec![
-        AccountMeta::new(source_token_account, false), // Source token account (writable)
-        AccountMeta::new(destination_token_account, false), // Destination token account (writable)
-        AccountMeta::new_readonly(token_owner.pubkey(), true), // Owner of source account (signer, NOT writable)
-        AccountMeta::new_readonly(token_mint, false),          // Token mint (readonly)
-    ];
-
-    // Create transfer instruction data
-    let transfer_data = spl_token::instruction::TokenInstruction::TransferChecked {
-        amount: main_transfer_amount,
-        decimals: 6, // USDC has 6 decimals
-    }
-    .pack();
-
-    let transfer_ix = Instruction {
-        program_id: spl_token::id(),
-        accounts: transfer_accounts,
-        data: transfer_data,
-    };
+    let transfer_ix = spl_token::instruction::transfer_checked(
+        &spl_token::id(),           // Token program ID
+        &source_token_account,      // Source token account
+        &token_mint,                // Token mint
+        &destination_token_account, // Destination token account
+        &token_owner.pubkey(),      // Owner of the source token account
+        &[],                        // Additional signers (empty array)
+        main_transfer_amount,       // Amount to transfer
+        6,                          // Decimals (6 for USDC)
+    )
+    .unwrap();
 
     let message = Message::new_with_blockhash(
         &[transfer_ix],
