@@ -414,6 +414,7 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
+            custom_rpc_urls: None,
         }
     }
 
