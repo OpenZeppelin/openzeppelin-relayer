@@ -169,6 +169,17 @@ impl EvmNetwork {
         }
     }
 
+    pub fn get_rpc_url(&self, custom_rpc_urls: Option<Vec<String>>) -> Option<String> {
+        custom_rpc_urls
+            .as_ref()
+            .and_then(|urls| urls.first().cloned())
+            .or_else(|| {
+                self.public_rpc_urls()
+                    .and_then(|urls| urls.first().cloned())
+                    .map(String::from)
+            })
+    }
+
     pub const fn kind(&self) -> &EvmNetworkKind {
         &self.0
     }
@@ -187,6 +198,10 @@ impl EvmNetwork {
 
     pub const fn is_arbitrum(self) -> bool {
         matches!(self.named(), Some(named) if named.is_arbitrum())
+    }
+
+    pub const fn is_rollup(self) -> bool {
+        matches!(self.named(), Some(named) if named.is_rollup())
     }
 
     pub const fn is_testnet(self) -> bool {

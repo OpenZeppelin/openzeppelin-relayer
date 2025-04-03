@@ -37,48 +37,48 @@ pub struct NotificationFileConfig {
 impl NotificationFileConfig {
     fn validate_signing_key(&self) -> Result<(), ConfigFileError> {
         match &self.signing_key {
-            Some(signing_key) => match signing_key {
-                PlainOrEnvValue::Env { value } => {
-                    if value.is_empty() {
-                        return Err(ConfigFileError::MissingField(
-                            "Signing key environment variable name cannot be empty".into(),
-                        ));
-                    }
+            Some(signing_key) => {
+                match signing_key {
+                    PlainOrEnvValue::Env { value } => {
+                        if value.is_empty() {
+                            return Err(ConfigFileError::MissingField(
+                                "Signing key environment variable name cannot be empty".into(),
+                            ));
+                        }
 
-                    match std::env::var(value) {
-                        Ok(key_value) => {
-                            // Validate the key length
-                            if key_value.len() < MINIMUM_SECRET_VALUE_LENGTH {
-                                return Err(ConfigFileError::InvalidFormat(format!(
-                                    "Signing key must be at least {} characters long (found {})",
-                                    MINIMUM_SECRET_VALUE_LENGTH,
-                                    key_value.len()
+                        match std::env::var(value) {
+                            Ok(key_value) => {
+                                // Validate the key length
+                                if key_value.len() < MINIMUM_SECRET_VALUE_LENGTH {
+                                    return Err(ConfigFileError::InvalidFormat(
+                                    format!("Signing key must be at least {} characters long (found {})",
+                                        MINIMUM_SECRET_VALUE_LENGTH, key_value.len()),
+                                ));
+                                }
+                            }
+                            Err(e) => {
+                                return Err(ConfigFileError::MissingEnvVar(format!(
+                                    "Environment variable '{}' not found: {}",
+                                    value, e
                                 )));
                             }
                         }
-                        Err(e) => {
-                            return Err(ConfigFileError::MissingEnvVar(format!(
-                                "Environment variable '{}' not found: {}",
-                                value, e
-                            )));
+                    }
+                    PlainOrEnvValue::Plain { value } => {
+                        if value.is_empty() {
+                            return Err(ConfigFileError::InvalidFormat(
+                                "Signing key value cannot be empty".into(),
+                            ));
+                        }
+
+                        if !value.has_minimum_length(MINIMUM_SECRET_VALUE_LENGTH) {
+                            return Err(ConfigFileError::InvalidFormat(
+                            format!("Security error: Signing key value must be at least {} characters long", MINIMUM_SECRET_VALUE_LENGTH)
+                        ));
                         }
                     }
                 }
-                PlainOrEnvValue::Plain { value } => {
-                    if value.is_empty() {
-                        return Err(ConfigFileError::InvalidFormat(
-                            "Signing key value cannot be empty".into(),
-                        ));
-                    }
-
-                    if !value.has_minimum_length(MINIMUM_SECRET_VALUE_LENGTH) {
-                        return Err(ConfigFileError::InvalidFormat(format!(
-                            "Security error: Signing key value must be at least {} characters long",
-                            MINIMUM_SECRET_VALUE_LENGTH
-                        )));
-                    }
-                }
-            },
+            }
             None => return Ok(()),
         }
 

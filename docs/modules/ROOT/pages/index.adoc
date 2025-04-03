@@ -72,7 +72,7 @@ flowchart TB
             signer[Signer Services]
             provider[Network Providers]
         end
-    
+
         subgraph "Services Layer"
             transaction[Transaction Services]
             vault[Vault Services]
@@ -105,7 +105,7 @@ flowchart TB
     domain -- "Uses" --> relayer
     domain -- "Enforces" --> policies
     relayer -- "Processes" --> transaction
-    
+
     %% Services Layer connections
     transaction -- "Signs with" --> signer
     transaction -- "Connects via" --> provider
@@ -701,6 +701,10 @@ Available configuration fields
 |String
 |Network the relayer will connect to. Please refer to xref:supported_networks[`Supported networks`].
 
+|custom_rpc_urls
+|list
+|Optional custom RPC URLs for the network. If provided, this will be used instead of the public RPC URLs. This is useful for using your own RPC node or a paid service provider. The first url of the list is going to be used as the default
+
 |policies
 |list
 |Overrides default policies. Please refer to the xref:network_policies[`Policies`] table
@@ -818,7 +822,12 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "paused": false,
       "notification_id": "notification-example",
       "signer_id": "local-signer",
-      "network_type": "evm"
+      "network_type": "evm",
+      "custom_rpc_urls": ["https://your-private-rpc-url.example.com"],
+      "policies": {
+        "gas_price_cap": 30000000000000,
+        "eip1559_pricing": true
+      }
     },
     {
       "id": "solana-example",
@@ -828,6 +837,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "solana",
+      "custom_rpc_urls": ["https://your-private-solana-rpc.example.com"],
       "policies": {
         "fee_payment_strategy": "user",
         "min_balance": 0,
@@ -869,6 +879,31 @@ Full `config/config.json` example with evm and solana relayers definitions using
   ]
 }
 ```
+
+=== RPC URL Configuration
+
+The relayer supports two ways to configure RPC URLs:
+
+1. **Public RPC URLs**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
+
+2. **Custom RPC URL**: You can specify a custom RPC URL using the `custom_rpc_urls` field in the relayer configuration. This is useful when you want to:
+   * Use your own RPC node
+   * Use a paid service provider for better reliability and performance
+   * Override the default public RPC URLs
+   * Access custom network endpoints
+
+When both are available, the relayer will:
+1. First attempt to use the `custom_rpc_urls` if configured
+2. Fall back to the public RPC URLs if no custom URL is configured or if it's not accessible
+
+[IMPORTANT]
+====
+When using custom RPC URLs:
+
+* Ensure the URL is secure (HTTPS) when accessing over public networks
+* Keep your API keys and authentication tokens secure
+* Test the RPC endpoint's reliability and performance before deploying to production
+====
 
 == Important Considerations
 
