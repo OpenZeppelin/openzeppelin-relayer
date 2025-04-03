@@ -754,8 +754,8 @@ Policies
 
 |solana
 |fee_payment_strategy
-|enum(user | relayer)
-|Defines which entity pays for transaction fees. When set to "user", the transaction sender pays fees. When set to "relayer", the relayer service covers transaction fees. Default is "user".
+|enum(user,relayer)
+|Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL.
 
 |solana
 |fee_margin_percentage
