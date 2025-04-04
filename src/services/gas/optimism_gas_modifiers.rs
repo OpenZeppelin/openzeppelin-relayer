@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use solana_sdk::packet::Encode;
 
 use crate::{
-    models::{EvmTransactionData, TransactionError, U256},
+    models::{EvmTransactionData, EvmTransactionDataTrait, TransactionError, U256},
     services::OptimismProviderTrait,
 };
 
@@ -70,9 +70,8 @@ impl<P: OptimismProviderTrait> NetworkGasModifierServiceTrait for OptimismGasPri
     async fn modify_gas_price(
         &self,
         tx_data: &EvmTransactionData,
-        eip1559: bool,
     ) -> Result<U256, TransactionError> {
-        let bytes = if eip1559 {
+        let bytes = if tx_data.is_eip1559() {
             let tx_eip1559 = TxEip1559::try_from(tx_data)?;
             let mut bytes = Vec::new();
             tx_eip1559.encode(&mut bytes).map_err(|e| {
