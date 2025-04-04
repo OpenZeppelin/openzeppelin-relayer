@@ -46,12 +46,34 @@ impl<P> OptimismGasPriceService<P> {
 
 impl<P: OptimismProviderTrait> OptimismGasPriceService<P> {
     pub async fn get_modifiers(&self) -> Result<OptimismModifiers, TransactionError> {
-        let l1_base_fee = self.provider.get_l1_base_fee().await?;
-        let base_fee = self.provider.get_base_fee().await?;
-        let decimals = self.provider.get_decimals().await?;
-        let blob_base_fee = self.provider.get_blob_base_fee().await?;
-        let base_fee_scalar = self.provider.get_base_fee_scalar().await?;
-        let blob_base_fee_scalar = self.provider.get_blob_base_fee_scalar().await?;
+        let (
+            l1_base_fee_result,
+            base_fee_result,
+            decimals_result,
+            blob_base_fee_result,
+            base_fee_scalar_result,
+            blob_base_fee_scalar_result,
+        ) = tokio::join!(
+            self.provider.get_l1_base_fee(),
+            self.provider.get_base_fee(),
+            self.provider.get_decimals(),
+            self.provider.get_blob_base_fee(),
+            self.provider.get_base_fee_scalar(),
+            self.provider.get_blob_base_fee_scalar(),
+        );
+
+        let l1_base_fee =
+            l1_base_fee_result.map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        let base_fee =
+            base_fee_result.map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        let decimals =
+            decimals_result.map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        let blob_base_fee =
+            blob_base_fee_result.map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        let base_fee_scalar =
+            base_fee_scalar_result.map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        let blob_base_fee_scalar = blob_base_fee_scalar_result
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         let modifiers = OptimismModifiers {
             l1_base_fee,
