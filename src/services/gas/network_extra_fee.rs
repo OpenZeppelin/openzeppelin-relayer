@@ -5,7 +5,7 @@ use crate::{
     services::{EvmProviderTrait, OptimismProviderTrait},
 };
 
-use super::optimism_extra_fee::OptimismGasPriceService;
+use super::optimism_extra_fee::OptimismExtraFeeService;
 
 #[async_trait]
 pub trait NetworkExtraFeeCalculatorServiceTrait {
@@ -20,7 +20,7 @@ where
     P: EvmProviderTrait + OptimismProviderTrait + 'static,
 {
     if network.is_optimism() {
-        Some(Box::new(OptimismGasPriceService::new(provider)))
+        Some(Box::new(OptimismExtraFeeService::new(provider)))
     } else {
         None
     }

@@ -34,17 +34,17 @@ impl Default for OptimismModifiers {
     }
 }
 
-pub struct OptimismGasPriceService<P> {
+pub struct OptimismExtraFeeService<P> {
     provider: P,
 }
 
-impl<P> OptimismGasPriceService<P> {
+impl<P> OptimismExtraFeeService<P> {
     pub fn new(provider: P) -> Self {
         Self { provider }
     }
 }
 
-impl<P: OptimismProviderTrait> OptimismGasPriceService<P> {
+impl<P: OptimismProviderTrait> OptimismExtraFeeService<P> {
     pub async fn get_modifiers(&self) -> Result<OptimismModifiers, TransactionError> {
         let (
             l1_base_fee_result,
@@ -89,7 +89,7 @@ impl<P: OptimismProviderTrait> OptimismGasPriceService<P> {
 
 #[async_trait]
 impl<P: OptimismProviderTrait> NetworkExtraFeeCalculatorServiceTrait
-    for OptimismGasPriceService<P>
+    for OptimismExtraFeeService<P>
 {
     async fn get_extra_fee(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError> {
         let bytes = if tx_data.is_eip1559() {
