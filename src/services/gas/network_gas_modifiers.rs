@@ -1,8 +1,7 @@
-use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
 
 use crate::{
-    models::{EvmNamedNetwork, EvmTransactionData, TransactionError, U256},
+    models::{EvmNetwork, EvmTransactionData, TransactionError, U256},
     services::{EvmProviderTrait, OptimismProviderTrait},
 };
 
@@ -16,19 +15,16 @@ pub trait NetworkGasModifierServiceTrait {
     ) -> Result<U256, TransactionError>;
 }
 
-pub fn gas_price_modifiers_factory<P>(
+pub fn get_network_gas_modifier_service<P>(
+    network: EvmNetwork,
     provider: P,
-) -> HashMap<EvmNamedNetwork, Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>
+) -> Option<Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>
 where
     P: EvmProviderTrait + OptimismProviderTrait + 'static,
 {
-    let mut modifiers: HashMap<
-        EvmNamedNetwork,
-        Box<dyn NetworkGasModifierServiceTrait + Send + Sync>,
-    > = HashMap::default();
-    modifiers.insert(
-        EvmNamedNetwork::Optimism,
-        Box::new(OptimismGasPriceService::new(provider)),
-    );
-    modifiers
+    if network.is_optimism() {
+        Some(Box::new(OptimismGasPriceService::new(provider)))
+    } else {
+        None
+    }
 }

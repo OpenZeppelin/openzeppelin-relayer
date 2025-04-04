@@ -37,10 +37,13 @@
 use crate::{
     constants::DEFAULT_TRANSACTION_SPEED,
     models::{
-        evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
-        TransactionError, TransactionRepoModel,
+        evm::Speed, EvmNamedNetwork, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait,
+        RelayerRepoModel, TransactionError, TransactionRepoModel,
     },
-    services::{gas::EvmGasPriceServiceTrait, gas::NetworkGasModifierServiceTrait, GasPrices},
+    services::{
+        gas::{EvmGasPriceServiceTrait, NetworkGasModifierServiceTrait},
+        GasPrices,
+    },
 };
 
 use alloy::primitives::map::HashMap;
@@ -82,8 +85,7 @@ pub struct PriceParams {
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
 pub struct PriceCalculator<G: EvmGasPriceServiceTrait> {
     gas_price_service: G,
-    network_gas_modifier_service:
-        HashMap<EvmNetwork, Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>,
+    network_gas_modifier_service: Option<Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>,
 }
 
 #[async_trait::async_trait]
@@ -108,13 +110,11 @@ impl<G: EvmGasPriceServiceTrait + Send + Sync> PriceCalculatorTrait for PriceCal
 impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
     pub fn new(
         gas_price_service: G,
-        network_gas_modifier_service: Option<
-            HashMap<EvmNetwork, Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>,
-        >,
+        network_gas_modifier_service: Option<Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>,
     ) -> Self {
         Self {
             gas_price_service,
-            network_gas_modifier_service: network_gas_modifier_service.unwrap_or_default(),
+            network_gas_modifier_service,
         }
     }
 

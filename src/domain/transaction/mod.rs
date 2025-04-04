@@ -21,7 +21,10 @@ use crate::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
-    services::{get_solana_network_provider, EvmGasPriceService, EvmProvider, EvmSignerFactory},
+    services::{
+        gas_price_modifiers_factory, get_network_gas_modifier_service, get_solana_network_provider,
+        EvmGasPriceService, EvmProvider, EvmSignerFactory,
+    },
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -404,9 +407,10 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let gas_modifier = get_network_gas_modifier_service(network, evm_provider.clone());
                 let price_calculator = PriceCalculator::new(
                     EvmGasPriceService::new(evm_provider.clone(), network),
-                    None,
+                    gas_modifier,
                 );
 
                 Ok(NetworkTransaction::Evm(DefaultEvmTransaction::new(
