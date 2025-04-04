@@ -39,6 +39,12 @@ pub struct OptimismExtraFeeService<P> {
 }
 
 impl<P> OptimismExtraFeeService<P> {
+    /// Create a new Optimism extra fee service
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The provider to get the extra fee for
+    ///
     pub fn new(provider: P) -> Self {
         Self { provider }
     }
@@ -108,6 +114,8 @@ impl<P: OptimismProviderTrait> NetworkExtraFeeCalculatorServiceTrait
             bytes
         };
 
+        // Ecotone L1 Data Fee Calculation
+        // https://docs.optimism.io/stack/transactions/fees#ecotone
         let zero_bytes = U256::from(bytes.iter().filter(|&b| *b == 0).count());
         let non_zero_bytes = U256::from(bytes.len()) - zero_bytes;
 
