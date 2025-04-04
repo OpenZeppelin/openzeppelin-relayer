@@ -22,8 +22,8 @@ use crate::{
         RelayerRepositoryStorage,
     },
     services::{
-        gas_price_modifiers_factory, get_network_gas_modifier_service, get_solana_network_provider,
-        EvmGasPriceService, EvmProvider, EvmSignerFactory,
+        get_network_gas_modifier_service, get_solana_network_provider, EvmGasPriceService,
+        EvmProvider, EvmSignerFactory,
     },
 };
 use async_trait::async_trait;
