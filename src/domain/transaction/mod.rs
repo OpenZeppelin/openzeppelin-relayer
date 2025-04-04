@@ -404,8 +404,10 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
-                let price_calculator =
-                    PriceCalculator::new(EvmGasPriceService::new(evm_provider.clone(), network));
+                let price_calculator = PriceCalculator::new(
+                    EvmGasPriceService::new(evm_provider.clone(), network),
+                    None,
+                );
 
                 Ok(NetworkTransaction::Evm(DefaultEvmTransaction::new(
                     relayer,
