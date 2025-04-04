@@ -5,20 +5,17 @@ use crate::{
     services::{EvmProviderTrait, OptimismProviderTrait},
 };
 
-use super::optimism_gas_modifiers::OptimismGasPriceService;
+use super::optimism_extra_fee::OptimismGasPriceService;
 
 #[async_trait]
-pub trait NetworkGasModifierServiceTrait {
-    async fn modify_gas_price(
-        &self,
-        tx_data: &EvmTransactionData,
-    ) -> Result<U256, TransactionError>;
+pub trait NetworkExtraFeeCalculatorServiceTrait {
+    async fn get_extra_fee(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError>;
 }
 
-pub fn get_network_gas_modifier_service<P>(
+pub fn get_network_extra_fee_calculator_service<P>(
     network: EvmNetwork,
     provider: P,
-) -> Option<Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>
+) -> Option<Box<dyn NetworkExtraFeeCalculatorServiceTrait + Send + Sync>>
 where
     P: EvmProviderTrait + OptimismProviderTrait + 'static,
 {

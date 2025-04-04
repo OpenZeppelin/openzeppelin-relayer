@@ -37,16 +37,15 @@
 use crate::{
     constants::DEFAULT_TRANSACTION_SPEED,
     models::{
-        evm::Speed, EvmNamedNetwork, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait,
-        RelayerRepoModel, TransactionError, TransactionRepoModel,
+        evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, U256,
     },
     services::{
-        gas::{EvmGasPriceServiceTrait, NetworkGasModifierServiceTrait},
+        gas::{EvmGasPriceServiceTrait, NetworkExtraFeeCalculatorServiceTrait},
         GasPrices,
     },
 };
 
-use alloy::primitives::map::HashMap;
 #[cfg(test)]
 use mockall::automock;
 
@@ -80,12 +79,14 @@ pub struct PriceParams {
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
     pub is_min_bumped: Option<bool>,
+    pub extra_fee: Option<u128>,
 }
 
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
 pub struct PriceCalculator<G: EvmGasPriceServiceTrait> {
     gas_price_service: G,
-    network_gas_modifier_service: Option<Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>,
+    network_extra_fee_calculator_service:
+        Option<Box<dyn NetworkExtraFeeCalculatorServiceTrait + Send + Sync>>,
 }
 
 #[async_trait::async_trait]
@@ -110,11 +111,13 @@ impl<G: EvmGasPriceServiceTrait + Send + Sync> PriceCalculatorTrait for PriceCal
 impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
     pub fn new(
         gas_price_service: G,
-        network_gas_modifier_service: Option<Box<dyn NetworkGasModifierServiceTrait + Send + Sync>>,
+        network_extra_fee_calculator_service: Option<
+            Box<dyn NetworkExtraFeeCalculatorServiceTrait + Send + Sync>,
+        >,
     ) -> Self {
         Self {
             gas_price_service,
-            network_gas_modifier_service,
+            network_extra_fee_calculator_service,
         }
     }
 
@@ -149,11 +152,19 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                 relayer,
             )?;
 
+        let extra_fee: u128 = if let Some(service) = &self.network_extra_fee_calculator_service {
+            let fee = service.get_extra_fee(tx_data).await?;
+            fee.try_into().unwrap_or(0)
+        } else {
+            0
+        };
+
         Ok(PriceParams {
             gas_price: gas_price_capped,
             max_fee_per_gas: max_fee_per_gas_capped,
             max_priority_fee_per_gas: max_priority_fee_per_gas_capped,
             is_min_bumped: None,
+            extra_fee: Some(extra_fee),
         })
     }
 
@@ -191,22 +202,53 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         ) {
             (Some(max_fee), Some(max_priority_fee), _) => {
                 // EIP1559
-                self.handle_eip1559_bump(
+                let bumped_price_params = self.handle_eip1559_bump(
                     &network_gas_prices,
                     relayer_gas_price_cap,
                     evm_data.speed.as_ref(),
                     max_fee,
                     max_priority_fee,
-                )
+                )?;
+
+                if let Some(service) = &self.network_extra_fee_calculator_service {
+                    // clone the evm_data to calculate the extra fee for the bumped price params
+                    let new_tx = evm_data.with_price_params(bumped_price_params.clone());
+                    let extra_fee = service.get_extra_fee(&new_tx).await?;
+                    Ok(PriceParams {
+                        gas_price: bumped_price_params.gas_price,
+                        max_fee_per_gas: bumped_price_params.max_fee_per_gas,
+                        max_priority_fee_per_gas: bumped_price_params.max_priority_fee_per_gas,
+                        is_min_bumped: bumped_price_params.is_min_bumped,
+                        extra_fee: Some(extra_fee.try_into().unwrap_or(0)),
+                    })
+                } else {
+                    Ok(bumped_price_params)
+                }
             }
             (None, None, Some(gas_price)) => {
                 // Legacy
-                self.handle_legacy_bump(
+                let bumped_price_params = self.handle_legacy_bump(
                     &network_gas_prices,
                     relayer_gas_price_cap,
                     evm_data.speed.as_ref(),
                     gas_price,
-                )
+                )?;
+
+                if let Some(service) = &self.network_extra_fee_calculator_service {
+                    // clone the evm_data to calculate the extra fee for the bumped price params
+                    let new_tx = evm_data.with_price_params(bumped_price_params.clone());
+
+                    let extra_fee = service.get_extra_fee(&new_tx).await?;
+                    Ok(PriceParams {
+                        gas_price: bumped_price_params.gas_price,
+                        max_fee_per_gas: bumped_price_params.max_fee_per_gas,
+                        max_priority_fee_per_gas: bumped_price_params.max_priority_fee_per_gas,
+                        is_min_bumped: bumped_price_params.is_min_bumped,
+                        extra_fee: Some(extra_fee.try_into().unwrap_or(0)),
+                    })
+                } else {
+                    Ok(bumped_price_params)
+                }
             }
             _ => Err(TransactionError::InvalidType(
                 "Transaction missing required gas price parameters".to_string(),
@@ -290,6 +332,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: Some(capped_priority),
             max_fee_per_gas: Some(capped_max_fee),
             is_min_bumped: Some(is_min_bumped),
+            extra_fee: None,
         })
     }
 
@@ -330,6 +373,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: None,
             max_fee_per_gas: None,
             is_min_bumped: Some(is_min_bumped),
+            extra_fee: None,
         })
     }
     /// Fetches price params based on the type of transaction (legacy, EIP1559, speed-based).
@@ -370,6 +414,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
 
@@ -393,6 +438,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(max_priority_fee),
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
     /// Handles gas price calculation for speed-based transactions.
@@ -445,6 +491,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(priority_fee),
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
     /// Calculates legacy gas prices based on the requested speed.
@@ -470,6 +517,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
 

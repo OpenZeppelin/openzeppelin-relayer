@@ -22,7 +22,7 @@ use crate::{
         RelayerRepositoryStorage,
     },
     services::{
-        get_network_gas_modifier_service, get_solana_network_provider, EvmGasPriceService,
+        get_network_extra_fee_calculator_service, get_solana_network_provider, EvmGasPriceService,
         EvmProvider, EvmSignerFactory,
     },
 };
@@ -407,10 +407,11 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
-                let gas_modifier = get_network_gas_modifier_service(network, evm_provider.clone());
+                let network_extra_fee_calculator_service =
+                    get_network_extra_fee_calculator_service(network, evm_provider.clone());
                 let price_calculator = PriceCalculator::new(
                     EvmGasPriceService::new(evm_provider.clone(), network),
-                    gas_modifier,
+                    network_extra_fee_calculator_service,
                 );
 
                 Ok(NetworkTransaction::Evm(DefaultEvmTransaction::new(

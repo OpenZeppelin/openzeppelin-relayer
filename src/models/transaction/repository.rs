@@ -525,6 +525,7 @@ mod tests {
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
             is_min_bumped: None,
+            extra_fee: None,
         };
 
         let updated_tx = tx_data.with_price_params(price_params);
@@ -777,18 +778,24 @@ mod tests {
         let mut evm_tx_data = create_sample_evm_tx_data();
         evm_tx_data.max_fee_per_gas = Some(30_000_000_000);
         evm_tx_data.max_priority_fee_per_gas = Some(2_000_000_000);
-        
+
         // Should convert successfully
         let result = TxEip1559::try_from(evm_tx_data.clone());
         assert!(result.is_ok());
         let tx_eip1559 = result.unwrap();
-        
+
         // Verify fields
         assert_eq!(tx_eip1559.chain_id, evm_tx_data.chain_id);
         assert_eq!(tx_eip1559.nonce, evm_tx_data.nonce.unwrap());
         assert_eq!(tx_eip1559.gas_limit, evm_tx_data.gas_limit);
-        assert_eq!(tx_eip1559.max_fee_per_gas, evm_tx_data.max_fee_per_gas.unwrap());
-        assert_eq!(tx_eip1559.max_priority_fee_per_gas, evm_tx_data.max_priority_fee_per_gas.unwrap());
+        assert_eq!(
+            tx_eip1559.max_fee_per_gas,
+            evm_tx_data.max_fee_per_gas.unwrap()
+        );
+        assert_eq!(
+            tx_eip1559.max_priority_fee_per_gas,
+            evm_tx_data.max_priority_fee_per_gas.unwrap()
+        );
         assert_eq!(tx_eip1559.value, evm_tx_data.value);
         assert!(tx_eip1559.access_list.0.is_empty());
     }
@@ -797,12 +804,12 @@ mod tests {
     fn test_try_from_evm_tx_data_for_tx_legacy() {
         // Create a valid EVM transaction with legacy fields
         let evm_tx_data = create_sample_evm_tx_data();
-        
+
         // Should convert successfully
         let result = TxLegacy::try_from(evm_tx_data.clone());
         assert!(result.is_ok());
         let tx_legacy = result.unwrap();
-        
+
         // Verify fields
         assert_eq!(tx_legacy.chain_id, Some(evm_tx_data.chain_id));
         assert_eq!(tx_legacy.nonce, evm_tx_data.nonce.unwrap());

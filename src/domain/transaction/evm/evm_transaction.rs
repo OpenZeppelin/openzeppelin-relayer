@@ -732,6 +732,7 @@ mod tests {
                         max_fee_per_gas: None,
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
+                        extra_fee: Some(0),
                     })
                 });
 

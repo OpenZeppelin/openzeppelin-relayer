@@ -8,7 +8,7 @@ use crate::{
     services::OptimismProviderTrait,
 };
 
-use super::NetworkGasModifierServiceTrait;
+use super::NetworkExtraFeeCalculatorServiceTrait;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimismModifiers {
@@ -66,11 +66,10 @@ impl<P: OptimismProviderTrait> OptimismGasPriceService<P> {
 }
 
 #[async_trait]
-impl<P: OptimismProviderTrait> NetworkGasModifierServiceTrait for OptimismGasPriceService<P> {
-    async fn modify_gas_price(
-        &self,
-        tx_data: &EvmTransactionData,
-    ) -> Result<U256, TransactionError> {
+impl<P: OptimismProviderTrait> NetworkExtraFeeCalculatorServiceTrait
+    for OptimismGasPriceService<P>
+{
+    async fn get_extra_fee(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError> {
         let bytes = if tx_data.is_eip1559() {
             let tx_eip1559 = TxEip1559::try_from(tx_data)?;
             let mut bytes = Vec::new();
