@@ -38,7 +38,7 @@ use crate::{
     constants::DEFAULT_TRANSACTION_SPEED,
     models::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, U256,
+        TransactionError, TransactionRepoModel,
     },
     services::{
         gas::{EvmGasPriceServiceTrait, NetworkExtraFeeCalculatorServiceTrait},
