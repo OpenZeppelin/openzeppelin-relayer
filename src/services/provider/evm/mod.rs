@@ -5,7 +5,8 @@
 //! blockchain state.
 
 use alloy::{
-    primitives::{TxKind, Uint},
+    hex::FromHex,
+    primitives::{Address, Bytes, TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
     rpc::types::{
         Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
@@ -16,7 +17,10 @@ use alloy::{
 use async_trait::async_trait;
 use eyre::{eyre, Result};
 
-use crate::models::{EvmTransactionData, TransactionError, U256};
+use crate::{
+    constants::OPTIMISM_GAS_PRICE_ORACLE_ADDRESS,
+    models::{EvmTransactionData, TransactionError, U256},
+};
 
 #[cfg(test)]
 use mockall::automock;
@@ -97,6 +101,16 @@ pub trait EvmProviderTrait: Send + Sync {
     /// # Arguments
     /// * `tx_hash` - The transaction hash to query
     async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>>;
+}
+
+#[async_trait]
+pub trait OptimismProviderTrait: EvmProviderTrait {
+    async fn get_l1_base_fee(&self) -> Result<U256>;
+    async fn get_decimals(&self) -> Result<U256>;
+    async fn get_base_fee(&self) -> Result<U256>;
+    async fn get_base_fee_scalar(&self) -> Result<u32>;
+    async fn get_blob_base_fee(&self) -> Result<U256>;
+    async fn get_blob_base_fee_scalar(&self) -> Result<u32>;
 }
 
 impl EvmProvider {
@@ -221,6 +235,95 @@ impl EvmProviderTrait for EvmProvider {
             .get_transaction_receipt(tx_hash)
             .await
             .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))
+    }
+}
+
+#[async_trait]
+impl OptimismProviderTrait for EvmProvider {
+    async fn get_l1_base_fee(&self) -> Result<U256> {
+        let oracle_address = Address::from_hex(OPTIMISM_GAS_PRICE_ORACLE_ADDRESS)
+            .map_err(|e| eyre!("Failed to parse oracle address: {}", e))?;
+
+        let fn_selector = Bytes::from(vec![81, 155, 75, 211]); // bytes4(keccak256("l1BaseFee()"))
+        let tx = TransactionRequest::default()
+            .to(oracle_address)
+            .input(TransactionInput::new(fn_selector));
+
+        let result = self.provider.call(&tx).await?;
+        Ok(U256::from_be_slice(result.as_ref()))
+    }
+
+    async fn get_decimals(&self) -> Result<U256> {
+        let oracle_address = Address::from_hex(OPTIMISM_GAS_PRICE_ORACLE_ADDRESS)
+            .map_err(|e| eyre!("Failed to parse oracle address: {}", e))?;
+
+        let fn_selector = Bytes::from(vec![49, 60, 229, 103]); // bytes4(keccak256("decimals()"))
+
+        let tx = TransactionRequest::default()
+            .to(oracle_address)
+            .input(TransactionInput::new(fn_selector));
+
+        let result = self.provider.call(&tx).await?;
+        Ok(U256::from_be_slice(result.as_ref()))
+    }
+
+    async fn get_base_fee(&self) -> Result<U256> {
+        let oracle_address = Address::from_hex(OPTIMISM_GAS_PRICE_ORACLE_ADDRESS)
+            .map_err(|e| eyre!("Failed to parse oracle address: {}", e))?;
+
+        let fn_selector = Bytes::from(vec![110, 242, 92, 58]); // bytes4(keccak256("baseFee()"))
+
+        let tx = TransactionRequest::default()
+            .to(oracle_address)
+            .input(TransactionInput::new(fn_selector));
+
+        let result = self.provider.call(&tx).await?;
+        Ok(U256::from_be_slice(result.as_ref()))
+    }
+
+    async fn get_base_fee_scalar(&self) -> Result<u32> {
+        let oracle_address = Address::from_hex(OPTIMISM_GAS_PRICE_ORACLE_ADDRESS)
+            .map_err(|e| eyre!("Failed to parse oracle address: {}", e))?;
+
+        let fn_selector = Bytes::from(vec![197, 152, 89, 24]); // bytes4(keccak256("baseFeeScalar()"))
+
+        let tx = TransactionRequest::default()
+            .to(oracle_address)
+            .input(TransactionInput::new(fn_selector));
+
+        let result = self.provider.call(&tx).await?;
+        let value = U256::from_be_slice(result.as_ref());
+        Ok(value.try_into()?)
+    }
+
+    async fn get_blob_base_fee(&self) -> Result<U256> {
+        let oracle_address = Address::from_hex(OPTIMISM_GAS_PRICE_ORACLE_ADDRESS)
+            .map_err(|e| eyre!("Failed to parse oracle address: {}", e))?;
+
+        let fn_selector = Bytes::from(vec![248, 32, 97, 64]); // bytes4(keccak256("blobBaseFee()"))
+
+        let tx = TransactionRequest::default()
+            .to(oracle_address)
+            .input(TransactionInput::new(fn_selector));
+
+        let result = self.provider.call(&tx).await?;
+        let value = U256::from_be_slice(result.as_ref());
+        Ok(value)
+    }
+
+    async fn get_blob_base_fee_scalar(&self) -> Result<u32> {
+        let oracle_address = Address::from_hex(OPTIMISM_GAS_PRICE_ORACLE_ADDRESS)
+            .map_err(|e| eyre!("Failed to parse oracle address: {}", e))?;
+
+        let fn_selector = Bytes::from(vec![104, 213, 220, 166]); // bytes4(keccak256("blobBaseFeeScalar()"))
+
+        let tx = TransactionRequest::default()
+            .to(oracle_address)
+            .input(TransactionInput::new(fn_selector));
+
+        let result = self.provider.call(&tx).await?;
+        let value = U256::from_be_slice(result.as_ref());
+        Ok(value.try_into()?)
     }
 }
 
