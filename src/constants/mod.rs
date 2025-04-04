@@ -19,3 +19,6 @@ pub use public_endpoints::*;
 
 mod validation;
 pub use validation::*;
+
+mod oracles;
+pub use oracles::*;
