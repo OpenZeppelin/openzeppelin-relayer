@@ -1,0 +1,222 @@
+---
+name: Run release-please
+
+on:
+  push:
+    branches:
+      - release-v*
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  attestations: write
+  packages: write
+  id-token: write
+
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.releases_created }}
+      pr_created: ${{ steps.release.outputs.prs_created }}
+      release_branch: ${{ steps.get_release_branch.outputs.release_branch }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_CHANNEL: '#oss-releases'
+    steps:
+      - name: Get github app token
+        uses: actions/create-github-app-token@af35edadc00be37caa72ed9f3e6d5f7801bfdf09  # v1.11.7
+        id: gh-app-token
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Slack notification
+        uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
+        with:
+          status: starting
+          steps: ${{ toJson(steps) }}
+          channel: ${{ env.SLACK_CHANNEL }}
+          message: Starting release please workflow for ${{ github.repository }}
+        if: always()
+
+      - name: Checkout release branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ steps.gh-app-token.outputs.token }}
+
+      - name: Check release branch
+        id: check_branch
+        run: |
+          RELEASE_BRANCH=${{ github.ref_name }}
+          CURRENT_VERSION=$(echo "$RELEASE_BRANCH" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+          echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+          # Sort release branches
+          HIGHER_BRANCHES=$(git branch -r | grep release-v | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n +2)
+          if [[ -n "$HIGHER_BRANCHES" ]]; then
+            # Extract the highest version
+            HIGHEST_VERSION=$(echo "$HIGHER_BRANCHES" | tail -n 1)
+            if [[ "$CURRENT_VERSION" == "$HIGHEST_VERSION" ]]; then
+              echo "run_release_please=true" >> $GITHUB_OUTPUT
+            else
+              echo "run_release_please=false" >> $GITHUB_OUTPUT
+              echo "Release-please skipped for branch: $RELEASE_BRANCH. Higher versioned release branches exist."
+            fi
+          else
+            echo "run_release_please=true" >> $GITHUB_OUTPUT  # if no higher version branch exists run release-please.
+          fi
+
+      - name: Get merged PR number from commit
+        id: get_pr
+        run: |
+          commit_sha="${{ github.sha }}"
+          pr_number=$(gh pr list --search "${commit_sha}" --state merged --json number | jq '.[0].number // empty')
+          echo "pr_number_output=${pr_number:-}" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
+
+
+      - name: Check for label and unlock conversation
+        if: steps.get_pr.outputs.pr_number_output != ''
+        run: |
+          PR_NUMBER=${{ steps.get_pr.outputs.pr_number_output }}
+          echo "Found merged PR number: $PR_NUMBER"
+
+          retries=3
+          wait=2
+
+          while [[ $retries -gt 0 ]]; do
+            # Fetch PR details and extract labels
+            PR_LABELS=$(gh api --jq '.labels.[].name' /repos/${{ github.repository }}/pulls/$PR_NUMBER)
+
+            if echo "$PR_LABELS" | grep -q "autorelease: pending"; then
+              echo "Label 'autorelease: pending' found. Attempting to unlock..."
+              gh pr unlock $PR_NUMBER
+              if [[ $? -eq 0 ]]; then
+                echo "PR unlocked successfully."
+                break
+              else
+                echo "Failed to unlock PR. Retrying in $wait seconds..."
+                sleep $wait
+                wait=$((wait * 2))
+                retries=$((retries - 1))
+              fi
+            else
+              echo "Label 'autorelease: pending' not found. Skipping unlock."
+              break
+            fi
+          done
+
+          if [[ $retries -eq 0 ]]; then
+            echo "Failed to unlock PR after multiple retries."
+            exit 1  # Fail the step if unlocking consistently fails
+          fi
+        env:
+          GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
+
+      - name: Start release please action
+        id: release
+        uses: googleapis/release-please-action@a02a34c4d625f9be7cb89156071d8567266a2445  # v4.2.0
+        if: ${{ steps.check_branch.outputs.run_release_please == 'true' }}
+        with:
+          token: ${{ steps.gh-app-token.outputs.token }}
+          target-branch: ${{ github.ref_name }}
+          config-file: .github/release-please/.config.json
+          manifest-file: .github/release-please/manifest.json
+
+      - name: Get release branch name on release please prs
+        if: ${{ steps.release.outputs.releases_created == 'false' }}
+        id: get_release_branch
+        run: |
+          echo "release_branch=${{ fromJSON(steps.release.outputs.pr).headBranchName }}" >> $GITHUB_OUTPUT
+
+      - name: Slack notification success or failure
+        uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
+        with:
+          status: ${{ job.status }}
+          steps: ${{ toJson(steps) }}
+          channel: ${{ env.SLACK_CHANNEL }}
+          message: Release please flow ${{ job.status }}
+        if: always()
+
+  # Cargo lock update
+  update-cargo-lockfile:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'false' }}
+    steps:
+      - name: Get github app token
+        uses: actions/create-github-app-token@af35edadc00be37caa72ed9f3e6d5f7801bfdf09  # v1.11.7
+        id: gh-app-token
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Get PR details
+        id: release-branch
+        run: |
+          echo "pr head branch name: >>>>> ${{ needs.release-please.outputs.release_branch }}"
+
+
+      - name: Checkout release branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 2
+          token: ${{ steps.gh-app-token.outputs.token }}
+          ref: ${{ needs.release-please.outputs.release_branch }}
+
+      - name: Get GitHub App User ID
+        id: get-user-id
+        run: echo "user-id=$(gh api "/users/${{ steps.gh-app-token.outputs.app-slug
+          }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
+
+      - name: Prepare
+        id: init
+        uses: ./.github/actions/prepare
+
+      - name: Cargo Update
+        id: lock-file-commit
+        run: |-
+          cargo update
+          git add Cargo.lock
+          if ! git diff --cached --quiet Cargo.lock; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "Cargo.lock has no changes, skipping commit and push."
+          fi
+
+      - name: Commit cargo update
+        if: ${{ steps.lock-file-commit.outputs.changes == 'true' }}
+        uses: iarekylew00t/verified-bot-commit@849c406ce58dfd17ed6a8b981448968d4d0f2012  # v1.3.2
+        with:
+          message: 'chore: Updating lock file'
+          token: ${{ steps.gh-app-token.outputs.token }}
+          ref: ${{ needs.release-please.outputs.release_branch }}
+          files: |-
+            Cargo.lock
+
+  # Trigger workflow to generate sbom
+  release-sbom:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/release-sbom.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+    secrets: inherit
+
+  # Trigger workflow to publish docker images
+  release-docker:
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs: release-please
+    uses: ./.github/workflows/release-docker.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+    secrets: inherit

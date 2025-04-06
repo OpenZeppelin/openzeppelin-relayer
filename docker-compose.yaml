@@ -3,6 +3,8 @@
 
 services:
   relayer:
+    # Needs docker hub registry to be public
+    image: openzeppelin/openzeppelin-relayer:latest
     build:
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile.development}

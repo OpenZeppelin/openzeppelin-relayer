@@ -1,0 +1,65 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {}
+  },
+  "release-type": "rust",
+  "include-component-in-tag": false,
+  "pull-request-title-pattern": "chore: Release version ${version}",
+  "pull-request-header": "🤖 Created a Release ⚡ ⚡",
+  "pull-request-footer": "Merge this pull request to trigger the next release.",
+  "changelog-sections": [
+    {
+      "type": "feat",
+      "section": "🚀 Features"
+    },
+    {
+        "type": "fix",
+        "section": "🐛 Bug Fixes"
+    },
+    {
+      "type": "revert",
+      "section": "◀️ Reverts"
+    },
+    {
+      "type": "docs",
+      "section": "📚 Documentation",
+      "hidden": false
+    },
+    {
+      "type": "refactor",
+      "section": "🚜 Code Refactoring",
+      "hidden": true
+    },
+    {
+      "type": "style",
+      "section": "🎨 Styles",
+      "hidden": true
+    },
+    {
+      "type": "chore",
+      "section": "⚙️ Miscellaneous Chores",
+      "hidden": true
+    },
+    {
+        "type": "refactor",
+        "section": "🚜 Code Refactoring",
+        "hidden": true
+    },
+    {
+        "type": "test",
+        "section": "🧪 Tests",
+        "hidden": true
+    },
+    {
+      "type": "build",
+      "section": "🛠️ Build System",
+      "hidden": true
+    },
+    {
+      "type": "ci",
+      "section": "🥏 Continuous Integration",
+      "hidden": true
+    }
+  ]
+}
