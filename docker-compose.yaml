@@ -3,7 +3,7 @@
 
 services:
   relayer:
-    # image: openzeppelin/openzeppelin-relayer:latest
+    image: openzeppelin/openzeppelin-relayer:latest
     build:
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile.development}
