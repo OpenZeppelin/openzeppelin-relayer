@@ -20,6 +20,8 @@ FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
+COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
+COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
 ENV APP_PORT=8080
 ENV METRICS_PORT=8081

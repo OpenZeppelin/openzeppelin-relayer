@@ -50,27 +50,27 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.gh-app-token.outputs.token }}
 
-      - name: Check release branch
-        id: check_branch
-        run: |
-          RELEASE_BRANCH=${{ github.ref_name }}
-          CURRENT_VERSION=$(echo "$RELEASE_BRANCH" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-          echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+      # - name: Check release branch
+      #   id: check_branch
+      #   run: |
+      #     RELEASE_BRANCH=${{ github.ref_name }}
+      #     CURRENT_VERSION=$(echo "$RELEASE_BRANCH" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+      #     echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
 
-          # Sort release branches
-          HIGHER_BRANCHES=$(git branch -r | grep release-v | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n +2)
-          if [[ -n "$HIGHER_BRANCHES" ]]; then
-            # Extract the highest version
-            HIGHEST_VERSION=$(echo "$HIGHER_BRANCHES" | tail -n 1)
-            if [[ "$CURRENT_VERSION" == "$HIGHEST_VERSION" ]]; then
-              echo "run_release_please=true" >> $GITHUB_OUTPUT
-            else
-              echo "run_release_please=false" >> $GITHUB_OUTPUT
-              echo "Release-please skipped for branch: $RELEASE_BRANCH. Higher versioned release branches exist."
-            fi
-          else
-            echo "run_release_please=true" >> $GITHUB_OUTPUT  # if no higher version branch exists run release-please.
-          fi
+      #     # Sort release branches
+      #     HIGHER_BRANCHES=$(git branch -r | grep release-v | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n +2)
+      #     if [[ -n "$HIGHER_BRANCHES" ]]; then
+      #       # Extract the highest version
+      #       HIGHEST_VERSION=$(echo "$HIGHER_BRANCHES" | tail -n 1)
+      #       if [[ "$CURRENT_VERSION" == "$HIGHEST_VERSION" ]]; then
+      #         echo "run_release_please=true" >> $GITHUB_OUTPUT
+      #       else
+      #         echo "run_release_please=false" >> $GITHUB_OUTPUT
+      #         echo "Release-please skipped for branch: $RELEASE_BRANCH. Higher versioned release branches exist."
+      #       fi
+      #     else
+      #       echo "run_release_please=true" >> $GITHUB_OUTPUT  # if no higher version branch exists run release-please.
+      #     fi
 
       - name: Get merged PR number from commit
         id: get_pr
@@ -123,7 +123,6 @@ jobs:
       - name: Start release please action
         id: release
         uses: googleapis/release-please-action@a02a34c4d625f9be7cb89156071d8567266a2445  # v4.2.0
-        if: ${{ steps.check_branch.outputs.run_release_please == 'true' }}
         with:
           token: ${{ steps.gh-app-token.outputs.token }}
           target-branch: ${{ github.ref_name }}
@@ -131,7 +130,8 @@ jobs:
           manifest-file: .github/release-please/manifest.json
 
       - name: Get release branch name on release please prs
-        if: ${{ steps.release.outputs.releases_created == 'false' }}
+        if: ${{ steps.release.outputs.releases_created == 'false' && steps.release.outputs.pr
+          != '' }}
         id: get_release_branch
         run: |
           echo "release_branch=${{ fromJSON(steps.release.outputs.pr).headBranchName }}" >> $GITHUB_OUTPUT
