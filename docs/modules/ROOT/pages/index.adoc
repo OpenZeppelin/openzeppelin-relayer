@@ -3,11 +3,15 @@
 = OpenZeppelin Relayer
 :description: User guide for setting up and configuring OpenZeppelin Relayer.
 
+== Overview
+
 CAUTION: This software is in alpha stage. Use in production environments at your own risk.
 
 OpenZeppelin Relayer is a service that provides infrastructure to relay transactions to the EVM & Non-EVM networks. It is designed to be used as a backend for dApps that need to interact with these networks.
 
-**Features**
+
+== Features
+
 - **Multi-Chain Support**: Interact with multiple blockchain networks, including Solana and EVM-based chains.
 - **Transaction Relaying**: Submit transactions to supported blockchain networks efficiently.
 - **Transaction Signing**: Securely sign transactions using configurable key management.
@@ -21,7 +25,8 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
 - **Docker Support**: Deploy the relayer using Docker for both development and production environments.
 
-**Supported Networks**
+
+== Supported Networks
 
 - Solana
 - EVM (Basic support for Ethereum and other EVM-compatible chains):
@@ -41,6 +46,7 @@ To get started immediately, see xref:quickstart.adoc[Quickstart].
 ====
 
 == Technical Overview
+
 
 [mermaid,width=100%]
 ....
@@ -606,6 +612,7 @@ Available configuration fields
 ==== 2. Notifications
 
 * `notifications` array, which should contain, at least, one valid configuration:
+
 [source,json]
 ----
 "notifications": [
@@ -649,6 +656,7 @@ Available configuration fields
 ==== 3. Relayers
 
 * `relayers` array, containing at least one valid relayer configuration:
+
 [source,json]
 ----
 "relayers": [
@@ -815,7 +823,8 @@ Policies
 
 Full `config/config.json` example with evm and solana relayers definitions using keystore signer:
 
-```json
+[source,json]
+----
 {
   "relayers": [
     {
@@ -882,6 +891,7 @@ Full `config/config.json` example with evm and solana relayers definitions using
   ]
 }
 ```
+----
 
 === RPC URL Configuration
 
