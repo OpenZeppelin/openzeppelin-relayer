@@ -82,15 +82,15 @@ jobs:
           sbom: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-      # TODO - Uncomment after public
-      # - name: Attest
-      #   uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2  # v2.2.3
-      #   id: attest
-      #   with:
-      #     subject-name: docker.io/${{ env.DOCKERHUB_IMAGE }}
-      #     subject-digest: ${{ steps.build.outputs.digest }}
-      #     push-to-registry: false
-      #     github-token: ${{ steps.gh-app-token.outputs.token }}
+
+      - name: Attest
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2  # v2.2.3
+        id: attest
+        with:
+          subject-name: docker.io/${{ env.DOCKERHUB_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: false
+          github-token: ${{ steps.gh-app-token.outputs.token }}
 
       - name: Slack notification success or failure
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0

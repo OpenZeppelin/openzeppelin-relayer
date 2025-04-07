@@ -54,12 +54,12 @@ jobs:
           GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
         run: gh release upload ${{ inputs.tag }} ./openzeppelin-relayer-${{ inputs.tag
           }}-spdx.json
-      # TODO - Uncomment after public
-      # - name: SBOM attestation
-      #   uses: actions/attest-build-provenance@d3b713ade6128010830a9be91a036ed11e065550  # main
-      #   with:
-      #     subject-path: ./openzeppelin-relayer-${{ inputs.tag }}-spdx.json
-      #     github-token: ${{ steps.gh-app-token.outputs.token }}
+
+      - name: SBOM attestation
+        uses: actions/attest-build-provenance@d3b713ade6128010830a9be91a036ed11e065550  # main
+        with:
+          subject-path: ./openzeppelin-relayer-${{ inputs.tag }}-spdx.json
+          github-token: ${{ steps.gh-app-token.outputs.token }}
 
       - name: Slack notification
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0

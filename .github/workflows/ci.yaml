@@ -174,16 +174,15 @@ jobs:
           path: clippy-results.sarif
           retention-days: 1
 
-      # TODO: enable this when the repo is made public.
-      # - name: Upload
-      #   uses: github/codeql-action/upload-sarif@dd196fa9ce80b6bacc74ca1c32bd5b0ba22efca7  # v3.28.3
-      #   with:
-      #     sarif_file: clippy-results.sarif
-      #     wait-for-processing: true
+      - name: Upload
+        uses: github/codeql-action/upload-sarif@dd196fa9ce80b6bacc74ca1c32bd5b0ba22efca7  # v3.28.3
+        with:
+          sarif_file: clippy-results.sarif
+          wait-for-processing: true
 
-      # - name: Report status
-      #   run: cargo clippy --all-features --all-targets -- -D warnings --allow deprecated
-      #     --locked
+      - name: Report status
+        run: cargo clippy --all-features --all-targets -- -D warnings --allow deprecated
+          --locked
 
   test:
     if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
