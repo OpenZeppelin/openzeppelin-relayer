@@ -117,9 +117,18 @@ impl SolanaAllowedTokensPolicy {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SolanaFeePaymentStrategy {
+    User,
+    Relayer,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerSolanaPolicy {
+    pub fee_payment_strategy: SolanaFeePaymentStrategy,
+    pub fee_margin_percentage: Option<f32>,
     pub min_balance: u64,
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     pub allowed_programs: Option<Vec<String>>,
@@ -127,7 +136,7 @@ pub struct RelayerSolanaPolicy {
     pub disallowed_accounts: Option<Vec<String>>,
     pub max_signatures: Option<u8>,
     pub max_tx_data_size: u16,
-    pub max_allowed_transfer_amount_lamports: Option<u64>,
+    pub max_allowed_fee_lamports: Option<u64>,
 }
 
 impl RelayerSolanaPolicy {
@@ -170,15 +179,28 @@ impl RelayerSolanaPolicy {
         self.max_signatures.unwrap_or(1)
     }
 
-    pub fn get_max_allowed_transfer_amount_lamports(&self) -> u64 {
-        self.max_allowed_transfer_amount_lamports
-            .unwrap_or(u64::MAX)
+    pub fn get_max_allowed_fee_lamports(&self) -> u64 {
+        self.max_allowed_fee_lamports.unwrap_or(u64::MAX)
+    }
+
+    pub fn get_max_tx_data_size(&self) -> u16 {
+        self.max_tx_data_size
+    }
+
+    pub fn get_fee_margin_percentage(&self) -> f32 {
+        self.fee_margin_percentage.unwrap_or(0.0)
+    }
+
+    pub fn get_fee_payment_strategy(&self) -> SolanaFeePaymentStrategy {
+        self.fee_payment_strategy.clone()
     }
 }
 
 impl Default for RelayerSolanaPolicy {
     fn default() -> Self {
         Self {
+            fee_payment_strategy: SolanaFeePaymentStrategy::User,
+            fee_margin_percentage: None,
             min_balance: DEFAULT_SOLANA_MIN_BALANCE,
             allowed_tokens: None,
             allowed_programs: None,
@@ -186,7 +208,7 @@ impl Default for RelayerSolanaPolicy {
             disallowed_accounts: None,
             max_signatures: None,
             max_tx_data_size: MAX_SOLANA_TX_DATA_SIZE,
-            max_allowed_transfer_amount_lamports: None,
+            max_allowed_fee_lamports: None,
         }
     }
 }
@@ -221,6 +243,7 @@ pub struct RelayerRepoModel {
     pub address: String,
     pub notification_id: Option<String>,
     pub system_disabled: bool,
+    pub custom_rpc_urls: Option<Vec<String>>,
 }
 
 impl RelayerRepoModel {
@@ -234,6 +257,24 @@ impl RelayerRepoModel {
         }
 
         Ok(())
+    }
+}
+
+impl Default for RelayerRepoModel {
+    fn default() -> Self {
+        Self {
+            id: "".to_string(),
+            name: "".to_string(),
+            network: "".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            signer_id: "".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        }
     }
 }
 
@@ -253,6 +294,7 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
+            custom_rpc_urls: None,
         }
     }
 

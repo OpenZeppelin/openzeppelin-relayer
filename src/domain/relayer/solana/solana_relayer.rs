@@ -287,6 +287,11 @@ impl SolanaRelayerTrait for SolanaRelayer {
                         "INVALID_PARAMS",
                         &format!("The transaction parameter is invalid or missing: {}", msg),
                     ),
+                    SolanaRpcError::TokenAccount(msg) => JsonRpcResponse::error(
+                        -32601,
+                        "PREPARATION_ERROR",
+                        &format!("Invalid Token Account: {}", msg),
+                    ),
                     SolanaRpcError::Provider(msg) => JsonRpcResponse::error(
                         -32006,
                         "PREPARATION_ERROR",

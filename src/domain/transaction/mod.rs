@@ -21,9 +21,7 @@ use crate::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
-    services::{
-        get_solana_network_provider_from_str, EvmGasPriceService, EvmProvider, EvmSignerFactory,
-    },
+    services::{get_solana_network_provider, EvmGasPriceService, EvmProvider, EvmSignerFactory},
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -387,13 +385,22 @@ impl RelayerTransactionFactory {
                     Ok(network) => network,
                     Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
                 };
-                let rpc_url = network
-                    .public_rpc_urls()
+
+                let rpc_url = relayer
+                    .custom_rpc_urls
+                    .as_ref()
                     .and_then(|urls| urls.first().cloned())
+                    .or_else(|| {
+                        network
+                            .public_rpc_urls()
+                            .and_then(|urls| urls.first().cloned())
+                            .map(String::from)
+                    })
                     .ok_or_else(|| {
                         TransactionError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
-                let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
+
+                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
@@ -412,8 +419,10 @@ impl RelayerTransactionFactory {
                 )?))
             }
             NetworkType::Solana => {
-                let solana_provider =
-                    Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+                let solana_provider = Arc::new(get_solana_network_provider(
+                    &relayer.network,
+                    relayer.custom_rpc_urls.clone(),
+                )?);
 
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                     relayer,

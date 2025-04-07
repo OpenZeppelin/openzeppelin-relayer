@@ -25,7 +25,8 @@ use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use crate::{
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction,
-        SignTransactionRequestParams, SignTransactionResult, SolanaWebhookRpcPayload,
+        SignTransactionRequestParams, SignTransactionResult, SolanaFeePaymentStrategy,
+        SolanaWebhookRpcPayload,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
@@ -45,24 +46,32 @@ where
     ) -> Result<SignTransactionResult, SolanaRpcError> {
         info!("Processing sign transaction request");
         let transaction_request = Transaction::try_from(params.transaction)?;
+
         validate_sign_transaction(&transaction_request, &self.relayer, &*self.provider).await?;
 
+        let policy = self.relayer.policies.get_solana_policy();
         let total_fee = self
-            .estimate_fee_payer_total_fee(&transaction_request)
+            .estimate_fee_with_margin(&transaction_request, policy.fee_margin_percentage)
             .await
             .map_err(|e| {
                 error!("Failed to estimate total fee: {}", e);
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        let lamports_outflow = self
-            .estimate_relayer_lampart_outflow(&transaction_request)
-            .await?;
-        let total_outflow = total_fee + lamports_outflow;
+        let user_pays_fee = policy.fee_payment_strategy == SolanaFeePaymentStrategy::User;
 
+        if user_pays_fee {
+            self.confirm_user_fee_payment(&transaction_request, total_fee)
+                .await?;
+        }
+
+        SolanaTransactionValidator::validate_max_fee(
+            total_fee,
+            &self.relayer.policies.get_solana_policy(),
+        )?;
         // Validate relayer has sufficient balance
         SolanaTransactionValidator::validate_sufficient_relayer_balance(
-            total_outflow,
+            total_fee,
             &self.relayer.address,
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
@@ -134,8 +143,8 @@ async fn validate_sign_transaction<P: SolanaProviderTrait + Send + Sync>(
         sync_validations,
         SolanaTransactionValidator::validate_blockhash(tx, provider),
         SolanaTransactionValidator::simulate_transaction(tx, provider),
-        SolanaTransactionValidator::validate_lamports_transfers(tx, policy, &relayer_pubkey),
-        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
+        SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey),
     )?;
 
     Ok(())
@@ -143,96 +152,25 @@ async fn validate_sign_transaction<P: SolanaProviderTrait + Send + Sync>(
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{RelayerNetworkPolicy, RelayerSolanaPolicy};
+    use crate::{
+        constants::WRAPPED_SOL_MINT,
+        models::{RelayerNetworkPolicy, RelayerSolanaPolicy},
+        services::QuoteResponse,
+    };
 
     use super::*;
     use mockall::predicate::{self};
     use solana_sdk::{
-        hash::Hash,
         message::Message,
+        program_pack::Pack,
         signature::{Keypair, Signature},
         signer::Signer,
         system_instruction,
     };
+    use spl_token::state::Account;
 
     #[tokio::test]
-    async fn test_create_and_sign_transaction_success() {
-        let (relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
-            setup_test_context();
-        let expected_signature = Signature::new_unique();
-
-        signer
-            .expect_sign()
-            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
-
-        provider
-            .expect_get_latest_blockhash_with_commitment()
-            .returning(|_commitment| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
-
-        provider
-            .expect_calculate_total_fee()
-            .returning(|_| Box::pin(async { Ok(5000u64) }));
-
-        let rpc = SolanaRpcMethodsImpl::new_mock(
-            relayer,
-            Arc::new(provider),
-            Arc::new(signer),
-            Arc::new(jupiter_service),
-            Arc::new(job_producer),
-        );
-
-        // Create test instructions
-        let test_instruction =
-            system_instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 1000);
-
-        let result = rpc
-            .create_and_sign_transaction(vec![test_instruction])
-            .await;
-
-        assert!(result.is_ok());
-        let (transaction, (_, slot)) = result.unwrap();
-
-        assert_eq!(transaction.message.instructions.len(), 1);
-        assert_eq!(slot, 100);
-        assert!(!transaction.signatures.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_create_and_sign_transaction_provider_error() {
-        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
-            setup_test_context();
-
-        // Mock provider error
-        provider
-            .expect_get_latest_blockhash_with_commitment()
-            .returning(|_| {
-                Box::pin(async {
-                    Err(crate::services::SolanaProviderError::RpcError(
-                        "Test error".to_string(),
-                    ))
-                })
-            });
-
-        let rpc = SolanaRpcMethodsImpl::new_mock(
-            relayer,
-            Arc::new(provider),
-            Arc::new(signer),
-            Arc::new(jupiter_service),
-            Arc::new(job_producer),
-        );
-
-        let test_instruction =
-            system_instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 1000);
-
-        let result = rpc
-            .create_and_sign_transaction(vec![test_instruction])
-            .await;
-
-        assert!(matches!(result, Err(SolanaRpcError::Provider(_))));
-    }
-
-    #[tokio::test]
-    async fn test_sign_transaction_success() {
+    async fn test_sign_transaction_success_relayer_fee_strategy() {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
@@ -294,7 +232,140 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_balance_failure() {
+    async fn test_sign_transaction_success_user_fee_strategy() {
+        let mut ctx = setup_test_context_user_fee_strategy();
+
+        ctx.provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                let relayer_pubkey = ctx.relayer_keypair.pubkey();
+                let user_pubkey = ctx.user_keypair.pubkey();
+                Box::pin(async move {
+                    let mut account_data = vec![0; Account::LEN];
+
+                    if pubkey == ctx.relayer_token_account {
+                        // Create relayer's token account
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: relayer_pubkey,
+                            amount: 0, // Current balance doesn't matter
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.user_token_account {
+                        // Create user's token account with sufficient balance
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: user_pubkey,
+                            amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else {
+                        Err(SolanaProviderError::RpcError(
+                            "Account not found".to_string(),
+                        ))
+                    }
+                })
+            });
+
+        let signature = Signature::new_unique();
+        ctx.signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
+
+        ctx.provider
+            .expect_is_blockhash_valid()
+            .with(predicate::always(), predicate::always())
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        ctx.provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        let token_clone = ctx.token.clone();
+        ctx.jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(move |_, _, _| {
+                let token_clone = token_clone.clone();
+                Box::pin(async {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: token_clone,
+                        in_amount: 5000,
+                        out_amount: 100_000,
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+
+        ctx.provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            ctx.relayer,
+            Arc::new(ctx.provider),
+            Arc::new(ctx.signer),
+            Arc::new(ctx.jupiter_service),
+            Arc::new(ctx.job_producer),
+        );
+
+        let params = SignTransactionRequestParams {
+            transaction: ctx.encoded_tx,
+        };
+
+        let result = rpc.sign_transaction(params).await;
+
+        assert!(
+            result.is_ok(),
+            "Should successfully sign transaction with token fee payment"
+        );
+        let sign_result = result.unwrap();
+
+        // Verify signature format
+        let decoded_sig = bs58::decode(&sign_result.signature)
+            .into_vec()
+            .expect("Failed to decode base58 signature");
+        assert_eq!(decoded_sig.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_balance_failure_relayer_fee_strategy() {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
@@ -362,9 +433,149 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_validation_failure_blockhash() {
-        let (relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+    async fn test_sign_transaction_balance_failure_user_fee_strategy() {
+        let mut ctx = setup_test_context_user_fee_strategy();
+
+        ctx.provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                let relayer_pubkey = ctx.relayer_keypair.pubkey();
+                let user_pubkey = ctx.user_keypair.pubkey();
+                Box::pin(async move {
+                    let mut account_data = vec![0; Account::LEN];
+
+                    if pubkey == ctx.relayer_token_account {
+                        // Create relayer's token account
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: relayer_pubkey,
+                            amount: 0, // Current balance doesn't matter
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.user_token_account {
+                        // Create user's token account with sufficient balance
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: user_pubkey,
+                            amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else {
+                        Err(SolanaProviderError::RpcError(
+                            "Account not found".to_string(),
+                        ))
+                    }
+                })
+            });
+
+        let signature = Signature::new_unique();
+        ctx.signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
+
+        ctx.provider
+            .expect_is_blockhash_valid()
+            .with(predicate::always(), predicate::always())
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        ctx.provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000) }));
+
+        let token_clone = ctx.token.clone();
+        ctx.jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(move |_, _, _| {
+                let token_clone = token_clone.clone();
+                Box::pin(async {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: token_clone,
+                        in_amount: 5000,
+                        out_amount: 100_000,
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+
+        ctx.provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            ctx.relayer,
+            Arc::new(ctx.provider),
+            Arc::new(ctx.signer),
+            Arc::new(ctx.jupiter_service),
+            Arc::new(ctx.job_producer),
+        );
+
+        let params = SignTransactionRequestParams {
+            transaction: ctx.encoded_tx,
+        };
+
+        let result = rpc.sign_transaction(params).await;
+
+        assert!(result.is_err());
+
+        match result {
+            Err(SolanaRpcError::InsufficientFunds(err)) => {
+                let error_string = err.to_string();
+                assert!(
+                    error_string.contains("Insufficient funds:"),
+                    "Unexpected error message: {}",
+                    err
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_validation_failure_blockhash_relayer_fee_strategy() {
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
+
+        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            ..Default::default()
+        });
 
         provider
             .expect_is_blockhash_valid()
@@ -388,12 +599,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_exceeds_max_signatures() {
+    async fn test_sign_transaction_exceeds_max_signatures_relayer_fee_strategy() {
         let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
-
         // Update policy with low max signatures
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             max_signatures: Some(0),
             ..Default::default()
         });
@@ -435,7 +646,7 @@ mod tests {
                 let error_string = err.to_string();
                 assert!(
                     error_string.contains(
-                        "Policy violation: Transaction requires 1 signatures, which exceeds \
+                        "Policy violation: Transaction requires 2 signatures, which exceeds \
                          maximum allowed 0"
                     ),
                     "Unexpected error message: {}",
@@ -447,7 +658,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_disallowed_program() {
+    async fn test_sign_transaction_disallowed_program_relayer_fee_strategy() {
         let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
@@ -501,7 +712,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_exceeds_data_size() {
+    async fn test_sign_transaction_exceeds_data_size_relayer_fee_strategy() {
         let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
@@ -548,7 +759,7 @@ mod tests {
                 let error_string = err.to_string();
                 assert!(
                     error_string.contains(
-                        "Policy violation: Transaction size 215 exceeds maximum allowed 10"
+                        "Policy violation: Transaction size 311 exceeds maximum allowed 10"
                     ),
                     "Unexpected error message: {}",
                     err
@@ -611,6 +822,7 @@ mod tests {
         // Update policy with disallowed accounts
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             disallowed_accounts: Some(vec![Pubkey::new_unique().to_string()]),
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             ..Default::default()
         });
 
@@ -665,29 +877,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sign_transaction_exceeds_max_lamports_transfer() {
-        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+    async fn test_sign_transaction_exceeds_max_lamports_fee() {
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
         // Set max allowed transfer amount in policy
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            max_allowed_transfer_amount_lamports: Some(500),
+            max_allowed_fee_lamports: Some(500),
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             ..Default::default()
         });
 
-        // Create transaction that exceeds max transfer amount
-        let payer = Keypair::new();
-        relayer.address = payer.pubkey().to_string();
-        let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(
-            &payer.pubkey(),
-            &recipient,
-            1000, // Amount exceeds max_allowed_transfer_amount_lamports
-        );
-        let message = Message::new(&[ix], Some(&payer.pubkey()));
-        let transaction = Transaction::new_unsigned(message);
-        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)
-            .expect("Failed to encode transaction");
+        provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(5000u64) }));
+
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
 
         provider
             .expect_is_blockhash_valid()
@@ -726,8 +933,9 @@ mod tests {
             Err(SolanaRpcError::SolanaTransactionValidation(err)) => {
                 let error_string = err.to_string();
                 assert!(
-                    error_string
-                        .contains("Lamports transfer amount 1000 exceeds max allowed fee 500"),
+                    error_string.contains(
+                        "Policy violation: Fee amount 5000 exceeds max allowed fee amount 500"
+                    ),
                     "Unexpected error message: {}",
                     err
                 );

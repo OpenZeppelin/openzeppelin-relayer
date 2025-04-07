@@ -134,8 +134,8 @@ pub enum EvmNamedNetwork {
     #[serde(alias = "unichain-sepolia")]
     UnichainSepolia = 1301,
 
-    #[strum(serialize = "worldchain-sepolia")]
-    #[serde(alias = "worldchain-sepolia")]
+    #[strum(to_string = "worldchain-sepolia")]
+    #[serde(alias = "worldchain-sepolia", alias = "worldchain_sepolia")]
     WorldChainSepolia = 4801,
 }
 

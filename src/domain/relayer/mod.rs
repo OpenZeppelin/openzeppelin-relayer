@@ -24,8 +24,8 @@ use crate::{
         RelayerRepositoryStorage,
     },
     services::{
-        get_solana_network_provider_from_str, EvmSignerFactory, JupiterService,
-        SolanaSignerFactory, TransactionCounterService,
+        get_solana_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
+        TransactionCounterService,
     },
 };
 
@@ -307,13 +307,15 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Ok(network) => network,
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
+
+                // Try custom RPC URL first, then fall back to public RPC URLs
                 let rpc_url = network
-                    .public_rpc_urls()
-                    .and_then(|urls| urls.first().cloned())
+                    .get_rpc_url(relayer.custom_rpc_urls.clone())
                     .ok_or_else(|| {
                         RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
-                let evm_provider: EvmProvider = EvmProvider::new(rpc_url)
+
+                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
@@ -335,7 +337,10 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let provider = Arc::new(get_solana_network_provider_from_str(&relayer.network)?);
+                let provider = Arc::new(get_solana_network_provider(
+                    &relayer.network,
+                    relayer.custom_rpc_urls.clone(),
+                )?);
                 let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
                 let jupiter_service = JupiterService::new_from_network(relayer.network.as_str());
                 let rpc_methods = SolanaRpcMethodsImpl::new(

@@ -21,7 +21,12 @@
       "signer_id": "local-signer",
       "network_type": "solana",
       "policies": {
+        "fee_payment_strategy": "user",
         "min_balance": 0,
+        "allowed_programs": [
+          "11111111111111111111111111111111",
+          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        ],
         "allowed_tokens": [
           {
             "mint": "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",

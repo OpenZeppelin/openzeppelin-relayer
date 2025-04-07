@@ -2,7 +2,9 @@ use crate::models::NetworkType;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{RelayerNetworkPolicy, RelayerRepoModel, SolanaAllowedTokensPolicy};
+use super::{
+    RelayerNetworkPolicy, RelayerRepoModel, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
@@ -41,6 +43,9 @@ pub struct EvmPolicyResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaPolicyResponse {
+    fee_payment_strategy: SolanaFeePaymentStrategy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee_margin_percentage: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
@@ -60,7 +65,7 @@ pub struct SolanaPolicyResponse {
     pub min_balance: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub max_allowed_transfer_amount_lamports: Option<u64>,
+    pub max_allowed_fee_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -83,6 +88,8 @@ impl From<RelayerRepoModel> for RelayerResponse {
             }),
             RelayerNetworkPolicy::Solana(solana) => {
                 NetworkPolicyResponse::Solana(SolanaPolicyResponse {
+                    fee_payment_strategy: solana.fee_payment_strategy,
+                    fee_margin_percentage: solana.fee_margin_percentage,
                     min_balance: solana.min_balance,
                     allowed_tokens: solana.allowed_tokens,
                     allowed_programs: solana.allowed_programs,
@@ -90,8 +97,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
                     disallowed_accounts: solana.disallowed_accounts,
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size,
-                    max_allowed_transfer_amount_lamports: solana
-                        .max_allowed_transfer_amount_lamports,
+                    max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
                 })
             }
             RelayerNetworkPolicy::Stellar(stellar) => {
@@ -117,7 +123,9 @@ impl From<RelayerRepoModel> for RelayerResponse {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy};
+    use crate::models::{
+        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
+    };
 
     use super::*;
 
@@ -140,6 +148,7 @@ mod tests {
             system_disabled: false,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
+            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
         };
 
         let response: RelayerResponse = model.clone().into();
@@ -176,6 +185,8 @@ mod tests {
             network_type: NetworkType::Solana,
             paused: true,
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: SolanaFeePaymentStrategy::User,
+                fee_margin_percentage: Some(0.5),
                 min_balance: 5000,
                 allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                     mint: "mint-address".to_string(),
@@ -189,12 +200,13 @@ mod tests {
                 disallowed_accounts: Some(vec!["bad-account".to_string()]),
                 max_signatures: Some(10),
                 max_tx_data_size: 1024,
-                max_allowed_transfer_amount_lamports: Some(10000),
+                max_allowed_fee_lamports: Some(10000),
             }),
             address: "solana-address".to_string(),
             system_disabled: false,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
+            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
         };
 
         let response: RelayerResponse = model.clone().into();
@@ -217,8 +229,8 @@ mod tests {
                 assert_eq!(solana.max_signatures, expected.max_signatures);
                 assert_eq!(solana.max_tx_data_size, expected.max_tx_data_size);
                 assert_eq!(
-                    solana.max_allowed_transfer_amount_lamports,
-                    expected.max_allowed_transfer_amount_lamports
+                    solana.max_allowed_fee_lamports,
+                    expected.max_allowed_fee_lamports
                 );
             } else {
                 panic!("Expected Solana policy");
@@ -245,6 +257,7 @@ mod tests {
             system_disabled: true,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
+            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
         };
 
         let response: RelayerResponse = model.clone().into();

@@ -26,7 +26,8 @@ use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use crate::{
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction,
-        SignAndSendTransactionRequestParams, SignAndSendTransactionResult, SolanaWebhookRpcPayload,
+        SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
+        SolanaFeePaymentStrategy, SolanaWebhookRpcPayload,
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
@@ -50,23 +51,29 @@ where
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
             .await?;
 
+        let policy = self.relayer.policies.get_solana_policy();
         let total_fee = self
-            .estimate_fee_payer_total_fee(&transaction_request)
+            .estimate_fee_with_margin(&transaction_request, policy.fee_margin_percentage)
             .await
             .map_err(|e| {
                 error!("Failed to estimate total fee: {}", e);
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        let lamports_outflow = self
-            .estimate_relayer_lampart_outflow(&transaction_request)
-            .await?;
+        let user_pays_fee = policy.fee_payment_strategy == SolanaFeePaymentStrategy::User;
 
-        let total_outflow = total_fee + lamports_outflow;
+        if user_pays_fee {
+            self.confirm_user_fee_payment(&transaction_request, total_fee)
+                .await?;
+        }
 
+        SolanaTransactionValidator::validate_max_fee(
+            total_fee,
+            &self.relayer.policies.get_solana_policy(),
+        )?;
         // Validate relayer has sufficient balance
         SolanaTransactionValidator::validate_sufficient_relayer_balance(
-            total_outflow,
+            total_fee,
             &self.relayer.address,
             &self.relayer.policies.get_solana_policy(),
             &*self.provider,
@@ -145,7 +152,7 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
         sync_validations,
         SolanaTransactionValidator::validate_blockhash(tx, provider),
         SolanaTransactionValidator::simulate_transaction(tx, provider),
-        SolanaTransactionValidator::validate_lamports_transfers(tx, policy, &relayer_pubkey),
+        SolanaTransactionValidator::validate_lamports_transfers(tx, &relayer_pubkey),
         SolanaTransactionValidator::validate_token_transfers(tx, policy, provider, &relayer_pubkey,),
     )?;
 
@@ -154,12 +161,15 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
 
 #[cfg(test)]
 mod tests {
+    use crate::{constants::WRAPPED_SOL_MINT, services::QuoteResponse};
+
     use super::*;
     use mockall::predicate::{self};
-    use solana_sdk::{message::Message, signature::Signature, system_instruction};
+    use solana_sdk::{program_pack::Pack, signature::Signature, signer::Signer};
+    use spl_token::state::Account;
 
     #[tokio::test]
-    async fn test_sign_and_send_transaction_success() {
+    async fn test_sign_and_send_transaction_success_relayer_fee_strategy() {
         let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
             setup_test_context();
 
@@ -218,6 +228,439 @@ mod tests {
 
         let send_result = result.unwrap();
         assert_eq!(send_result.signature, expected_signature.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_success_user_fee_strategy() {
+        let mut ctx = setup_test_context_user_fee_strategy();
+        let expected_signature = Signature::new_unique();
+
+        ctx.provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                let relayer_pubkey = ctx.relayer_keypair.pubkey();
+                let user_pubkey = ctx.user_keypair.pubkey();
+                Box::pin(async move {
+                    let mut account_data = vec![0; Account::LEN];
+
+                    if pubkey == ctx.relayer_token_account {
+                        // Create relayer's token account
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: relayer_pubkey,
+                            amount: 0, // Current balance doesn't matter
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.user_token_account {
+                        // Create user's token account with sufficient balance
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: user_pubkey,
+                            amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else {
+                        Err(SolanaProviderError::RpcError(
+                            "Account not found".to_string(),
+                        ))
+                    }
+                })
+            });
+
+        let signature = Signature::new_unique();
+        ctx.signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
+
+        ctx.provider
+            .expect_is_blockhash_valid()
+            .with(predicate::always(), predicate::always())
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        ctx.provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        let token_clone = ctx.token.clone();
+        ctx.jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(move |_, _, _| {
+                let token_clone = token_clone.clone();
+                Box::pin(async {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: token_clone,
+                        in_amount: 5000,
+                        out_amount: 100_000,
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        ctx.provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        ctx.provider
+            .expect_send_transaction()
+            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            ctx.relayer,
+            Arc::new(ctx.provider),
+            Arc::new(ctx.signer),
+            Arc::new(ctx.jupiter_service),
+            Arc::new(ctx.job_producer),
+        );
+
+        let params = SignAndSendTransactionRequestParams {
+            transaction: ctx.encoded_tx,
+        };
+
+        let result = rpc.sign_and_send_transaction_impl(params).await;
+
+        assert!(
+            result.is_ok(),
+            "Should successfully sign transaction with token fee payment"
+        );
+        let send_result = result.unwrap();
+        assert_eq!(send_result.signature, expected_signature.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_insufficient_token_amount_user_fee_strategy() {
+        let mut ctx = setup_test_context_user_fee_strategy();
+        let expected_signature = Signature::new_unique();
+
+        ctx.provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                let relayer_pubkey = ctx.relayer_keypair.pubkey();
+                let user_pubkey = ctx.user_keypair.pubkey();
+                Box::pin(async move {
+                    let mut account_data = vec![0; Account::LEN];
+
+                    if pubkey == ctx.relayer_token_account {
+                        // Create relayer's token account
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: relayer_pubkey,
+                            amount: 0, // Current balance doesn't matter
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.user_token_account {
+                        // Create user's token account with sufficient balance
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: user_pubkey,
+                            amount: 1_000_000, // NOT enough for both transfers
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else {
+                        Err(SolanaProviderError::RpcError(
+                            "Account not found".to_string(),
+                        ))
+                    }
+                })
+            });
+
+        let signature = Signature::new_unique();
+        ctx.signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
+
+        ctx.provider
+            .expect_is_blockhash_valid()
+            .with(predicate::always(), predicate::always())
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        ctx.provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        let token_clone = ctx.token.clone();
+        ctx.jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(move |_, _, _| {
+                let token_clone = token_clone.clone();
+                Box::pin(async {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: token_clone,
+                        in_amount: 5000,
+                        out_amount: 100_000,
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        ctx.provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        ctx.provider
+            .expect_send_transaction()
+            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            ctx.relayer,
+            Arc::new(ctx.provider),
+            Arc::new(ctx.signer),
+            Arc::new(ctx.jupiter_service),
+            Arc::new(ctx.job_producer),
+        );
+
+        let params = SignAndSendTransactionRequestParams {
+            transaction: ctx.encoded_tx,
+        };
+
+        let result = rpc.sign_and_send_transaction_impl(params).await;
+
+        assert!(result.is_err());
+
+        match result {
+            Err(SolanaRpcError::SolanaTransactionValidation(err)) => {
+                let error_string = err.to_string();
+                assert!(
+                    error_string
+                        .contains("Insufficient balance for cumulative transfers: account "),
+                    "Unexpected error message: {}",
+                    err
+                );
+                assert!(
+                    error_string.contains(
+                        "has balance 1000000 but requires 6000000 across all instructions"
+                    ),
+                    "Unexpected error message: {}",
+                    err
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_insufficient_balance_user_fee_strategy() {
+        let mut ctx = setup_test_context_user_fee_strategy();
+        let expected_signature = Signature::new_unique();
+
+        ctx.provider
+            .expect_get_account_from_pubkey()
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
+                let relayer_pubkey = ctx.relayer_keypair.pubkey();
+                let user_pubkey = ctx.user_keypair.pubkey();
+                Box::pin(async move {
+                    let mut account_data = vec![0; Account::LEN];
+
+                    if pubkey == ctx.relayer_token_account {
+                        // Create relayer's token account
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: relayer_pubkey,
+                            amount: 0, // Current balance doesn't matter
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.user_token_account {
+                        // Create user's token account with sufficient balance
+                        let token_account = spl_token::state::Account {
+                            mint: ctx.token_mint,
+                            owner: user_pubkey,
+                            amount: ctx.main_transfer_amount + ctx.fee_amount, // Enough for both transfers
+                            state: spl_token::state::AccountState::Initialized,
+                            ..Default::default()
+                        };
+                        spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: account_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else {
+                        Err(SolanaProviderError::RpcError(
+                            "Account not found".to_string(),
+                        ))
+                    }
+                })
+            });
+
+        let signature = Signature::new_unique();
+        ctx.signer.expect_sign().returning(move |_| {
+            let signature_clone = signature;
+            Box::pin(async move { Ok(signature_clone) })
+        });
+
+        ctx.provider
+            .expect_is_blockhash_valid()
+            .with(predicate::always(), predicate::always())
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        ctx.provider
+            .expect_calculate_total_fee()
+            .returning(|_| Box::pin(async { Ok(1_000_000u64) }));
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000) }));
+
+        let token_clone = ctx.token.clone();
+        ctx.jupiter_service
+            .expect_get_sol_to_token_quote()
+            .returning(move |_, _, _| {
+                let token_clone = token_clone.clone();
+                Box::pin(async {
+                    Ok(QuoteResponse {
+                        input_mint: WRAPPED_SOL_MINT.to_string(),
+                        output_mint: token_clone,
+                        in_amount: 5000,
+                        out_amount: 100_000,
+                        price_impact_pct: 0.1,
+                        other_amount_threshold: 0,
+                    })
+                })
+            });
+
+        ctx.provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
+
+        ctx.provider.expect_simulate_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
+                    err: None,
+                    logs: None,
+                    accounts: None,
+                    units_consumed: None,
+                    return_data: None,
+                    replacement_blockhash: None,
+                    inner_instructions: None,
+                })
+            })
+        });
+
+        ctx.provider
+            .expect_send_transaction()
+            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            ctx.relayer,
+            Arc::new(ctx.provider),
+            Arc::new(ctx.signer),
+            Arc::new(ctx.jupiter_service),
+            Arc::new(ctx.job_producer),
+        );
+
+        let params = SignAndSendTransactionRequestParams {
+            transaction: ctx.encoded_tx,
+        };
+
+        let result = rpc.sign_and_send_transaction_impl(params).await;
+
+        assert!(result.is_err());
+
+        match result {
+            Err(SolanaRpcError::InsufficientFunds(err)) => {
+                let error_string = err.to_string();
+                assert!(
+                    error_string.contains("Insufficient funds:"),
+                    "Unexpected error message: {}",
+                    err
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -294,157 +737,6 @@ mod tests {
             result,
             Err(SolanaRpcError::SolanaTransactionValidation(_))
         ));
-    }
-
-    #[tokio::test]
-    async fn test_sign_and_send_transaction_with_lamports_outflow() {
-        let (relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
-            setup_test_context();
-
-        // Create transaction with lamports transfer
-        let recipient = Pubkey::new_unique();
-        let transfer_amount = 1_000_000;
-        let ix = system_instruction::transfer(
-            &Pubkey::from_str(&relayer.address).unwrap(),
-            &recipient,
-            transfer_amount,
-        );
-
-        let message = Message::new(&[ix], Some(&Pubkey::from_str(&relayer.address).unwrap()));
-        let transaction = Transaction::new_unsigned(message);
-        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
-
-        let expected_signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| {
-            let signature = expected_signature;
-            Box::pin(async move { Ok(signature) })
-        });
-
-        provider
-            .expect_is_blockhash_valid()
-            .returning(|_, _| Box::pin(async { Ok(true) }));
-
-        provider
-            .expect_calculate_total_fee()
-            .returning(|_| Box::pin(async { Ok(5000u64) }));
-
-        provider
-            .expect_get_balance()
-            .returning(|_| Box::pin(async { Ok(10_000_000) }));
-
-        provider.expect_simulate_transaction().returning(|_| {
-            Box::pin(async {
-                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
-                    err: None,
-                    logs: None,
-                    accounts: None,
-                    units_consumed: None,
-                    return_data: None,
-                    replacement_blockhash: None,
-                    inner_instructions: None,
-                })
-            })
-        });
-
-        provider
-            .expect_send_transaction()
-            .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
-
-        let rpc = SolanaRpcMethodsImpl::new_mock(
-            relayer,
-            Arc::new(provider),
-            Arc::new(signer),
-            Arc::new(jupiter_service),
-            Arc::new(job_producer),
-        );
-
-        let result = rpc
-            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
-                transaction: encoded_tx,
-            })
-            .await;
-
-        assert!(result.is_ok());
-        let send_result = result.unwrap();
-        assert_eq!(send_result.signature, expected_signature.to_string());
-    }
-
-    #[tokio::test]
-    async fn test_sign_and_send_transaction_with_lamports_outflow_fail() {
-        let (relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
-            setup_test_context();
-
-        // Create transaction with lamports transfer
-        let recipient = Pubkey::new_unique();
-        let transfer_amount = 10_000_000;
-        let ix = system_instruction::transfer(
-            &Pubkey::from_str(&relayer.address).unwrap(),
-            &recipient,
-            transfer_amount,
-        );
-
-        let message = Message::new(&[ix], Some(&Pubkey::from_str(&relayer.address).unwrap()));
-        let transaction = Transaction::new_unsigned(message);
-        let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
-
-        let expected_signature = Signature::new_unique();
-        signer.expect_sign().returning(move |_| {
-            let signature = expected_signature;
-            Box::pin(async move { Ok(signature) })
-        });
-
-        provider
-            .expect_is_blockhash_valid()
-            .returning(|_, _| Box::pin(async { Ok(true) }));
-
-        provider
-            .expect_calculate_total_fee()
-            .returning(|_| Box::pin(async { Ok(5000u64) }));
-
-        provider
-            .expect_get_balance()
-            .returning(|_| Box::pin(async { Ok(10_000_000) }));
-
-        provider.expect_simulate_transaction().returning(|_| {
-            Box::pin(async {
-                Ok(solana_client::rpc_response::RpcSimulateTransactionResult {
-                    err: None,
-                    logs: None,
-                    accounts: None,
-                    units_consumed: None,
-                    return_data: None,
-                    replacement_blockhash: None,
-                    inner_instructions: None,
-                })
-            })
-        });
-
-        let rpc = SolanaRpcMethodsImpl::new_mock(
-            relayer,
-            Arc::new(provider),
-            Arc::new(signer),
-            Arc::new(jupiter_service),
-            Arc::new(job_producer),
-        );
-
-        let result = rpc
-            .sign_and_send_transaction_impl(SignAndSendTransactionRequestParams {
-                transaction: encoded_tx,
-            })
-            .await;
-
-        assert!(result.is_err());
-        match result {
-            Err(SolanaRpcError::InsufficientFunds(err)) => {
-                let error_string = err.to_string();
-                assert!(
-                    error_string.contains("Insufficient funds:"),
-                    "Unexpected error message: {}",
-                    err
-                );
-            }
-            other => panic!("Expected ValidationError, got: {:?}", other),
-        }
     }
 
     #[tokio::test]

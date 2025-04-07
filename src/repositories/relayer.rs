@@ -7,7 +7,8 @@
 //! The `RelayerRepository` trait is designed to be implemented by any storage backend,
 //! allowing for flexibility in how relayers are stored and managed. The in-memory
 //! implementation is useful for testing and development purposes.
-use crate::models::PaginationQuery;
+use crate::config::ConfigFileRelayerSolanaFeePaymentStrategy;
+use crate::models::{PaginationQuery, SolanaFeePaymentStrategy};
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
     constants::{
@@ -284,6 +285,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
                                       * relayer */
             notification_id: config.notification_id,
             system_disabled: false,
+            custom_rpc_urls: config.custom_rpc_urls,
         })
     }
 }
@@ -323,7 +325,20 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                             })
                             .collect::<Vec<_>>()
                     });
+                let fee_payment_strategy = solana.fee_payment_strategy.clone().map_or(
+                    SolanaFeePaymentStrategy::User,
+                    |fp| match fp {
+                        ConfigFileRelayerSolanaFeePaymentStrategy::User => {
+                            SolanaFeePaymentStrategy::User
+                        }
+                        ConfigFileRelayerSolanaFeePaymentStrategy::Relayer => {
+                            SolanaFeePaymentStrategy::Relayer
+                        }
+                    },
+                );
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                    fee_payment_strategy,
+                    fee_margin_percentage: solana.fee_margin_percentage,
                     min_balance: solana.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
                     allowed_accounts: solana.allowed_accounts.clone(),
                     allowed_programs: solana.allowed_programs.clone(),
@@ -331,8 +346,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     disallowed_accounts: solana.disallowed_accounts.clone(),
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
-                    max_allowed_transfer_amount_lamports: solana
-                        .max_allowed_transfer_amount_lamports,
+                    max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {
@@ -515,6 +529,7 @@ mod tests {
             address: "0x".to_string(),
             notification_id: None,
             system_disabled: false,
+            custom_rpc_urls: None,
         }
     }
 

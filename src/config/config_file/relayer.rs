@@ -39,8 +39,21 @@ pub struct AllowedToken {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigFileRelayerSolanaFeePaymentStrategy {
+    User,
+    Relayer,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaPolicy {
+    /// Determines if the relayer pays the transaction fee or the user. Optional.
+    pub fee_payment_strategy: Option<ConfigFileRelayerSolanaFeePaymentStrategy>,
+
+    /// Fee margin percentage for the relayer. Optional.
+    pub fee_margin_percentage: Option<f32>,
+
     /// Minimum balance required for the relayer (in lamports). Optional.
     pub min_balance: Option<u64>,
 
@@ -65,8 +78,8 @@ pub struct ConfigFileRelayerSolanaPolicy {
     /// Maximum supported signatures. Optional.
     pub max_signatures: Option<u8>,
 
-    /// Maximum allowed transfer amount (in lamports) for a transaction. Optional.
-    pub max_allowed_transfer_amount_lamports: Option<u64>,
+    /// Maximum allowed fee (in lamports) for a transaction. Optional.
+    pub max_allowed_fee_lamports: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -90,6 +103,8 @@ pub struct RelayerFileConfig {
     pub signer_id: String,
     #[serde(default)]
     pub notification_id: Option<String>,
+    #[serde(default)]
+    pub custom_rpc_urls: Option<Vec<String>>,
 }
 use serde::{de, Deserializer};
 use serde_json::Value;
@@ -172,6 +187,15 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             Ok(None) // `policies` is optional
         }?;
 
+        let custom_rpc_urls = value
+            .get("custom_rpc_urls")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
+
         Ok(RelayerFileConfig {
             id,
             name,
@@ -181,6 +205,7 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             policies,
             signer_id,
             notification_id,
+            custom_rpc_urls,
         })
     }
 }
@@ -235,6 +260,20 @@ impl RelayerFileConfig {
         Ok(())
     }
 
+    fn validate_solana_fee_margin_percentage(
+        &self,
+        fee_margin_percentage: Option<f32>,
+    ) -> Result<(), ConfigFileError> {
+        if let Some(value) = fee_margin_percentage {
+            if value < 0f32 {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "Negative values are not accepted".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_policies(&self) -> Result<(), ConfigFileError> {
         match self.network_type {
             ConfigFileNetworkType::Solana => {
@@ -249,6 +288,7 @@ impl RelayerFileConfig {
                     });
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
+                    self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(
@@ -260,6 +300,17 @@ impl RelayerFileConfig {
             }
             ConfigFileNetworkType::Evm => {}
             ConfigFileNetworkType::Stellar => {}
+        }
+        Ok(())
+    }
+
+    fn validate_custom_rpc_urls(&self) -> Result<(), ConfigFileError> {
+        if let Some(urls) = &self.custom_rpc_urls {
+            for url in urls {
+                reqwest::Url::parse(url).map_err(|_| {
+                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", url))
+                })?;
+            }
         }
         Ok(())
     }
@@ -292,8 +343,8 @@ impl RelayerFileConfig {
         }
 
         self.validate_network()?;
-
         self.validate_policies()?;
+        self.validate_custom_rpc_urls()?;
         Ok(())
     }
 }
@@ -465,5 +516,80 @@ mod tests {
         });
 
         let _relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+    }
+
+    #[test]
+    fn test_valid_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": [
+                "https://api.example.com/rpc",
+                "https://rpc.example.com"
+            ]
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": [
+                "not-a-url",
+                "https://api.example.com/rpc"
+            ]
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(ConfigFileError::InvalidFormat(msg)) = result {
+            assert!(msg.contains("Invalid RPC URL"));
+        } else {
+            panic!("Expected ConfigFileError::InvalidFormat");
+        }
+    }
+
+    #[test]
+    fn test_empty_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": []
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_no_custom_rpc_urls() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
     }
 }
