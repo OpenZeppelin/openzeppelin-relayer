@@ -20,6 +20,26 @@ pub trait NetworkExtraFeeCalculatorServiceTrait {
     async fn get_extra_fee(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError>;
 }
 
+/// Enum of network-specific extra fee calculators
+pub enum NetworkExtraFeeCalculator<P: EvmProviderTrait> {
+    /// No extra fee calculator
+    None,
+    /// Optimism extra fee calculator
+    Optimism(OptimismExtraFeeService<P>),
+}
+
+#[async_trait]
+impl<P: EvmProviderTrait + Send + Sync> NetworkExtraFeeCalculatorServiceTrait
+    for NetworkExtraFeeCalculator<P>
+{
+    async fn get_extra_fee(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError> {
+        match self {
+            Self::None => Ok(U256::ZERO),
+            Self::Optimism(service) => service.get_extra_fee(tx_data).await,
+        }
+    }
+}
+
 /// Get the network extra fee calculator service
 ///
 /// # Arguments
@@ -30,14 +50,14 @@ pub trait NetworkExtraFeeCalculatorServiceTrait {
 pub fn get_network_extra_fee_calculator_service<P>(
     network: EvmNetwork,
     provider: P,
-) -> Option<Box<dyn NetworkExtraFeeCalculatorServiceTrait + Send + Sync>>
+) -> NetworkExtraFeeCalculator<P>
 where
     P: EvmProviderTrait + 'static,
 {
     if network.is_optimism() {
-        Some(Box::new(OptimismExtraFeeService::new(provider)))
+        NetworkExtraFeeCalculator::Optimism(OptimismExtraFeeService::new(provider))
     } else {
-        None
+        NetworkExtraFeeCalculator::None
     }
 }
 
@@ -55,8 +75,8 @@ mod tests {
         let service = get_network_extra_fee_calculator_service(network, provider);
 
         assert!(
-            service.is_some(),
-            "Should return a service for Optimism network"
+            matches!(service, NetworkExtraFeeCalculator::Optimism(_)),
+            "Should return an Optimism service for Optimism network"
         );
     }
 
@@ -73,8 +93,8 @@ mod tests {
             let service = get_network_extra_fee_calculator_service(network, provider);
 
             assert!(
-                service.is_none(),
-                "Should not return a service for non-Optimism network"
+                matches!(service, NetworkExtraFeeCalculator::None),
+                "Should return None service for non-Optimism network"
             );
         }
     }
@@ -93,10 +113,6 @@ mod tests {
 
         let network = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
         let service = get_network_extra_fee_calculator_service(network, mock_provider);
-        assert!(
-            service.is_some(),
-            "Should return a service for Optimism network"
-        );
 
         let tx_data = EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
@@ -115,7 +131,6 @@ mod tests {
             raw: None,
         };
 
-        let service = service.unwrap();
         let extra_fee_result = service.get_extra_fee(&tx_data).await;
 
         assert!(

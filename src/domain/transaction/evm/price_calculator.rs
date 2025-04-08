@@ -42,7 +42,7 @@ use crate::{
     },
     services::{
         gas::{EvmGasPriceServiceTrait, NetworkExtraFeeCalculatorServiceTrait},
-        GasPrices,
+        GasPrices, NetworkExtraFeeCalculator,
     },
 };
 
@@ -85,8 +85,7 @@ pub struct PriceParams {
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
 pub struct PriceCalculator<G: EvmGasPriceServiceTrait> {
     gas_price_service: G,
-    network_extra_fee_calculator_service:
-        Option<Box<dyn NetworkExtraFeeCalculatorServiceTrait + Send + Sync>>,
+    network_extra_fee_calculator_service: Option<NetworkExtraFeeCalculator<G::Provider>>,
 }
 
 #[async_trait::async_trait]
@@ -111,9 +110,7 @@ impl<G: EvmGasPriceServiceTrait + Send + Sync> PriceCalculatorTrait for PriceCal
 impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
     pub fn new(
         gas_price_service: G,
-        network_extra_fee_calculator_service: Option<
-            Box<dyn NetworkExtraFeeCalculatorServiceTrait + Send + Sync>,
-        >,
+        network_extra_fee_calculator_service: Option<NetworkExtraFeeCalculator<G::Provider>>,
     ) -> Self {
         Self {
             gas_price_service,
