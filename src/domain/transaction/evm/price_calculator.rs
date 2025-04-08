@@ -192,65 +192,47 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             .unwrap_or(u128::MAX);
 
         // Decide EIP1559 vs Legacy based on presence of maxFeePerGas / maxPriorityFeePerGas vs gasPrice
-        match (
+        let bumped_price_params = match (
             evm_data.max_fee_per_gas,
             evm_data.max_priority_fee_per_gas,
             evm_data.gas_price,
         ) {
             (Some(max_fee), Some(max_priority_fee), _) => {
                 // EIP1559
-                let bumped_price_params = self.handle_eip1559_bump(
+                self.handle_eip1559_bump(
                     &network_gas_prices,
                     relayer_gas_price_cap,
                     evm_data.speed.as_ref(),
                     max_fee,
                     max_priority_fee,
-                )?;
-
-                if let Some(service) = &self.network_extra_fee_calculator_service {
-                    // clone the evm_data to calculate the extra fee for the bumped price params
-                    let new_tx = evm_data.with_price_params(bumped_price_params.clone());
-                    let extra_fee = service.get_extra_fee(&new_tx).await?;
-                    Ok(PriceParams {
-                        gas_price: bumped_price_params.gas_price,
-                        max_fee_per_gas: bumped_price_params.max_fee_per_gas,
-                        max_priority_fee_per_gas: bumped_price_params.max_priority_fee_per_gas,
-                        is_min_bumped: bumped_price_params.is_min_bumped,
-                        extra_fee: Some(extra_fee.try_into().unwrap_or(0)),
-                    })
-                } else {
-                    Ok(bumped_price_params)
-                }
+                )?
             }
             (None, None, Some(gas_price)) => {
                 // Legacy
-                let bumped_price_params = self.handle_legacy_bump(
+                self.handle_legacy_bump(
                     &network_gas_prices,
                     relayer_gas_price_cap,
                     evm_data.speed.as_ref(),
                     gas_price,
-                )?;
-
-                if let Some(service) = &self.network_extra_fee_calculator_service {
-                    // clone the evm_data to calculate the extra fee for the bumped price params
-                    let new_tx = evm_data.with_price_params(bumped_price_params.clone());
-
-                    let extra_fee = service.get_extra_fee(&new_tx).await?;
-                    Ok(PriceParams {
-                        gas_price: bumped_price_params.gas_price,
-                        max_fee_per_gas: bumped_price_params.max_fee_per_gas,
-                        max_priority_fee_per_gas: bumped_price_params.max_priority_fee_per_gas,
-                        is_min_bumped: bumped_price_params.is_min_bumped,
-                        extra_fee: Some(extra_fee.try_into().unwrap_or(0)),
-                    })
-                } else {
-                    Ok(bumped_price_params)
-                }
+                )?
             }
-            _ => Err(TransactionError::InvalidType(
-                "Transaction missing required gas price parameters".to_string(),
-            )),
+            _ => {
+                return Err(TransactionError::InvalidType(
+                    "Transaction missing required gas price parameters".to_string(),
+                ))
+            }
+        };
+
+        // Add extra fee if needed
+        let mut final_params = bumped_price_params;
+        
+        if let Some(service) = &self.network_extra_fee_calculator_service {
+            let new_tx = evm_data.with_price_params(final_params.clone());
+            let extra_fee = service.get_extra_fee(&new_tx).await?;
+            final_params.extra_fee = Some(extra_fee.try_into().unwrap_or(0));
         }
+        
+        Ok(final_params)
     }
 
     /// Computes the bumped gas parameters for an EIP-1559 transaction resubmission.
