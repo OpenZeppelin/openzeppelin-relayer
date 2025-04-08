@@ -164,7 +164,7 @@ pub trait Transaction {
 
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
-    Evm(DefaultEvmTransaction),
+    Evm(Box<DefaultEvmTransaction>),
     Solana(SolanaRelayerTransaction),
     Stellar(StellarRelayerTransaction),
 }
@@ -414,16 +414,18 @@ impl RelayerTransactionFactory {
                     Some(network_extra_fee_calculator),
                 );
 
-                Ok(NetworkTransaction::Evm(DefaultEvmTransaction::new(
-                    relayer,
-                    evm_provider,
-                    relayer_repository,
-                    transaction_repository,
-                    transaction_counter_store,
-                    job_producer,
-                    price_calculator,
-                    signer_service,
-                )?))
+                Ok(NetworkTransaction::Evm(Box::new(
+                    DefaultEvmTransaction::new(
+                        relayer,
+                        evm_provider,
+                        relayer_repository,
+                        transaction_repository,
+                        transaction_counter_store,
+                        job_producer,
+                        price_calculator,
+                        signer_service,
+                    )?,
+                )))
             }
             NetworkType::Solana => {
                 let solana_provider = Arc::new(get_solana_network_provider(
