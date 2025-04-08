@@ -22,23 +22,17 @@
       "section": "◀️ Reverts"
     },
     {
+      "type": "chore",
+      "section": "⚙️ Miscellaneous Chores"
+    },
+    {
       "type": "docs",
       "section": "📚 Documentation",
       "hidden": false
     },
     {
-      "type": "refactor",
-      "section": "🚜 Code Refactoring",
-      "hidden": true
-    },
-    {
       "type": "style",
       "section": "🎨 Styles",
-      "hidden": true
-    },
-    {
-      "type": "chore",
-      "section": "⚙️ Miscellaneous Chores",
       "hidden": true
     },
     {
@@ -59,7 +53,7 @@
     {
       "type": "ci",
       "section": "🥏 Continuous Integration",
-      "hidden": true
+      "hidden": false
     }
   ]
 }
