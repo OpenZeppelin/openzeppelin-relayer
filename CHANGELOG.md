@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.1](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.1.0...v0.1.1) (2025-04-08)
+
+
+### 🐛 Bug Fixes
+
+* Skip releases ([e79b2e9](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/e79b2e963439721dd8e151fa0827654e4019df5f))
+* Skip releases with release please ([#158](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/158)) ([e79b2e9](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/e79b2e963439721dd8e151fa0827654e4019df5f))
+
+
+### ⚙️ Miscellaneous Chores
+
+* Fix workflow and missing libs in docker file ([#157](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/157)) ([c7a681d](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/c7a681dea154b06b675a286e936606e2f9ce087b))
+* plat-7575 Docs fixes ([#153](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/153)) ([#154](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/154)) ([44257e8](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/44257e8ea3e658adbf40f69ad809e4e3503e9af4))
+
 ## 0.1.0 (2025-04-07)
 
 
