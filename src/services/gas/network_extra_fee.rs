@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::{
     models::{EvmNetwork, EvmTransactionData, TransactionError, U256},
-    services::{EvmProviderTrait, OptimismProviderTrait},
+    services::EvmProviderTrait,
 };
 
 use super::optimism_extra_fee::OptimismExtraFeeService;
@@ -32,11 +32,101 @@ pub fn get_network_extra_fee_calculator_service<P>(
     provider: P,
 ) -> Option<Box<dyn NetworkExtraFeeCalculatorServiceTrait + Send + Sync>>
 where
-    P: EvmProviderTrait + OptimismProviderTrait + 'static,
+    P: EvmProviderTrait + 'static,
 {
     if network.is_optimism() {
         Some(Box::new(OptimismExtraFeeService::new(provider)))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{EvmNamedNetwork, EvmNetwork};
+    use crate::services::MockEvmProviderTrait;
+    use alloy::primitives::Bytes;
+
+    #[test]
+    fn test_get_network_extra_fee_calculator_service_for_optimism() {
+        let provider = MockEvmProviderTrait::new();
+        let network = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        let service = get_network_extra_fee_calculator_service(network, provider);
+
+        assert!(
+            service.is_some(),
+            "Should return a service for Optimism network"
+        );
+    }
+
+    #[test]
+    fn test_get_network_extra_fee_calculator_service_for_non_optimism() {
+        let networks = [
+            EvmNetwork::from_named(EvmNamedNetwork::Mainnet),
+            EvmNetwork::from_named(EvmNamedNetwork::Arbitrum),
+            EvmNetwork::from_named(EvmNamedNetwork::Polygon),
+        ];
+
+        for network in networks {
+            let provider = MockEvmProviderTrait::new();
+            let service = get_network_extra_fee_calculator_service(network, provider);
+
+            assert!(
+                service.is_none(),
+                "Should not return a service for non-Optimism network"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_integration_with_optimism_extra_fee_service() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+
+        mock_provider
+            .expect_call_contract()
+            .times(6) // All 6 contract calls in get_modifiers
+            .returning(|_| {
+                let value_bytes = U256::from(1u64).to_be_bytes::<32>();
+                Box::pin(async move { Ok(Bytes::from(value_bytes.to_vec())) })
+            });
+
+        let network = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        let service = get_network_extra_fee_calculator_service(network, mock_provider);
+        assert!(
+            service.is_some(),
+            "Should return a service for Optimism network"
+        );
+
+        let tx_data = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0xa24Cea55A6171FbA0935c9e171c4Efe5Ba28DF91".to_string()),
+            gas_price: Some(20000000000),
+            value: U256::from(1000000000),
+            data: Some("0x0123".to_string()),
+            nonce: Some(1),
+            chain_id: 10,
+            gas_limit: 21000,
+            hash: None,
+            signature: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        let service = service.unwrap();
+        let extra_fee_result = service.get_extra_fee(&tx_data).await;
+
+        assert!(
+            extra_fee_result.is_ok(),
+            "Should calculate extra fee without errors"
+        );
+
+        let extra_fee = extra_fee_result.unwrap();
+        assert!(
+            extra_fee > U256::ZERO,
+            "Extra fee should be greater than zero"
+        );
     }
 }
