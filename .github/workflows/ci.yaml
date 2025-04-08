@@ -111,7 +111,7 @@ jobs:
 
       # Check the lockfile
       - name: Validate lockfile updates
-        run: cargo update --locked
+        run: cargo check --locked
 
   rustfmt:
     if: ${{ github.event.pull_request.draft == false && github.event_name != 'push'
