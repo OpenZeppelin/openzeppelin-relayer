@@ -7,7 +7,11 @@ use crate::{
 
 use super::optimism_extra_fee::OptimismExtraFeeService;
 
+#[cfg(test)]
+use mockall::automock;
+
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait NetworkExtraFeeCalculatorServiceTrait {
     /// Get the extra fee for a transaction
     ///
@@ -26,6 +30,9 @@ pub enum NetworkExtraFeeCalculator<P: EvmProviderTrait> {
     None,
     /// Optimism extra fee calculator
     Optimism(OptimismExtraFeeService<P>),
+    /// Test mock implementation (available only in test builds)
+    #[cfg(test)]
+    Mock(MockNetworkExtraFeeCalculatorServiceTrait),
 }
 
 #[async_trait]
@@ -36,6 +43,8 @@ impl<P: EvmProviderTrait + Send + Sync> NetworkExtraFeeCalculatorServiceTrait
         match self {
             Self::None => Ok(U256::ZERO),
             Self::Optimism(service) => service.get_extra_fee(tx_data).await,
+            #[cfg(test)]
+            Self::Mock(mock) => mock.get_extra_fee(tx_data).await,
         }
     }
 }
