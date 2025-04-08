@@ -44,11 +44,14 @@ impl ServerConfig {
     /// - `RATE_LIMIT_BURST_SIZE` defaults to `300`.
     /// - `METRICS_PORT` defaults to `8081`.
     pub fn from_env() -> Self {
-        let conf_dir = env::var("IN_DOCKER")
+        let conf_dir = if env::var("IN_DOCKER")
             .map(|val| val == "true")
             .unwrap_or(false)
-            .then(|| "config/".to_string())
-            .unwrap_or_else(|| env::var("CONFIG_DIR").unwrap_or_else(|_| "./config".to_string()));
+        {
+            "config/".to_string()
+        } else {
+            env::var("CONFIG_DIR").unwrap_or_else(|_| "./config".to_string())
+        };
 
         let conf_dir = format!("{}/", conf_dir.trim_end_matches('/'));
 

@@ -164,11 +164,9 @@ mod tests {
         let job = TestJob;
         let ctx = ();
         let mut req = Request::new_with_ctx(job, ctx);
-        let mut result: Result<(), Err> = Err(Error::from(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Test error",
-        ))
-            as Box<dyn std::error::Error + Send + Sync>));
+        let mut result: Result<(), Err> =
+            Err(Error::from(Box::new(std::io::Error::other("Test error"))
+                as Box<dyn std::error::Error + Send + Sync>));
 
         // First attempt (0) should return Some(Sleep) since retries > 0
         assert!(policy.retry(&mut req, &mut result).is_some());
@@ -274,11 +272,9 @@ mod tests {
         let job = TestJob;
         let ctx = ();
         let mut req = Request::new_with_ctx(job, ctx);
-        let mut result: Result<(), Err> = Err(Error::from(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Test error",
-        ))
-            as Box<dyn std::error::Error + Send + Sync>));
+        let mut result: Result<(), Err> =
+            Err(Error::from(Box::new(std::io::Error::other("Test error"))
+                as Box<dyn std::error::Error + Send + Sync>));
 
         // Should return None immediately because retries=0
         assert!(policy.retry(&mut req, &mut result).is_none());
