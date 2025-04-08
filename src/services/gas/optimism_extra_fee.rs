@@ -65,6 +65,13 @@ impl<P> OptimismExtraFeeService<P> {
 }
 
 impl<P: EvmProviderTrait> OptimismExtraFeeService<P> {
+    /// Create a contract call for the given function selector
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes_fn_selector` - The function selector to create a contract call for
+    ///
+    /// # Returns
     fn create_contract_call(
         &self,
         bytes_fn_selector: Vec<u8>,
@@ -80,12 +87,24 @@ impl<P: EvmProviderTrait> OptimismExtraFeeService<P> {
         Ok(tx)
     }
 
+    /// Get the fee for the given function selector
+    ///
+    /// # Arguments
+    ///
+    /// * `fn_selector` - The function selector to get the fee for
+    ///
+    /// # Returns
     async fn get_fee(&self, fn_selector: Vec<u8>) -> Result<U256, TransactionError> {
         let tx = self.create_contract_call(fn_selector)?;
         let result = self.provider.call_contract(&tx).await?;
         Ok(U256::from_be_slice(result.as_ref()))
     }
 
+    /// Get the price modifiers for optimism
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the price modifiers or a `TransactionError`.
     pub async fn get_modifiers(&self) -> Result<OptimismModifiers, TransactionError> {
         let (l1_base_fee, base_fee, decimals, blob_base_fee, base_fee_scalar, blob_base_fee_scalar) =
             tokio::try_join!(
@@ -122,6 +141,12 @@ impl<P: EvmProviderTrait> OptimismExtraFeeService<P> {
 
 #[async_trait]
 impl<P: EvmProviderTrait> NetworkExtraFeeCalculatorServiceTrait for OptimismExtraFeeService<P> {
+    /// Get the extra fee for the given transaction data
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_data` - The transaction data to get the extra fee for
+    ///
     async fn get_extra_fee(&self, tx_data: &EvmTransactionData) -> Result<U256, TransactionError> {
         let bytes = if tx_data.is_eip1559() {
             let tx_eip1559 = TxEip1559::try_from(tx_data)?;
