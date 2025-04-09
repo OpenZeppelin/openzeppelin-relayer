@@ -182,7 +182,6 @@ jobs:
 
       - name: Report status
         run: cargo clippy --all-features --all-targets -- -D warnings --allow deprecated
-          --locked
 
   test:
     if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files
