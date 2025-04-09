@@ -187,8 +187,8 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError> {
         let evm_data = tx.network_data.get_evm_transaction_data()?;
-        let _network_gas_prices = self.gas_price_service.get_prices_from_json_rpc().await?;
-        let _relayer_gas_price_cap = relayer
+        let network_gas_prices = self.gas_price_service.get_prices_from_json_rpc().await?;
+        let relayer_gas_price_cap = relayer
             .policies
             .get_evm_policy()
             .gas_price_cap
@@ -203,8 +203,8 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             (Some(max_fee), Some(max_priority_fee), _) => {
                 // EIP1559
                 self.handle_eip1559_bump(
-                    &_network_gas_prices,
-                    _relayer_gas_price_cap,
+                    &network_gas_prices,
+                    relayer_gas_price_cap,
                     evm_data.speed.as_ref(),
                     max_fee,
                     max_priority_fee,
@@ -213,8 +213,8 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             (None, None, Some(gas_price)) => {
                 // Legacy
                 self.handle_legacy_bump(
-                    &_network_gas_prices,
-                    _relayer_gas_price_cap,
+                    &network_gas_prices,
+                    relayer_gas_price_cap,
                     evm_data.speed.as_ref(),
                     gas_price,
                 )?
