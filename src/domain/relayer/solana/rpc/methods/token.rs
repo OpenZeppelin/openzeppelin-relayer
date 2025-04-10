@@ -238,7 +238,7 @@ impl SolanaTokenProgram {
         wallet: &Pubkey,
         mint: &Pubkey,
     ) -> Pubkey {
-        get_associated_token_address_with_program_id(program_id, wallet, mint)
+        get_associated_token_address_with_program_id(wallet, mint, program_id)
     }
 
     /// Creates an instruction to create an associated token account.
@@ -610,13 +610,25 @@ mod tests {
     }
 
     #[test]
-    fn test_get_associated_token_address() {
+    fn test_get_associated_token_address_spl_token() {
         let program_id = spl_token::id();
         let wallet = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
 
         let result = SolanaTokenProgram::get_associated_token_address(&program_id, &wallet, &mint);
-        let expected = get_associated_token_address_with_program_id(&program_id, &wallet, &mint);
+        let expected = get_associated_token_address_with_program_id(&wallet, &mint, &program_id);
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_get_associated_token_address_token_2022() {
+        let program_id = spl_token_2022::id();
+        let wallet = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+
+        let result = SolanaTokenProgram::get_associated_token_address(&program_id, &wallet, &mint);
+        let expected = get_associated_token_address_with_program_id(&wallet, &mint, &program_id);
 
         assert_eq!(result, expected);
     }

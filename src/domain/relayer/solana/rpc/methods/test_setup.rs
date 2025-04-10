@@ -79,6 +79,107 @@ pub fn setup_test_context() -> (
     )
 }
 
+pub struct RelayerFeeStrategyTestContext {
+    pub relayer: RelayerRepoModel,
+    pub signer: MockSolanaSignTrait,
+    pub provider: MockSolanaProviderTrait,
+    pub jupiter_service: MockJupiterServiceTrait,
+    pub encoded_tx: EncodedSerializedTransaction,
+    pub job_producer: MockJobProducerTrait,
+    pub relayer_keypair: Keypair,
+    pub source_keypair: Keypair,
+    pub destination: Pubkey,
+    pub token: String,
+    pub token_mint: Pubkey,
+    pub user_token_account: Pubkey,
+}
+
+pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContext {
+    // Create test transaction
+    let relayer_keypair = Keypair::new();
+    let source = Keypair::new();
+    let recipient = Pubkey::new_unique();
+
+    let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost USDC token mint
+    let token_mint = Pubkey::from_str(test_token).unwrap();
+
+    let source_token_account = get_associated_token_address(&source.pubkey(), &token_mint);
+    let destination_token_account =
+        get_associated_token_address(&Pubkey::new_unique(), &token_mint);
+
+    let main_transfer_amount = 5_000_000u64; // Main transfer amount (5 USDC)
+
+    let main_transfer_ix = spl_token::instruction::transfer_checked(
+        &spl_token::id(),           // Token program ID
+        &source_token_account,      // Source token account
+        &token_mint,                // Token mint
+        &destination_token_account, // Destination token account
+        &source.pubkey(),           // Owner of the source token account
+        &[],                        // Additional signers (empty array)
+        main_transfer_amount,       // Amount to transfer
+        6,                          // Decimals (6 for USDC)
+    )
+    .unwrap();
+
+    // Create the message with both instructions, making sure all accounts are properly marked
+    let message = Message::new_with_blockhash(
+        &[main_transfer_ix],
+        Some(&relayer_keypair.pubkey()), // Fee payer
+        &Hash::default(),                // We'll use a default blockhash for testing
+    );
+
+    let transaction = Transaction::new_unsigned(message);
+    let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
+
+    // Create test relayer
+    let relayer = RelayerRepoModel {
+        id: "id".to_string(),
+        name: "Relayer".to_string(),
+        network: "testnet".to_string(),
+        paused: false,
+        network_type: NetworkType::Solana,
+        policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_margin_percentage: Some(0.5),
+            allowed_accounts: None,
+            allowed_tokens: None,
+            min_balance: 10000,
+            allowed_programs: None,
+            max_signatures: Some(10),
+            disallowed_accounts: None,
+            max_allowed_fee_lamports: None,
+            max_tx_data_size: 1000,
+        }),
+        signer_id: "test".to_string(),
+        address: relayer_keypair.pubkey().to_string(),
+        notification_id: None,
+        system_disabled: false,
+        custom_rpc_urls: None,
+    };
+
+    // Setup mock signer
+    let mock_signer = MockSolanaSignTrait::new();
+
+    let jupiter_service = MockJupiterServiceTrait::new();
+    let provider = MockSolanaProviderTrait::new();
+    let job_producer = MockJobProducerTrait::new();
+
+    RelayerFeeStrategyTestContext {
+        relayer,
+        signer: mock_signer,
+        provider,
+        jupiter_service,
+        encoded_tx,
+        job_producer,
+        relayer_keypair,
+        source_keypair: source,
+        destination: recipient,
+        token_mint,
+        token: test_token.to_string(),
+        user_token_account: source_token_account,
+    }
+}
+
 pub struct UserFeeStrategyTestContext {
     pub relayer: RelayerRepoModel,
     pub signer: MockSolanaSignTrait,
