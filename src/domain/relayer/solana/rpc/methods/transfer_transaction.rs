@@ -555,7 +555,7 @@ mod tests {
     async fn test_transfer_spl_token_success_token_account_creation() {
         let mut ctx = setup_test_context_relayer_fee_strategy();
         let source_pubkey = ctx.source_keypair.pubkey();
-        let destination_pubkey = ctx.destination.clone();
+        let destination_pubkey = ctx.destination;
 
         let source_token_account = spl_token::state::Account {
             mint: Pubkey::from_str(&ctx.token).unwrap(),
@@ -621,13 +621,13 @@ mod tests {
                         };
                         spl_token::state::Mint::pack(mint, &mut mint_data).unwrap();
 
-                        return Ok(solana_sdk::account::Account {
+                        Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: mint_data,
                             owner: spl_token::id(),
                             executable: false,
                             rent_epoch: 0,
-                        });
+                        })
                     } else if pubkey == ctx.user_token_account {
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,

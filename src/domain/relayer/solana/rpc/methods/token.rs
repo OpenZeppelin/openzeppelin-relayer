@@ -516,11 +516,13 @@ mod tests {
         let owner = Pubkey::new_unique();
         let amount = 1000;
 
-        let mut spl_account = Account::default();
-        spl_account.mint = mint;
-        spl_account.owner = owner;
-        spl_account.amount = amount;
-        spl_account.state = spl_token::state::AccountState::Initialized;
+        let spl_account = Account {
+            mint,
+            owner,
+            amount,
+            state: spl_token::state::AccountState::Initialized,
+            ..Default::default()
+        };
 
         let mut account_data = vec![0; Account::LEN];
         Account::pack(spl_account, &mut account_data).unwrap();
@@ -540,7 +542,7 @@ mod tests {
         assert_eq!(token_account.mint, mint);
         assert_eq!(token_account.owner, owner);
         assert_eq!(token_account.amount, amount);
-        assert_eq!(token_account.is_frozen, false);
+        assert!(!token_account.is_frozen);
     }
 
     #[test]
@@ -550,11 +552,13 @@ mod tests {
         let owner = Pubkey::new_unique();
         let amount = 1000;
 
-        let mut spl_account = Account::default();
-        spl_account.mint = mint;
-        spl_account.owner = owner;
-        spl_account.amount = amount;
-        spl_account.state = spl_token::state::AccountState::Initialized;
+        let spl_account = Account {
+            mint,
+            owner,
+            amount,
+            state: spl_token::state::AccountState::Initialized,
+            ..Default::default()
+        };
 
         let mut account_data = vec![0; Account::LEN];
         Account::pack(spl_account, &mut account_data).unwrap();
@@ -574,7 +578,7 @@ mod tests {
         assert_eq!(token_account.mint, mint);
         assert_eq!(token_account.owner, owner);
         assert_eq!(token_account.amount, amount);
-        assert_eq!(token_account.is_frozen, false);
+        assert!(!token_account.is_frozen);
     }
 
     #[test]
@@ -584,11 +588,13 @@ mod tests {
         let owner = Pubkey::new_unique();
         let amount = 1000;
 
-        let mut spl_account = Account::default();
-        spl_account.mint = mint;
-        spl_account.owner = owner;
-        spl_account.amount = amount;
-        spl_account.state = spl_token::state::AccountState::Initialized;
+        let spl_account = Account {
+            mint,
+            owner,
+            amount,
+            state: spl_token::state::AccountState::Initialized,
+            ..Default::default()
+        };
 
         let mut account_data = vec![0; Account::LEN];
         Account::pack(spl_account, &mut account_data).unwrap();
