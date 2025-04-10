@@ -292,6 +292,11 @@ impl SolanaRelayerTrait for SolanaRelayer {
                         "PREPARATION_ERROR",
                         &format!("Invalid Token Account: {}", msg),
                     ),
+                    SolanaRpcError::Token(msg) => JsonRpcResponse::error(
+                        -32601,
+                        "PREPARATION_ERROR",
+                        &format!("Invalid Token Account: {}", msg),
+                    ),
                     SolanaRpcError::Provider(msg) => JsonRpcResponse::error(
                         -32006,
                         "PREPARATION_ERROR",

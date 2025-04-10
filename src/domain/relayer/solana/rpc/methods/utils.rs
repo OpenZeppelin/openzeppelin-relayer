@@ -25,7 +25,7 @@
 //! SDK for transaction manipulation.
 use std::str::FromStr;
 
-use super::*;
+use super::{token::SolanaTokenProgram, *};
 
 use log::debug;
 use solana_sdk::{
@@ -40,9 +40,7 @@ use solana_sdk::{
     system_program,
     transaction::Transaction,
 };
-use spl_associated_token_account::{
-    get_associated_token_address, instruction::create_associated_token_account,
-};
+
 use spl_token::{amount_to_ui_amount, state::Account};
 
 use crate::{
@@ -398,6 +396,27 @@ where
         Ok((signed_transaction, recent_blockhash))
     }
 
+    pub(crate) async fn get_token_program_id(
+        &self,
+        token_mint: &Pubkey,
+    ) -> Result<Pubkey, SolanaRpcError> {
+        let account = self
+            .provider
+            .get_account_from_pubkey(token_mint)
+            .await
+            .map_err(|e| SolanaRpcError::TokenAccount(e.to_string()))?;
+
+        if account.owner == spl_token::id() {
+            Ok(spl_token::id())
+        } else if account.owner == spl_token_2022::id() {
+            Ok(spl_token_2022::id())
+        } else {
+            Err(SolanaRpcError::TokenAccount(
+                "Unknown token program".to_string(),
+            ))
+        }
+    }
+
     /// Handles a token transfer between two accounts, creating an associated token account (ATA)
     /// for the destination if necessary.
     ///
@@ -431,8 +450,11 @@ where
         amount: u64,
     ) -> Result<Vec<Instruction>, SolanaRpcError> {
         let mut instructions = Vec::new();
-        let source_ata = get_associated_token_address(source, token_mint);
-        let destination_ata = get_associated_token_address(destination, token_mint);
+        let program_id = self.get_token_program_id(token_mint).await?;
+        let source_ata =
+            SolanaTokenProgram::get_associated_token_address(&program_id, source, token_mint);
+        let destination_ata =
+            SolanaTokenProgram::get_associated_token_address(&program_id, destination, token_mint);
 
         // Verify source account and balance
         let source_account = self
@@ -442,8 +464,9 @@ where
             .map_err(|e| {
                 SolanaRpcError::TokenAccount(format!("Invalid source token account: {}", e))
             })?;
-        let unpacked_source_account = Account::unpack(&source_account.data)
-            .map_err(|e| SolanaRpcError::InvalidParams(format!("Invalid token account: {}", e)))?;
+
+        let unpacked_source_account =
+            SolanaTokenProgram::unpack_account(&program_id, &source_account)?;
 
         if unpacked_source_account.amount < amount {
             return Err(SolanaRpcError::InsufficientFunds(format!(
@@ -462,11 +485,11 @@ where
             let relayer_pubkey = &Pubkey::from_str(&self.relayer.address)
                 .map_err(|e| SolanaRpcError::Internal(e.to_string()))?;
 
-            instructions.push(create_associated_token_account(
+            instructions.push(SolanaTokenProgram::create_associated_token_account(
+                &program_id,
                 relayer_pubkey,
                 destination,
                 token_mint,
-                &spl_token::id(),
             ));
         }
         let token_decimals = self
@@ -478,19 +501,15 @@ where
                 SolanaRpcError::UnsupportedFeeToken("Token not found in allowed tokens".to_string())
             })?;
 
-        instructions.push(
-            spl_token::instruction::transfer_checked(
-                &spl_token::id(),
-                &source_ata,
-                token_mint,
-                &destination_ata,
-                source,
-                &[],
-                amount,
-                token_decimals,
-            )
-            .map_err(|e| SolanaRpcError::TransactionPreparation(e.to_string()))?,
-        );
+        instructions.push(SolanaTokenProgram::create_transfer_checked_instruction(
+            &program_id,
+            &source_ata,
+            token_mint,
+            &destination_ata,
+            source,
+            amount,
+            token_decimals,
+        )?);
 
         Ok(instructions)
     }
@@ -757,16 +776,14 @@ where
         for ix in &transaction.message.instructions {
             let program_id = transaction.message.account_keys[ix.program_id_index as usize];
 
-            if program_id != spl_token::id() {
+            if !SolanaTokenProgram::is_token_program(&program_id) {
                 continue;
             }
 
-            if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
+            if let Ok(token_ix) = SolanaTokenProgram::unpack_instruction(&program_id, &ix.data) {
                 match token_ix {
-                    spl_token::instruction::TokenInstruction::Transfer { amount }
-                    | spl_token::instruction::TokenInstruction::TransferChecked {
-                        amount, ..
-                    } => {
+                    TokenInstruction::Transfer { amount }
+                    | TokenInstruction::TransferChecked { amount, .. } => {
                         if ix.accounts.len() < 2 {
                             continue;
                         }
@@ -774,9 +791,7 @@ where
                         // Get source and destination token accounts from instruction
                         let source_token_idx = ix.accounts[0] as usize;
                         let dest_token_idx = match token_ix {
-                            spl_token::instruction::TokenInstruction::TransferChecked {
-                                ..
-                            } => ix.accounts[2] as usize,
+                            TokenInstruction::TransferChecked { .. } => ix.accounts[2] as usize,
                             _ => ix.accounts[1] as usize,
                         };
 
@@ -797,11 +812,14 @@ where
                             .await
                         {
                             Ok(dest_account) => {
-                                if dest_account.owner != spl_token::id() {
+                                if !SolanaTokenProgram::is_token_program(&dest_account.owner) {
                                     continue;
                                 }
 
-                                let dest_token_account = match Account::unpack(&dest_account.data) {
+                                let dest_token_account = match SolanaTokenProgram::unpack_account(
+                                    &program_id,
+                                    &dest_account,
+                                ) {
                                     Ok(account) => account,
                                     Err(e) => {
                                         error!("Failed to unpack destination token account: {}", e);
@@ -825,12 +843,21 @@ where
                                     .await
                                 {
                                     Ok(source_account) => {
-                                        if source_account.owner != spl_token::id() {
+                                        if !SolanaTokenProgram::is_token_program(
+                                            &source_account.owner,
+                                        ) {
+                                            debug!(
+                                                "Source token account owner {} is not a token program",
+                                                source_account.owner
+                                            );
                                             continue;
                                         }
 
                                         let source_token_account =
-                                            match Account::unpack(&source_account.data) {
+                                            match SolanaTokenProgram::unpack_account(
+                                                &program_id,
+                                                &source_account,
+                                            ) {
                                                 Ok(account) => account,
                                                 Err(e) => {
                                                     error!(
@@ -868,11 +895,13 @@ where
                             }
                         }
                     }
-                    _ => continue,
+                    TokenInstruction::Other => {
+                        // Skip other instruction types
+                        continue;
+                    }
                 }
             }
         }
-
         Ok(payments)
     }
 }
@@ -892,6 +921,9 @@ mod tests {
         signature::{Keypair, Signature},
         signer::Signer,
         system_instruction,
+    };
+    use spl_associated_token_account::{
+        get_associated_token_address, instruction::create_associated_token_account,
     };
 
     #[tokio::test]
