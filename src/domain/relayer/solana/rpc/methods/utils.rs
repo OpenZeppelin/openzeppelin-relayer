@@ -396,27 +396,6 @@ where
         Ok((signed_transaction, recent_blockhash))
     }
 
-    pub(crate) async fn get_token_program_id(
-        &self,
-        token_mint: &Pubkey,
-    ) -> Result<Pubkey, SolanaRpcError> {
-        let account = self
-            .provider
-            .get_account_from_pubkey(token_mint)
-            .await
-            .map_err(|e| SolanaRpcError::TokenAccount(e.to_string()))?;
-
-        if account.owner == spl_token::id() {
-            Ok(spl_token::id())
-        } else if account.owner == spl_token_2022::id() {
-            Ok(spl_token_2022::id())
-        } else {
-            Err(SolanaRpcError::TokenAccount(
-                "Unknown token program".to_string(),
-            ))
-        }
-    }
-
     /// Handles a token transfer between two accounts, creating an associated token account (ATA)
     /// for the destination if necessary.
     ///
@@ -449,8 +428,9 @@ where
         token_mint: &Pubkey,
         amount: u64,
     ) -> Result<Vec<Instruction>, SolanaRpcError> {
-        let mut instructions = Vec::new();
-        let program_id = self.get_token_program_id(token_mint).await?;
+        let mut instructions: Vec<Instruction> = Vec::new();
+        let program_id =
+            SolanaTokenProgram::get_token_program_for_mint(&*self.provider, token_mint).await?;
         let source_ata =
             SolanaTokenProgram::get_associated_token_address(&program_id, source, token_mint);
         let destination_ata =
@@ -780,125 +760,125 @@ where
                 continue;
             }
 
-            if let Ok(token_ix) = SolanaTokenProgram::unpack_instruction(&program_id, &ix.data) {
-                match token_ix {
-                    TokenInstruction::Transfer { amount }
-                    | TokenInstruction::TransferChecked { amount, .. } => {
-                        if ix.accounts.len() < 2 {
-                            continue;
-                        }
+            let token_ix = match SolanaTokenProgram::unpack_instruction(&program_id, &ix.data) {
+                Ok(ix) => ix,
+                Err(_) => continue,
+            };
 
-                        // Get source and destination token accounts from instruction
-                        let source_token_idx = ix.accounts[0] as usize;
-                        let dest_token_idx = match token_ix {
-                            TokenInstruction::TransferChecked { .. } => ix.accounts[2] as usize,
-                            _ => ix.accounts[1] as usize,
-                        };
-
-                        if dest_token_idx >= transaction.message.account_keys.len()
-                            || source_token_idx >= transaction.message.account_keys.len()
-                        {
-                            continue;
-                        }
-
-                        let source_token_account =
-                            transaction.message.account_keys[source_token_idx];
-                        let dest_token_account = transaction.message.account_keys[dest_token_idx];
-
-                        // Check destination account first
-                        match self
-                            .provider
-                            .get_account_from_pubkey(&dest_token_account)
-                            .await
-                        {
-                            Ok(dest_account) => {
-                                if !SolanaTokenProgram::is_token_program(&dest_account.owner) {
-                                    continue;
-                                }
-
-                                let dest_token_account = match SolanaTokenProgram::unpack_account(
-                                    &program_id,
-                                    &dest_account,
-                                ) {
-                                    Ok(account) => account,
-                                    Err(e) => {
-                                        error!("Failed to unpack destination token account: {}", e);
-                                        continue;
-                                    }
-                                };
-
-                                // Check if destination token account is owned by relayer
-                                if dest_token_account.owner != *relayer_pubkey {
-                                    debug!(
-                                        "Token account owner {} is not relayer {}",
-                                        dest_token_account.owner, relayer_pubkey
-                                    );
-                                    continue;
-                                }
-
-                                // Now check source account balance
-                                match self
-                                    .provider
-                                    .get_account_from_pubkey(&source_token_account)
-                                    .await
-                                {
-                                    Ok(source_account) => {
-                                        if !SolanaTokenProgram::is_token_program(
-                                            &source_account.owner,
-                                        ) {
-                                            debug!(
-                                                "Source token account owner {} is not a token program",
-                                                source_account.owner
-                                            );
-                                            continue;
-                                        }
-
-                                        let source_token_account =
-                                            match SolanaTokenProgram::unpack_account(
-                                                &program_id,
-                                                &source_account,
-                                            ) {
-                                                Ok(account) => account,
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to unpack source token account: {}",
-                                                        e
-                                                    );
-                                                    continue;
-                                                }
-                                            };
-
-                                        // Check if source has enough tokens
-                                        if source_token_account.amount < amount {
-                                            continue;
-                                        }
-
-                                        let token_mint = dest_token_account.mint;
-
-                                        // Check if this token mint is in allowed tokens
-                                        if allowed_tokens
-                                            .iter()
-                                            .any(|t| t.mint == token_mint.to_string())
-                                        {
-                                            payments.push((token_mint, amount));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to get source token account: {}", e);
-                                        continue;
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to get destination token account: {}", e);
-                                continue;
-                            }
-                        }
-                    }
-                    TokenInstruction::Other => {
-                        // Skip other instruction types
+            match token_ix {
+                TokenInstruction::Transfer { amount }
+                | TokenInstruction::TransferChecked { amount, .. } => {
+                    if ix.accounts.len() < 2 {
                         continue;
                     }
+
+                    // Get source and destination token accounts from instruction
+                    let source_token_idx = ix.accounts[0] as usize;
+                    let dest_token_idx = match token_ix {
+                        TokenInstruction::TransferChecked { .. } => ix.accounts[2] as usize,
+                        _ => ix.accounts[1] as usize,
+                    };
+
+                    if dest_token_idx >= transaction.message.account_keys.len()
+                        || source_token_idx >= transaction.message.account_keys.len()
+                    {
+                        continue;
+                    }
+
+                    let source_token_account = transaction.message.account_keys[source_token_idx];
+                    let dest_token_account = transaction.message.account_keys[dest_token_idx];
+
+                    // Check destination account first
+                    match self
+                        .provider
+                        .get_account_from_pubkey(&dest_token_account)
+                        .await
+                    {
+                        Ok(dest_account) => {
+                            if !SolanaTokenProgram::is_token_program(&dest_account.owner) {
+                                continue;
+                            }
+
+                            let dest_token_account = match SolanaTokenProgram::unpack_account(
+                                &program_id,
+                                &dest_account,
+                            ) {
+                                Ok(account) => account,
+                                Err(e) => {
+                                    error!("Failed to unpack destination token account: {}", e);
+                                    continue;
+                                }
+                            };
+
+                            // Check if destination token account is owned by relayer
+                            if dest_token_account.owner != *relayer_pubkey {
+                                debug!(
+                                    "Token account owner {} is not relayer {}",
+                                    dest_token_account.owner, relayer_pubkey
+                                );
+                                continue;
+                            }
+
+                            // Now check source account balance
+                            match self
+                                .provider
+                                .get_account_from_pubkey(&source_token_account)
+                                .await
+                            {
+                                Ok(source_account) => {
+                                    if !SolanaTokenProgram::is_token_program(&source_account.owner)
+                                    {
+                                        debug!(
+                                            "Source token account owner {} is not a token program",
+                                            source_account.owner
+                                        );
+                                        continue;
+                                    }
+
+                                    let source_token_account =
+                                        match SolanaTokenProgram::unpack_account(
+                                            &program_id,
+                                            &source_account,
+                                        ) {
+                                            Ok(account) => account,
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to unpack source token account: {}",
+                                                    e
+                                                );
+                                                continue;
+                                            }
+                                        };
+
+                                    // Check if source has enough tokens
+                                    if source_token_account.amount < amount {
+                                        continue;
+                                    }
+
+                                    let token_mint = dest_token_account.mint;
+
+                                    // Check if this token mint is in allowed tokens
+                                    if allowed_tokens
+                                        .iter()
+                                        .any(|t| t.mint == token_mint.to_string())
+                                    {
+                                        payments.push((token_mint, amount));
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to get source token account: {}", e);
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to get destination token account: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                TokenInstruction::Other => {
+                    continue;
                 }
             }
         }
