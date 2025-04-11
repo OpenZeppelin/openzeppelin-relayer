@@ -411,7 +411,7 @@ impl RelayerTransactionFactory {
                     get_network_extra_fee_calculator_service(network, evm_provider.clone());
                 let price_calculator = PriceCalculator::new(
                     EvmGasPriceService::new(evm_provider.clone(), network),
-                    Some(network_extra_fee_calculator),
+                    network_extra_fee_calculator,
                 );
 
                 Ok(NetworkTransaction::Evm(Box::new(
