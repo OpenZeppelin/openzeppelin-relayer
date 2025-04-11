@@ -15,7 +15,6 @@ use solana_sdk::{
 use spl_associated_token_account::get_associated_token_address_with_program_id;
 
 use spl_associated_token_account::instruction::create_associated_token_account;
-use spl_token_2022::state::Account as Token2022Account;
 
 use crate::services::SolanaProviderTrait;
 
@@ -197,7 +196,7 @@ impl SolanaTokenProgram {
         }
         if program_id == &spl_token::id() {
             let account = SplTokenAccount::unpack(&account.data)
-                .map_err(|e| TokenError::AccountError(format!("Invalid token account: {}", e)))?;
+                .map_err(|e| TokenError::AccountError(format!("Invalid token account1: {}", e)))?;
 
             return Ok(TokenAccount {
                 mint: account.mint,
@@ -206,14 +205,18 @@ impl SolanaTokenProgram {
                 is_frozen: account.is_frozen(),
             });
         } else if program_id == &spl_token_2022::id() {
-            let account = Token2022Account::unpack(&account.data)
-                .map_err(|e| TokenError::AccountError(format!("Invalid token account: {}", e)))?;
+            let state_with_extensions = spl_token_2022::extension::StateWithExtensions::<
+                spl_token_2022::state::Account,
+            >::unpack(&account.data)
+            .map_err(|e| TokenError::AccountError(format!("Invalid token account2: {}", e)))?;
+
+            let base_account = state_with_extensions.base;
 
             return Ok(TokenAccount {
-                mint: account.mint,
-                owner: account.owner,
-                amount: account.amount,
-                is_frozen: account.is_frozen(),
+                mint: base_account.mint,
+                owner: base_account.owner,
+                amount: base_account.amount,
+                is_frozen: base_account.is_frozen(),
             });
         }
         Err(TokenError::InvalidTokenProgram(format!(
