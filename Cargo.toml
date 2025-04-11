@@ -57,7 +57,8 @@ actix-governor = "0.8"
 governor = "0.8.0"
 solana-sdk = { version = "2.2" }
 solana-client = { version = "2.2" }
-spl-token = { version = "7" }
+spl-token = { version = "8" }
+spl-token-2022 = { version = "8" }
 mpl-token-metadata = { version = "5.1" }
 sysinfo = "0.33"
 bincode = { version = "1.3" }

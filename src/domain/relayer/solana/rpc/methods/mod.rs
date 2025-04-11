@@ -10,11 +10,14 @@ mod get_supported_tokens;
 mod prepare_transaction;
 mod sign_and_send_transaction;
 mod sign_transaction;
-#[cfg(test)]
-mod test_setup;
+mod token;
 mod transfer_transaction;
 mod utils;
 mod validations;
+pub use token::*;
+
+#[cfg(test)]
+mod test_setup;
 #[cfg(test)]
 use mockall::automock;
 

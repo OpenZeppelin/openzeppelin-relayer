@@ -51,6 +51,8 @@ pub enum SolanaRpcError {
     Encoding(#[from] SolanaEncodingError),
     #[error("Provider error: {0}")]
     Provider(#[from] SolanaProviderError),
+    #[error("Token error: {0}")]
+    Token(#[from] TokenError),
     #[error("Internal error: {0}")]
     Internal(String),
 }

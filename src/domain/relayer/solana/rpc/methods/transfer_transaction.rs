@@ -553,13 +553,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_transfer_spl_token_success_token_account_creation() {
-        let (mut relayer, mut signer, mut provider, mut jupiter_service, _, job_producer) =
-            setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
+        let mut ctx = setup_test_context_relayer_fee_strategy();
+        let source_pubkey = ctx.source_keypair.pubkey();
+        let destination_pubkey = ctx.destination;
 
         let source_token_account = spl_token::state::Account {
-            mint: Pubkey::from_str(test_token).unwrap(),
-            owner: Pubkey::new_unique(),
+            mint: Pubkey::from_str(&ctx.token).unwrap(),
+            owner: source_pubkey,
             amount: 10_000_000,
             delegate: COption::None,
             state: spl_token::state::AccountState::Initialized,
@@ -571,11 +571,10 @@ mod tests {
         let mut source_account_data = vec![0; spl_token::state::Account::LEN];
         spl_token::state::Account::pack(source_token_account, &mut source_account_data).unwrap();
 
-        // Set up policy
-        relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+        ctx.relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
-                mint: test_token.to_string(),
+                mint: ctx.token.to_string(),
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
@@ -586,36 +585,50 @@ mod tests {
 
         let signature = Signature::new_unique();
 
-        signer.expect_sign().returning(move |_| {
+        ctx.signer.expect_sign().returning(move |_| {
             let signature_clone = signature;
             Box::pin(async move { Ok(signature_clone) })
         });
 
-        // Mock provider responses
-        provider
+        ctx.provider
             .expect_get_latest_blockhash_with_commitment()
             .returning(|_commitment| Box::pin(async { Ok((Hash::new_unique(), 100)) }));
 
-        provider
+        ctx.provider
             .expect_calculate_total_fee()
             .returning(|_| Box::pin(async { Ok(5000u64) }));
 
-        provider
+        ctx.provider
             .expect_get_balance()
             .returning(|_| Box::pin(async { Ok(1_000_000_000) }));
 
-        let call_count = std::sync::atomic::AtomicUsize::new(0);
-
-        provider
+        ctx.provider
             .expect_get_account_from_pubkey()
-            .returning(move |_| {
-                let count = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
+            .returning(move |pubkey| {
+                let pubkey = *pubkey;
                 let account_data = source_account_data.clone();
-
-                let is_source = count == 0;
                 Box::pin(async move {
-                    if is_source {
+                    if pubkey == ctx.token_mint {
+                        let mut mint_data = vec![0; spl_token::state::Mint::LEN];
+                        let mint = spl_token::state::Mint {
+                            is_initialized: true,
+                            mint_authority: solana_sdk::program_option::COption::Some(
+                                Pubkey::new_unique(),
+                            ),
+                            supply: 1_000_000_000_000,
+                            decimals: 6,
+                            ..Default::default()
+                        };
+                        spl_token::state::Mint::pack(mint, &mut mint_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: mint_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
+                    } else if pubkey == ctx.user_token_account {
                         Ok(solana_sdk::account::Account {
                             lamports: 1_000_000,
                             data: account_data,
@@ -625,24 +638,26 @@ mod tests {
                         })
                     } else {
                         Err(crate::services::SolanaProviderError::InvalidAddress(
-                            "test".to_string(),
+                            format!("Invalid token address {}", pubkey),
                         ))
                     }
                 })
             });
 
-        provider
+        ctx.provider
             .expect_get_minimum_balance_for_rent_exemption()
             .returning(|_| Box::pin(async { Ok(1111) }));
 
-        // Mock Jupiter quote
-        jupiter_service
+        let token = ctx.token.to_string();
+
+        ctx.jupiter_service
             .expect_get_sol_to_token_quote()
-            .returning(|_, _, _| {
+            .returning(move |_, _, _| {
+                let token_clone = token.clone();
                 Box::pin(async {
                     Ok(QuoteResponse {
                         input_mint: WRAPPED_SOL_MINT.to_string(),
-                        output_mint: test_token.to_string(),
+                        output_mint: token_clone,
                         in_amount: 5000,
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
@@ -652,17 +667,17 @@ mod tests {
             });
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
-            relayer,
-            Arc::new(provider),
-            Arc::new(signer),
-            Arc::new(jupiter_service),
-            Arc::new(job_producer),
+            ctx.relayer,
+            Arc::new(ctx.provider),
+            Arc::new(ctx.signer),
+            Arc::new(ctx.jupiter_service),
+            Arc::new(ctx.job_producer),
         );
 
         let params = TransferTransactionRequestParams {
-            token: test_token.to_string(),
-            source: Pubkey::new_unique().to_string(),
-            destination: Pubkey::new_unique().to_string(),
+            token: ctx.token.to_string(),
+            source: source_pubkey.to_string(),
+            destination: destination_pubkey.to_string(),
             amount: 1_000_000,
         };
 
@@ -672,7 +687,7 @@ mod tests {
         let transfer_result = result.unwrap();
         assert_eq!(transfer_result.fee_in_spl, "100000");
         assert_eq!(transfer_result.fee_in_lamports, "6111");
-        assert_eq!(transfer_result.fee_token, test_token);
+        assert_eq!(transfer_result.fee_token, ctx.token.to_string());
         assert_ne!(transfer_result.valid_until_blockheight, 0);
     }
 

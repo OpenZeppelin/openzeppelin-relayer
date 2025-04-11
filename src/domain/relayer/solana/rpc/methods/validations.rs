@@ -13,11 +13,12 @@ use crate::{models::RelayerSolanaPolicy, services::SolanaProviderTrait};
 use log::info;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
-    commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey,
-    system_instruction::SystemInstruction, system_program, transaction::Transaction,
+    commitment_config::CommitmentConfig, pubkey::Pubkey, system_instruction::SystemInstruction,
+    system_program, transaction::Transaction,
 };
-use spl_token::{instruction::TokenInstruction, state::Account};
 use thiserror::Error;
+
+use super::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction};
 
 #[derive(Debug, Error)]
 #[allow(dead_code)]
@@ -357,166 +358,162 @@ impl SolanaTransactionValidator {
         for ix in &tx.message.instructions {
             let program_id = tx.message.account_keys[ix.program_id_index as usize];
 
-            // Check if instruction is a token transfer (SPL Token Program)
-            if program_id == spl_token::id() {
-                // Decode token instruction
-                if let Ok(token_ix) = spl_token::instruction::TokenInstruction::unpack(&ix.data) {
-                    match token_ix {
-                        TokenInstruction::Transfer { amount }
-                        | TokenInstruction::TransferChecked { amount, .. } => {
-                            // Get source account info
-                            let source_index = ix.accounts[0] as usize;
-                            let source_pubkey = &tx.message.account_keys[source_index];
+            if !SolanaTokenProgram::is_token_program(&program_id) {
+                continue;
+            }
 
-                            // Validate source account is writable but not signer
-                            if !tx.message.is_maybe_writable(source_index, None) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    "Source account must be writable".to_string(),
-                                ));
-                            }
-                            if tx.message.is_signer(source_index) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    "Source account must not be signer".to_string(),
-                                ));
-                            }
+            let token_ix = match SolanaTokenProgram::unpack_instruction(&program_id, &ix.data) {
+                Ok(ix) => ix,
+                Err(_) => continue, // Skip instructions we can't decode
+            };
 
-                            if source_pubkey == relayer_account {
-                                return Err(SolanaTransactionValidationError::PolicyViolation(
-                                    "Relayer account cannot be source".to_string(),
-                                ));
-                            }
+            // Decode token instruction
+            match token_ix {
+                SolanaTokenInstruction::Transfer { amount }
+                | SolanaTokenInstruction::TransferChecked { amount, .. } => {
+                    // Get source account info
+                    let source_index = ix.accounts[0] as usize;
+                    let source_pubkey = &tx.message.account_keys[source_index];
 
-                            let dest_index = match token_ix {
-                                TokenInstruction::TransferChecked { .. } => ix.accounts[2] as usize,
-                                _ => ix.accounts[1] as usize,
-                            };
-                            let destination_pubkey = &tx.message.account_keys[dest_index];
+                    // Validate source account is writable but not signer
+                    if !tx.message.is_maybe_writable(source_index, None) {
+                        return Err(SolanaTransactionValidationError::ValidationError(
+                            "Source account must be writable".to_string(),
+                        ));
+                    }
+                    if tx.message.is_signer(source_index) {
+                        return Err(SolanaTransactionValidationError::ValidationError(
+                            "Source account must not be signer".to_string(),
+                        ));
+                    }
 
-                            // Validate destination account is writable but not signer
-                            if !tx.message.is_maybe_writable(dest_index, None) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    "Destination account must be writable".to_string(),
-                                ));
-                            }
-                            if tx.message.is_signer(dest_index) {
-                                return Err(SolanaTransactionValidationError::ValidationError(
-                                    "Destination account must not be signer".to_string(),
-                                ));
-                            }
+                    if source_pubkey == relayer_account {
+                        return Err(SolanaTransactionValidationError::PolicyViolation(
+                            "Relayer account cannot be source".to_string(),
+                        ));
+                    }
 
-                            let owner_index = match token_ix {
-                                TokenInstruction::TransferChecked { .. } => ix.accounts[3] as usize,
-                                _ => ix.accounts[2] as usize,
-                            };
-                            // Validate owner is signer but not writable
-                            if !tx.message.is_signer(owner_index) {
+                    let dest_index = match token_ix {
+                        SolanaTokenInstruction::TransferChecked { .. } => ix.accounts[2] as usize,
+                        _ => ix.accounts[1] as usize,
+                    };
+                    let destination_pubkey = &tx.message.account_keys[dest_index];
+
+                    // Validate destination account is writable but not signer
+                    if !tx.message.is_maybe_writable(dest_index, None) {
+                        return Err(SolanaTransactionValidationError::ValidationError(
+                            "Destination account must be writable".to_string(),
+                        ));
+                    }
+                    if tx.message.is_signer(dest_index) {
+                        return Err(SolanaTransactionValidationError::ValidationError(
+                            "Destination account must not be signer".to_string(),
+                        ));
+                    }
+
+                    let owner_index = match token_ix {
+                        SolanaTokenInstruction::TransferChecked { .. } => ix.accounts[3] as usize,
+                        _ => ix.accounts[2] as usize,
+                    };
+                    // Validate owner is signer but not writable
+                    if !tx.message.is_signer(owner_index) {
+                        return Err(SolanaTransactionValidationError::ValidationError(format!(
+                            "Owner must be signer {}",
+                            &tx.message.account_keys[owner_index]
+                        )));
+                    }
+
+                    // Get mint address from token account - only once per source account
+                    if !account_balances.contains_key(source_pubkey) {
+                        let source_account = provider
+                            .get_account_from_pubkey(source_pubkey)
+                            .await
+                            .map_err(|e| {
+                                SolanaTransactionValidationError::ValidationError(e.to_string())
+                            })?;
+
+                        let token_account =
+                            SolanaTokenProgram::unpack_account(&program_id, &source_account)
+                                .map_err(|e| {
+                                    SolanaTransactionValidationError::ValidationError(format!(
+                                        "Invalid token account: {}",
+                                        e
+                                    ))
+                                })?;
+
+                        if token_account.is_frozen {
+                            return Err(SolanaTransactionValidationError::PolicyViolation(
+                                "Token account is frozen".to_string(),
+                            ));
+                        }
+
+                        let token_config = allowed_tokens
+                            .iter()
+                            .find(|t| t.mint == token_account.mint.to_string());
+
+                        // check if token is allowed by policy
+                        if token_config.is_none() {
+                            return Err(SolanaTransactionValidationError::PolicyViolation(
+                                format!("Token {} not allowed for transfers", token_account.mint),
+                            ));
+                        }
+                        // Store the balance for later use
+                        account_balances.insert(*source_pubkey, token_account.amount);
+
+                        // Validate decimals for TransferChecked
+                        if let (
+                            Some(config),
+                            SolanaTokenInstruction::TransferChecked { decimals, .. },
+                        ) = (token_config, &token_ix)
+                        {
+                            if Some(*decimals) != config.decimals {
                                 return Err(SolanaTransactionValidationError::ValidationError(
                                     format!(
-                                        "Owner must be signer {}",
-                                        &tx.message.account_keys[owner_index]
+                                        "Invalid decimals: expected {:?}, got {}",
+                                        config.decimals, decimals
                                     ),
                                 ));
                             }
+                        }
 
-                            // Get mint address from token account - only once per source account
-                            if !account_balances.contains_key(source_pubkey) {
-                                let source_account = provider
-                                    .get_account_from_pubkey(source_pubkey)
-                                    .await
-                                    .map_err(|e| {
-                                        SolanaTransactionValidationError::ValidationError(
-                                            e.to_string(),
-                                        )
-                                    })?;
-
-                                let token_account =
-                                    Account::unpack(&source_account.data).map_err(|e| {
-                                        SolanaTransactionValidationError::ValidationError(format!(
-                                            "Invalid token account: {}",
-                                            e
-                                        ))
-                                    })?;
-
-                                if token_account.is_frozen() {
-                                    return Err(SolanaTransactionValidationError::PolicyViolation(
-                                        "Token account is frozen".to_string(),
-                                    ));
-                                }
-
-                                let token_config = allowed_tokens
-                                    .iter()
-                                    .find(|t| t.mint == token_account.mint.to_string());
-
-                                // check if token is allowed by policy
-                                if token_config.is_none() {
-                                    return Err(SolanaTransactionValidationError::PolicyViolation(
-                                        format!(
-                                            "Token {} not allowed for transfers",
-                                            token_account.mint
-                                        ),
-                                    ));
-                                }
-                                // Store the balance for later use
-                                account_balances.insert(*source_pubkey, token_account.amount);
-
-                                // Validate decimals for TransferChecked
-                                if let (
-                                    Some(config),
-                                    TokenInstruction::TransferChecked { decimals, .. },
-                                ) = (token_config, &token_ix)
-                                {
-                                    if Some(*decimals) != config.decimals {
+                        // if relayer is destination, check max fee
+                        if destination_pubkey == relayer_account {
+                            // Check max fee if configured
+                            if let Some(config) = token_config {
+                                if let Some(max_fee) = config.max_allowed_fee {
+                                    if amount > max_fee {
                                         return Err(
-                                            SolanaTransactionValidationError::ValidationError(
+                                            SolanaTransactionValidationError::PolicyViolation(
                                                 format!(
-                                                    "Invalid decimals: expected {:?}, got {}",
-                                                    config.decimals, decimals
+                                                    "Transfer amount {} exceeds max fee \
+                                                    allowed {} for token {}",
+                                                    amount, max_fee, token_account.mint
                                                 ),
                                             ),
                                         );
                                     }
                                 }
-
-                                // if relayer is destination, check max fee
-                                if destination_pubkey == relayer_account {
-                                    // Check max fee if configured
-                                    if let Some(config) = token_config {
-                                        if let Some(max_fee) = config.max_allowed_fee {
-                                            if amount > max_fee {
-                                                return Err(
-                     SolanaTransactionValidationError::PolicyViolation(
-                         format!(
-                             "Transfer amount {} exceeds max fee \
-                              allowed {} for token {}",
-                             amount, max_fee, token_account.mint
-                         ),
-                     ),
-                 );
-                                            }
-                                        }
-                                    }
-                                }
                             }
-
-                            *account_transfers.entry(*source_pubkey).or_insert(0) += amount;
                         }
-                        _ => {
-                            // For any other token instruction, verify relayer account is not used
-                            // as a source by checking if it's marked as writable
-                            for account in ix.accounts.iter() {
-                                let account_index = *account as usize;
-                                if account_index < tx.message.account_keys.len() {
-                                    let pubkey = &tx.message.account_keys[account_index];
-                                    if pubkey == relayer_account
-                                        && tx.message.is_maybe_writable(account_index, None)
-                                        && !tx.message.is_signer(account_index)
-                                    {
-                                        // It's ok if relayer is just signing
-                                        return Err(SolanaTransactionValidationError::PolicyViolation(
+                    }
+
+                    *account_transfers.entry(*source_pubkey).or_insert(0) += amount;
+                }
+                _ => {
+                    // For any other token instruction, verify relayer account is not used
+                    // as a source by checking if it's marked as writable
+                    for account in ix.accounts.iter() {
+                        let account_index = *account as usize;
+                        if account_index < tx.message.account_keys.len() {
+                            let pubkey = &tx.message.account_keys[account_index];
+                            if pubkey == relayer_account
+                                && tx.message.is_maybe_writable(account_index, None)
+                                && !tx.message.is_signer(account_index)
+                            {
+                                // It's ok if relayer is just signing
+                                return Err(SolanaTransactionValidationError::PolicyViolation(
                                             "Relayer account cannot be used as writable account in token instructions".to_string(),
                                         ));
-                                    }
-                                }
                             }
                         }
                     }
@@ -530,11 +527,11 @@ impl SolanaTransactionValidator {
 
             if balance < total_transfer {
                 return Err(SolanaTransactionValidationError::ValidationError(
-            format!(
-                "Insufficient balance for cumulative transfers: account {} has balance {} but requires {} across all instructions",
-                account, balance, total_transfer
-            ),
-        ));
+                    format!(
+                        "Insufficient balance for cumulative transfers: account {} has balance {} but requires {} across all instructions",
+                        account, balance, total_transfer
+                    ),
+                ));
             }
         }
         Ok(())
@@ -566,10 +563,11 @@ mod tests {
     use solana_sdk::{
         instruction::{AccountMeta, Instruction},
         message::Message,
+        program_pack::Pack,
         signature::{Keypair, Signer},
         system_instruction, system_program,
     };
-    use spl_token::instruction as token_instruction;
+    use spl_token::{instruction as token_instruction, state::Account};
 
     fn setup_token_transfer_test(
         transfer_amount: Option<u64>,

@@ -384,6 +384,26 @@ mod tests {
                             executable: false,
                             rent_epoch: 0,
                         })
+                    } else if pubkey == ctx.token_mint {
+                        let mut mint_data = vec![0; spl_token::state::Mint::LEN];
+                        let mint = spl_token::state::Mint {
+                            is_initialized: true,
+                            mint_authority: solana_sdk::program_option::COption::Some(
+                                Pubkey::new_unique(),
+                            ),
+                            supply: 1_000_000_000_000,
+                            decimals: 6,
+                            ..Default::default()
+                        };
+                        spl_token::state::Mint::pack(mint, &mut mint_data).unwrap();
+
+                        Ok(solana_sdk::account::Account {
+                            lamports: 1_000_000,
+                            data: mint_data,
+                            owner: spl_token::id(),
+                            executable: false,
+                            rent_epoch: 0,
+                        })
                     } else {
                         Err(SolanaProviderError::RpcError(
                             "Account not found".to_string(),
