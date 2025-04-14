@@ -1014,9 +1014,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.97"
+version = "1.0.98"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
+checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
 
 [[package]]
 name = "apalis"
@@ -1910,9 +1910,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.35"
+version = "4.5.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8aa86934b44c19c50f87cc2790e19f54f7a67aedb64101c2e1a2e5ecfb73944"
+checksum = "2df961d8c8a0d08aa9945718ccf584145eee3f3aa06cddbeac12933781102e04"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1920,9 +1920,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.35"
+version = "4.5.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2414dbb2dd0695280da6ea9261e327479e9d37b0630f6b53ba2a11c60c679fd9"
+checksum = "132dbda40fb6753878316a489d5a1242a8ef2f0d9e47ba01c951ea8aa7d013a5"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2380,9 +2380,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.8.0"
+version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "575f75dfd25738df5b91b8e43e14d44bda14637a58fae779fd2b064f8bf3e010"
+checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 
 [[package]]
 name = "deadpool"
@@ -6560,9 +6560,9 @@ dependencies = [
 
 [[package]]
 name = "solana-curve25519"
-version = "2.2.7"
+version = "2.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0cf33066cc9a741ff4cc4d171a4a816ea06f9826516b7360d997179a1b3244f"
+checksum = "7d9499a822cd1acdac4fcec1acb500819f84b2f83042d6ae0d19cc45b32747f9"
 dependencies = [
  "bytemuck",
  "bytemuck_derive",
@@ -8243,9 +8243,9 @@ dependencies = [
 
 [[package]]
 name = "solana-zk-sdk"
-version = "2.2.7"
+version = "2.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a153bff0be31a58dacd7f40bc37fc80f5bb7cb3f38fb62e7a2777a8b48de25"
+checksum = "a891726b0eedc02be46f0cfd2685cafdd7a8ce9d9663f4f7cbd9c883d792896c"
 dependencies = [
  "aes-gcm-siv",
  "base64 0.22.1",
