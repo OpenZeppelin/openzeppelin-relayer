@@ -47,7 +47,7 @@ pub struct TransactionUpdateRequest {
     pub is_canceled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionRepoModel {
     pub id: String,
     pub relayer_id: String,
@@ -403,6 +403,66 @@ impl TryFrom<NetworkTransactionData> for TxEip1559 {
     }
 }
 
+impl TryFrom<&EvmTransactionData> for TxLegacy {
+    type Error = SignerError;
+
+    fn try_from(tx: &EvmTransactionData) -> Result<Self, Self::Error> {
+        let tx_kind = match tx.to_address()? {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+
+        Ok(Self {
+            chain_id: Some(tx.chain_id),
+            nonce: tx.nonce.unwrap_or(0),
+            gas_limit: tx.gas_limit,
+            gas_price: tx.gas_price.unwrap_or(0),
+            to: tx_kind,
+            value: tx.value,
+            input: tx.data_to_bytes()?,
+        })
+    }
+}
+
+impl TryFrom<EvmTransactionData> for TxLegacy {
+    type Error = SignerError;
+
+    fn try_from(tx: EvmTransactionData) -> Result<Self, Self::Error> {
+        Self::try_from(&tx)
+    }
+}
+
+impl TryFrom<&EvmTransactionData> for TxEip1559 {
+    type Error = SignerError;
+
+    fn try_from(tx: &EvmTransactionData) -> Result<Self, Self::Error> {
+        let tx_kind = match tx.to_address()? {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+
+        Ok(Self {
+            chain_id: tx.chain_id,
+            nonce: tx.nonce.unwrap_or(0),
+            gas_limit: tx.gas_limit,
+            max_fee_per_gas: tx.max_fee_per_gas.unwrap_or(0),
+            max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or(0),
+            to: tx_kind,
+            value: tx.value,
+            access_list: AccessList::default(),
+            input: tx.data_to_bytes()?,
+        })
+    }
+}
+
+impl TryFrom<EvmTransactionData> for TxEip1559 {
+    type Error = SignerError;
+
+    fn try_from(tx: EvmTransactionData) -> Result<Self, Self::Error> {
+        Self::try_from(&tx)
+    }
+}
+
 impl From<&[u8; 65]> for EvmTransactionDataSignature {
     fn from(bytes: &[u8; 65]) -> Self {
         Self {
@@ -465,6 +525,7 @@ mod tests {
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
             is_min_bumped: None,
+            extra_fee: None,
         };
 
         let updated_tx = tx_data.with_price_params(price_params);
@@ -709,5 +770,51 @@ mod tests {
             hash: None,
         });
         assert!(TxLegacy::try_from(solana_data).is_err());
+    }
+
+    #[test]
+    fn test_try_from_evm_tx_data_for_tx_eip1559() {
+        // Create a valid EVM transaction with EIP-1559 fields
+        let mut evm_tx_data = create_sample_evm_tx_data();
+        evm_tx_data.max_fee_per_gas = Some(30_000_000_000);
+        evm_tx_data.max_priority_fee_per_gas = Some(2_000_000_000);
+
+        // Should convert successfully
+        let result = TxEip1559::try_from(evm_tx_data.clone());
+        assert!(result.is_ok());
+        let tx_eip1559 = result.unwrap();
+
+        // Verify fields
+        assert_eq!(tx_eip1559.chain_id, evm_tx_data.chain_id);
+        assert_eq!(tx_eip1559.nonce, evm_tx_data.nonce.unwrap());
+        assert_eq!(tx_eip1559.gas_limit, evm_tx_data.gas_limit);
+        assert_eq!(
+            tx_eip1559.max_fee_per_gas,
+            evm_tx_data.max_fee_per_gas.unwrap()
+        );
+        assert_eq!(
+            tx_eip1559.max_priority_fee_per_gas,
+            evm_tx_data.max_priority_fee_per_gas.unwrap()
+        );
+        assert_eq!(tx_eip1559.value, evm_tx_data.value);
+        assert!(tx_eip1559.access_list.0.is_empty());
+    }
+
+    #[test]
+    fn test_try_from_evm_tx_data_for_tx_legacy() {
+        // Create a valid EVM transaction with legacy fields
+        let evm_tx_data = create_sample_evm_tx_data();
+
+        // Should convert successfully
+        let result = TxLegacy::try_from(evm_tx_data.clone());
+        assert!(result.is_ok());
+        let tx_legacy = result.unwrap();
+
+        // Verify fields
+        assert_eq!(tx_legacy.chain_id, Some(evm_tx_data.chain_id));
+        assert_eq!(tx_legacy.nonce, evm_tx_data.nonce.unwrap());
+        assert_eq!(tx_legacy.gas_limit, evm_tx_data.gas_limit);
+        assert_eq!(tx_legacy.gas_price, evm_tx_data.gas_price.unwrap());
+        assert_eq!(tx_legacy.value, evm_tx_data.value);
     }
 }

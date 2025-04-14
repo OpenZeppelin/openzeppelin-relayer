@@ -75,11 +75,14 @@ pub fn setup_logging() {
         info!("Logging to file: {}", log_level);
 
         // Use logs/ directly in container path, otherwise use LOG_DATA_DIR or default to logs/ for host path
-        let log_dir = env::var("IN_DOCKER")
+        let log_dir = if env::var("IN_DOCKER")
             .map(|val| val == "true")
             .unwrap_or(false)
-            .then(|| "logs/".to_string())
-            .unwrap_or_else(|| env::var("LOG_DATA_DIR").unwrap_or_else(|_| "./logs".to_string()));
+        {
+            "logs/".to_string()
+        } else {
+            env::var("LOG_DATA_DIR").unwrap_or_else(|_| "./logs".to_string())
+        };
 
         let log_dir = format!("{}/", log_dir.trim_end_matches('/'));
         // set dates

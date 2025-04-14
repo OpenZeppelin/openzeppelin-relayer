@@ -125,9 +125,13 @@ impl IntoIterator for SpeedPrices {
 }
 
 #[async_trait]
-#[cfg_attr(test, automock)]
+#[cfg_attr(test, automock(
+    type Provider = crate::services::MockEvmProviderTrait;
+))]
 #[allow(dead_code)]
 pub trait EvmGasPriceServiceTrait {
+    type Provider: EvmProviderTrait;
+
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError>;
 
     async fn get_legacy_prices_from_json_rpc(&self) -> Result<SpeedPrices, TransactionError>;
@@ -156,6 +160,8 @@ impl<P: EvmProviderTrait> EvmGasPriceService<P> {
 
 #[async_trait]
 impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
+    type Provider = P;
+
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError> {
         info!("Estimating gas for tx_data: {:?}", tx_data);
         let gas_estimation = self.provider.estimate_gas(tx_data).await.map_err(|err| {

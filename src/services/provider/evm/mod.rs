@@ -5,7 +5,7 @@
 //! blockchain state.
 
 use alloy::{
-    primitives::{TxKind, Uint},
+    primitives::{Bytes, TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
     rpc::types::{
         Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
@@ -97,6 +97,12 @@ pub trait EvmProviderTrait: Send + Sync {
     /// # Arguments
     /// * `tx_hash` - The transaction hash to query
     async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>>;
+
+    /// Calls a contract function.
+    ///
+    /// # Arguments
+    /// * `tx` - The transaction request to call the contract function
+    async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes>;
 }
 
 impl EvmProvider {
@@ -221,6 +227,13 @@ impl EvmProviderTrait for EvmProvider {
             .get_transaction_receipt(tx_hash)
             .await
             .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))
+    }
+
+    async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes> {
+        self.provider
+            .call(tx)
+            .await
+            .map_err(|e| eyre!("Failed to call contract: {}", e))
     }
 }
 
@@ -522,5 +535,46 @@ mod tests {
         let fee_history = fee_history.unwrap();
         assert_eq!(fee_history.oldest_block, 100);
         assert_eq!(fee_history.gas_used_ratio, vec![0.5]);
+    }
+
+    #[tokio::test]
+    async fn test_call_contract() {
+        let mut mock = MockEvmProviderTrait::new();
+
+        let tx = TransactionRequest {
+            from: Some(Address::from_str("0x742d35Cc6634C0532925a3b844Bc454e4438f44e").unwrap()),
+            to: Some(TxKind::Call(
+                Address::from_str("0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC").unwrap(),
+            )),
+            input: TransactionInput::from(
+                hex::decode("a9059cbb000000000000000000000000742d35cc6634c0532925a3b844bc454e4438f44e0000000000000000000000000000000000000000000000000de0b6b3a7640000").unwrap()
+            ),
+            ..Default::default()
+        };
+
+        // Setup mock for call_contract
+        mock.expect_call_contract()
+            .with(mockall::predicate::always())
+            .times(1)
+            .returning(|_| {
+                async {
+                    Ok(Bytes::from(
+                        hex::decode(
+                            "0000000000000000000000000000000000000000000000000000000000000001",
+                        )
+                        .unwrap(),
+                    ))
+                }
+                .boxed()
+            });
+
+        let result = mock.call_contract(&tx).await;
+        assert!(result.is_ok());
+
+        let data = result.unwrap();
+        assert_eq!(
+            hex::encode(data),
+            "0000000000000000000000000000000000000000000000000000000000000001"
+        );
     }
 }

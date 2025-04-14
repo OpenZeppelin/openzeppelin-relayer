@@ -21,7 +21,10 @@ use crate::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
-    services::{get_solana_network_provider, EvmGasPriceService, EvmProvider, EvmSignerFactory},
+    services::{
+        get_network_extra_fee_calculator_service, get_solana_network_provider, EvmGasPriceService,
+        EvmProvider, EvmSignerFactory,
+    },
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -161,7 +164,7 @@ pub trait Transaction {
 
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
-    Evm(DefaultEvmTransaction),
+    Evm(Box<DefaultEvmTransaction>),
     Solana(SolanaRelayerTransaction),
     Stellar(StellarRelayerTransaction),
 }
@@ -404,19 +407,25 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
-                let price_calculator =
-                    PriceCalculator::new(EvmGasPriceService::new(evm_provider.clone(), network));
+                let network_extra_fee_calculator =
+                    get_network_extra_fee_calculator_service(network, evm_provider.clone());
+                let price_calculator = PriceCalculator::new(
+                    EvmGasPriceService::new(evm_provider.clone(), network),
+                    network_extra_fee_calculator,
+                );
 
-                Ok(NetworkTransaction::Evm(DefaultEvmTransaction::new(
-                    relayer,
-                    evm_provider,
-                    relayer_repository,
-                    transaction_repository,
-                    transaction_counter_store,
-                    job_producer,
-                    price_calculator,
-                    signer_service,
-                )?))
+                Ok(NetworkTransaction::Evm(Box::new(
+                    DefaultEvmTransaction::new(
+                        relayer,
+                        evm_provider,
+                        relayer_repository,
+                        transaction_repository,
+                        transaction_counter_store,
+                        job_producer,
+                        price_calculator,
+                        signer_service,
+                    )?,
+                )))
             }
             NetworkType::Solana => {
                 let solana_provider = Arc::new(get_solana_network_provider(

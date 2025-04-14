@@ -40,11 +40,17 @@ use crate::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
         TransactionError, TransactionRepoModel,
     },
-    services::{gas::EvmGasPriceServiceTrait, GasPrices},
+    services::{
+        gas::{EvmGasPriceServiceTrait, NetworkExtraFeeCalculatorServiceTrait},
+        GasPrices, NetworkExtraFeeCalculator,
+    },
 };
 
 #[cfg(test)]
 use mockall::automock;
+
+#[cfg(test)]
+use crate::services::gas::MockNetworkExtraFeeCalculatorServiceTrait;
 
 #[async_trait::async_trait]
 #[cfg_attr(test, automock)]
@@ -76,11 +82,13 @@ pub struct PriceParams {
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
     pub is_min_bumped: Option<bool>,
+    pub extra_fee: Option<u128>,
 }
 
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
 pub struct PriceCalculator<G: EvmGasPriceServiceTrait> {
     gas_price_service: G,
+    network_extra_fee_calculator_service: NetworkExtraFeeCalculator<G::Provider>,
 }
 
 #[async_trait::async_trait]
@@ -103,8 +111,14 @@ impl<G: EvmGasPriceServiceTrait + Send + Sync> PriceCalculatorTrait for PriceCal
 }
 
 impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
-    pub fn new(gas_price_service: G) -> Self {
-        Self { gas_price_service }
+    pub fn new(
+        gas_price_service: G,
+        network_extra_fee_calculator_service: NetworkExtraFeeCalculator<G::Provider>,
+    ) -> Self {
+        Self {
+            gas_price_service,
+            network_extra_fee_calculator_service,
+        }
     }
 
     /// Calculates transaction price parameters based on the transaction type and network conditions.
@@ -138,12 +152,27 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                 relayer,
             )?;
 
-        Ok(PriceParams {
+        let mut final_params = PriceParams {
             gas_price: gas_price_capped,
             max_fee_per_gas: max_fee_per_gas_capped,
             max_priority_fee_per_gas: max_priority_fee_per_gas_capped,
             is_min_bumped: None,
-        })
+            extra_fee: None,
+        };
+
+        match &self.network_extra_fee_calculator_service {
+            NetworkExtraFeeCalculator::None => {}
+            _ => {
+                let new_tx = tx_data.clone().with_price_params(final_params.clone());
+                let extra_fee = self
+                    .network_extra_fee_calculator_service
+                    .get_extra_fee(&new_tx)
+                    .await?;
+                final_params.extra_fee = Some(extra_fee.try_into().unwrap_or(0));
+            }
+        }
+
+        Ok(final_params)
     }
 
     /// Computes bumped gas price for transaction resubmission, factoring in network conditions.
@@ -173,7 +202,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             .unwrap_or(u128::MAX);
 
         // Decide EIP1559 vs Legacy based on presence of maxFeePerGas / maxPriorityFeePerGas vs gasPrice
-        match (
+        let bumped_price_params = match (
             evm_data.max_fee_per_gas,
             evm_data.max_priority_fee_per_gas,
             evm_data.gas_price,
@@ -186,7 +215,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                     evm_data.speed.as_ref(),
                     max_fee,
                     max_priority_fee,
-                )
+                )?
             }
             (None, None, Some(gas_price)) => {
                 // Legacy
@@ -195,12 +224,31 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                     relayer_gas_price_cap,
                     evm_data.speed.as_ref(),
                     gas_price,
-                )
+                )?
             }
-            _ => Err(TransactionError::InvalidType(
-                "Transaction missing required gas price parameters".to_string(),
-            )),
+            _ => {
+                return Err(TransactionError::InvalidType(
+                    "Transaction missing required gas price parameters".to_string(),
+                ))
+            }
+        };
+
+        // Add extra fee if needed
+        let mut final_params = bumped_price_params;
+
+        match &self.network_extra_fee_calculator_service {
+            NetworkExtraFeeCalculator::None => {}
+            _ => {
+                let new_tx = evm_data.with_price_params(final_params.clone());
+                let extra_fee = self
+                    .network_extra_fee_calculator_service
+                    .get_extra_fee(&new_tx)
+                    .await?;
+                final_params.extra_fee = Some(extra_fee.try_into().unwrap_or(0));
+            }
         }
+
+        Ok(final_params)
     }
 
     /// Computes the bumped gas parameters for an EIP-1559 transaction resubmission.
@@ -279,6 +327,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: Some(capped_priority),
             max_fee_per_gas: Some(capped_max_fee),
             is_min_bumped: Some(is_min_bumped),
+            extra_fee: None,
         })
     }
 
@@ -319,6 +368,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: None,
             max_fee_per_gas: None,
             is_min_bumped: Some(is_min_bumped),
+            extra_fee: None,
         })
     }
     /// Fetches price params based on the type of transaction (legacy, EIP1559, speed-based).
@@ -359,6 +409,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
 
@@ -382,6 +433,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(max_priority_fee),
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
     /// Handles gas price calculation for speed-based transactions.
@@ -434,6 +486,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(priority_fee),
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
     /// Calculates legacy gas prices based on the requested speed.
@@ -459,6 +512,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
+            extra_fee: None,
         })
     }
 
@@ -624,7 +678,7 @@ mod tests {
             .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
         // Create the PriceCalculator with the gas_price_service
-        let pc = PriceCalculator::new(gas_price_service);
+        let pc = PriceCalculator::new(gas_price_service, NetworkExtraFeeCalculator::None);
 
         let result = pc.get_transaction_price_params(&tx_data, &relayer).await;
         assert!(result.is_ok());
@@ -658,7 +712,7 @@ mod tests {
             .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
         // Create the PriceCalculator
-        let pc = PriceCalculator::new(gas_price_service);
+        let pc = PriceCalculator::new(gas_price_service, NetworkExtraFeeCalculator::None);
 
         let result = pc.get_transaction_price_params(&tx_data, &relayer).await;
         assert!(result.is_ok());
@@ -696,7 +750,7 @@ mod tests {
             .expect_get_gas_price()
             .returning(|| async { Ok(20000000000) }.boxed());
 
-        let pc = PriceCalculator::new(gas_price_service);
+        let pc = PriceCalculator::new(gas_price_service, NetworkExtraFeeCalculator::None);
 
         let result = pc.get_transaction_price_params(&tx_data, &relayer).await;
         assert!(result.is_ok());
@@ -728,7 +782,7 @@ mod tests {
             .expect_get_balance()
             .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
-        let pc = PriceCalculator::new(gas_price_service);
+        let pc = PriceCalculator::new(gas_price_service, NetworkExtraFeeCalculator::None);
 
         let result = pc.get_transaction_price_params(&tx_data, &relayer).await;
         assert!(result.is_err());
@@ -767,7 +821,7 @@ mod tests {
             .expect_get_balance()
             .returning(|_| async { Ok(U256::from(1000000000000000000u128)) }.boxed());
 
-        let pc = PriceCalculator::new(gas_price_service);
+        let pc = PriceCalculator::new(gas_price_service, NetworkExtraFeeCalculator::None);
 
         let result = pc.get_transaction_price_params(&tx_data, &relayer).await;
         assert!(result.is_ok());
@@ -844,7 +898,7 @@ mod tests {
             .return_const(network);
 
         // Construct our PriceCalculator with the mocked gas service
-        let pc = PriceCalculator::new(mock_gas_price_service);
+        let pc = PriceCalculator::new(mock_gas_price_service, NetworkExtraFeeCalculator::None);
 
         for (speed, expected_priority_fee) in test_data {
             // Call our internal fetch_eip1559_speed_params, which replaced handle_eip1559_speed
@@ -891,7 +945,7 @@ mod tests {
             .expect_network()
             .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
-        let pc = PriceCalculator::new(mock_service);
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
         // Example cap to demonstrate bump capping
         relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
@@ -940,7 +994,7 @@ mod tests {
             .expect_network()
             .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
-        let pc = PriceCalculator::new(mock_service);
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
 
         // Old max_priority_fee: 2.0 Gwei, new market is 1.5 Gwei (less)
@@ -986,7 +1040,7 @@ mod tests {
             .expect_network()
             .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
-        let pc = PriceCalculator::new(mock_service);
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
         let tx = TransactionRepoModel {
             network_data: {
@@ -1014,7 +1068,7 @@ mod tests {
             .times(1)
             .returning(|| Box::pin(async { Ok(GasPrices::default()) }));
 
-        let pc = PriceCalculator::new(mock_service);
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
         // Both max_fee_per_gas, max_priority_fee_per_gas, and gas_price absent
         let tx = TransactionRepoModel {
@@ -1062,7 +1116,7 @@ mod tests {
             .expect_network()
             .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
-        let pc = PriceCalculator::new(mock_service);
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
         relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
             gas_price_cap: Some(105_000_000_000),
@@ -1111,7 +1165,7 @@ mod tests {
             .expect_network()
             .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
-        let pc = PriceCalculator::new(mock_service);
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
 
         // Case 1: Price high enough - should result in is_min_bumped = true
@@ -1191,7 +1245,7 @@ mod tests {
             .expect_network()
             .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
 
-        let pc = PriceCalculator::new(mock_service);
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
 
         // Case 1: Regular case, cap is high enough
@@ -1230,6 +1284,121 @@ mod tests {
             bumped.is_min_bumped,
             Some(false),
             "Should not be min bumped with insufficient cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_calculate_bumped_gas_price_with_extra_fee() {
+        // Set up mock gas price service
+        let mut mock_gas_service = MockEvmGasPriceServiceTrait::new();
+        mock_gas_service
+            .expect_get_prices_from_json_rpc()
+            .returning(|| {
+                Box::pin(async {
+                    Ok(GasPrices {
+                        legacy_prices: SpeedPrices {
+                            safe_low: 10_000_000_000,
+                            average: 12_000_000_000,
+                            fast: 14_000_000_000,
+                            fastest: 18_000_000_000,
+                        },
+                        max_priority_fee_per_gas: SpeedPrices::default(),
+                        base_fee_per_gas: 40_000_000_000,
+                    })
+                })
+            });
+        mock_gas_service
+            .expect_network()
+            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+
+        // Create a PriceCalculator without extra fee service first
+        let pc = PriceCalculator::new(mock_gas_service, NetworkExtraFeeCalculator::None);
+
+        // Create test transaction and relayer
+        let relayer = create_mock_relayer();
+        let tx = TransactionRepoModel {
+            network_data: {
+                NetworkTransactionData::Evm(EvmTransactionData {
+                    max_fee_per_gas: Some(50_000_000_000),
+                    max_priority_fee_per_gas: Some(2_000_000_000),
+                    speed: Some(Speed::Fast),
+                    ..Default::default()
+                })
+            },
+            ..Default::default()
+        };
+
+        // Call the method under test
+        let result = pc.calculate_bumped_gas_price(&tx, &relayer).await;
+
+        // Verify extra fee is None when no extra fee service is used
+        assert!(result.is_ok());
+        let price_params = result.unwrap();
+        assert_eq!(price_params.extra_fee, None);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_bumped_gas_price_with_mock_extra_fee() {
+        // Set up mock gas price service
+        let mut mock_gas_service = MockEvmGasPriceServiceTrait::new();
+        mock_gas_service
+            .expect_get_prices_from_json_rpc()
+            .returning(|| {
+                Box::pin(async {
+                    Ok(GasPrices {
+                        legacy_prices: SpeedPrices {
+                            safe_low: 10_000_000_000,
+                            average: 12_000_000_000,
+                            fast: 14_000_000_000,
+                            fastest: 18_000_000_000,
+                        },
+                        max_priority_fee_per_gas: SpeedPrices::default(),
+                        base_fee_per_gas: 40_000_000_000,
+                    })
+                })
+            });
+        mock_gas_service
+            .expect_network()
+            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+
+        // Create mock extra fee service
+        let mut mock_extra_fee_service = MockNetworkExtraFeeCalculatorServiceTrait::new();
+
+        // Set up expected return value for the extra fee
+        let expected_extra_fee = U256::from(123456789u64);
+        mock_extra_fee_service
+            .expect_get_extra_fee()
+            .returning(move |_| Box::pin(async move { Ok(expected_extra_fee) }));
+
+        // Use the Mock variant from NetworkExtraFeeCalculator enum
+        let extra_fee_calculator = NetworkExtraFeeCalculator::Mock(mock_extra_fee_service);
+
+        // Create the price calculator with the mock extra fee service
+        let pc = PriceCalculator::new(mock_gas_service, extra_fee_calculator);
+
+        // Create test transaction and relayer
+        let relayer = create_mock_relayer();
+        let tx = TransactionRepoModel {
+            network_data: {
+                NetworkTransactionData::Evm(EvmTransactionData {
+                    max_fee_per_gas: Some(50_000_000_000),
+                    max_priority_fee_per_gas: Some(2_000_000_000),
+                    speed: Some(Speed::Fast),
+                    ..Default::default()
+                })
+            },
+            ..Default::default()
+        };
+
+        // Call the method under test
+        let result = pc.calculate_bumped_gas_price(&tx, &relayer).await;
+
+        // Verify extra fee was properly included
+        assert!(result.is_ok());
+        let price_params = result.unwrap();
+        assert_eq!(
+            price_params.extra_fee,
+            Some(expected_extra_fee.try_into().unwrap_or(0))
         );
     }
 }
