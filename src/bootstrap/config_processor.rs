@@ -7,7 +7,7 @@ use crate::{
     jobs::JobProducerTrait,
     models::{
         AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
-        SignerConfig, SignerRepoModel, VaultTransitSignerConfig,
+        SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
     },
     repositories::Repository,
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
@@ -133,6 +133,16 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 secret_id: vault_transit_config.secret_id.get_value()?,
                 pubkey: vault_transit_config.pubkey.clone(),
                 mount_point: vault_transit_config.mount_point.clone(),
+            }),
+        },
+        SignerFileConfigEnum::Turnkey(turnkey_config) => SignerRepoModel {
+            id: signer.id.clone(),
+            config: SignerConfig::Turnkey(TurnkeySignerConfig {
+                private_key_id: turnkey_config.private_key_id.clone(),
+                organization_id: turnkey_config.organization_id.clone(),
+                public_key: turnkey_config.public_key.clone(),
+                api_private_key: turnkey_config.api_private_key.get_value()?,
+                api_public_key: turnkey_config.api_public_key.clone(),
             }),
         },
     };

@@ -17,6 +17,7 @@ pub enum SignerType {
     Local,
     AwsKms,
     Vault,
+    Turnkey,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +47,15 @@ pub struct VaultTransitSignerConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct TurnkeySignerConfig {
+    pub api_public_key: String,
+    pub api_private_key: SecretString,
+    pub organization_id: String,
+    pub private_key_id: String,
+    pub public_key: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum SignerConfig {
     Test(LocalSignerConfig),
     Local(LocalSignerConfig),
@@ -53,6 +63,7 @@ pub enum SignerConfig {
     VaultCloud(LocalSignerConfig),
     VaultTransit(VaultTransitSignerConfig),
     AwsKms(AwsKmsSignerConfig),
+    Turnkey(TurnkeySignerConfig),
 }
 
 impl SignerConfig {
@@ -62,7 +73,7 @@ impl SignerConfig {
             | Self::Test(config)
             | Self::Vault(config)
             | Self::VaultCloud(config) => Some(config),
-            Self::VaultTransit(_) | Self::AwsKms(_) => None,
+            Self::VaultTransit(_) | Self::AwsKms(_) | Self::Turnkey(_) => None,
         }
     }
 
@@ -81,6 +92,14 @@ impl SignerConfig {
 
         Some(config)
     }
+
+    pub fn get_turnkey(&self) -> Option<&TurnkeySignerConfig> {
+        let SignerConfig::Turnkey(config) = self else {
+            return None;
+        };
+
+        Some(config)
+    }
 }
 
 #[cfg(test)]
@@ -94,6 +113,7 @@ mod tests {
         assert_eq!(to_string(&SignerType::Local).unwrap(), "\"local\"");
         assert_eq!(to_string(&SignerType::AwsKms).unwrap(), "\"awskms\"");
         assert_eq!(to_string(&SignerType::Vault).unwrap(), "\"vault\"");
+        assert_eq!(to_string(&SignerType::Vault).unwrap(), "\"turnkey\"");
     }
 
     #[test]
@@ -112,6 +132,10 @@ mod tests {
         );
         assert_eq!(
             from_str::<SignerType>("\"vault\"").unwrap(),
+            SignerType::Vault
+        );
+        assert_eq!(
+            from_str::<SignerType>("\"turnkey\"").unwrap(),
             SignerType::Vault
         );
     }

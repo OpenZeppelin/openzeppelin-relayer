@@ -73,6 +73,7 @@ secrets = { version = "1.2"}
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
+p256 = { version = "0.13.2" }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"

@@ -16,9 +16,14 @@
 use async_trait::async_trait;
 mod local_signer;
 use local_signer::*;
+
 mod vault_transit_signer;
-use solana_sdk::signature::Signature;
 use vault_transit_signer::*;
+
+mod turnkey_signer;
+use turnkey_signer::*;
+
+use solana_sdk::signature::Signature;
 
 use crate::{
     domain::{
@@ -29,7 +34,7 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
-    services::{VaultConfig, VaultService},
+    services::{TurnkeyService, VaultConfig, VaultService},
 };
 use eyre::Result;
 
@@ -42,6 +47,7 @@ pub enum SolanaSigner {
     Vault(LocalSigner),
     VaultCloud(LocalSigner),
     VaultTransit(VaultTransitSigner),
+    Turnkey(TurnkeySigner),
 }
 
 #[async_trait]
@@ -52,6 +58,7 @@ impl Signer for SolanaSigner {
                 signer.address().await
             }
             Self::VaultTransit(signer) => signer.address().await,
+            Self::Turnkey(signer) => signer.address().await,
         }
     }
 
@@ -64,6 +71,7 @@ impl Signer for SolanaSigner {
                 signer.sign_transaction(transaction).await
             }
             Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
+            Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -81,6 +89,7 @@ impl SolanaSignTrait for SolanaSigner {
         match self {
             Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => signer.pubkey(),
             Self::VaultTransit(signer) => signer.pubkey(),
+            Self::Turnkey(signer) => signer.pubkey(),
         }
     }
 
@@ -90,6 +99,7 @@ impl SolanaSignTrait for SolanaSigner {
                 Ok(signer.sign(message).await?)
             }
             Self::VaultTransit(signer) => Ok(signer.sign(message).await?),
+            Self::Turnkey(signer) => Ok(signer.sign(message).await?),
         }
     }
 }
@@ -122,6 +132,20 @@ impl SolanaSignerFactory {
             }
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
+            }
+            SignerConfig::Turnkey(turnkey_signer_config) => {
+                let turnkey_service =
+                    TurnkeyService::new(turnkey_signer_config.clone()).map_err(|e| {
+                        SignerFactoryError::InvalidConfig(format!(
+                            "Failed to create Turnkey service: {}",
+                            e
+                        ))
+                    })?;
+
+                return Ok(SolanaSigner::Turnkey(TurnkeySigner::new(
+                    turnkey_signer_config,
+                    turnkey_service,
+                )));
             }
         };
 

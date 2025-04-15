@@ -22,6 +22,9 @@ pub use vault_cloud::*;
 mod vault_transit;
 pub use vault_transit::*;
 
+mod turnkey;
+pub use turnkey::*;
+
 pub trait SignerConfigValidate {
     fn validate(&self) -> Result<(), ConfigFileError>;
 }
@@ -72,6 +75,7 @@ pub enum SignerFileConfigEnum {
     VaultCloud(VaultCloudSignerFileConfig),
     #[serde(rename = "vault_transit")]
     VaultTransit(VaultTransitSignerFileConfig),
+    Turnkey(TurnkeySignerFileConfig),
 }
 
 impl SignerFileConfigEnum {
@@ -116,6 +120,13 @@ impl SignerFileConfigEnum {
             _ => None,
         }
     }
+
+    pub fn get_turnkey(&self) -> Option<&TurnkeySignerFileConfig> {
+        match self {
+            SignerFileConfigEnum::Turnkey(turnkey) => Some(turnkey),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -155,6 +166,9 @@ impl SignerFileConfig {
             }
             SignerFileConfigEnum::VaultTransit(vault_transit_config) => {
                 SignerConfigValidate::validate(vault_transit_config)
+            }
+            SignerFileConfigEnum::Turnkey(turnkey_config) => {
+                SignerConfigValidate::validate(turnkey_config)
             }
         }
     }
