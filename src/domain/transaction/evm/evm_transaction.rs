@@ -18,11 +18,13 @@ use crate::{
             evm::price_calculator::{PriceCalculator, PriceCalculatorTrait},
             Transaction,
         },
+        EvmTransactionValidator,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload, EvmTransactionDataTrait,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest, U256,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
@@ -214,6 +216,28 @@ where
         }
         Ok(())
     }
+
+    async fn calculate_total_cost(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<U256, TransactionError> {
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+        let price_params = self
+            .price_calculator
+            .get_transaction_price_params(&evm_data, &self.relayer())
+            .await?;
+
+        if evm_data.is_eip1559() {
+            Ok(U256::from(price_params.max_fee_per_gas.unwrap_or(0))
+                * U256::from(evm_data.gas_limit)
+                + U256::from(evm_data.value))
+        } else {
+            Ok(
+                U256::from(price_params.gas_price.unwrap_or(0)) * U256::from(evm_data.gas_limit)
+                    + U256::from(evm_data.value),
+            )
+        }
+    }
 }
 
 #[async_trait]
@@ -260,7 +284,7 @@ where
         let updated_evm_data = tx
             .network_data
             .get_evm_transaction_data()?
-            .with_price_params(price_params)
+            .with_price_params(price_params.clone())
             .with_nonce(nonce);
 
         // sign the transaction
@@ -271,6 +295,17 @@ where
 
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+
+        let total_cost = self.calculate_total_cost(&tx).await?;
+
+        EvmTransactionValidator::validate_sufficient_relayer_balance(
+            total_cost + U256::from(price_params.extra_fee.unwrap_or(0)),
+            &self.relayer().address,
+            &self.relayer().policies.get_evm_policy(),
+            &self.provider,
+        )
+        .await
+        .map_err(|e| TransactionError::InsufficientBalance(e.to_string()))?;
 
         // Track the transaction hash
         let mut hashes = tx.hashes.clone();
@@ -400,7 +435,7 @@ where
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
         // Create new transaction data with bumped gas price
-        let updated_evm_data = evm_data.with_price_params(bumped_price_params);
+        let updated_evm_data = evm_data.with_price_params(bumped_price_params.clone());
 
         // Sign the transaction
         let sig_result = self
@@ -409,6 +444,16 @@ where
             .await?;
 
         let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+
+        let total_cost = self.calculate_total_cost(&tx).await?;
+        EvmTransactionValidator::validate_sufficient_relayer_balance(
+            total_cost + U256::from(bumped_price_params.extra_fee.unwrap_or(0)),
+            &self.relayer().address,
+            &self.relayer().policies.get_evm_policy(),
+            &self.provider,
+        )
+        .await
+        .map_err(|e| TransactionError::InsufficientBalance(e.to_string()))?;
 
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
