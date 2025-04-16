@@ -5,7 +5,7 @@ use alloy::{
     primitives::{eip191_hash_message, keccak256},
 };
 use async_trait::async_trait;
-use log::{debug, info};
+use log::{debug, info}; // Import FutureExt to enable the `boxed` method
 
 use crate::{
     domain::{
@@ -93,6 +93,8 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
 
         // Process the signed transaction
         let mut signed_bytes_slice = signed_bytes.as_slice();
+
+        println!("Signed bytes: {:?}", signed_bytes_slice);
 
         // Parse the signed transaction and extract components
         let (hash, signature_bytes) = if is_eip1559 {
@@ -188,254 +190,163 @@ mod tests {
     use super::*;
     use actix_web::body::MessageBody;
     use alloy::primitives::{keccak256, private::alloy_rlp::*};
+    use rand::rngs::mock;
+
+    use crate::{
+        models::{SecretString, TurnkeySignerConfig},
+        services::MockTurnkeyServiceTrait,
+    };
+    use mockall::predicate::*;
+
+    fn create_test_config() -> TurnkeySignerConfig {
+        TurnkeySignerConfig {
+            api_public_key: "test-api-public-key".to_string(),
+            api_private_key: SecretString::new("test-api-private-key"),
+            organization_id: "test-org-id".to_string(),
+            private_key_id: "test-private-key-id".to_string(),
+            public_key: "7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(), // An example Ethereum address
+        }
+    }
 
     #[test]
-    fn test() {
-        let public_key_hex = "047d3bb8e0317927700cf19fed34e0627367be1390ec247dddf8c239e4b4321a49aea80090e49b206b6a3e577a4f11d721ab063482001ee10db40d6f2963233eec";
+    fn test_new_with_service() {
+        let mock_service = MockTurnkeyServiceTrait::new();
+        let config = create_test_config();
 
-        // Convert the hex string into a vector of bytes.
-        let public_key = hex::decode(public_key_hex).unwrap();
+        let signer = TurnkeySigner::new_for_testing(config.clone(), mock_service);
 
-        // Remove the first byte (0x04 prefix) to get the 64-byte concatenation of X and Y.
-        let pub_key_no_prefix = &public_key[1..];
-
-        // Compute the Keccak-256 hash of the 64-byte public key.
-        let hash = keccak256(pub_key_no_prefix);
-
-        // Ethereum addresses are the last 20 bytes of the Keccak-256 hash.
-        // Since the hash is 32 bytes, the address is bytes 12..32.
-        let address_bytes = &hash[12..];
-
-        let address = hex::encode(address_bytes);
-
-        println!("Ethereum address: 0x{}", address);
-
-        // let mut signed = "02f86f83aa36a70185027c27ad0085188159d99882520894ad6ed179ce21440a0c1d44adc60c82cb73f604250180c001a06f56b7c9df749a975b30c91f44721c8a68f5e050252b6af01753ea5871e4e3d6a04c8d3db66334046338ddd0eb81c6b1443ee511cedde8cfffbd132cf483260d14";
-        // let mut signed_bytes = hex::decode(signed).expect("Failed to decode hex string");
-        // let mut aa = signed_bytes.as_slice();
-
-        // let test: alloy::consensus::Signed<TxLegacy> =
-        //     alloy::consensus::Signed::eip2718_decode(&mut aa).unwrap();
-
-        // let signature = test.signature();
-        // let hash = test.tx().signature_hash();
-
-        // println!("Signature: {:?}", signature);
-
-        // println!("Hash: {:?}", hash);
-        // let r = signature.r();
-        // let s = signature.s().to_vec();
-        // let v = signature.v();
-
-        // let mut sig_bytes = Vec::with_capacity(65);
-        // sig_bytes.extend_from_slice(&r);
-        // sig_bytes.extend_from_slice(&s);
-        // sig_bytes.push(v);
-
-        // let hash = alloy::primitives::keccak256(&signed_bytes);
-        // let result = SignTransactionResponse::Evm(SignTransactionResponseEvm {
-        //     hash: format!("0x{}", hex::encode(hash)),
-        //     signature: EvmTransactionDataSignature {
-        //         r: hex::encode(r),
-        //         s: hex::encode(s),
-        //         v,
-        //         sig: hex::encode(&sig_bytes),
-        //     },
-        //     raw: signed_bytes,
-        // });
-        //     debug!("Result: {:?}", result);
-        // let mut signed_bytes_slice = signed_bytes.as_slice();
-        // let signed_tx = alloy::consensus::TxEip1559::decode(&mut signed_bytes_slice)
-        //     .map_err(|e| SignerError::SigningError(format!("Failed to decode signed transaction: {}", e))).unwrap();
-
-        // signed_tx.
-
-        //     // Extract signature components
-        //     let r = signed_tx.r().to_vec();
-        //     let s = signed_tx.s().to_vec();
-        //     let v = signed_tx.v();
-
-        //     let r = signature.r().to_vec();
-        //     let s = signature.s().to_vec();
-        //     let v = signature.v();
-
-        // Combine r, s, v into a single signature
-        // let mut sig_bytes = Vec::with_capacity(65);
-        // sig_bytes.extend_from_slice(&r);
-        // sig_bytes.extend_from_slice(&s);
-        // sig_bytes.push(v);
-
-        // // Calculate the transaction hash
-        // let hash = alloy::primitives::keccak256(&signed);
-
-        //     let result = SignTransactionResponse::Evm(SignTransactionResponseEvm {
-        //         hash: format!("0x{}", hex::encode(hash)),
-        //         signature: EvmTransactionDataSignature {
-        //             r: hex::encode(r),
-        //             s: hex::encode(s),
-        //             v,
-        //             sig: hex::encode(&sig_bytes),
-        //         },
-        //         raw: signed_bytes,
-        //     });
+        assert_eq!(signer.config.api_public_key, "test-api-public-key");
+        assert_eq!(signer.config.organization_id, "test-org-id");
+        assert_eq!(
+            signer.config.public_key,
+            "7f5f4552091a69125d5dfcb7b8c2658029395bdf"
+        );
     }
-    //     use crate::{
-    //         models::{SecretString, TurnkeySignerConfig},
-    //         services::MockTurnkeyServiceTrait,
-    //     };
-    //     use mockall::predicate::*;
 
-    //     fn create_test_config() -> TurnkeySignerConfig {
-    //         TurnkeySignerConfig {
-    //             api_public_key: "test-api-public-key".to_string(),
-    //             api_private_key: SecretString::new("test-api-private-key"),
-    //             organization_id: "test-org-id".to_string(),
-    //             private_key_id: "test-private-key-id".to_string(),
-    //             public_key: "7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(), // An example Ethereum address
-    //         }
-    //     }
+    #[tokio::test]
+    async fn test_address() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let config = create_test_config();
 
-    //     #[test]
-    //     fn test_new_with_service() {
-    //         let mut mock_service = MockTurnkeyServiceTrait::new();
-    //         let config = create_test_config();
+        mock_service.expect_address_evm().times(1).returning(|| {
+            Ok(Address::Evm([
+                200, 52, 220, 220, 154, 7, 77, 187, 173, 204, 113, 88, 71, 137, 174, 75, 70, 61,
+                177, 22,
+            ]))
+        });
 
-    //         let signer = TurnkeySigner::new_for_testing(config.clone(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(config, mock_service);
+        let result = signer.address().await.unwrap();
 
-    //         assert_eq!(signer.config.api_public_key, "test-api-public-key");
-    //         assert_eq!(signer.config.organization_id, "test-org-id");
-    //         assert_eq!(signer.config.public_key, "7f5f4552091a69125d5dfcb7b8c2658029395bdf");
-    //     }
+        match result {
+            Address::Evm(addr) => {
+                assert_eq!(
+                    hex::encode(addr),
+                    "c834dcdc9a074dbbadcc71584789ae4b463db116"
+                );
+            }
+            _ => panic!("Expected EVM address"),
+        }
+    }
 
-    //     #[tokio::test]
-    //     async fn test_address() {
-    //         let mut mock_service = MockTurnkeyServiceTrait::new();
-    //         let config = create_test_config();
+    #[tokio::test]
+    async fn test_sign_data() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_message = "Test message";
 
-    //         let signer = TurnkeySigner::new_for_testing(config, mock_service);
-    //         let result = signer.address().await.unwrap();
+        let prefix = format!("\x19Ethereum Signed Message:\n{}", test_message.len());
+        let mut prefixed_message = prefix.as_bytes().to_vec();
+        prefixed_message.extend_from_slice(test_message.as_bytes());
 
-    //         match result {
-    //             Address::Evm(addr) => {
-    //                 assert_eq!(hex::encode(addr), "7f5f4552091a69125d5dfcb7b8c2658029395bdf");
-    //             }
-    //             _ => panic!("Expected EVM address"),
-    //         }
-    //     }
+        let r = [1u8; 32];
+        let s = [2u8; 32];
+        let v = 27u8;
+        let mut mock_sig = Vec::with_capacity(65);
+        mock_sig.extend_from_slice(&r);
+        mock_sig.extend_from_slice(&s);
+        mock_sig.push(v);
 
-    //     #[tokio::test]
-    //     async fn test_sign_data() {
-    //         let mut mock_service = MockTurnkeyServiceTrait::new();
-    //         let test_message = "Test message";
+        mock_service.expect_sign_evm().times(1).returning(move |_| {
+            let sig = mock_sig.clone();
+            Box::pin(async { Ok(sig) })
+        });
 
-    //         // The prefixed message that should be sent to Turnkey
-    //         let prefix = format!("\x19Ethereum Signed Message:\n{}", test_message.len());
-    //         let mut prefixed_message = prefix.as_bytes().to_vec();
-    //         prefixed_message.extend_from_slice(test_message.as_bytes());
+        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let request = SignDataRequest {
+            message: test_message.to_string(),
+        };
 
-    //         // Create a mock signature
-    //         let r = [1u8; 32];
-    //         let s = [2u8; 32];
-    //         let v = 27u8;
-    //         let mut mock_sig = Vec::with_capacity(65);
-    //         mock_sig.extend_from_slice(&r);
-    //         mock_sig.extend_from_slice(&s);
-    //         mock_sig.push(v);
+        let result = signer.sign_data(request).await.unwrap();
 
-    //         mock_service
-    //             .expect_sign()
-    //             .with(eq(prefixed_message))
-    //             .times(1)
-    //             .returning(move |_| Ok(mock_sig.clone()));
+        match result {
+            SignDataResponse::Evm(sig) => {
+                assert_eq!(
+                    sig.r,
+                    "0101010101010101010101010101010101010101010101010101010101010101"
+                );
+                assert_eq!(
+                    sig.s,
+                    "0202020202020202020202020202020202020202020202020202020202020202"
+                );
+                assert_eq!(sig.v, 27);
+                assert_eq!(sig.sig, "01010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202".to_string() + "1b");
+            }
+            _ => panic!("Expected EVM signature"),
+        }
+    }
 
-    //         let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
-    //         let request = SignDataRequest {
-    //             message: test_message.to_string(),
-    //         };
+    #[tokio::test]
+    async fn test_sign_transaction() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
 
-    //         let result = signer.sign_data(request).await.unwrap();
+        let tx_data = crate::models::EvmTransactionData {
+            from: "0x7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(),
+            to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
+            gas_price: None,
+            gas_limit: 21000,
+            nonce: Some(0),
+            value: crate::models::U256::from(1000000000000000000u64),
+            data: Some("0x".to_string()),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            raw: None,
+            max_fee_per_gas: Some(1),
+            max_priority_fee_per_gas: Some(1),
+            speed: None,
+        };
 
-    //         match result {
-    //             SignDataResponse::Evm(sig) => {
-    //                 assert_eq!(sig.r, "0101010101010101010101010101010101010101010101010101010101010101");
-    //                 assert_eq!(sig.s, "0202020202020202020202020202020202020202020202020202020202020202");
-    //                 assert_eq!(sig.v, 27);
-    //                 assert_eq!(sig.sig, "01010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202" + "1b");
-    //             }
-    //             _ => panic!("Expected EVM signature"),
-    //         }
-    //     }
+        mock_service
+            .expect_sign_evm_transaction()
+            .returning(move |_| {
+                let test = hex::decode("02f86d83aa36a70184442b657e84e946e47982520894b726167dc2ef2ac582f0a3de4c08ac4abb90626a0180c001a0f6b2cfef2b4d31f4af9a6d851c022f3ae89571e1eee6ec5d05889eaf50c4244da0369a720cf91e1327b9fff17d9291e042a22172e92c1db5e76f4b0ebf7fae9ed2".to_string()).unwrap();
+                Box::pin(async { Ok(test) })
+            });
 
-    //     #[tokio::test]
-    //     async fn test_sign_transaction() {
-    //         let mut mock_service = MockTurnkeyServiceTrait::new();
+        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
 
-    //         // Create a mock transaction
-    //         let tx_data = NetworkTransactionData::Evm(crate::models::EvmTransactionData {
-    //             from: "0x7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(),
-    //             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
-    //             gas_price: Some(20000000000),
-    //             gas_limit: 21000,
-    //             nonce: Some(0),
-    //             value: crate::models::U256::from(1000000000000000000u64),
-    //             data: Some("0x".to_string()),
-    //             chain_id: 1,
-    //             hash: None,
-    //             signature: None,
-    //             raw: None,
-    //             max_fee_per_gas: None,
-    //             max_priority_fee_per_gas: None,
-    //             speed: None,
-    //         });
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Evm(tx_data))
+            .await
+            .unwrap();
 
-    //         // Create a mock unsigned TX bytes that the EvmTransactionData.serialize_unsigned would return
-    //         let unsigned_tx_bytes = vec![1, 2, 3, 4, 5];
-
-    //         // Create a mock signature
-    //         let r = [1u8; 32];
-    //         let s = [2u8; 32];
-    //         let v = 27u8;
-    //         let mut mock_sig = Vec::with_capacity(65);
-    //         mock_sig.extend_from_slice(&r);
-    //         mock_sig.extend_from_slice(&s);
-    //         mock_sig.push(v);
-
-    //         // Setup expectations on the mock
-    //         mock_service
-    //             .expect_sign()
-    //             .with(eq(unsigned_tx_bytes.clone()))
-    //             .times(1)
-    //             .returning(move |_| Ok(mock_sig.clone()));
-
-    //         // Create the test signer with our mock
-    //         let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
-
-    //         // We need to mock the EvmTransactionData methods since we can't directly test with real transactions
-    //         // This requires a more complex test setup with partial mocking or custom struct implementations
-
-    //         // For simplicity in this example, I'll skip the actual test execution
-    //         // In a real test, you would:
-    //         // 1. Setup appropriate mocks for the tx_data.serialize_unsigned() method
-    //         // 2. Setup mocks for hash_signed and serialize_signed
-    //         // 3. Execute signer.sign_transaction(tx_data).await
-    //         // 4. Verify the results match expectations
-    //     }
-
-    //     #[tokio::test]
-    //     async fn test_sign_typed_data_not_implemented() {
-    //         let mut mock_service = MockTurnkeyServiceTrait::new();
-    //         let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
-
-    //         let result = signer.sign_typed_data(SignTypedDataRequest {
-    //             domain: serde_json::json!({}),
-    //             types: serde_json::json!({}),
-    //             primary_type: "Test".to_string(),
-    //             message: serde_json::json!({})
-    //         }).await;
-
-    //         match result {
-    //             Err(SignerError::NotImplemented(_)) => {} // Expected
-    //             _ => panic!("Expected NotImplemented error"),
-    //         }
-    //     }
+        match result {
+            SignTransactionResponse::Evm(signed_tx) => {
+                assert_eq!(
+                    signed_tx.signature.r,
+                    "f6b2cfef2b4d31f4af9a6d851c022f3ae89571e1eee6ec5d05889eaf50c4244d"
+                );
+                assert_eq!(
+                    signed_tx.signature.s,
+                    "369a720cf91e1327b9fff17d9291e042a22172e92c1db5e76f4b0ebf7fae9ed2"
+                );
+                assert_eq!(signed_tx.signature.v, 1);
+                assert_eq!(
+                    signed_tx.hash,
+                    "0xc2e3533e19d6cf2318a1415bcbe2df3977707c5000dc2b9cd04b99e5aeee2b58"
+                );
+            }
+            _ => panic!("Expected EVM signed transaction"),
+        }
+    }
 }

@@ -459,6 +459,42 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_turnkey_signer() {
+        let config = json!({
+            "id": "turnkey-signer",
+            "type": "turnkey",
+            "config": {
+                "api_private_key": {"type": "plain", "value": "key"},
+                "api_public_key": "api_public_key",
+                "organization_id": "organization_id",
+                "private_key_id": "private_key_id",
+                "public_key": "public_key",
+            }
+        });
+
+        let signer_config: SignerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(signer_config.validate_signer().is_ok());
+    }
+
+    #[test]
+    fn test_validate_turnkey_invalid() {
+        let config = json!({
+            "id": "turnkey-signer",
+            "type": "turnkey",
+            "config": {
+                "api_private_key": {"type": "plain", "value": "key"},
+                "api_public_key": "",
+                "organization_id": "organization_id",
+                "private_key_id": "private_key_id",
+                "public_key": "public_key",
+            }
+        });
+
+        let signer_config: SignerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(signer_config.validate_signer().is_err());
+    }
+
+    #[test]
     fn test_empty_signers_array() {
         let config = json!({
             "signers": []
@@ -553,6 +589,19 @@ mod tests {
         });
         let parsed: SignerFileConfigEnum = serde_json::from_value(aws_kms_config).unwrap();
         assert!(matches!(parsed, SignerFileConfigEnum::AwsKms(_)));
+
+        let turnkey_config = json!({
+            "type": "turnkey",
+            "config": {
+                "api_private_key": {"type": "plain", "value": "key"},
+                "api_public_key": "api_public_key",
+                "organization_id": "organization_id",
+                "private_key_id": "private_key_id",
+                "public_key": "public_key",
+            }
+        });
+        let parsed: SignerFileConfigEnum = serde_json::from_value(turnkey_config).unwrap();
+        assert!(matches!(parsed, SignerFileConfigEnum::Turnkey(_)));
     }
 
     #[test]
@@ -564,6 +613,7 @@ mod tests {
         assert!(test_config.get_vault_cloud().is_none());
         assert!(test_config.get_vault_transit().is_none());
         assert!(test_config.get_aws_kms().is_none());
+        assert!(test_config.get_turnkey().is_none());
 
         let local_config = SignerFileConfigEnum::Local(LocalSignerFileConfig {
             path: "test-path".to_string(),
@@ -577,6 +627,7 @@ mod tests {
         assert!(local_config.get_vault_cloud().is_none());
         assert!(local_config.get_vault_transit().is_none());
         assert!(local_config.get_aws_kms().is_none());
+        assert!(local_config.get_turnkey().is_none());
 
         let vault_config = SignerFileConfigEnum::Vault(VaultSignerFileConfig {
             address: "https://vault.example.com".to_string(),
@@ -596,6 +647,7 @@ mod tests {
         assert!(vault_config.get_vault_cloud().is_none());
         assert!(vault_config.get_vault_transit().is_none());
         assert!(vault_config.get_aws_kms().is_none());
+        assert!(vault_config.get_turnkey().is_none());
 
         let vault_cloud_config = SignerFileConfigEnum::VaultCloud(VaultCloudSignerFileConfig {
             client_id: "client-123".to_string(),
@@ -634,6 +686,7 @@ mod tests {
         assert!(vault_transit_config.get_vault_cloud().is_none());
         assert!(vault_transit_config.get_vault_transit().is_some());
         assert!(vault_transit_config.get_aws_kms().is_none());
+        assert!(vault_transit_config.get_turnkey().is_none());
 
         let aws_kms_config = SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {});
         assert!(aws_kms_config.get_test().is_none());
@@ -642,5 +695,23 @@ mod tests {
         assert!(aws_kms_config.get_vault_cloud().is_none());
         assert!(aws_kms_config.get_vault_transit().is_none());
         assert!(aws_kms_config.get_aws_kms().is_some());
+        assert!(aws_kms_config.get_turnkey().is_none());
+
+        let aws_kms_config = SignerFileConfigEnum::Turnkey(TurnkeySignerFileConfig {
+            api_private_key: PlainOrEnvValue::Plain {
+                value: SecretString::new("role-123"),
+            },
+            api_public_key: "api_public_key".to_string(),
+            organization_id: "organization_id".to_string(),
+            private_key_id: "private_key_id".to_string(),
+            public_key: "public_key".to_string(),
+        });
+        assert!(aws_kms_config.get_test().is_none());
+        assert!(aws_kms_config.get_local().is_none());
+        assert!(aws_kms_config.get_vault().is_none());
+        assert!(aws_kms_config.get_vault_cloud().is_none());
+        assert!(aws_kms_config.get_vault_transit().is_none());
+        assert!(aws_kms_config.get_aws_kms().is_none());
+        assert!(aws_kms_config.get_turnkey().is_some());
     }
 }

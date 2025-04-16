@@ -199,6 +199,23 @@ mod tests {
     }
 
     #[test]
+    fn test_turnkey_signer_config() {
+        let config = TurnkeySignerConfig {
+            api_private_key: SecretString::new("123"),
+            api_public_key: "api_public_key".to_string(),
+            organization_id: "organization_id".to_string(),
+            private_key_id: "private_key_id".to_string(),
+            public_key: "public_key".to_string(),
+        };
+
+        assert_eq!(config.api_public_key, "api_public_key");
+        assert_eq!(config.organization_id, "organization_id");
+        assert_eq!(config.api_private_key.to_str().as_str(), "123");
+        assert_eq!(config.private_key_id, "private_key_id");
+        assert_eq!(config.public_key, "public_key");
+    }
+
+    #[test]
     fn test_signer_config_variants() {
         let test_config = SignerConfig::Test(LocalSignerConfig {
             raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[1, 2, 3])),
@@ -228,6 +245,14 @@ mod tests {
 
         let aws_kms_config = SignerConfig::AwsKms(AwsKmsSignerConfig {});
 
+        let turnkey_config = SignerConfig::Turnkey(TurnkeySignerConfig {
+            api_private_key: SecretString::new("123"),
+            api_public_key: "api_public_key".to_string(),
+            organization_id: "organization_id".to_string(),
+            private_key_id: "private_key_id".to_string(),
+            public_key: "public_key".to_string(),
+        });
+
         assert!(matches!(test_config, SignerConfig::Test(_)));
         assert!(matches!(local_config, SignerConfig::Local(_)));
         assert!(matches!(vault_config, SignerConfig::Vault(_)));
@@ -237,6 +262,7 @@ mod tests {
             SignerConfig::VaultTransit(_)
         ));
         assert!(matches!(aws_kms_config, SignerConfig::AwsKms(_)));
+        assert!(matches!(turnkey_config, SignerConfig::Turnkey(_)));
     }
 
     #[test]
@@ -275,6 +301,18 @@ mod tests {
             mount_point: None,
         });
         assert!(vault_transit_config.get_local().is_none());
+
+        let aws_kms_config = SignerConfig::AwsKms(AwsKmsSignerConfig {});
+        assert!(aws_kms_config.get_local().is_none());
+
+        let turnkey_config = SignerConfig::Turnkey(TurnkeySignerConfig {
+            api_private_key: SecretString::new("123"),
+            api_public_key: "api_public_key".to_string(),
+            organization_id: "organization_id".to_string(),
+            private_key_id: "private_key_id".to_string(),
+            public_key: "public_key".to_string(),
+        });
+        assert!(turnkey_config.get_local().is_none());
     }
 
     #[test]
@@ -318,5 +356,27 @@ mod tests {
             raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[7, 8, 9])),
         });
         assert!(vault_config.get_vault_transit().is_none());
+    }
+
+    #[test]
+    fn test_signer_config_get_turnkey() {
+        let turnkey_config = SignerConfig::Turnkey(TurnkeySignerConfig {
+            api_private_key: SecretString::new("123"),
+            api_public_key: "api_public_key".to_string(),
+            organization_id: "organization_id".to_string(),
+            private_key_id: "private_key_id".to_string(),
+            public_key: "public_key".to_string(),
+        });
+
+        let retrieved = turnkey_config.get_turnkey().unwrap();
+
+        assert_eq!(retrieved.api_public_key, "api_public_key");
+        assert_eq!(retrieved.organization_id, "organization_id");
+        assert_eq!(retrieved.api_private_key.to_str().as_str(), "123");
+        assert_eq!(retrieved.private_key_id, "private_key_id");
+        assert_eq!(retrieved.public_key, "public_key");
+        assert!(turnkey_config.get_aws_kms().is_none());
+        assert!(turnkey_config.get_local().is_none());
+        assert!(turnkey_config.get_vault_transit().is_none());
     }
 }

@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     use crate::models::{
         AwsKmsSignerConfig, EvmTransactionData, LocalSignerConfig, SecretString, SignerConfig,
-        SignerRepoModel, VaultTransitSignerConfig, U256,
+        SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig, U256,
     };
     use mockall::predicate::*;
     use secrets::SecretVec;
@@ -267,6 +267,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_create_evm_signer_turnkey() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Turnkey(TurnkeySignerConfig {
+                api_private_key: SecretString::new("api_private_key"),
+                api_public_key: "api_public_key".to_string(),
+                organization_id: "organization_id".to_string(),
+                private_key_id: "private_key_id".to_string(),
+                public_key: "public_key".to_string(),
+            }),
+        };
+
+        let result = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+
+        match result {
+            EvmSigner::Turnkey(_) => {}
+            _ => panic!("Expected UnsupportedType error"),
+        }
+    }
+
     #[tokio::test]
     async fn test_address_evm_signer_local() {
         let signer_model = SignerRepoModel {
@@ -325,6 +346,28 @@ mod tests {
         let signer_address = signer.address().await.unwrap();
 
         assert_eq!(test_key_address(), signer_address);
+    }
+
+    #[tokio::test]
+    async fn test_address_evm_signer_turnkey() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Turnkey(TurnkeySignerConfig {
+                api_private_key: SecretString::new("api_private_key"),
+                api_public_key: "api_public_key".to_string(),
+                organization_id: "organization_id".to_string(),
+                private_key_id: "private_key_id".to_string(),
+                public_key: "047d3bb8e0317927700cf19fed34e0627367be1390ec247dddf8c239e4b4321a49aea80090e49b206b6a3e577a4f11d721ab063482001ee10db40d6f2963233eec".to_string(),
+            }),
+        };
+
+        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer_address = signer.address().await.unwrap();
+
+        assert_eq!(
+            "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a",
+            signer_address.to_string()
+        );
     }
 
     #[tokio::test]
