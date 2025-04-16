@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::keccak256,
+    primitives::{eip191_hash_message, keccak256},
 };
 use async_trait::async_trait;
 use log::{debug, info};
@@ -141,18 +141,9 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
 #[async_trait]
 impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
-        // For EVM, we need to follow Ethereum's personal_sign format:
-        // First, create the Ethereum signed message format
         let message_bytes = request.message.as_bytes();
-        let prefix = format!("\x19Ethereum Signed Message:\n{}", message_bytes.len());
 
-        let mut prefixed_message = prefix.into_bytes();
-        prefixed_message.extend_from_slice(message_bytes);
-
-        // let mut prefixed_message = prefix.as_bytes().to_vec();
-        // prefixed_message.extend_from_slice(message_bytes);
-
-        let message_hash = keccak256(&prefixed_message);
+        let message_hash = eip191_hash_message(message_bytes);
 
         // Sign the prefixed message
         let signature_bytes = self
@@ -168,7 +159,6 @@ impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
             )));
         }
 
-        // Extract r, s, v components
         let r = hex::encode(&signature_bytes[0..32]);
         let s = hex::encode(&signature_bytes[32..64]);
         let v = signature_bytes[64];
