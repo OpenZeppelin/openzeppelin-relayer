@@ -11,12 +11,15 @@
 //!   ├── LocalSigner (encrypted JSON keystore)
 //!   ├── AwsKmsSigner (AWS KMS backend) [NOT IMPLEMENTED]
 //!   ├── Vault (HashiCorp Vault backend)
-//!   └── VaultCould (HashiCorp Vault backend)
-
+//!   ├── VaultCould (HashiCorp Vault backend)
+//!   └── Turnkey (Turnkey backend)
 //! ```
 mod local_signer;
+mod turnkey_signer;
+
 use async_trait::async_trait;
 use local_signer::*;
+use turnkey_signer::*;
 
 use crate::{
     domain::{
@@ -27,6 +30,7 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
+    services::{turnkey::TurnkeyService, TurnkeyServiceTrait},
 };
 use eyre::Result;
 
@@ -48,6 +52,7 @@ pub enum EvmSigner {
     Local(LocalSigner),
     Vault(LocalSigner),
     VaultCloud(LocalSigner),
+    Turnkey(TurnkeySigner),
 }
 
 #[async_trait]
@@ -57,6 +62,7 @@ impl Signer for EvmSigner {
             Self::Local(signer) => signer.address().await,
             Self::Vault(signer) => signer.address().await,
             Self::VaultCloud(signer) => signer.address().await,
+            Self::Turnkey(signer) => signer.address().await,
         }
     }
 
@@ -68,6 +74,7 @@ impl Signer for EvmSigner {
             Self::Local(signer) => signer.sign_transaction(transaction).await,
             Self::Vault(signer) => signer.sign_transaction(transaction).await,
             Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
+            Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -79,6 +86,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Local(signer) => signer.sign_data(request).await,
             Self::Vault(signer) => signer.sign_data(request).await,
             Self::VaultCloud(signer) => signer.sign_data(request).await,
+            Self::Turnkey(signer) => signer.sign_data(request).await,
         }
     }
 
@@ -90,6 +98,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Local(signer) => signer.sign_typed_data(request).await,
             Self::Vault(signer) => signer.sign_typed_data(request).await,
             Self::VaultCloud(signer) => signer.sign_typed_data(request).await,
+            Self::Turnkey(signer) => signer.sign_typed_data(request).await,
         }
     }
 }
@@ -111,8 +120,11 @@ impl EvmSignerFactory {
             SignerConfig::VaultTransit(_) => {
                 return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()));
             }
-            SignerConfig::Turnkey(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Turnkey".into()));
+            SignerConfig::Turnkey(ref config) => {
+                let turnkey_service = TurnkeyService::new(config.clone()).map_err(|e| {
+                    SignerFactoryError::CreationFailed(format!("Turnkey service error: {}", e))
+                })?;
+                EvmSigner::Turnkey(TurnkeySigner::new(config, turnkey_service))
             }
         };
 

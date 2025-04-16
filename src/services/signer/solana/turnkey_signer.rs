@@ -71,16 +71,13 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
 #[async_trait]
 impl<T: TurnkeyServiceTrait> SolanaSignTrait for TurnkeySigner<T> {
     fn pubkey(&self) -> Result<Address, SignerError> {
-        let raw_pubkey = hex::decode(&self.config.public_key)
-            .map_err(|e| SignerError::KeyError(format!("Invalid public key: {}", e)))?;
-        let pubkey = bs58::encode(&raw_pubkey).into_string();
-        let address: Address = Address::Solana(pubkey);
+        let pubkey = self.turnkey_service.address_solana()?;
 
-        Ok(address)
+        Ok(pubkey)
     }
 
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
-        let sig_bytes = self.turnkey_service.sign(message).await?;
+        let sig_bytes = self.turnkey_service.sign_solana(message).await?;
 
         Ok(Signature::try_from(sig_bytes.as_slice()).map_err(|e| {
             SignerError::SigningError(format!("Failed to create signature from bytes: {}", e))

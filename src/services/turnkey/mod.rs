@@ -19,6 +19,9 @@
 //!   ├── Transaction Signing
 //!   └── Raw Payload Signing
 //! ```
+use std::str::FromStr;
+
+use alloy::primitives::keccak256;
 use async_trait::async_trait;
 use chrono;
 use log::{debug, info};
@@ -29,10 +32,9 @@ use p256::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::Transaction};
-use std::str::FromStr;
 use thiserror::Error;
 
-use crate::models::{SecretString, TurnkeySignerConfig};
+use crate::models::{Address, SecretString, TurnkeySignerConfig};
 use crate::utils::base64_url_encode;
 
 #[derive(Error, Debug, Serialize)]
@@ -100,6 +102,16 @@ struct SignRawPayloadRequest {
     parameters: SignRawPayloadIntentV2Parameters,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SignEvmTransactionRequest {
+    #[serde(rename = "type")]
+    activity_type: String,
+    timestamp_ms: String,
+    organization_id: String,
+    parameters: SignEvmTransactionV2Parameters,
+}
+
 /// Parameters for signing raw payload
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,32 +122,59 @@ struct SignRawPayloadIntentV2Parameters {
     hash_function: String,
 }
 
+/// Parameters for signing raw payload
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SignEvmTransactionV2Parameters {
+    sign_with: String,
+    #[serde(rename = "type")]
+    sign_type: String,
+    unsigned_transaction: String,
+}
+
 /// Response from activity API
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ActivityResponse {
     activity: Activity,
 }
 
 /// Activity details
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Activity {
+    id: Option<String>,
+    status: Option<String>,
     result: Option<ActivityResult>,
 }
 
 /// Activity result
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ActivityResult {
     sign_raw_payload_result: Option<SignRawPayloadResult>,
+    sign_transaction_result: Option<SignTransactionResult>,
+}
+
+/// Activity result
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityResultEvm {
+    sign_transaction_result: Option<SignTransactionResult>,
 }
 
 /// Sign raw payload result
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SignRawPayloadResult {
     r: String,
     s: String,
+    v: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SignTransactionResult {
+    signed_transaction: String,
 }
 
 #[cfg(test)]
@@ -144,8 +183,12 @@ use mockall::automock;
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait TurnkeyServiceTrait: Send + Sync {
-    async fn sign(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
-    async fn sign_transaction(
+    fn address_solana(&self) -> Result<Address, TurnkeyError>;
+    fn address_evm(&self) -> Result<Address, TurnkeyError>;
+    async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+    async fn sign_evm(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+    async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+    async fn sign_solana_transaction(
         &self,
         transaction: &mut Transaction,
     ) -> TurnkeyResult<(Transaction, Signature)>;
@@ -157,25 +200,12 @@ pub struct TurnkeyService {
     api_private_key: SecretString,
     organization_id: String,
     private_key_id: String,
-    address: Option<Pubkey>,
+    public_key: String,
     client: Client,
 }
 
 impl TurnkeyService {
     pub fn new(config: TurnkeySignerConfig) -> Result<Self, TurnkeyError> {
-        let address = if !config.public_key.is_empty() {
-            let raw_pubkey = hex::decode(&config.public_key)
-                .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key: {}", e)))?;
-            let pubkey = bs58::encode(&raw_pubkey).into_string();
-
-            Some(
-                Pubkey::from_str(&pubkey)
-                    .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key: {}", e)))?,
-            )
-        } else {
-            None
-        };
-
         info!("Creating TurnkeyService with config: {:?}", config);
 
         Ok(Self {
@@ -183,9 +213,50 @@ impl TurnkeyService {
             api_private_key: config.api_private_key,
             organization_id: config.organization_id.clone(),
             private_key_id: config.private_key_id.clone(),
-            address,
+            public_key: config.public_key.clone(),
             client: Client::new(),
         })
+    }
+
+    /// Converts the public key to an Solana address
+    pub fn address_solana(&self) -> Result<Address, TurnkeyError> {
+        if self.public_key.is_empty() {
+            return Err(TurnkeyError::ConfigError("Public key is empty".to_string()));
+        }
+
+        let raw_pubkey = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        let pubkey_bs58 = bs58::encode(&raw_pubkey).into_string();
+
+        Ok(Address::Solana(pubkey_bs58))
+    }
+
+    /// Converts the public key to an EVM address
+    pub fn address_evm(&self) -> Result<Address, TurnkeyError> {
+        let public_key = hex::decode(&self.public_key)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {}", e)))?;
+
+        // Remove the first byte (0x04 prefix)
+        let pub_key_no_prefix = &public_key[1..];
+
+        let hash = keccak256(pub_key_no_prefix);
+
+        // Ethereum addresses are the last 20 bytes of the Keccak-256 hash.
+        // Since the hash is 32 bytes, the address is bytes 12..32.
+        let address_bytes = &hash[12..];
+
+        if address_bytes.len() != 20 {
+            return Err(TurnkeyError::ConfigError(format!(
+                "EVM address should be 20 bytes, got {} bytes",
+                address_bytes.len()
+            )));
+        }
+
+        let mut array = [0u8; 20];
+        array.copy_from_slice(&address_bytes);
+
+        Ok(Address::Evm(array))
     }
 
     /// Creates a digital stamp for API authentication
@@ -216,7 +287,7 @@ impl TurnkeyService {
     }
 
     /// Signs raw bytes using the Turnkey API
-    async fn sign_bytes(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
+    async fn sign_bytes_solana(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
         let encoded_bytes = hex::encode(bytes);
 
         let sign_raw_payload_body = SignRawPayloadRequest {
@@ -234,6 +305,7 @@ impl TurnkeyService {
         let body = serde_json::to_string(&sign_raw_payload_body).map_err(|e| {
             TurnkeyError::SerializationError(format!("Signing serialization error: {}", e))
         })?;
+
         let x_stamp = self.stamp(&body)?;
 
         debug!("Sending sign request to Turnkey API");
@@ -264,7 +336,111 @@ impl TurnkeyService {
         ))
     }
 
-    /// Process API responses
+    /// Signs raw bytes using the Turnkey API
+    async fn sign_bytes_evm(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
+        let encoded_bytes = hex::encode(bytes);
+
+        info!("encoded bytes: {}", encoded_bytes);
+
+        let sign_raw_payload_body = SignRawPayloadRequest {
+            activity_type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2".to_string(),
+            timestamp_ms: chrono::Utc::now().timestamp_millis().to_string(),
+            organization_id: self.organization_id.clone(),
+            parameters: SignRawPayloadIntentV2Parameters {
+                sign_with: self.private_key_id.clone(),
+                payload: encoded_bytes,
+                encoding: "PAYLOAD_ENCODING_HEXADECIMAL".to_string(),
+                hash_function: "HASH_FUNCTION_NO_OP".to_string(),
+            },
+        };
+
+        let body = serde_json::to_string(&sign_raw_payload_body).map_err(|e| {
+            TurnkeyError::SerializationError(format!("Signing serialization error: {}", e))
+        })?;
+
+        let x_stamp = self.stamp(&body)?;
+
+        debug!("Sending sign request to Turnkey API");
+        let response = self
+            .client
+            .post("https://api.turnkey.com/public/v1/submit/sign_raw_payload")
+            .header("Content-Type", "application/json")
+            .header("X-Stamp", x_stamp)
+            .body(body)
+            .send()
+            .await;
+
+        let response_body = self.process_response::<ActivityResponse>(response).await?;
+
+        if let Some(result) = response_body.activity.result {
+            if let Some(result) = result.sign_raw_payload_result {
+                let concatenated_hex = format!("{}{}{}", result.r, result.s, result.v);
+                let signature_bytes = hex::decode(&concatenated_hex).map_err(|e| {
+                    TurnkeyError::SigningError(format!("Turnkey signing error {}", e))
+                })?;
+
+                return Ok(signature_bytes);
+            }
+        }
+
+        Err(TurnkeyError::OtherError(
+            "Missing SIGN_RAW_PAYLOAD result".into(),
+        ))
+    }
+
+    /// Signs raw bytes using the Turnkey API
+    async fn sign_evm_transaction(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
+        let encoded_bytes = hex::encode(bytes);
+
+        let sign_raw_payload_body = SignEvmTransactionRequest {
+            activity_type: "ACTIVITY_TYPE_SIGN_TRANSACTION_V2".to_string(),
+            timestamp_ms: chrono::Utc::now().timestamp_millis().to_string(),
+            organization_id: self.organization_id.clone(),
+            parameters: SignEvmTransactionV2Parameters {
+                sign_with: self.private_key_id.clone(),
+                sign_type: "TRANSACTION_TYPE_ETHEREUM".to_string(),
+                unsigned_transaction: encoded_bytes,
+            },
+        };
+
+        let body = serde_json::to_string(&sign_raw_payload_body).map_err(|e| {
+            TurnkeyError::SerializationError(format!("Signing serialization error: {}", e))
+        })?;
+
+        let x_stamp = self.stamp(&body)?;
+
+        debug!("Sending sign request to Turnkey API");
+        let response = self
+            .client
+            .post("https://api.turnkey.com/public/v1/submit/sign_transaction")
+            .header("Content-Type", "application/json")
+            .header("X-Stamp", x_stamp)
+            .body(body)
+            .send()
+            .await;
+
+        let response_body = self.process_response::<ActivityResponse>(response).await?;
+
+        info!(
+            "response_body {}",
+            serde_json::to_string(&response_body).unwrap()
+        );
+
+        if let Some(result) = response_body.activity.result {
+            if let Some(result) = result.sign_transaction_result {
+                let signed_bytes = hex::decode(result.signed_transaction).map_err(|e| {
+                    TurnkeyError::SigningError(format!("Turnkey signing error {}", e))
+                })?;
+
+                return Ok(signed_bytes);
+            }
+        }
+
+        Err(TurnkeyError::OtherError(
+            "Missing ACTIVITY_TYPE_SIGN_TRANSACTION_V2 result".into(),
+        ))
+    }
+
     async fn process_response<T>(
         &self,
         response: Result<reqwest::Response, reqwest::Error>,
@@ -331,23 +507,39 @@ impl TurnkeyService {
 
 #[async_trait]
 impl TurnkeyServiceTrait for TurnkeyService {
-    async fn sign(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
-        let signature_bytes = self.sign_bytes(message).await?;
+    fn address_solana(&self) -> Result<Address, TurnkeyError> {
+        self.address_solana()
+    }
+
+    fn address_evm(&self) -> Result<Address, TurnkeyError> {
+        self.address_evm()
+    }
+
+    async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
+        let signature_bytes = self.sign_bytes_solana(message).await?;
         Ok(signature_bytes)
     }
 
-    async fn sign_transaction(
+    async fn sign_evm(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
+        let signature_bytes = self.sign_bytes_evm(message).await?;
+        Ok(signature_bytes)
+    }
+
+    async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError> {
+        let signature_bytes = self.sign_evm_transaction(message).await?;
+        Ok(signature_bytes)
+    }
+
+    async fn sign_solana_transaction(
         &self,
         transaction: &mut Transaction,
     ) -> TurnkeyResult<(Transaction, Signature)> {
         let serialized_message = transaction.message_data();
 
-        let public_key = match self.address {
-            Some(pubkey) => pubkey,
-            None => return Err(TurnkeyError::ConfigError("Public key not available".into())),
-        };
+        let public_key = Pubkey::from_str(&self.address_solana()?.to_string())
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid pubkey: {}", e)))?;
 
-        let signature_bytes = self.sign_bytes(&serialized_message).await?;
+        let signature_bytes = self.sign_bytes_solana(&serialized_message).await?;
 
         let signature = Signature::try_from(signature_bytes.as_slice())
             .map_err(|e| TurnkeyError::SignatureError(format!("Invalid signature: {}", e)))?;
@@ -413,7 +605,7 @@ impl TurnkeyServiceTrait for TurnkeyService {
 //     }
 
 //     #[tokio::test]
-//     async fn test_sign_bytes() {
+//     async fn test_sign_bytes_solana() {
 //         let mock_server = MockServer::start().await;
 //         setup_mock_sign_raw_payload(&mock_server).await;
 
@@ -433,7 +625,7 @@ impl TurnkeyServiceTrait for TurnkeyService {
 //         // This test will fail since we can't actually connect to the mock server with our real client
 //         // In a real test, we would need to modify the client to use the mock server URL
 //         // For now, let's just create the test structure
-//         // let result = service.sign_bytes(b"test message", "test-private-key-id".to_string()).await;
+//         // let result = service.sign_bytes_solana(b"test message", "test-private-key-id".to_string()).await;
 //         // assert!(result.is_ok());
 //     }
 
