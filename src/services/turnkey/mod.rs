@@ -155,13 +155,6 @@ struct ActivityResult {
     sign_transaction_result: Option<SignTransactionResult>,
 }
 
-/// Activity result
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ActivityResultEvm {
-    sign_transaction_result: Option<SignTransactionResult>,
-}
-
 /// Sign raw payload result
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -286,113 +279,105 @@ impl TurnkeyService {
         Ok(encoded_stamp)
     }
 
-    /// Signs raw bytes using the Turnkey API
+    /// Helper method to make Turnkey API requests
+    async fn make_turnkey_request<T, R>(&self, endpoint: &str, request_body: &T) -> TurnkeyResult<R>
+    where
+        T: Serialize,
+        R: for<'de> Deserialize<'de> + 'static,
+    {
+        // Serialize the request body
+        let body = serde_json::to_string(request_body).map_err(|e| {
+            TurnkeyError::SerializationError(format!("Request serialization error: {}", e))
+        })?;
+
+        // Create the authentication stamp
+        let x_stamp = self.stamp(&body)?;
+
+        // Send the request
+        debug!("Sending request to Turnkey API: {}", endpoint);
+        let response = self
+            .client
+            .post(format!(
+                "https://api.turnkey.com/public/v1/submit/{}",
+                endpoint
+            ))
+            .header("Content-Type", "application/json")
+            .header("X-Stamp", x_stamp)
+            .body(body)
+            .send()
+            .await;
+
+        // Process and return the response
+        self.process_response::<R>(response).await
+    }
+
+    /// Helper method to sign raw payloads with configurable hash function and v inclusion
+    async fn sign_raw_payload(
+        &self,
+        payload: &[u8],
+        hash_function: &str,
+        include_v: bool,
+    ) -> TurnkeyResult<Vec<u8>> {
+        let encoded_payload = hex::encode(payload);
+
+        let sign_raw_payload_body = SignRawPayloadRequest {
+            activity_type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2".to_string(),
+            timestamp_ms: chrono::Utc::now().timestamp_millis().to_string(),
+            organization_id: self.organization_id.clone(),
+            parameters: SignRawPayloadIntentV2Parameters {
+                sign_with: self.private_key_id.clone(),
+                payload: encoded_payload,
+                encoding: "PAYLOAD_ENCODING_HEXADECIMAL".to_string(),
+                hash_function: hash_function.to_string(),
+            },
+        };
+
+        let response_body = self
+            .make_turnkey_request::<_, ActivityResponse>("sign_raw_payload", &sign_raw_payload_body)
+            .await?;
+
+        if let Some(result) = response_body.activity.result {
+            if let Some(result) = result.sign_raw_payload_result {
+                let concatenated_hex = if include_v {
+                    format!("{}{}{}", result.r, result.s, result.v)
+                } else {
+                    format!("{}{}", result.r, result.s)
+                };
+
+                let signature_bytes = hex::decode(&concatenated_hex).map_err(|e| {
+                    TurnkeyError::SigningError(format!("Turnkey signing error {}", e))
+                })?;
+
+                return Ok(signature_bytes);
+            }
+        }
+
+        Err(TurnkeyError::OtherError(
+            "Missing SIGN_RAW_PAYLOAD result".into(),
+        ))
+    }
+
+    /// Signs raw bytes using the Turnkey API (for Solana)
     async fn sign_bytes_solana(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
-        let encoded_bytes = hex::encode(bytes);
-
-        let sign_raw_payload_body = SignRawPayloadRequest {
-            activity_type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2".to_string(),
-            timestamp_ms: chrono::Utc::now().timestamp_millis().to_string(),
-            organization_id: self.organization_id.clone(),
-            parameters: SignRawPayloadIntentV2Parameters {
-                sign_with: self.private_key_id.clone(),
-                payload: encoded_bytes,
-                encoding: "PAYLOAD_ENCODING_HEXADECIMAL".to_string(),
-                hash_function: "HASH_FUNCTION_NOT_APPLICABLE".to_string(),
-            },
-        };
-
-        let body = serde_json::to_string(&sign_raw_payload_body).map_err(|e| {
-            TurnkeyError::SerializationError(format!("Signing serialization error: {}", e))
-        })?;
-
-        let x_stamp = self.stamp(&body)?;
-
-        debug!("Sending sign request to Turnkey API");
-        let response = self
-            .client
-            .post("https://api.turnkey.com/public/v1/submit/sign_raw_payload")
-            .header("Content-Type", "application/json")
-            .header("X-Stamp", x_stamp)
-            .body(body)
-            .send()
-            .await;
-
-        let response_body = self.process_response::<ActivityResponse>(response).await?;
-
-        if let Some(result) = response_body.activity.result {
-            if let Some(result) = result.sign_raw_payload_result {
-                let concatenated_hex = format!("{}{}", result.r, result.s);
-                let signature_bytes = hex::decode(&concatenated_hex).map_err(|e| {
-                    TurnkeyError::SigningError(format!("Turnkey signing error {}", e))
-                })?;
-
-                return Ok(signature_bytes);
-            }
-        }
-
-        Err(TurnkeyError::OtherError(
-            "Missing SIGN_RAW_PAYLOAD result".into(),
-        ))
+        self.sign_raw_payload(bytes, "HASH_FUNCTION_NOT_APPLICABLE", false)
+            .await
     }
 
-    /// Signs raw bytes using the Turnkey API
+    /// Signs raw bytes using the Turnkey API (for EVM)
     async fn sign_bytes_evm(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
-        let encoded_bytes = hex::encode(bytes);
-
-        info!("encoded bytes: {}", encoded_bytes);
-
-        let sign_raw_payload_body = SignRawPayloadRequest {
-            activity_type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2".to_string(),
-            timestamp_ms: chrono::Utc::now().timestamp_millis().to_string(),
-            organization_id: self.organization_id.clone(),
-            parameters: SignRawPayloadIntentV2Parameters {
-                sign_with: self.private_key_id.clone(),
-                payload: encoded_bytes,
-                encoding: "PAYLOAD_ENCODING_HEXADECIMAL".to_string(),
-                hash_function: "HASH_FUNCTION_NO_OP".to_string(),
-            },
-        };
-
-        let body = serde_json::to_string(&sign_raw_payload_body).map_err(|e| {
-            TurnkeyError::SerializationError(format!("Signing serialization error: {}", e))
-        })?;
-
-        let x_stamp = self.stamp(&body)?;
-
-        debug!("Sending sign request to Turnkey API");
-        let response = self
-            .client
-            .post("https://api.turnkey.com/public/v1/submit/sign_raw_payload")
-            .header("Content-Type", "application/json")
-            .header("X-Stamp", x_stamp)
-            .body(body)
-            .send()
-            .await;
-
-        let response_body = self.process_response::<ActivityResponse>(response).await?;
-
-        if let Some(result) = response_body.activity.result {
-            if let Some(result) = result.sign_raw_payload_result {
-                let concatenated_hex = format!("{}{}{}", result.r, result.s, result.v);
-                let signature_bytes = hex::decode(&concatenated_hex).map_err(|e| {
-                    TurnkeyError::SigningError(format!("Turnkey signing error {}", e))
-                })?;
-
-                return Ok(signature_bytes);
-            }
-        }
-
-        Err(TurnkeyError::OtherError(
-            "Missing SIGN_RAW_PAYLOAD result".into(),
-        ))
+        let result = self
+            .sign_raw_payload(bytes, "HASH_FUNCTION_NO_OP", true)
+            .await?;
+        debug!("EVM signature length: {}", result.len());
+        Ok(result)
     }
 
-    /// Signs raw bytes using the Turnkey API
+    /// Signs an EVM transaction using the Turnkey API
     async fn sign_evm_transaction(&self, bytes: &[u8]) -> TurnkeyResult<Vec<u8>> {
         let encoded_bytes = hex::encode(bytes);
 
-        let sign_raw_payload_body = SignEvmTransactionRequest {
+        // Create the request body
+        let sign_transaction_body = SignEvmTransactionRequest {
             activity_type: "ACTIVITY_TYPE_SIGN_TRANSACTION_V2".to_string(),
             timestamp_ms: chrono::Utc::now().timestamp_millis().to_string(),
             organization_id: self.organization_id.clone(),
@@ -403,42 +388,22 @@ impl TurnkeyService {
             },
         };
 
-        let body = serde_json::to_string(&sign_raw_payload_body).map_err(|e| {
-            TurnkeyError::SerializationError(format!("Signing serialization error: {}", e))
-        })?;
+        // Make the API request and get the response
+        let response_body = self
+            .make_turnkey_request::<_, ActivityResponse>("sign_transaction", &sign_transaction_body)
+            .await?;
 
-        let x_stamp = self.stamp(&body)?;
-
-        debug!("Sending sign request to Turnkey API");
-        let response = self
-            .client
-            .post("https://api.turnkey.com/public/v1/submit/sign_transaction")
-            .header("Content-Type", "application/json")
-            .header("X-Stamp", x_stamp)
-            .body(body)
-            .send()
-            .await;
-
-        let response_body = self.process_response::<ActivityResponse>(response).await?;
-
-        info!(
-            "response_body {}",
-            serde_json::to_string(&response_body).unwrap()
-        );
-
-        if let Some(result) = response_body.activity.result {
-            if let Some(result) = result.sign_transaction_result {
-                let signed_bytes = hex::decode(result.signed_transaction).map_err(|e| {
-                    TurnkeyError::SigningError(format!("Turnkey signing error {}", e))
-                })?;
-
-                return Ok(signed_bytes);
-            }
-        }
-
-        Err(TurnkeyError::OtherError(
-            "Missing ACTIVITY_TYPE_SIGN_TRANSACTION_V2 result".into(),
-        ))
+        // Extract the signed transaction
+        response_body
+            .activity
+            .result
+            .and_then(|result| result.sign_transaction_result)
+            .map(|tx_result| hex::decode(&tx_result.signed_transaction))
+            .transpose()
+            .map_err(|e| {
+                TurnkeyError::SigningError(format!("Failed to decode transaction: {}", e))
+            })?
+            .ok_or_else(|| TurnkeyError::OtherError("Missing transaction result".into()))
     }
 
     async fn process_response<T>(
