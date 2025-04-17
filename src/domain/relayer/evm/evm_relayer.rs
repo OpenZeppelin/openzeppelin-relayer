@@ -37,7 +37,7 @@ use crate::{
     models::{
         produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
-        TransactionRepoModel, U256,
+        TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -315,8 +315,7 @@ where
     /// A `Result` indicating success or a `RelayerError` if the balance is insufficient.
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
         let policy = self.relayer.policies.get_evm_policy();
-        EvmTransactionValidator::validate_sufficient_relayer_balance(
-            U256::ZERO,
+        EvmTransactionValidator::init_balance_validation(
             &self.relayer.address,
             &policy,
             &self.provider,

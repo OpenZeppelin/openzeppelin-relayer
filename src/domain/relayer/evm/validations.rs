@@ -16,6 +16,28 @@ pub enum EvmTransactionValidationError {
 pub struct EvmTransactionValidator {}
 
 impl EvmTransactionValidator {
+    pub async fn init_balance_validation(
+        relayer_address: &str,
+        policy: &RelayerEvmPolicy,
+        provider: &impl EvmProviderTrait,
+    ) -> Result<(), EvmTransactionValidationError> {
+        let balance = provider
+            .get_balance(relayer_address)
+            .await
+            .map_err(|e| EvmTransactionValidationError::ValidationError(e.to_string()))?;
+
+        let min_balance = U256::from(policy.min_balance);
+
+        if balance < min_balance {
+            return Err(EvmTransactionValidationError::InsufficientBalance(format!(
+                "Relayer balance {balance} is less than the minimum enforced balance of {}",
+                policy.min_balance
+            )));
+        }
+
+        Ok(())
+    }
+
     pub async fn validate_sufficient_relayer_balance(
         balance_to_use: U256,
         relayer_address: &str,
@@ -30,23 +52,18 @@ impl EvmTransactionValidator {
         let min_balance = U256::from(policy.min_balance);
         let remaining_balance = balance.saturating_sub(balance_to_use);
 
-        if balance_to_use.is_zero() && balance < min_balance {
+        // Check if balance is insufficient to cover transaction cost
+        if balance < balance_to_use {
             return Err(EvmTransactionValidationError::InsufficientBalance(format!(
-                "Relayer balance {balance} is less than the minimum enforced balance of {}",
-                policy.min_balance
+                "Relayer balance {balance} is insufficient to cover {balance_to_use}"
             )));
         }
 
+        // Check if remaining balance would fall below minimum requirement
         if !min_balance.is_zero() && remaining_balance < min_balance {
             return Err(EvmTransactionValidationError::InsufficientBalance(
                 format!("Relayer balance {balance} is insufficient to cover {balance_to_use}, with an enforced minimum balance of {}", policy.min_balance)
             ));
-        }
-
-        if min_balance.is_zero() && balance < balance_to_use {
-            return Err(EvmTransactionValidationError::InsufficientBalance(format!(
-                "Relayer balance {balance} is insufficient to cover {balance_to_use}"
-            )));
         }
 
         Ok(())
@@ -214,5 +231,83 @@ mod tests {
             result,
             Err(EvmTransactionValidationError::InsufficientBalance(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn test_init_balance_validation_success() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(200000000000000000u64)))));
+
+        let result = EvmTransactionValidator::init_balance_validation(
+            "0xSender",
+            &create_test_policy(100000000000000000u128),
+            &mock_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_init_balance_validation_failure() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(50000000000000000u64)))));
+
+        let result = EvmTransactionValidator::init_balance_validation(
+            "0xSender",
+            &create_test_policy(100000000000000000u128),
+            &mock_provider,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(EvmTransactionValidationError::InsufficientBalance(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_init_balance_validation_provider_error() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Err(eyre::eyre!("Provider error")))));
+
+        let result = EvmTransactionValidator::init_balance_validation(
+            "0xSender",
+            &create_test_policy(100000000000000000u128),
+            &mock_provider,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(EvmTransactionValidationError::ValidationError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_init_balance_validation_zero_min_balance() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(0u64)))));
+
+        let result = EvmTransactionValidator::init_balance_validation(
+            "0xSender",
+            &create_test_policy(0), // No min balance
+            &mock_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
     }
 }
