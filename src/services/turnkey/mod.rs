@@ -343,11 +343,6 @@ impl TurnkeyService {
             .make_turnkey_request::<_, ActivityResponse>("sign_raw_payload", &sign_raw_payload_body)
             .await?;
 
-        println!(
-            "Response body: {:#?}",
-            serde_json::to_string(&response_body).unwrap()
-        );
-
         if let Some(result) = response_body.activity.result {
             if let Some(result) = result.sign_raw_payload_result {
                 let concatenated_hex = if include_v {

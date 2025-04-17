@@ -94,8 +94,6 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
         // Process the signed transaction
         let mut signed_bytes_slice = signed_bytes.as_slice();
 
-        println!("Signed bytes: {:?}", signed_bytes_slice);
-
         // Parse the signed transaction and extract components
         let (hash, signature_bytes) = if is_eip1559 {
             let signed_tx =
