@@ -38,40 +38,25 @@ where
     T: TurnkeyServiceTrait,
 {
     turnkey_service: T,
-    config: TurnkeySignerConfig,
 }
 
 impl TurnkeySigner<DefaultTurnkeyService> {
     /// Creates a new TurnkeySigner with the default Turnkey service
-    pub fn new(config: &TurnkeySignerConfig, turnkey_service: DefaultTurnkeyService) -> Self {
-        Self {
-            turnkey_service,
-            config: config.clone(),
-        }
+    pub fn new(turnkey_service: DefaultTurnkeyService) -> Self {
+        Self { turnkey_service }
     }
 }
 
 #[cfg(test)]
 impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
     /// Creates a new TurnkeySigner from a signer model and custom service implementation
-    pub fn new_with_service(signer_model: &SignerRepoModel, turnkey_service: T) -> Self {
-        let config = signer_model
-            .config
-            .get_turnkey()
-            .expect("Failed to get Turnkey config");
-
-        Self {
-            turnkey_service,
-            config: config.clone(),
-        }
+    pub fn new_with_service(turnkey_service: T) -> Self {
+        Self { turnkey_service }
     }
 
     /// Creates a new TurnkeySigner with provided config and service for testing
-    pub fn new_for_testing(config: TurnkeySignerConfig, turnkey_service: T) -> Self {
-        Self {
-            turnkey_service,
-            config,
-        }
+    pub fn new_for_testing(turnkey_service: T) -> Self {
+        Self { turnkey_service }
     }
 }
 
@@ -119,36 +104,9 @@ mod tests {
     };
     use mockall::predicate::*;
 
-    fn create_test_config() -> TurnkeySignerConfig {
-        TurnkeySignerConfig {
-            api_public_key: "test-api-public-key".to_string(),
-            api_private_key: SecretString::new("test-api-private-key"),
-            organization_id: "test-org-id".to_string(),
-            private_key_id: "test-private-key-id".to_string(),
-            public_key: "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
-                .to_string(),
-        }
-    }
-
-    #[test]
-    fn test_new_with_service() {
-        let mock_service = MockTurnkeyServiceTrait::new();
-        let config = create_test_config();
-
-        let signer = TurnkeySigner::new_for_testing(config.clone(), mock_service);
-
-        assert_eq!(signer.config.api_public_key, "test-api-public-key");
-        assert_eq!(signer.config.organization_id, "test-org-id");
-        assert_eq!(
-            signer.config.public_key,
-            "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
-        );
-    }
-
     #[tokio::test]
     async fn test_address() {
         let mut mock_service = MockTurnkeyServiceTrait::new();
-        let config = create_test_config();
 
         mock_service.expect_address_solana().times(1).returning(|| {
             Ok(Address::Solana(
@@ -156,7 +114,7 @@ mod tests {
             ))
         });
 
-        let signer = TurnkeySigner::new_for_testing(config, mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let result = signer.address().await.unwrap();
 
         match result {
@@ -177,7 +135,7 @@ mod tests {
             ))
         });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let result = signer.pubkey().unwrap();
 
         match result {
@@ -205,10 +163,10 @@ mod tests {
                 Box::pin(async { Ok(sig_clone) })
             });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let result = signer.sign(test_message).await.unwrap();
 
-        let expected_sig = Signature::try_from([1u8; 64]).unwrap();
+        let expected_sig = Signature::from([1u8; 64]);
         assert_eq!(result, expected_sig);
     }
 
@@ -224,7 +182,7 @@ mod tests {
                 Box::pin(async { Err(TurnkeyError::SigningError("Mock signing error".into())) })
             });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let result = signer.sign(test_message).await;
 
@@ -251,7 +209,7 @@ mod tests {
                 Box::pin(async { Ok(invalid_sig) })
             });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let result = signer.sign(test_message).await;
         assert!(result.is_err());
@@ -266,7 +224,7 @@ mod tests {
     #[tokio::test]
     async fn test_sign_transaction_not_implemented() {
         let mock_service = MockTurnkeyServiceTrait::new();
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let tx_data = SolanaTransactionData {
             recent_blockhash: Some("hash".to_string()),
@@ -288,14 +246,13 @@ mod tests {
     #[tokio::test]
     async fn test_address_error_handling() {
         let mut mock_service = MockTurnkeyServiceTrait::new();
-        let config = create_test_config();
 
         mock_service
             .expect_address_solana()
             .times(1)
             .returning(|| Err(TurnkeyError::ConfigError("Invalid public key".to_string())));
 
-        let signer = TurnkeySigner::new_for_testing(config, mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let result = signer.address().await;
 
         assert!(result.is_err());

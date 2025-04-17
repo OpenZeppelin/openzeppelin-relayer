@@ -259,7 +259,7 @@ impl TurnkeyService {
         }
 
         let mut array = [0u8; 20];
-        array.copy_from_slice(&address_bytes);
+        array.copy_from_slice(address_bytes);
 
         Ok(Address::Evm(array))
     }
@@ -286,7 +286,7 @@ impl TurnkeyService {
         let json_stamp = serde_json::to_string(&stamp).map_err(|e| {
             TurnkeyError::SerializationError(format!("Serialization stamp error: {}", e))
         })?;
-        let encoded_stamp = base64_url_encode(&json_stamp.as_bytes());
+        let encoded_stamp = base64_url_encode(json_stamp.as_bytes());
 
         Ok(encoded_stamp)
     }

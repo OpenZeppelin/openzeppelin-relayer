@@ -158,10 +158,7 @@ impl SolanaSignerFactory {
                         ))
                     })?;
 
-                return Ok(SolanaSigner::Turnkey(TurnkeySigner::new(
-                    turnkey_signer_config,
-                    turnkey_service,
-                )));
+                return Ok(SolanaSigner::Turnkey(TurnkeySigner::new(turnkey_service)));
             }
         };
 

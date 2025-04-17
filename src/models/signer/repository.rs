@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(to_string(&SignerType::Local).unwrap(), "\"local\"");
         assert_eq!(to_string(&SignerType::AwsKms).unwrap(), "\"awskms\"");
         assert_eq!(to_string(&SignerType::Vault).unwrap(), "\"vault\"");
-        assert_eq!(to_string(&SignerType::Vault).unwrap(), "\"turnkey\"");
+        assert_eq!(to_string(&SignerType::Turnkey).unwrap(), "\"turnkey\"");
     }
 
     #[test]
@@ -136,7 +136,7 @@ mod tests {
         );
         assert_eq!(
             from_str::<SignerType>("\"turnkey\"").unwrap(),
-            SignerType::Vault
+            SignerType::Turnkey
         );
     }
 

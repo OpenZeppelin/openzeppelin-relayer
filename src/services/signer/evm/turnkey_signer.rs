@@ -43,37 +43,22 @@ where
     T: TurnkeyServiceTrait,
 {
     turnkey_service: T,
-    config: TurnkeySignerConfig,
 }
 
 impl TurnkeySigner<DefaultTurnkeyService> {
-    pub fn new(config: &TurnkeySignerConfig, turnkey_service: DefaultTurnkeyService) -> Self {
-        Self {
-            turnkey_service,
-            config: config.clone(),
-        }
+    pub fn new(turnkey_service: DefaultTurnkeyService) -> Self {
+        Self { turnkey_service }
     }
 }
 
 #[cfg(test)]
 impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
-    pub fn new_with_service(signer_model: &SignerRepoModel, turnkey_service: T) -> Self {
-        let config = signer_model
-            .config
-            .get_turnkey()
-            .expect("turnkey config not found");
-
-        Self {
-            turnkey_service,
-            config: config.clone(),
-        }
+    pub fn new_with_service(turnkey_service: T) -> Self {
+        Self { turnkey_service }
     }
 
-    pub fn new_for_testing(config: TurnkeySignerConfig, turnkey_service: T) -> Self {
-        Self {
-            turnkey_service,
-            config,
-        }
+    pub fn new_for_testing(turnkey_service: T) -> Self {
+        Self { turnkey_service }
     }
 }
 
@@ -163,10 +148,7 @@ impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
         let message_hash = eip191_hash_message(message_bytes);
 
         // Sign the prefixed message
-        let signature_bytes = self
-            .turnkey_service
-            .sign_evm(&message_hash.to_vec())
-            .await?;
+        let signature_bytes = self.turnkey_service.sign_evm(message_hash.as_ref()).await?;
 
         // Ensure we have the right signature length
         if signature_bytes.len() != 65 {
@@ -213,35 +195,9 @@ mod tests {
     };
     use mockall::predicate::*;
 
-    fn create_test_config() -> TurnkeySignerConfig {
-        TurnkeySignerConfig {
-            api_public_key: "test-api-public-key".to_string(),
-            api_private_key: SecretString::new("test-api-private-key"),
-            organization_id: "test-org-id".to_string(),
-            private_key_id: "test-private-key-id".to_string(),
-            public_key: "7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(), // An example Ethereum address
-        }
-    }
-
-    #[test]
-    fn test_new_with_service() {
-        let mock_service = MockTurnkeyServiceTrait::new();
-        let config = create_test_config();
-
-        let signer = TurnkeySigner::new_for_testing(config.clone(), mock_service);
-
-        assert_eq!(signer.config.api_public_key, "test-api-public-key");
-        assert_eq!(signer.config.organization_id, "test-org-id");
-        assert_eq!(
-            signer.config.public_key,
-            "7f5f4552091a69125d5dfcb7b8c2658029395bdf"
-        );
-    }
-
     #[tokio::test]
     async fn test_address() {
         let mut mock_service = MockTurnkeyServiceTrait::new();
-        let config = create_test_config();
 
         mock_service.expect_address_evm().times(1).returning(|| {
             Ok(Address::Evm([
@@ -250,7 +206,7 @@ mod tests {
             ]))
         });
 
-        let signer = TurnkeySigner::new_for_testing(config, mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let result = signer.address().await.unwrap();
 
         match result {
@@ -286,7 +242,7 @@ mod tests {
             Box::pin(async { Ok(sig) })
         });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
         };
@@ -334,11 +290,11 @@ mod tests {
         mock_service
             .expect_sign_evm_transaction()
             .returning(move |_| {
-                let test = hex::decode("02f86d83aa36a70184442b657e84e946e47982520894b726167dc2ef2ac582f0a3de4c08ac4abb90626a0180c001a0f6b2cfef2b4d31f4af9a6d851c022f3ae89571e1eee6ec5d05889eaf50c4244da0369a720cf91e1327b9fff17d9291e042a22172e92c1db5e76f4b0ebf7fae9ed2".to_string()).unwrap();
+                let test = hex::decode("02f86d83aa36a70184442b657e84e946e47982520894b726167dc2ef2ac582f0a3de4c08ac4abb90626a0180c001a0f6b2cfef2b4d31f4af9a6d851c022f3ae89571e1eee6ec5d05889eaf50c4244da0369a720cf91e1327b9fff17d9291e042a22172e92c1db5e76f4b0ebf7fae9ed2").unwrap();
                 Box::pin(async { Ok(test) })
             });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let result = signer
             .sign_transaction(NetworkTransactionData::Evm(tx_data))
@@ -375,7 +331,7 @@ mod tests {
             Box::pin(async { Err(TurnkeyError::SigningError("Mock signing error".into())) })
         });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
         };
@@ -401,7 +357,7 @@ mod tests {
             Box::pin(async { Ok(invalid_sig) })
         });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
         };
@@ -421,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn test_sign_typed_data_not_implemented() {
         let mock_service = MockTurnkeyServiceTrait::new();
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let request = SignTypedDataRequest {
             domain_separator: "test-domain".to_string(),
@@ -465,7 +421,7 @@ mod tests {
                 Box::pin(async { Ok(test) })
             });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let result = signer
             .sign_transaction(NetworkTransactionData::Evm(tx_data))
@@ -519,7 +475,7 @@ mod tests {
                 })
             });
 
-        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let result = signer
             .sign_transaction(NetworkTransactionData::Evm(tx_data))

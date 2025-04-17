@@ -125,7 +125,7 @@ impl EvmSignerFactory {
                 let turnkey_service = TurnkeyService::new(config.clone()).map_err(|e| {
                     SignerFactoryError::CreationFailed(format!("Turnkey service error: {}", e))
                 })?;
-                EvmSigner::Turnkey(TurnkeySigner::new(config, turnkey_service))
+                EvmSigner::Turnkey(TurnkeySigner::new(turnkey_service))
             }
         };
 
