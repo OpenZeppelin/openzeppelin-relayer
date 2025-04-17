@@ -200,6 +200,8 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 * `basic-example-metrics`: Setup with Prometheus and Grafana metrics
 * `vault-secret-signer`: Using HashiCorp Vault for key management
 * `vault-transit-signer`: Using Vault Transit for secure signing
+* `evm-turnkey-signer`: Using Turnkey for EVM secure signing
+* `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
 
 Each example includes a README with step-by-step instructions and Docker Compose configuration.
 ====
