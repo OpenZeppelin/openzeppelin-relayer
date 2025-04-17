@@ -1,0 +1,3 @@
+allow_duplicate_keys = false
+line_length = 280
+sequence_style = "flow_style"
