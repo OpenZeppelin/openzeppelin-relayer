@@ -62,7 +62,7 @@ jobs:
             You can sign the CLA by just posting a Pull Request Comment with the sentence below. Thanks.
           custom-pr-sign-comment: I confirm that I have read and hereby agree to the OpenZeppelin Contributor License Agreement
       - name: Label PR as CLA Unsigned
-        if: ${{ steps.cla_assistant.outcome != 'success' }}
+        if: ${{ steps.cla_assistant.outcome != 'success' && steps.check_allowlist.outputs.is_allowed == 'false' }}
         run: |
           if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
             PR_NUMBER="${{ github.event.pull_request.number }}"
