@@ -27,6 +27,7 @@ pub struct ConfigFileRelayerEvmPolicy {
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: Option<bool>,
     pub min_balance: Option<u128>,
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -591,5 +592,103 @@ mod tests {
 
         let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
         assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_evm_timeout_seconds() {
+        // Test with timeout_seconds present
+        let config = json!({
+            "id": "evm-relayer",
+            "name": "EVM Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "evm-signer",
+            "paused": false,
+            "policies": {
+                "timeout_seconds": 30
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+
+        if let Some(ConfigFileRelayerNetworkPolicy::Evm(policy)) = &relayer.policies {
+            assert_eq!(policy.timeout_seconds, Some(30));
+        } else {
+            panic!("Expected EVM policy");
+        }
+
+        // Test with timeout_seconds set to zero (edge case)
+        let config = json!({
+            "id": "evm-relayer",
+            "name": "EVM Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "evm-signer",
+            "paused": false,
+            "policies": {
+                "timeout_seconds": 0
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+
+        if let Some(ConfigFileRelayerNetworkPolicy::Evm(policy)) = &relayer.policies {
+            assert_eq!(policy.timeout_seconds, Some(0));
+        } else {
+            panic!("Expected EVM policy");
+        }
+
+        // Test without timeout_seconds (should be None)
+        let config = json!({
+            "id": "evm-relayer",
+            "name": "EVM Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "evm-signer",
+            "paused": false,
+            "policies": {
+                "gas_price_cap": 100
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+
+        if let Some(ConfigFileRelayerNetworkPolicy::Evm(policy)) = &relayer.policies {
+            assert_eq!(policy.timeout_seconds, None);
+        } else {
+            panic!("Expected EVM policy");
+        }
+
+        // Test with multiple policy settings including timeout_seconds
+        let config = json!({
+            "id": "evm-relayer",
+            "name": "EVM Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "evm-signer",
+            "paused": false,
+            "policies": {
+                "gas_price_cap": 100,
+                "eip1559_pricing": true,
+                "min_balance": 1000000,
+                "timeout_seconds": 60,
+                "whitelist_receivers": ["0x1234"]
+            }
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+
+        if let Some(ConfigFileRelayerNetworkPolicy::Evm(policy)) = &relayer.policies {
+            assert_eq!(policy.timeout_seconds, Some(60));
+            assert_eq!(policy.gas_price_cap, Some(100));
+            assert_eq!(policy.eip1559_pricing, Some(true));
+            assert_eq!(policy.min_balance, Some(1000000));
+        } else {
+            panic!("Expected EVM policy");
+        }
     }
 }

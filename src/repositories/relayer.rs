@@ -302,6 +302,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     eip1559_pricing: evm.eip1559_pricing,
                     private_transactions: evm.private_transactions.unwrap_or(false),
                     min_balance: evm.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
+                    timeout_seconds: evm.timeout_seconds,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Solana(solana) => {
@@ -524,6 +525,7 @@ mod tests {
                 eip1559_pricing: Some(false),
                 private_transactions: false,
                 min_balance: 0,
+                timeout_seconds: Some(10),
             }),
             signer_id: "test".to_string(),
             address: "0x".to_string(),
@@ -686,6 +688,7 @@ mod tests {
             eip1559_pricing: Some(true),
             private_transactions: true,
             min_balance: 1000000,
+            timeout_seconds: Some(60),
         });
 
         // Update the policy
@@ -702,6 +705,7 @@ mod tests {
                 assert_eq!(policy.eip1559_pricing, Some(true));
                 assert!(policy.private_transactions);
                 assert_eq!(policy.min_balance, 1000000);
+                assert_eq!(policy.timeout_seconds, Some(60));
             }
             _ => panic!("Unexpected policy type"),
         }
