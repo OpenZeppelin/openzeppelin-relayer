@@ -22,9 +22,8 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, EvmTransactionDataTrait,
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest, U256,
+        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
@@ -216,28 +215,6 @@ where
         }
         Ok(())
     }
-
-    async fn calculate_total_cost(
-        &self,
-        tx: &TransactionRepoModel,
-    ) -> Result<U256, TransactionError> {
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
-        let price_params = self
-            .price_calculator
-            .get_transaction_price_params(&evm_data, &self.relayer())
-            .await?;
-
-        if evm_data.is_eip1559() {
-            Ok(U256::from(price_params.max_fee_per_gas.unwrap_or(0))
-                * U256::from(evm_data.gas_limit)
-                + U256::from(evm_data.value))
-        } else {
-            Ok(
-                U256::from(price_params.gas_price.unwrap_or(0)) * U256::from(evm_data.gas_limit)
-                    + U256::from(evm_data.value),
-            )
-        }
-    }
 }
 
 #[async_trait]
@@ -296,10 +273,8 @@ where
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        let total_cost = self.calculate_total_cost(&tx).await?;
-
         EvmTransactionValidator::validate_sufficient_relayer_balance(
-            total_cost + U256::from(price_params.extra_fee.unwrap_or(0)),
+            price_params.total_cost,
             &self.relayer().address,
             &self.relayer().policies.get_evm_policy(),
             &self.provider,
@@ -445,9 +420,8 @@ where
 
         let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        let total_cost = self.calculate_total_cost(&tx).await?;
         EvmTransactionValidator::validate_sufficient_relayer_balance(
-            total_cost + U256::from(bumped_price_params.extra_fee.unwrap_or(0)),
+            bumped_price_params.total_cost,
             &self.relayer().address,
             &self.relayer().policies.get_evm_policy(),
             &self.provider,
@@ -778,6 +752,7 @@ mod tests {
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
                         extra_fee: Some(0),
+                        total_cost: U256::ZERO,
                     })
                 });
 

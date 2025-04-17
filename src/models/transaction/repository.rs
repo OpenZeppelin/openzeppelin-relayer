@@ -526,6 +526,7 @@ mod tests {
             max_priority_fee_per_gas: Some(2_000_000_000),
             is_min_bumped: None,
             extra_fee: None,
+            total_cost: U256::ZERO,
         };
 
         let updated_tx = tx_data.with_price_params(price_params);
