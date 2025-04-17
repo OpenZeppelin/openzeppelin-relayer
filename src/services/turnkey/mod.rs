@@ -102,6 +102,7 @@ struct SignRawPayloadRequest {
     parameters: SignRawPayloadIntentV2Parameters,
 }
 
+/// Parameters for signing transaction payload
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SignEvmTransactionRequest {
@@ -176,11 +177,22 @@ use mockall::automock;
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait TurnkeyServiceTrait: Send + Sync {
+    /// Returns the Solana address derived from the configured public key
     fn address_solana(&self) -> Result<Address, TurnkeyError>;
+
+    /// Returns the EVM address derived from the configured public key
     fn address_evm(&self) -> Result<Address, TurnkeyError>;
+
+    /// Signs a message using the Solana signing scheme
     async fn sign_solana(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+
+    /// Signs a message using the EVM signing scheme
     async fn sign_evm(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+
+    /// Signs an EVM transaction using the Turnkey API
     async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, TurnkeyError>;
+
+    /// Signs a Solana transaction and returns both the transaction and signature
     async fn sign_solana_transaction(
         &self,
         transaction: &mut Transaction,
@@ -189,24 +201,24 @@ pub trait TurnkeyServiceTrait: Send + Sync {
 
 #[derive(Clone)]
 pub struct TurnkeyService {
-    api_public_key: String,
-    api_private_key: SecretString,
-    organization_id: String,
-    private_key_id: String,
-    public_key: String,
+    pub api_public_key: String,
+    pub api_private_key: SecretString,
+    pub organization_id: String,
+    pub private_key_id: String,
+    pub public_key: String,
+    pub base_url: String,
     client: Client,
 }
 
 impl TurnkeyService {
     pub fn new(config: TurnkeySignerConfig) -> Result<Self, TurnkeyError> {
-        info!("Creating TurnkeyService with config: {:?}", config);
-
         Ok(Self {
             api_public_key: config.api_public_key.clone(),
             api_private_key: config.api_private_key,
             organization_id: config.organization_id.clone(),
             private_key_id: config.private_key_id.clone(),
             public_key: config.public_key.clone(),
+            base_url: String::from("https://api.turnkey.com"),
             client: Client::new(),
         })
     }
@@ -293,21 +305,16 @@ impl TurnkeyService {
         // Create the authentication stamp
         let x_stamp = self.stamp(&body)?;
 
-        // Send the request
         debug!("Sending request to Turnkey API: {}", endpoint);
         let response = self
             .client
-            .post(format!(
-                "https://api.turnkey.com/public/v1/submit/{}",
-                endpoint
-            ))
+            .post(format!("{}/public/v1/submit/{}", self.base_url, endpoint))
             .header("Content-Type", "application/json")
             .header("X-Stamp", x_stamp)
             .body(body)
             .send()
             .await;
 
-        // Process and return the response
         self.process_response::<R>(response).await
     }
 
@@ -335,6 +342,11 @@ impl TurnkeyService {
         let response_body = self
             .make_turnkey_request::<_, ActivityResponse>("sign_raw_payload", &sign_raw_payload_body)
             .await?;
+
+        println!(
+            "Response body: {:#?}",
+            serde_json::to_string(&response_body).unwrap()
+        );
 
         if let Some(result) = response_body.activity.result {
             if let Some(result) = result.sign_raw_payload_result {
@@ -527,72 +539,266 @@ impl TurnkeyServiceTrait for TurnkeyService {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use serde_json::json;
-//     use wiremock::matchers::{body_json, header, method, path};
-//     use wiremock::{Mock, MockServer, ResponseTemplate};
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{header, header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-//     #[test]
-//     fn test_select_key() {
-//         let service = TurnkeyService {
-//             api_public_key: "test-api-public-key".to_string(),
-//             api_private_key: SecretString::new("test-api-private-key"),
-//             organization_id: "test-org-id".to_string(),
-//             private_key_id: "test-private-key-id".to_string(),
-//             public_key: "test-public-key".to_string(),
-//             address: Some(Pubkey::new_unique()),
-//             client: Client::new(),
-//         };
+    fn create_solana_test_config() -> TurnkeySignerConfig {
+        TurnkeySignerConfig {
+            api_public_key: "test-api-public-key".to_string(),
+            api_private_key: SecretString::new(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ),
+            organization_id: "test-org-id".to_string(),
+            private_key_id: "test-private-key-id".to_string(),
+            public_key: "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
+                .to_string(),
+        }
+    }
 
-//         let key_info = service.get_key_info();
-//         assert_eq!(key_info.private_key_id, "test-private-key-id");
-//         assert!(key_info.public_key.is_some());
-//     }
+    fn create_evm_test_config() -> TurnkeySignerConfig {
+        TurnkeySignerConfig {
+            api_public_key: "test-api-public-key".to_string(),
+            api_private_key: SecretString::new("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            organization_id: "test-org-id".to_string(),
+            private_key_id: "test-private-key-id".to_string(),
+            public_key: "047d3bb8e0317927700cf19fed34e0627367be1390ec247dddf8c239e4b4321a49aea80090e49b206b6a3e577a4f11d721ab063482001ee10db40d6f2963233eec".to_string(),
+        }
+    }
 
-//     // Setup a mock for sign_raw_payload response
-//     async fn setup_mock_sign_raw_payload(mock_server: &MockServer) {
-//         Mock::given(method("POST"))
-//             .and(path("/public/v1/submit/sign_raw_payload"))
-//             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-//                 "activity": {
-//                     "result": {
-//                         "sign_raw_payload_result": {
-//                             "r": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-//                             "s": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-//                         }
-//                     }
-//                 }
-//             })))
-//             .mount(mock_server)
-//             .await;
-//     }
+    #[test]
+    fn test_new_turnkey_service() {
+        let config = create_evm_test_config();
+        let service = TurnkeyService::new(config);
 
-//     #[tokio::test]
-//     async fn test_sign_bytes_solana() {
-//         let mock_server = MockServer::start().await;
-//         setup_mock_sign_raw_payload(&mock_server).await;
+        assert!(service.is_ok());
+        let service = service.unwrap();
+        assert_eq!(service.api_public_key, "test-api-public-key");
+        assert_eq!(service.organization_id, "test-org-id");
+        assert_eq!(service.private_key_id, "test-private-key-id");
+    }
 
-//         // Create a mock TurnkeyService
-//         let service = TurnkeyService {
-//             api_public_key: "test-api-public-key".to_string(),
-//             api_private_key: SecretString::new(
-//                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-//             ), // Using a mock hex string
-//             organization_id: "test-org-id".to_string(),
-//             private_key_id: "test-private-key-id".to_string(),
-//             public_key: "test-public-key".to_string(),
-//             address: Some(Pubkey::new_unique()),
-//             client: reqwest::Client::new(),
-//         };
+    #[test]
+    fn test_address_evm() {
+        let config = create_evm_test_config();
+        let service = TurnkeyService::new(config).unwrap();
 
-//         // This test will fail since we can't actually connect to the mock server with our real client
-//         // In a real test, we would need to modify the client to use the mock server URL
-//         // For now, let's just create the test structure
-//         // let result = service.sign_bytes_solana(b"test message", "test-private-key-id".to_string()).await;
-//         // assert!(result.is_ok());
-//     }
+        let address = service.address_evm();
+        assert!(address.is_ok());
 
-//     // Additional test cases would be added for other methods
-// }
+        let address = address.unwrap();
+
+        assert_eq!(
+            address.to_string(),
+            "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a"
+        );
+    }
+
+    #[test]
+    fn test_address_solana() {
+        let config = create_solana_test_config();
+        let service = TurnkeyService::new(config).unwrap();
+
+        let address = service.address_solana();
+        assert!(address.is_ok());
+
+        let address_str = address.unwrap().to_string();
+        assert_eq!(address_str, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
+    }
+
+    #[test]
+    fn test_address_with_empty_pubkey() {
+        let mut config = create_solana_test_config();
+        config.public_key = "".to_string();
+        let service = TurnkeyService::new(config).unwrap();
+
+        let result = service.address_solana();
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, TurnkeyError::ConfigError(_)));
+            assert_eq!(e.to_string(), "Configuration error: Public key is empty");
+        }
+    }
+
+    #[test]
+    fn test_address_with_invalid_pubkey() {
+        let mut config = create_solana_test_config();
+        config.public_key = "invalid-hex".to_string();
+        let service = TurnkeyService::new(config).unwrap();
+
+        let result = service.address_evm();
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, TurnkeyError::ConfigError(_)));
+            assert!(e.to_string().contains("Invalid public key hex"));
+        }
+    }
+
+    // Setup mock for signing raw payload
+    async fn setup_mock_sign_raw_payload(mock_server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/public/v1/submit/sign_raw_payload"))
+            .and(header("Content-Type", "application/json"))
+            .and(header_exists("X-Stamp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "activity": {
+                    "id": "test-activity-id",
+                    "status": "ACTIVITY_STATUS_COMPLETE",
+                    "result": {
+                        "signRawPayloadResult": {
+                            "r": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            "s": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                            "v": "1b"
+                        }
+                    }
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    // Setup mock for signing EVM transaction
+    async fn setup_mock_sign_evm_transaction(mock_server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/public/v1/submit/sign_transaction"))
+            .and(header("Content-Type", "application/json"))
+            .and(header_exists("X-Stamp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "activity": {
+                    "id": "test-activity-id",
+                    "status": "ACTIVITY_STATUS_COMPLETE",
+                    "result": {
+                        "signTransactionResult": {
+                            "signedTransaction": "02f1010203050607080910" // Example signed transaction hex
+                        }
+                    }
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    // Setup mock for error response
+    async fn setup_mock_error_response(mock_server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/public/v1/submit/sign_raw_payload"))
+            .and(header("Content-Type", "application/json"))
+            .and(header_exists("X-Stamp"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": {
+                    "code": 400,
+                    "message": "Invalid payload format"
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    // Helper function to create a modified client for testing
+    fn create_test_client() -> Client {
+        reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana() {
+        let mock_server = MockServer::start().await;
+        setup_mock_sign_raw_payload(&mock_server).await;
+
+        let config = create_solana_test_config();
+
+        let service = TurnkeyService {
+            api_public_key: config.api_public_key,
+            api_private_key: config.api_private_key,
+            organization_id: config.organization_id,
+            private_key_id: config.private_key_id,
+            public_key: config.public_key,
+            base_url: mock_server.uri(),
+            client: create_test_client(),
+        };
+
+        let message = b"test message";
+        let result = service.sign_solana(message).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm() {
+        let mock_server = MockServer::start().await;
+        setup_mock_sign_raw_payload(&mock_server).await;
+
+        let config = create_evm_test_config();
+        let service = TurnkeyService {
+            api_public_key: config.api_public_key,
+            api_private_key: config.api_private_key,
+            organization_id: config.organization_id,
+            private_key_id: config.private_key_id,
+            public_key: config.public_key,
+            base_url: mock_server.uri(),
+            client: create_test_client(),
+        };
+
+        let message = b"test message";
+        let result = service.sign_evm(message).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_transaction() {
+        let mock_server = MockServer::start().await;
+        setup_mock_sign_evm_transaction(&mock_server).await;
+
+        let config = create_evm_test_config();
+        let service = TurnkeyService {
+            api_public_key: config.api_public_key,
+            api_private_key: config.api_private_key,
+            organization_id: config.organization_id,
+            private_key_id: config.private_key_id,
+            public_key: config.public_key,
+            base_url: mock_server.uri(),
+            client: create_test_client(),
+        };
+
+        let message = b"test transaction";
+        let result = service.sign_evm_transaction(message).await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        let expected = hex::decode("02f1010203050607080910").unwrap();
+        assert_eq!(result, expected)
+    }
+
+    #[tokio::test]
+    async fn test_error_handling() {
+        let mock_server = MockServer::start().await;
+        setup_mock_error_response(&mock_server).await;
+
+        let config = create_solana_test_config();
+        let service = TurnkeyService {
+            api_public_key: config.api_public_key,
+            api_private_key: config.api_private_key,
+            organization_id: config.organization_id,
+            private_key_id: config.private_key_id,
+            public_key: config.public_key,
+            base_url: mock_server.uri(),
+            client: create_test_client(),
+        };
+
+        let message = b"test message";
+        let result = service.sign_solana(message).await;
+        assert!(result.is_err());
+        match result {
+            Err(TurnkeyError::MethodError(e)) => {
+                assert!(e.error.message.contains("Invalid payload format"));
+            }
+            _ => panic!("Expected MethodError for Solana signing"),
+        }
+    }
+}

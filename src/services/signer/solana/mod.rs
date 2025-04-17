@@ -79,8 +79,23 @@ impl Signer for SolanaSigner {
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait SolanaSignTrait: Send + Sync {
+/// Trait defining Solana-specific signing operations
+///
+/// This trait extends the basic signing functionality with methods specific
+/// to the Solana blockchain, including public key retrieval and message signing.
+pub trait SolanaSignTrait: Sync + Send {
+    /// Returns the public key of the Solana signer as an Address
     fn pubkey(&self) -> Result<Address, SignerError>;
+
+    /// Signs a message using the Solana signing scheme
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The message bytes to sign
+    ///
+    /// # Returns
+    ///
+    /// A Result containing either the Solana Signature or a SignerError
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError>;
 }
 

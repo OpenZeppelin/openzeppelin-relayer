@@ -42,6 +42,7 @@ where
 }
 
 impl TurnkeySigner<DefaultTurnkeyService> {
+    /// Creates a new TurnkeySigner with the default Turnkey service
     pub fn new(config: &TurnkeySignerConfig, turnkey_service: DefaultTurnkeyService) -> Self {
         Self {
             turnkey_service,
@@ -52,6 +53,7 @@ impl TurnkeySigner<DefaultTurnkeyService> {
 
 #[cfg(test)]
 impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
+    /// Creates a new TurnkeySigner from a signer model and custom service implementation
     pub fn new_with_service(signer_model: &SignerRepoModel, turnkey_service: T) -> Self {
         let config = signer_model
             .config
@@ -64,6 +66,7 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
         }
     }
 
+    /// Creates a new TurnkeySigner with provided config and service for testing
     pub fn new_for_testing(config: TurnkeySignerConfig, turnkey_service: T) -> Self {
         Self {
             turnkey_service,
