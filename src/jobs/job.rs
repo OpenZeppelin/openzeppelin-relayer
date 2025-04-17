@@ -277,6 +277,7 @@ mod tests {
                 id: "tx123".to_string(),
                 hash: Some("0x123".to_string()),
                 status: TransactionStatus::Confirmed,
+                status_reason: None,
                 created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
                 sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
                 confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),

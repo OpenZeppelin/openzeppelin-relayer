@@ -142,6 +142,7 @@ mod tests {
             id: "tx_123".to_string(),
             hash: Some("0x123...".to_string()),
             status: TransactionStatus::Pending,
+            status_reason: None,
             created_at: "2024-03-20T10:00:00Z".to_string(),
             sent_at: Some("2024-03-20T10:00:01Z".to_string()),
             confirmed_at: None,

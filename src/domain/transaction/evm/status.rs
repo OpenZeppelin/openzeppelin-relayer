@@ -347,6 +347,7 @@ mod tests {
             id: "test-tx-id".to_string(),
             relayer_id: "test-relayer-id".to_string(),
             status,
+            status_reason: None,
             created_at: Utc::now().to_rfc3339(),
             sent_at: None,
             confirmed_at: None,
