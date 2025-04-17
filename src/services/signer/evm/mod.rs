@@ -2,6 +2,7 @@
 //!
 //! Provides:
 //! - Local keystore support (encrypted JSON files)
+//! - Turnkey (Turnkey backend)
 //!
 //! # Architecture
 //!

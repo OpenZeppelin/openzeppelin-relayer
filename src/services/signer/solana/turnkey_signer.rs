@@ -1,3 +1,7 @@
+//! # Solana Turnkey Signer Implementation
+//!
+//! This module provides a Solana signer implementation that uses the Turnkey API
+//! for secure wallet management and cryptographic operations.
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -52,7 +56,7 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
         let config = signer_model
             .config
             .get_turnkey()
-            .expect("turnkey config not found");
+            .expect("Failed to get Turnkey config");
 
         Self {
             turnkey_service,
@@ -88,10 +92,7 @@ impl<T: TurnkeyServiceTrait> SolanaSignTrait for TurnkeySigner<T> {
 #[async_trait]
 impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
     async fn address(&self) -> Result<Address, SignerError> {
-        let raw_pubkey = hex::decode(&self.config.public_key)
-            .map_err(|e| SignerError::KeyError(format!("Invalid public key: {}", e)))?;
-        let pubkey = bs58::encode(&raw_pubkey).into_string();
-        let address: Address = Address::Solana(pubkey);
+        let address = self.turnkey_service.address_solana()?;
 
         Ok(address)
     }
@@ -106,146 +107,194 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::{
-//         models::{SecretString, SignerConfig, SolanaTransactionData, TurnkeySignerConfig},
-//         services::{vault::VaultError, MockVaultServiceTrait},
-//     };
-//     use mockall::predicate::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        models::{SecretString, SignerConfig, SolanaTransactionData, TurnkeySignerConfig},
+        services::{MockTurnkeyServiceTrait, TurnkeyError},
+    };
+    use mockall::predicate::*;
 
-//     fn create_test_signer_model() -> SignerRepoModel {
-//         SignerRepoModel {
-//             id: "test-vault-transit-signer".to_string(),
-//             config: SignerConfig::VaultTransit(TurnkeySignerConfig {
-//                 key_name: "transit-key".to_string(),
-//                 address: "https://vault.example.com".to_string(),
-//                 namespace: None,
-//                 role_id: SecretString::new("role-123"),
-//                 secret_id: SecretString::new("secret-456"),
-//                 pubkey: "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=".to_string(),
-//                 mount_point: None,
-//             }),
-//         }
-//     }
+    fn create_test_config() -> TurnkeySignerConfig {
+        TurnkeySignerConfig {
+            api_public_key: "test-api-public-key".to_string(),
+            api_private_key: SecretString::new("test-api-private-key"),
+            organization_id: "test-org-id".to_string(),
+            private_key_id: "test-private-key-id".to_string(),
+            public_key: "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
+                .to_string(),
+        }
+    }
 
-//     #[test]
-//     fn test_new_with_service() {
-//         let model = create_test_signer_model();
-//         let mock_turnkey_service = MockVaultServiceTrait::new();
+    #[test]
+    fn test_new_with_service() {
+        let mock_service = MockTurnkeyServiceTrait::new();
+        let config = create_test_config();
 
-//         let signer = TurnkeySigner::new_with_service(&model, mock_turnkey_service);
+        let signer = TurnkeySigner::new_for_testing(config.clone(), mock_service);
 
-//         assert_eq!(signer.key_name, "transit-key");
-//         assert_eq!(
-//             signer.pubkey,
-//             "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs="
-//         );
-//     }
+        assert_eq!(signer.config.api_public_key, "test-api-public-key");
+        assert_eq!(signer.config.organization_id, "test-org-id");
+        assert_eq!(
+            signer.config.public_key,
+            "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
+        );
+    }
 
-//     #[test]
-//     fn test_new_for_testing() {
-//         let mock_turnkey_service = MockVaultServiceTrait::new();
+    #[tokio::test]
+    async fn test_address() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let config = create_test_config();
 
-//         let signer = TurnkeySigner::new_for_testing(
-//             "test-key".to_string(),
-//             "test-pubkey".to_string(),
-//             mock_turnkey_service,
-//         );
+        mock_service.expect_address_solana().times(1).returning(|| {
+            Ok(Address::Solana(
+                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
+            ))
+        });
 
-//         assert_eq!(signer.key_name, "test-key");
-//         assert_eq!(signer.pubkey, "test-pubkey");
-//     }
-//     #[tokio::test]
-//     async fn test_sign_with_mock() {
-//         let mut mock_turnkey_service = MockVaultServiceTrait::new();
-//         let key_name = "test-key";
-//         let test_message = b"hello world";
+        let signer = TurnkeySigner::new_for_testing(config, mock_service);
+        let result = signer.address().await.unwrap();
 
-//         let mock_sig_bytes = [1u8; 64];
-//         let mock_sig_base64 = base64::engine::general_purpose::STANDARD.encode(mock_sig_bytes);
-//         let mock_vault_signature = format!("vault:v1:{}", mock_sig_base64);
+        match result {
+            Address::Solana(addr) => {
+                assert_eq!(addr, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
+            }
+            _ => panic!("Expected Solana address"),
+        }
+    }
 
-//         mock_turnkey_service
-//             .expect_sign()
-//             .with(eq(key_name), eq(test_message.to_vec()))
-//             .times(1)
-//             .returning(move |_, _| {
-//                 let mock_vault_signature = mock_vault_signature.clone();
-//                 Box::pin(async move { Ok(mock_vault_signature) })
-//             });
+    #[tokio::test]
+    async fn test_pubkey() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
 
-//         let signer = TurnkeySigner::new_for_testing(
-//             key_name.to_string(),
-//             "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=".to_string(),
-//             mock_turnkey_service,
-//         );
+        mock_service.expect_address_solana().times(1).returning(|| {
+            Ok(Address::Solana(
+                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
+            ))
+        });
 
-//         let result = signer.sign(test_message).await;
+        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let result = signer.pubkey().unwrap();
 
-//         assert!(result.is_ok());
-//         let signature = result.unwrap();
-//         assert_eq!(signature.as_ref(), &mock_sig_bytes);
-//     }
+        match result {
+            Address::Solana(addr) => {
+                assert_eq!(addr, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
+            }
+            _ => panic!("Expected Solana address"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_transaction_with_mock() {
-//         let mock_turnkey_service = MockVaultServiceTrait::new();
-//         let key_name = "test-key";
+    #[tokio::test]
+    async fn test_sign() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_message = b"Test message";
 
-//         let signer = TurnkeySigner::new_for_testing(
-//             key_name.to_string(),
-//             "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=".to_string(),
-//             mock_turnkey_service,
-//         );
-//         let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-//             fee_payer: "test".to_string(),
-//             hash: None,
-//             recent_blockhash: None,
-//             instructions: vec![],
-//         });
+        // Create a valid mock signature (must be exactly 64 bytes for Solana)
+        let mock_sig_bytes = vec![1u8; 64];
 
-//         let result = signer.sign_transaction(transaction_data).await;
+        mock_service
+            .expect_sign_solana()
+            .times(1)
+            .returning(move |message| {
+                assert_eq!(message, test_message);
+                let sig_clone = mock_sig_bytes.clone();
+                Box::pin(async { Ok(sig_clone) })
+            });
 
-//         match result {
-//             Err(SignerError::NotImplemented(msg)) => {
-//                 assert_eq!(msg, "sign_transaction is not implemented".to_string());
-//             }
-//             _ => panic!("Expected SignerError::NotImplemented"),
-//         }
-//     }
+        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+        let result = signer.sign(test_message).await.unwrap();
 
-//     #[tokio::test]
-//     async fn test_pubkey_returns_correct_address() {
-//         let mock_turnkey_service = MockVaultServiceTrait::new();
-//         let base64_pubkey = "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=";
+        let expected_sig = Signature::try_from([1u8; 64]).unwrap();
+        assert_eq!(result, expected_sig);
+    }
 
-//         let signer = TurnkeySigner::new_for_testing(
-//             "test-key".to_string(),
-//             base64_pubkey.to_string(),
-//             mock_turnkey_service,
-//         );
+    #[tokio::test]
+    async fn test_sign_error_handling() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_message = b"Test message";
 
-//         let result = signer.pubkey();
-//         let result_address = signer.address().await;
+        mock_service
+            .expect_sign_solana()
+            .times(1)
+            .returning(move |_| {
+                Box::pin(async { Err(TurnkeyError::SigningError("Mock signing error".into())) })
+            });
 
-//         // Assert
-//         assert!(result.is_ok());
-//         assert!(result_address.is_ok());
-//         match result.unwrap() {
-//             Address::Solana(pubkey) => {
-//                 // The expected base58 encoded representation of the public key
-//                 assert_eq!(pubkey, "He7WmJPCHfaJYHhMqK7QePfRT1JC5JC4UXxf3gnQhN3L");
-//             }
-//             _ => panic!("Expected Address::Solana variant"),
-//         }
-//         match result_address.unwrap() {
-//             Address::Solana(pubkey) => {
-//                 // The expected base58 encoded representation of the public key
-//                 assert_eq!(pubkey, "He7WmJPCHfaJYHhMqK7QePfRT1JC5JC4UXxf3gnQhN3L");
-//             }
-//             _ => panic!("Expected Address::Solana variant"),
-//         }
-//     }
-// }
+        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+
+        let result = signer.sign(test_message).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::TurnkeyError(err)) => {
+                assert_eq!(err.to_string(), "Signing error: Mock signing error");
+            }
+            _ => panic!("Expected SigningError error variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_invalid_signature_length() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let test_message = b"Test message";
+
+        // Return invalid signature length (not 64 bytes)
+        mock_service
+            .expect_sign_solana()
+            .times(1)
+            .returning(move |_| {
+                let invalid_sig = vec![1u8; 32]; // Only 32 bytes instead of 64
+                Box::pin(async { Ok(invalid_sig) })
+            });
+
+        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+
+        let result = signer.sign(test_message).await;
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to create signature from bytes"));
+            }
+            _ => panic!("Expected SigningError error variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_not_implemented() {
+        let mock_service = MockTurnkeyServiceTrait::new();
+        let signer = TurnkeySigner::new_for_testing(create_test_config(), mock_service);
+
+        let tx_data = SolanaTransactionData {
+            recent_blockhash: Some("hash".to_string()),
+            fee_payer: "payer".to_string(),
+            instructions: vec![],
+            hash: None,
+        };
+
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Solana(tx_data))
+            .await;
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::NotImplemented(_)) => {}
+            _ => panic!("Expected NotImplemented error variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_address_error_handling() {
+        let mut mock_service = MockTurnkeyServiceTrait::new();
+        let config = create_test_config();
+
+        mock_service
+            .expect_address_solana()
+            .times(1)
+            .returning(|| Err(TurnkeyError::ConfigError("Invalid public key".to_string())));
+
+        let signer = TurnkeySigner::new_for_testing(config, mock_service);
+        let result = signer.address().await;
+
+        assert!(result.is_err());
+    }
+}

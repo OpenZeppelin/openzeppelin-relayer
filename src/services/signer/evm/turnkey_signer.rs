@@ -1,3 +1,18 @@
+//! # EVM Turnkey Signer Implementation
+//!
+//! This module provides an EVM signer implementation that uses the Turnkey API
+//! for secure key management and transaction signing operations.
+//!
+//! ## Features
+//!
+//! - Secure signing of EVM transactions (both legacy and EIP-1559)
+//! - Message signing with EIP-191 prefixing
+//! - Remote key management through Turnkey's secure infrastructure
+//!
+//! ## Security Notes
+//!
+//! Private keys never leave the Turnkey service, providing enhanced security
+//! compared to local key storage solutions.
 use std::str::FromStr;
 
 use alloy::{
