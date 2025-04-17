@@ -260,8 +260,8 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
 
         // Add extra fee if needed
         let mut final_params = bumped_price_params;
-        let value = evm_data.value.clone();
-        let gas_limit = evm_data.gas_limit.clone();
+        let value = evm_data.value;
+        let gas_limit = evm_data.gas_limit;
         let is_eip1559 = evm_data.is_eip1559();
 
         match &self.network_extra_fee_calculator_service {
