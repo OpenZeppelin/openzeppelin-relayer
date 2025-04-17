@@ -273,15 +273,39 @@ where
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        EvmTransactionValidator::validate_sufficient_relayer_balance(
+        // Validate the relayer has sufficient balance
+        let balance_validation = EvmTransactionValidator::validate_sufficient_relayer_balance(
             price_params.total_cost,
             &self.relayer().address,
             &self.relayer().policies.get_evm_policy(),
             &self.provider,
         )
-        .await
-        .map_err(|e| TransactionError::InsufficientBalance(e.to_string()))?;
+        .await;
 
+        if let Err(validation_error) = balance_validation {
+            info!(
+                "Insufficient balance for transaction {}: {}",
+                tx.id, validation_error
+            );
+
+            let update = TransactionUpdateRequest {
+                status: Some(TransactionStatus::Failed),
+                ..Default::default()
+            };
+
+            let updated_tx = self
+                .transaction_repository
+                .partial_update(tx.id.clone(), update)
+                .await?;
+
+            let _ = self.send_transaction_update_notification(&updated_tx).await;
+
+            return Err(TransactionError::InsufficientBalance(
+                validation_error.to_string(),
+            ));
+        }
+
+        // Balance validation passed, continue with normal flow
         // Track the transaction hash
         let mut hashes = tx.hashes.clone();
         if let Some(hash) = updated_evm_data.hash.clone() {
@@ -420,14 +444,40 @@ where
 
         let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        EvmTransactionValidator::validate_sufficient_relayer_balance(
+        // Validate the relayer has sufficient balance
+        let balance_validation = EvmTransactionValidator::validate_sufficient_relayer_balance(
             bumped_price_params.total_cost,
             &self.relayer().address,
             &self.relayer().policies.get_evm_policy(),
             &self.provider,
         )
-        .await
-        .map_err(|e| TransactionError::InsufficientBalance(e.to_string()))?;
+        .await;
+
+        if let Err(validation_error) = balance_validation {
+            info!(
+                "Insufficient balance for resubmitting transaction {}: {}",
+                tx.id, validation_error
+            );
+
+            // Update the transaction to Failed status
+            let update = TransactionUpdateRequest {
+                status: Some(TransactionStatus::Failed),
+                ..Default::default()
+            };
+
+            let updated_tx = self
+                .transaction_repository
+                .partial_update(tx.id.clone(), update)
+                .await?;
+
+            // Send notification for the failure
+            let _ = self.send_transaction_update_notification(&updated_tx).await;
+
+            // Return the error to stop further processing
+            return Err(TransactionError::InsufficientBalance(
+                validation_error.to_string(),
+            ));
+        }
 
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
