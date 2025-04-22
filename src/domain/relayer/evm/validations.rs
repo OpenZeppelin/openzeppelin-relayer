@@ -190,7 +190,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EvmTransactionValidationError::ValidationError(_))
+            Err(EvmTransactionValidationError::ProviderError(_))
         ));
     }
 
@@ -291,7 +291,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(EvmTransactionValidationError::ValidationError(_))
+            Err(EvmTransactionValidationError::ProviderError(_))
         ));
     }
 
