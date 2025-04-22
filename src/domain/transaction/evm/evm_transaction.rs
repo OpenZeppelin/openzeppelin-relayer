@@ -290,6 +290,7 @@ where
 
             let update = TransactionUpdateRequest {
                 status: Some(TransactionStatus::Failed),
+                status_reason: Some(validation_error.to_string()),
                 ..Default::default()
             };
 
@@ -462,6 +463,7 @@ where
             // Update the transaction to Failed status
             let update = TransactionUpdateRequest {
                 status: Some(TransactionStatus::Failed),
+                status_reason: Some(validation_error.to_string()),
                 ..Default::default()
             };
 
