@@ -7,6 +7,8 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum EvmTransactionValidationError {
+    #[error("Provider error: {0}")]
+    ProviderError(String),
     #[error("Validation error: {0}")]
     ValidationError(String),
     #[error("Insufficient balance: {0}")]
@@ -24,7 +26,7 @@ impl EvmTransactionValidator {
         let balance = provider
             .get_balance(relayer_address)
             .await
-            .map_err(|e| EvmTransactionValidationError::ValidationError(e.to_string()))?;
+            .map_err(|e| EvmTransactionValidationError::ProviderError(e.to_string()))?;
 
         let min_balance = U256::from(policy.min_balance);
 
@@ -47,7 +49,7 @@ impl EvmTransactionValidator {
         let balance = provider
             .get_balance(relayer_address)
             .await
-            .map_err(|e| EvmTransactionValidationError::ValidationError(e.to_string()))?;
+            .map_err(|e| EvmTransactionValidationError::ProviderError(e.to_string()))?;
 
         let min_balance = U256::from(policy.min_balance);
         let remaining_balance = balance.saturating_sub(balance_to_use);
