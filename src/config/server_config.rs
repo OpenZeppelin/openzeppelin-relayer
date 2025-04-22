@@ -102,9 +102,9 @@ impl ServerConfig {
                 .parse()
                 .unwrap_or(10000),
             rpc_timeout_ms: env::var("RPC_TIMEOUT_MS")
-                .unwrap_or_else(|_| "5000".to_string())
+                .unwrap_or_else(|_| "10000".to_string())
                 .parse()
-                .unwrap_or(5000),
+                .unwrap_or(10000),
         }
     }
 }
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(config.rate_limit_burst_size, 300);
         assert_eq!(config.metrics_port, 8081);
         assert_eq!(config.redis_connection_timeout_ms, 5000);
-        assert_eq!(config.rpc_timeout_ms, 5000);
+        assert_eq!(config.rpc_timeout_ms, 10000);
     }
 
     #[test]
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(config.rate_limit_requests_per_second, 100);
         assert_eq!(config.rate_limit_burst_size, 300);
         assert_eq!(config.redis_connection_timeout_ms, 10000);
-        assert_eq!(config.rpc_timeout_ms, 5000);
+        assert_eq!(config.rpc_timeout_ms, 10000);
     }
 
     #[test]
