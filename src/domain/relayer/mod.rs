@@ -13,11 +13,12 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use crate::{
+    config::ServerConfig,
     jobs::JobProducer,
     models::{
         EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerError, RelayerNetworkPolicy,
-        RelayerRepoModel, SignerRepoModel, TransactionError, TransactionRepoModel,
+        NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
+        TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -315,14 +316,10 @@ impl RelayerFactoryTrait for RelayerFactory {
                         RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
 
-                let evm_provider: EvmProvider = match &relayer.policies {
-                    RelayerNetworkPolicy::Evm(policy) if policy.timeout_seconds.is_some() => {
-                        EvmProvider::new_with_timeout(&rpc_url, policy.timeout_seconds.unwrap())
-                            .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?
-                    }
-                    _ => EvmProvider::new(&rpc_url)
-                        .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?,
-                };
+                let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
+                let evm_provider = EvmProvider::new_with_timeout(&rpc_url, rpc_timeout_ms)
+                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),

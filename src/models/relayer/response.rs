@@ -39,9 +39,6 @@ pub struct EvmPolicyResponse {
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -88,7 +85,6 @@ impl From<RelayerRepoModel> for RelayerResponse {
                 eip1559_pricing: evm.eip1559_pricing,
                 min_balance: evm.min_balance,
                 private_transactions: evm.private_transactions,
-                timeout_seconds: evm.timeout_seconds,
             }),
             RelayerNetworkPolicy::Solana(solana) => {
                 NetworkPolicyResponse::Solana(SolanaPolicyResponse {
@@ -147,7 +143,6 @@ mod tests {
                 eip1559_pricing: Some(true),
                 min_balance: 1000,
                 private_transactions: true,
-                timeout_seconds: Some(11),
             }),
             address: "0xabc".to_string(),
             system_disabled: false,
@@ -173,7 +168,6 @@ mod tests {
                 assert_eq!(evm.eip1559_pricing, expected.eip1559_pricing);
                 assert_eq!(evm.min_balance, expected.min_balance);
                 assert_eq!(evm.private_transactions, expected.private_transactions);
-                assert_eq!(evm.timeout_seconds, expected.timeout_seconds);
             } else {
                 panic!("Expected EVM policy");
             }

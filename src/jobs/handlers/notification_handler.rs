@@ -142,7 +142,6 @@ mod tests {
                     eip1559_pricing: None,
                     private_transactions: false,
                     min_balance: 0,
-                    timeout_seconds: None,
                 }),
                 address: "0xabc".to_string(),
                 system_disabled: false,

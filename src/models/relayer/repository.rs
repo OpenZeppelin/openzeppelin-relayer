@@ -55,7 +55,6 @@ pub struct RelayerEvmPolicy {
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
-    pub timeout_seconds: Option<u64>,
 }
 
 impl Default for RelayerEvmPolicy {
@@ -66,7 +65,6 @@ impl Default for RelayerEvmPolicy {
             eip1559_pricing: None,
             private_transactions: false,
             min_balance: DEFAULT_EVM_MIN_BALANCE,
-            timeout_seconds: None,
         }
     }
 }

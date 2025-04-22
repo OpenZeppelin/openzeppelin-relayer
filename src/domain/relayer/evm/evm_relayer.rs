@@ -427,7 +427,6 @@ mod tests {
                 gas_price_cap: Some(100000000000), // 100 Gwei
                 eip1559_pricing: Some(false),
                 private_transactions: false,
-                timeout_seconds: None,
             }),
             network_type: NetworkType::Evm,
             custom_rpc_urls: None,
