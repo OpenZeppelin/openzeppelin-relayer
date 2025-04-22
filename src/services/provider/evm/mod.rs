@@ -134,6 +134,13 @@ impl EvmProvider {
     /// # Returns
     /// * `Result<Self>` - A new provider instance or an error
     pub fn new_with_timeout(url: &str, timeout_seconds: u64) -> Result<Self> {
+        // Check if URL has valid HTTP(S) scheme because this uses and http client
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(eyre!(
+                "Invalid URL scheme. Only HTTP and HTTPS are supported"
+            ));
+        }
+
         let rpc_url = url.parse()?;
         let client = ReqwestClientBuilder::default()
             .timeout(Duration::from_secs(timeout_seconds))
