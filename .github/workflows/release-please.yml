@@ -198,3 +198,12 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag }}
     secrets: inherit
+
+  # Trigger workflow to publish docs
+  release-docs:
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs: [release-please, release-docker]
+    uses: ./.github/workflows/release-docs.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+    secrets: inherit
