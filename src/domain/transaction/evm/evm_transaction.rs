@@ -716,6 +716,273 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_prepare_transaction_with_sufficient_balance() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        counter_service
+            .expect_get_and_increment()
+            .returning(|_, _| Ok(42));
+
+        let price_params = PriceParams {
+            gas_price: Some(30000000000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(630000000000000u64),
+        };
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xtx_hash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ),
+            )))
+        });
+
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                if let Some(status) = &update.status {
+                    updated_tx.status = status.clone();
+                }
+                if let Some(network_data) = &update.network_data {
+                    updated_tx.network_data = network_data.clone();
+                }
+                if let Some(hashes) = &update.hashes {
+                    updated_tx.hashes = hashes.clone();
+                }
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
+        assert!(result.is_ok());
+        let prepared_tx = result.unwrap();
+        assert_eq!(prepared_tx.status, TransactionStatus::Sent);
+        assert!(!prepared_tx.hashes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_with_insufficient_balance() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        counter_service
+            .expect_get_and_increment()
+            .returning(|_, _| Ok(42));
+
+        let price_params = PriceParams {
+            gas_price: Some(30000000000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(630000000000000u64),
+        };
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xtx_hash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ),
+            )))
+        });
+
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(90000000000000000u64)))));
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == "test-tx-id" && update.status == Some(TransactionStatus::Failed)
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
+        assert!(
+            matches!(result, Err(TransactionError::InsufficientBalance(_))),
+            "Expected InsufficientBalance error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resubmit_transaction_with_insufficient_balance() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Submitted;
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some("0xoriginal_hash".to_string()),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        let bumped_price_params = PriceParams {
+            gas_price: Some(40000000000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: Some(true),
+            extra_fee: Some(0),
+            total_cost: U256::from(840000000000000u64),
+        };
+        mock_price_calculator
+            .expect_calculate_bumped_gas_price()
+            .returning(move |_, _| Ok(bumped_price_params.clone()));
+
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xresubmit_hash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ),
+            )))
+        });
+
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(90000000000000000u64)))));
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .withf(move |id, update| {
+                id == "test-tx-id" && update.status == Some(TransactionStatus::Failed)
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
+        assert!(
+            matches!(result, Err(TransactionError::InsufficientBalance(_))),
+            "Expected InsufficientBalance error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
     async fn test_cancel_transaction() {
         // Test Case 1: Canceling a pending transaction
         {
