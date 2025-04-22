@@ -9,6 +9,12 @@ on:
         description: The tag to use for creating docs branch or merging to docs branch.
         required: true
 
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  id-token: write
+
 jobs:
   docs:
     name: publish docs
@@ -18,7 +24,7 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
     steps:
       - name: Get github app token
-        uses: actions/create-github-app-token@af35edadc00be37caa72ed9f3e6d5f7801bfdf09  # v1.11.7
+        uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5  # v2.0.2
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
