@@ -62,7 +62,7 @@ jobs:
 
           echo "Major: $MAJOR, Minor: $MINOR, Patch: $PATCH"
           RELEASE_BRANCH="release-v${MAJOR}.${MINOR}.0"
-          DOCS_BRANCH="docs-v${MAJOR}.${MINOR}.0"
+          DOCS_BRANCH="docs-v${MAJOR}.${MINOR}"
 
           echo "DOCS_BRANCH=${DOCS_BRANCH}" >> $GITHUB_OUTPUT
           echo "RELEASE_BRANCH=${RELEASE_BRANCH}" >> $GITHUB_OUTPUT
