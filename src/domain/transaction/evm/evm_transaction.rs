@@ -459,6 +459,10 @@ where
                 "Insufficient balance for resubmitting transaction {}: {}",
                 tx.id, validation_error
             );
+
+            return Err(TransactionError::InsufficientBalance(
+                validation_error.to_string(),
+            ));
         }
 
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
