@@ -2,4 +2,5 @@
 name: relayer
 title: Relayer
 version: 0.1.x  # x-release-please-minor
-nav: [modules/ROOT/nav.adoc]
+nav:
+  - modules/ROOT/nav.adoc
