@@ -8493,8 +8493,9 @@ dependencies = [
 
 [[package]]
 name = "soroban-rs"
-version = "0.2.1"
-source = "git+ssh://git@github.com/OpenZeppelin/soroban-helpers.git#9dd8b0cde004e9491b835dc0da4809a87080d00c"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bca954ed26456d0038a5a040724fc0a71af151d0bc3efbd7fdd2a62b86f45942"
 dependencies = [
  "async-trait",
  "ed25519-dalek 2.1.1",
@@ -8510,8 +8511,9 @@ dependencies = [
 
 [[package]]
 name = "soroban-rs-macros"
-version = "0.1.0"
-source = "git+ssh://git@github.com/OpenZeppelin/soroban-helpers.git#9dd8b0cde004e9491b835dc0da4809a87080d00c"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e2fa346eb4b437b64abfb3a1972d1bdaa7e868bedfb352d5a4638f4ac586365"
 dependencies = [
  "proc-macro2",
  "quote",
