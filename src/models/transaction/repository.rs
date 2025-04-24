@@ -1,8 +1,10 @@
+use super::evm::Speed;
 use crate::{
     domain::{PriceParams, SignTransactionResponseEvm},
+    models::transaction::stellar_types::{MemoSpec, OperationSpec},
     models::{
         AddressError, EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError,
-        RelayerRepoModel, SignerError, TransactionError, U256,
+        RelayerRepoModel, SignerError, StellarNamedNetwork, TransactionError, U256,
     },
 };
 use alloy::{
@@ -10,13 +12,13 @@ use alloy::{
     primitives::{Address as AlloyAddress, Bytes, TxKind},
     rpc::types::AccessList,
 };
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, str::FromStr};
+
 use utoipa::ToSchema;
 use uuid::Uuid;
-
-use super::evm::Speed;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -235,9 +237,13 @@ pub struct SolanaTransactionData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StellarTransactionData {
     pub source_account: String,
-    pub fee: u128,
-    pub sequence_number: u64,
-    pub operations: Vec<String>,
+    pub fee: Option<u32>,
+    pub sequence_number: Option<i64>,
+    pub operations: Vec<OperationSpec>,
+    pub memo: Option<MemoSpec>,
+    pub valid_until: Option<String>,
+    pub network: StellarNamedNetwork,
+    pub envelope_xdr: Option<String>,
     pub hash: Option<String>,
 }
 
@@ -315,10 +321,14 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                 network_type: NetworkType::Stellar,
                 network_data: NetworkTransactionData::Stellar(StellarTransactionData {
                     source_account: stellar_request.source_account.clone(),
-                    fee: stellar_request.fee,
-                    sequence_number: 0, // TODO
-                    operations: vec![], // TODO
-                    hash: Some("0x".to_string()),
+                    operations: stellar_request.operations.clone(),
+                    memo: stellar_request.memo.clone(),
+                    valid_until: stellar_request.valid_until.clone(),
+                    network: StellarNamedNetwork::from_str(&stellar_request.network)?,
+                    envelope_xdr: None,
+                    hash: None,
+                    fee: None,
+                    sequence_number: None,
                 }),
                 priced_at: None,
                 hashes: Vec::new(),
@@ -721,11 +731,21 @@ mod tests {
 
     #[test]
     fn test_network_tx_data_get_stellar_transaction_data() {
+        use crate::models::transaction::stellar_types::{AssetSpec, MemoSpec, OperationSpec};
+
         let stellar_tx_data = StellarTransactionData {
             source_account: "account123".to_string(),
-            fee: 100,
-            sequence_number: 5,
-            operations: vec!["op1".to_string()],
+            fee: Some(100),
+            sequence_number: Some(5),
+            operations: vec![OperationSpec::Payment {
+                destination: "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ".to_string(),
+                amount: 100000000, // 10 XLM in stroops
+                asset: AssetSpec::Native,
+            }],
+            memo: Some(MemoSpec::Text("Test memo".to_string())),
+            valid_until: Some("2025-01-01T00:00:00Z".to_string()),
+            network: StellarNamedNetwork::Testnet,
+            envelope_xdr: None,
             hash: Some("hash123".to_string()),
         };
         let network_data = NetworkTransactionData::Stellar(stellar_tx_data.clone());

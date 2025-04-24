@@ -73,6 +73,10 @@ secrets = { version = "1.2"}
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
+ed25519-dalek = "2.1"
+stellar-strkey = "0.0.12"
+stellar-xdr = { version = "22.1.0", features = ["curr", "base64", "serde"] }
+soroban-rs = { git = "ssh://git@github.com/OpenZeppelin/soroban-helpers.git", package = "soroban-rs" }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"

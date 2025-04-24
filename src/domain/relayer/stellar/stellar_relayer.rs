@@ -3,18 +3,18 @@ use crate::{
         BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
         SignTypedDataRequest,
     },
-    jobs::JobProducer,
+    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel,
-        StellarNetwork, StellarRpcResult, TransactionRepoModel,
+        RepositoryError, StellarNetwork, StellarRpcResult, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        Repository,
     },
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
 use std::sync::Arc;
 
 use crate::domain::relayer::{Relayer, RelayerError};
@@ -58,7 +58,18 @@ impl Relayer for StellarRelayer {
     ) -> Result<TransactionRepoModel, RelayerError> {
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        info!("Stellar Sending transaction...");
+        self.transaction_repository
+            .create(transaction.clone())
+            .await
+            .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
+        self.job_producer
+            .produce_transaction_request_job(
+                TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                None,
+            )
+            .await?;
+
         Ok(transaction)
     }
 

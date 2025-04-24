@@ -1,14 +1,16 @@
 use async_trait::async_trait;
 use eyre::Result;
+use log::info;
 use std::sync::Arc;
 
 use crate::{
     domain::transaction::Transaction,
     jobs::JobProducer,
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
+    models::{NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
+    services::Signer,
 };
 
 #[allow(dead_code)]
@@ -17,6 +19,7 @@ pub struct StellarRelayerTransaction {
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
+    signer: Arc<dyn Signer>,
 }
 
 #[allow(dead_code)]
@@ -26,12 +29,14 @@ impl StellarRelayerTransaction {
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
+        signer: Arc<dyn Signer>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
             relayer_repository,
             transaction_repository,
             relayer,
             job_producer,
+            signer,
         })
     }
 }
@@ -42,6 +47,14 @@ impl Transaction for StellarRelayerTransaction {
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        let signature = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Stellar(
+                tx.network_data.get_stellar_transaction_data()?,
+            ))
+            .await?;
+
+        info!("signature: {:?}", signature);
         Ok(tx)
     }
 
