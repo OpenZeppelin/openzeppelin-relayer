@@ -13,6 +13,7 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use crate::{
+    config::ServerConfig,
     jobs::JobProducer,
     models::{
         EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest, NetworkRpcResult,
@@ -317,8 +318,10 @@ impl RelayerFactoryTrait for RelayerFactory {
                         RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
                     })?;
 
-                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url)
+                let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
+                let evm_provider = EvmProvider::new_with_timeout(&rpc_url, rpc_timeout_ms)
                     .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),

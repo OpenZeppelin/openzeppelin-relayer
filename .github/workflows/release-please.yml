@@ -29,7 +29,7 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
     steps:
       - name: Get github app token
-        uses: actions/create-github-app-token@af35edadc00be37caa72ed9f3e6d5f7801bfdf09  # v1.11.7
+        uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5  # v2.0.2
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -130,7 +130,7 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created == 'false' }}
     steps:
       - name: Get github app token
-        uses: actions/create-github-app-token@af35edadc00be37caa72ed9f3e6d5f7801bfdf09  # v1.11.7
+        uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5  # v2.0.2
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -195,6 +195,15 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     needs: release-please
     uses: ./.github/workflows/release-docker.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+    secrets: inherit
+
+  # Trigger workflow to publish docs
+  release-docs:
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs: [release-please, release-docker]
+    uses: ./.github/workflows/release-docs.yml
     with:
       tag: ${{ needs.release-please.outputs.tag }}
     secrets: inherit

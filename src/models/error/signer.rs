@@ -1,7 +1,7 @@
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::services::VaultError;
+use crate::services::{TurnkeyError, VaultError};
 
 use super::TransactionError;
 
@@ -25,6 +25,9 @@ pub enum SignerError {
 
     #[error("Vault error: {0}")]
     VaultError(#[from] VaultError),
+
+    #[error("Turnkey error: {0}")]
+    TurnkeyError(#[from] TurnkeyError),
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),

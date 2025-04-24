@@ -200,6 +200,8 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 * `basic-example-metrics`: Setup with Prometheus and Grafana metrics
 * `vault-secret-signer`: Using HashiCorp Vault for key management
 * `vault-transit-signer`: Using Vault Transit for secure signing
+* `evm-turnkey-signer`: Using Turnkey for EVM secure signing
+* `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
 
 Each example includes a README with step-by-step instructions and Docker Compose configuration.
 ====
@@ -380,6 +382,11 @@ This table lists the environment variables and their default values.
 | `<timeout in milliseconds>`
 | Connection timeout for Redis in milliseconds.
 
+| `RPC_TIMEOUT_MS`
+| `10000`
+| `<timeout in milliseconds>`
+| Sets the maximum time to wait for RPC connections before timing out.
+
 | `ENABLE_SWAGGER`
 | `false`
 | `true, false`
@@ -409,6 +416,7 @@ METRICS_ENABLED=true
 METRICS_PORT=8081
 REDIS_URL=redis://localhost:6379
 REDIS_CONNECTION_TIMEOUT_MS=10000
+RPC_TIMEOUT_MS=10000
 ENABLE_SWAGGER=false
 KEYSTORE_PASSPHRASE=your_keystore_passphrase
 ```
@@ -460,6 +468,7 @@ Supported signer types:
 - `vault`: vault secret signer
 - `vault_cloud`: hosted vault secret signer
 - `vault_transit`: vault transit signer
+- `turnkey`: turnkey signer
 
 Available configuration fields
 [cols="1,1,2"]
@@ -606,6 +615,37 @@ Available configuration fields
 |pubkey
 |String
 |Public key of the cryptographic key within Vault's Transit engine that is used for signing operations
+|===
+
+
+`turnkey` type config:
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| api_public_key
+| String
+| The public key associated with your Turnkey API access credentials. Used for authentication to the Turnkey signing service.
+
+| api_private_key.type
+| String
+| Type of value source (`env` or `plain`)
+
+| api_private_key.value
+| String
+| The Turnkey API private key or environment variable name containing it. Used with the public key to authenticate API requests.
+
+| organization_id
+| String
+| Your unique Turnkey organization identifier. Required to access resources within your specific organization.
+
+| private_key_id
+| String
+| The unique identifier of the private key in your Turnkey account that will be used for signing operations.
+
+| public_key
+| String
+| The public key corresponding to the private key identified by private_key_id. Used for address derivation and signature verification.
 |===
 
 

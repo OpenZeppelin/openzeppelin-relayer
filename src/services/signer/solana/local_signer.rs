@@ -1,3 +1,13 @@
+//! # Solana Local Signer Implementation
+//!
+//! This module provides a local signer implementation for Solana transactions
+//! and messages using an in-memory keypair.
+//!
+//! ## Security Considerations
+//!
+//! This implementation stores private keys in memory and should primarily be used
+//! for development and testing. For production environments, consider using
+//! more secure options like the TurnkeySigner or VaultTransitSigner.
 use async_trait::async_trait;
 use log::info;
 use solana_sdk::{

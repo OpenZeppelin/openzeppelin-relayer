@@ -9,6 +9,13 @@ pub fn base64_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64::engine::general_purpose::STANDARD.decode(data)
 }
 
+pub fn base64_url_encode(message: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(message)
+}
+pub fn base64_url_decode(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

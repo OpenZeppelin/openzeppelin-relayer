@@ -4,17 +4,23 @@
 //! It implements common operations like getting balances, sending transactions, and querying
 //! blockchain state.
 
+use std::time::Duration;
+
 use alloy::{
     primitives::{Bytes, TxKind, Uint},
     providers::{Provider, ProviderBuilder, RootProvider},
-    rpc::types::{
-        Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
-        TransactionInput, TransactionReceipt, TransactionRequest,
+    rpc::{
+        client::ClientBuilder,
+        types::{
+            Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
+            TransactionInput, TransactionReceipt, TransactionRequest,
+        },
     },
     transports::http::{Client, Http},
 };
 use async_trait::async_trait;
 use eyre::{eyre, Result};
+use reqwest::ClientBuilder as ReqwestClientBuilder;
 
 use crate::models::{EvmTransactionData, TransactionError, U256};
 
@@ -116,6 +122,39 @@ impl EvmProvider {
     pub fn new(url: &str) -> Result<Self> {
         let rpc_url = url.parse()?;
         let provider = ProviderBuilder::new().on_http(rpc_url);
+        Ok(Self { provider })
+    }
+
+    /// Creates a new EVM provider instance with a custom timeout.
+    ///
+    /// # Arguments
+    /// * `url` - The RPC endpoint URL to connect to
+    /// * `timeout_seconds` - The timeout duration in seconds
+    ///
+    /// # Returns
+    /// * `Result<Self>` - A new provider instance or an error
+    pub fn new_with_timeout(url: &str, timeout_seconds: u64) -> Result<Self> {
+        // Check if URL has valid HTTP(S) scheme because this uses and http client
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(eyre!(
+                "Invalid URL scheme. Only HTTP and HTTPS are supported"
+            ));
+        }
+
+        let rpc_url = url.parse()?;
+        let client = ReqwestClientBuilder::default()
+            .timeout(Duration::from_secs(timeout_seconds))
+            .build()
+            .map_err(|e| eyre!("Failed to build HTTP client: {}", e))?;
+
+        let mut transport = Http::new(rpc_url);
+        transport.set_client(client);
+
+        let is_local = transport.guess_local();
+        let client = ClientBuilder::default().transport(transport, is_local);
+
+        let provider = ProviderBuilder::new().on_client(client);
+
         Ok(Self { provider })
     }
 }
@@ -293,6 +332,32 @@ mod tests {
 
         let provider = EvmProvider::new("invalid-url");
         assert!(provider.is_err());
+    }
+
+    #[test]
+    fn test_new_provider_with_timeout() {
+        let provider = EvmProvider::new_with_timeout("http://localhost:8545", 30);
+        assert!(provider.is_ok());
+
+        let provider = EvmProvider::new_with_timeout("invalid-url", 30);
+        assert!(provider.is_err());
+
+        let provider = EvmProvider::new_with_timeout("http://localhost:8545", 0);
+        assert!(provider.is_ok());
+
+        let provider = EvmProvider::new_with_timeout("http://localhost:8545", 3600);
+        assert!(provider.is_ok());
+    }
+
+    #[test]
+    fn test_new_with_timeout_error_handling() {
+        // Test with invalid URL
+        let result = EvmProvider::new_with_timeout("not-a-valid-url", 30);
+        assert!(result.is_err());
+
+        // Test with invalid scheme
+        let result = EvmProvider::new_with_timeout("ftp://localhost:8545", 30);
+        assert!(result.is_err());
     }
 
     #[test]

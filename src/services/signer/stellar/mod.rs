@@ -53,6 +53,9 @@ impl StellarSignerFactory {
             SignerConfig::VaultTransit(_) => {
                 return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()))
             }
+            SignerConfig::Turnkey(_) => {
+                return Err(SignerFactoryError::UnsupportedType("Turnkey".into()))
+            }
         };
         Ok(signer)
     }

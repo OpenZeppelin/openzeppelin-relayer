@@ -10,15 +10,21 @@
 //!   ├── Local (Raw Key Signer)
 //!   ├── Vault (HashiCorp Vault backend)
 //!   ├── VaultCloud (HashiCorp Cloud Vault backend)
-//!   └── VaultTransit (HashiCorp Vault Transit signer, most secure)
+//!   ├── VaultTransit (HashiCorp Vault Transit signer)
+//!   └── Turnkey (Turnkey backend)
 
 //! ```
 use async_trait::async_trait;
 mod local_signer;
 use local_signer::*;
+
 mod vault_transit_signer;
-use solana_sdk::signature::Signature;
 use vault_transit_signer::*;
+
+mod turnkey_signer;
+use turnkey_signer::*;
+
+use solana_sdk::signature::Signature;
 
 use crate::{
     domain::{
@@ -29,7 +35,7 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
-    services::{VaultConfig, VaultService},
+    services::{TurnkeyService, VaultConfig, VaultService},
 };
 use eyre::Result;
 
@@ -42,6 +48,7 @@ pub enum SolanaSigner {
     Vault(LocalSigner),
     VaultCloud(LocalSigner),
     VaultTransit(VaultTransitSigner),
+    Turnkey(TurnkeySigner),
 }
 
 #[async_trait]
@@ -52,6 +59,7 @@ impl Signer for SolanaSigner {
                 signer.address().await
             }
             Self::VaultTransit(signer) => signer.address().await,
+            Self::Turnkey(signer) => signer.address().await,
         }
     }
 
@@ -64,14 +72,30 @@ impl Signer for SolanaSigner {
                 signer.sign_transaction(transaction).await
             }
             Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
+            Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait SolanaSignTrait: Send + Sync {
+/// Trait defining Solana-specific signing operations
+///
+/// This trait extends the basic signing functionality with methods specific
+/// to the Solana blockchain, including public key retrieval and message signing.
+pub trait SolanaSignTrait: Sync + Send {
+    /// Returns the public key of the Solana signer as an Address
     fn pubkey(&self) -> Result<Address, SignerError>;
+
+    /// Signs a message using the Solana signing scheme
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The message bytes to sign
+    ///
+    /// # Returns
+    ///
+    /// A Result containing either the Solana Signature or a SignerError
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError>;
 }
 
@@ -81,6 +105,7 @@ impl SolanaSignTrait for SolanaSigner {
         match self {
             Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => signer.pubkey(),
             Self::VaultTransit(signer) => signer.pubkey(),
+            Self::Turnkey(signer) => signer.pubkey(),
         }
     }
 
@@ -90,6 +115,7 @@ impl SolanaSignTrait for SolanaSigner {
                 Ok(signer.sign(message).await?)
             }
             Self::VaultTransit(signer) => Ok(signer.sign(message).await?),
+            Self::Turnkey(signer) => Ok(signer.sign(message).await?),
         }
     }
 }
@@ -123,6 +149,17 @@ impl SolanaSignerFactory {
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
+            SignerConfig::Turnkey(turnkey_signer_config) => {
+                let turnkey_service =
+                    TurnkeyService::new(turnkey_signer_config.clone()).map_err(|e| {
+                        SignerFactoryError::InvalidConfig(format!(
+                            "Failed to create Turnkey service: {}",
+                            e
+                        ))
+                    })?;
+
+                return Ok(SolanaSigner::Turnkey(TurnkeySigner::new(turnkey_service)));
+            }
         };
 
         Ok(signer)
@@ -134,7 +171,7 @@ mod solana_signer_factory_tests {
     use super::*;
     use crate::models::{
         AwsKmsSignerConfig, LocalSignerConfig, SecretString, SignerConfig, SignerRepoModel,
-        SolanaTransactionData, VaultTransitSignerConfig,
+        SolanaTransactionData, TurnkeySignerConfig, VaultTransitSignerConfig,
     };
     use mockall::predicate::*;
     use secrets::SecretVec;
@@ -243,6 +280,27 @@ mod solana_signer_factory_tests {
         }
     }
 
+    #[test]
+    fn test_create_solana_signer_turnkey() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Turnkey(TurnkeySignerConfig {
+                api_private_key: SecretString::new("api_private_key"),
+                api_public_key: "api_public_key".to_string(),
+                organization_id: "organization_id".to_string(),
+                private_key_id: "private_key_id".to_string(),
+                public_key: "public_key".to_string(),
+            }),
+        };
+
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+
+        match signer {
+            SolanaSigner::Turnkey(_) => {}
+            _ => panic!("Expected Turnkey signer"),
+        }
+    }
+
     #[tokio::test]
     async fn test_address_solana_signer_local() {
         let signer_model = SignerRepoModel {
@@ -327,6 +385,30 @@ mod solana_signer_factory_tests {
         };
         let expected_pubkey =
             Address::Solana("9SNR5Sf993aphA7hzWSQsGv63x93trfuN8WjaToXcqKA".to_string());
+
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer_address = signer.address().await.unwrap();
+        let signer_pubkey = signer.pubkey().unwrap();
+
+        assert_eq!(expected_pubkey, signer_address);
+        assert_eq!(expected_pubkey, signer_pubkey);
+    }
+
+    #[tokio::test]
+    async fn test_address_solana_signer_turnkey() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Turnkey(TurnkeySignerConfig {
+                api_private_key: SecretString::new("api_private_key"),
+                api_public_key: "api_public_key".to_string(),
+                organization_id: "organization_id".to_string(),
+                private_key_id: "private_key_id".to_string(),
+                public_key: "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
+                    .to_string(),
+            }),
+        };
+        let expected_pubkey =
+            Address::Solana("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string());
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await.unwrap();

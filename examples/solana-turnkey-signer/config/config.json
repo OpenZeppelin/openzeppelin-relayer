@@ -1,0 +1,48 @@
+{
+  "relayers": [
+    {
+      "id": "solana-example",
+      "name": "Solana Example",
+      "network": "devnet",
+      "paused": false,
+      "signer_id": "turnkey-signer-solana",
+      "network_type": "solana",
+      "policies": {
+        "fee_payment_strategy": "user",
+        "min_balance": 0,
+        "allowed_tokens": [
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "turnkey-signer-solana",
+      "type": "turnkey",
+      "config": {
+        "api_public_key": "",
+        "api_private_key": {
+          "type": "env",
+          "value": "TURNKEY_API_PRIVATE_KEY"
+        },
+        "organization_id": "",
+        "private_key_id": "",
+        "public_key": ""
+      }
+    }
+  ]
+}

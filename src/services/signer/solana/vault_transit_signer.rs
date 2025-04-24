@@ -1,3 +1,7 @@
+//! # Vault Transit Signer for Solana
+//!
+//! This module provides a Solana signer implementation that uses HashiCorp Vault's Transit engine
+//! for secure key management and signing operations.
 use std::str::FromStr;
 
 use async_trait::async_trait;

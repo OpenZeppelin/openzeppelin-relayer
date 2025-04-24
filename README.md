@@ -6,7 +6,7 @@
 
 This relayer service
 
-[User Docs](https://docs.openzeppelin.com/relayer/0.1.0/) | [Quickstart](https://docs.openzeppelin.com/relayer/0.1.0/quickstart) | [Crate Docs](https://docs.openzeppelin.com/relayer/0.1.0/rust_docs/doc/openzeppelin_relayer/)
+[User Docs](https://docs.openzeppelin.com/relayer/) | [Quickstart](https://docs.openzeppelin.com/relayer/quickstart)
 
 ## Features
 
@@ -28,18 +28,18 @@ This relayer service
 - Solana
 - EVM (🚧 Partial support)
 
-> For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/0.1.0/roadmap).
+> For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/roadmap).
 
 
 ## For users
 
 ### Installation
 
-View the [Installation](https://docs.openzeppelin.com/relayer/0.1.0/#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://docs.openzeppelin.com/relayer/0.1.0/quickstart) guide.
+View the [Installation](https://docs.openzeppelin.com/relayer#getting_started) documentation for detailed information. For a quicker introduction, check out the [Quickstart](https://docs.openzeppelin.com/relayer/quickstart) guide.
 
 ### Usage
 
-View the [Usage](https://docs.openzeppelin.com/relayer/0.1.0/#running_the_relayer) documentation for more information.
+View the [Usage](https://docs.openzeppelin.com/relayer#running_the_relayer) documentation for more information.
 
 ### Examples
 
@@ -252,7 +252,7 @@ Create `config/config.json` file. You can use `config/config.example.json` as a 
 cp config/config.example.json config/config.json
 ```
 
-Refer to the [Configuration References](https://docs.openzeppelin.com/relayer/0.1.0/#configuration_references) section for a complete list of configuration options.
+Refer to the [Configuration References](https://docs.openzeppelin.com/relayer#configuration_references) section for a complete list of configuration options.
 
 
 Create `.env` with correct values according to your needs from `.env.example` file as a starting point:
@@ -495,7 +495,7 @@ For security concerns, please refer to our [Security Policy](SECURITY.md).
 
 ## Get Help
 
-If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://docs.openzeppelin.com/relayer/0.1.0/).
+If you have any questions, first see if the answer to your question can be found in the [User Documentation](https://docs.openzeppelin.com/relayer/).
 
 If the answer is not there:
 

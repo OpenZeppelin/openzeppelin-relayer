@@ -1,3 +1,18 @@
+//! # EVM Local Signer Implementation
+//!
+//! This module provides a local signer implementation for Ethereum Virtual Machine (EVM)
+//! transactions and messages using the Alloy library with an in-memory private key.
+//!
+//! ## Features
+//!
+//! - Support for both legacy and EIP-1559 transaction types
+//! - Message signing with standard Ethereum prefixing
+//! - Implementation of the `DataSignerTrait` for EVM-specific operations
+//!
+//! ## Security Considerations
+//!
+//! This implementation stores private keys in memory and should primarily be used
+//! for development and testing purposes, not production
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
     network::{EthereumWallet, TransactionBuilder, TxSigner},
