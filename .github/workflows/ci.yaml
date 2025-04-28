@@ -183,7 +183,11 @@ jobs:
           sudo rm -f /swapfile
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt clean
-          docker rmi $(docker image ls -aq)
+          if [[ $(docker image ls -aq) ]]; then
+            docker rmi $(docker image ls -aq)
+          else
+            echo "No Docker images found to remove"
+          fi
           df -h
       - name: Prepare
         id: init
