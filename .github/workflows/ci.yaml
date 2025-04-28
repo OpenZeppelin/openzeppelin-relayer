@@ -166,7 +166,9 @@ jobs:
     if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files == 'true' }}
     permissions:
       contents: read
-    needs: changed_files
+    needs:
+      - changed_files
+      - ci
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
