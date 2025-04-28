@@ -4764,7 +4764,6 @@ dependencies = [
  "spl-token 8.0.0",
  "spl-token-2022 8.0.1",
  "stellar-strkey 0.0.12",
- "stellar-xdr",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "subtle",

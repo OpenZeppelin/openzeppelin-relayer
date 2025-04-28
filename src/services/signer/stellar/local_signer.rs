@@ -1,3 +1,17 @@
+//! # Stellar Local Signer Implementation
+//!
+//! This module provides a local signer implementation for Stellar transactions
+//! using the `ed25519-dalek` and `soroban-rs` libraries with an in-memory private key.
+//!
+//! ## Features
+//!
+//! - Transaction signing for Stellar networks
+//! - Integration with `soroban-rs` for Soroban compatibility
+//!
+//! ## Security Considerations
+//!
+//! This implementation stores private keys in memory and should primarily be used
+//! for development and testing purposes, not production.
 use crate::{
     domain::{
         SignDataRequest, SignDataResponse, SignTransactionResponse, SignTransactionResponseStellar,
@@ -6,19 +20,18 @@ use crate::{
     models::{Address, NetworkTransactionData, SignerError, SignerRepoModel},
     services::Signer,
 };
-use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;
 use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use eyre::Result;
 use sha2::{Digest, Sha256};
-use soroban_rs::Signer as SorobanSigner;
-use std::convert::TryInto;
-use stellar_xdr::curr::{
-    DecoratedSignature, Hash, Limits, Signature, SignatureHint, Transaction, TransactionEnvelope,
+use soroban_rs::xdr::{
+    Hash, Limits, Signature, SignatureHint, Transaction, TransactionEnvelope,
     TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
     TransactionV1Envelope, VecM, WriteXdr,
 };
+use soroban_rs::Signer as SorobanSigner;
+use std::convert::TryInto;
 
 pub struct LocalSigner {
     local_signer_client: SorobanSigner,
@@ -32,8 +45,12 @@ impl LocalSigner {
             .ok_or_else(|| SignerError::Configuration("Local config not found".into()))?;
 
         let local_signer_client = {
-            let key_bytes = config.raw_key.borrow();
-            SorobanSigner::new(SigningKey::from_bytes(&FixedBytes::from_slice(&key_bytes)))
+            let key_slice = config.raw_key.borrow();
+
+            let key_bytes: [u8; 32] = <[u8; 32]>::try_from(&key_slice[..])
+                .map_err(|_| SignerError::Configuration("Private key must be 32 bytes".into()))?;
+
+            SorobanSigner::new(SigningKey::from_bytes(&key_bytes))
         };
 
         Ok(Self {

@@ -1,10 +1,9 @@
+use crate::models::NetworkError;
 use core::{fmt, time::Duration};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use soroban_rs::xdr::Hash;
 use std::str::FromStr;
-use stellar_xdr::curr::Hash;
-
-use crate::models::NetworkError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StellarNamedNetwork {

@@ -16,9 +16,9 @@ use crate::{
     config::ServerConfig,
     jobs::JobProducer,
     models::{
-        EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
-        TransactionError, TransactionRepoModel,
+        DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+        SignerRepoModel, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -29,8 +29,6 @@ use crate::{
         TransactionCounterService,
     },
 };
-
-use stellar_xdr::curr::DecoratedSignature;
 
 use crate::services::EvmProvider;
 use async_trait::async_trait;

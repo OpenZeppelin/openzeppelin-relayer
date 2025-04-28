@@ -11,8 +11,11 @@ pub use token::*;
 mod authorization;
 pub use authorization::*;
 
-mod transaction;
-pub use transaction::*;
+mod evm_transaction;
+pub use evm_transaction::*;
+
+mod stellar_transaction;
+pub use stellar_transaction::*;
 
 mod public_endpoints;
 pub use public_endpoints::*;

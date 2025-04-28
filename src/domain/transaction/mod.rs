@@ -166,7 +166,7 @@ pub trait Transaction {
 pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
     Solana(SolanaRelayerTransaction),
-    Stellar(StellarRelayerTransaction),
+    Stellar(DefaultStellarTransaction),
 }
 
 #[async_trait]
@@ -445,7 +445,7 @@ impl RelayerTransactionFactory {
                 let signer_service =
                     Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
 
-                Ok(NetworkTransaction::Stellar(StellarRelayerTransaction::new(
+                Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
                     relayer_repository,
                     transaction_repository,

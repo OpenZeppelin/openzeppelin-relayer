@@ -1,18 +1,28 @@
+//! Defines types and conversions for representing Stellar transactions and related structures.
+//!
+//! This module provides Rust representations for Stellar XDR types like `Memo`, `Asset`,
+//! `Operation`, and `Transaction`, along with `serde` serialization/deserialization
+//! and `TryFrom` implementations for converting between custom spec types (e.g., `MemoSpec`)
+//! and the underlying XDR types. It also includes helper functions and unit tests.
+
+use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::models::transaction::repository::StellarTransactionData;
 use crate::models::SignerError;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
+use soroban_rs::xdr::{
+    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, Hash, Memo,
+    MuxedAccount as XdrMuxedAccount, MuxedAccountMed25519, Operation, OperationBody, PaymentOp,
+    Preconditions, PublicKey as XdrPublicKey, SequenceNumber, StringM, TimeBounds, TimePoint,
+    Transaction, TransactionExt, Uint256, VecM,
+};
 use std::convert::TryFrom;
 use std::str::FromStr;
 use stellar_strkey::ed25519::MuxedAccount;
 use stellar_strkey::ed25519::PublicKey;
-use stellar_xdr::curr::{
-    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, Hash, Memo,
-    MuxedAccount as XdrMuxedAccount, MuxedAccountMed25519, Operation, OperationBody, PaymentOp,
-    Preconditions, PublicKey as XdrPublicKey, SequenceNumber, TimeBounds, TimePoint, Transaction,
-    TransactionExt, Uint256, VecM,
-};
 use utoipa::ToSchema;
+
+pub type DecoratedSignature = soroban_rs::xdr::DecoratedSignature;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Deserialize, ToSchema)]
 #[serde(tag = "type", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
@@ -30,7 +40,7 @@ impl TryFrom<MemoSpec> for Memo {
         Ok(match m {
             MemoSpec::None => Memo::None,
             MemoSpec::Text(s) => {
-                let text = stellar_xdr::curr::StringM::<28>::try_from(s.as_str()).map_err(|e| {
+                let text = StringM::<28>::try_from(s.as_str()).map_err(|e| {
                     SignerError::ConversionError(format!("Invalid memo text: {}", e))
                 })?;
                 Memo::Text(text)
@@ -66,7 +76,7 @@ impl TryFrom<AssetSpec> for Asset {
                 let issuer_pk = PublicKey::from_str(&issuer)
                     .map_err(|e| SignerError::ConversionError(format!("Invalid issuer: {}", e)))?;
 
-                let uint256 = stellar_xdr::curr::Uint256(issuer_pk.0);
+                let uint256 = Uint256(issuer_pk.0);
                 let pk = XdrPublicKey::PublicKeyTypeEd25519(uint256);
                 let account_id = AccountId(pk);
 
@@ -86,7 +96,7 @@ impl TryFrom<AssetSpec> for Asset {
                 let issuer_pk = PublicKey::from_str(&issuer)
                     .map_err(|e| SignerError::ConversionError(format!("Invalid issuer: {}", e)))?;
 
-                let uint256 = stellar_xdr::curr::Uint256(issuer_pk.0);
+                let uint256 = Uint256(issuer_pk.0);
                 let pk = XdrPublicKey::PublicKeyTypeEd25519(uint256);
                 let account_id = AccountId(pk);
 
@@ -197,7 +207,7 @@ impl TryFrom<StellarTransactionData> for Transaction {
             None => Memo::None,
         };
 
-        let fee = data.fee.unwrap_or(100); // TODO: use constant
+        let fee = data.fee.unwrap_or(STELLAR_DEFAULT_TRANSACTION_FEE);
         let sequence = data.sequence_number.unwrap_or(0);
 
         let source_account = {
