@@ -1760,9 +1760,9 @@ checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
 
 [[package]]
 name = "bytemuck"
-version = "1.22.0"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b1fc10dbac614ebc03540c9dbd60e83887fda27794998c6528f1782047d540"
+checksum = "9134a6ef01ce4b366b50689c94f82c14bc72bc5d0386829828a2e2752ef7958c"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -1915,9 +1915,9 @@ dependencies = [
 
 [[package]]
 name = "chrono"
-version = "0.4.40"
+version = "0.4.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a7964611d71df112cb1730f2ee67324fcf4d0fc6606acbbe9bfe06df124637c"
+checksum = "c469d952047f47f91b68d1cba3f10d63c11d73e4636f24f08daf0278abf01c4d"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
@@ -8492,9 +8492,9 @@ dependencies = [
 
 [[package]]
 name = "soroban-rs"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bca954ed26456d0038a5a040724fc0a71af151d0bc3efbd7fdd2a62b86f45942"
+checksum = "790ecbbc2f864561c405f485383605960eb49353e2bd9f70b29b6ac9feb70b72"
 dependencies = [
  "async-trait",
  "ed25519-dalek 2.1.1",
