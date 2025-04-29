@@ -7,6 +7,9 @@ pub use evm::*;
 mod solana;
 pub use solana::*;
 
+mod stellar;
+pub use stellar::*;
+
 use crate::models::SolanaNetwork;
 
 #[derive(Error, Debug, Serialize)]

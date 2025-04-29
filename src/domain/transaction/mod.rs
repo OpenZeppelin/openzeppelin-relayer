@@ -23,7 +23,7 @@ use crate::{
     },
     services::{
         get_network_extra_fee_calculator_service, get_solana_network_provider, EvmGasPriceService,
-        EvmProvider, EvmSignerFactory, StellarSignerFactory,
+        EvmProvider, EvmSignerFactory, StellarProvider, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -444,6 +444,8 @@ impl RelayerTransactionFactory {
             NetworkType::Stellar => {
                 let signer_service =
                     Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
+                let stellar_provider = StellarProvider::new(&relayer.network)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
@@ -451,6 +453,7 @@ impl RelayerTransactionFactory {
                     transaction_repository,
                     job_producer,
                     signer_service,
+                    stellar_provider,
                 )?))
             }
         }

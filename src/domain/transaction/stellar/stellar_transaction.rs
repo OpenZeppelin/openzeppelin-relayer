@@ -10,31 +10,34 @@ use crate::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
         Repository, TransactionRepository,
     },
-    services::{Signer, StellarSigner},
+    services::{Signer, StellarProvider, StellarProviderTrait, StellarSigner},
 };
 
 #[allow(dead_code)]
-pub struct StellarRelayerTransaction<R, T, J, S>
+pub struct StellarRelayerTransaction<R, T, J, S, P>
 where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
     S: Signer,
+    P: StellarProviderTrait,
 {
     relayer: RelayerRepoModel,
     relayer_repository: Arc<R>,
     transaction_repository: Arc<T>,
     job_producer: Arc<J>,
     signer: Arc<S>,
+    provider: P,
 }
 
 #[allow(dead_code)]
-impl<R, T, J, S> StellarRelayerTransaction<R, T, J, S>
+impl<R, T, J, S, P> StellarRelayerTransaction<R, T, J, S, P>
 where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
     S: Signer,
+    P: StellarProviderTrait,
 {
     pub fn new(
         relayer: RelayerRepoModel,
@@ -42,24 +45,43 @@ where
         transaction_repository: Arc<T>,
         job_producer: Arc<J>,
         signer: Arc<S>,
+        provider: P,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
+            relayer,
             relayer_repository,
             transaction_repository,
-            relayer,
             job_producer,
             signer,
+            provider,
         })
+    }
+
+    pub fn provider(&self) -> &P {
+        &self.provider
+    }
+
+    pub fn relayer(&self) -> &RelayerRepoModel {
+        &self.relayer
+    }
+
+    pub fn job_producer(&self) -> &J {
+        &self.job_producer
+    }
+
+    pub fn transaction_repository(&self) -> &T {
+        &self.transaction_repository
     }
 }
 
 #[async_trait]
-impl<R, T, J, S> Transaction for StellarRelayerTransaction<R, T, J, S>
+impl<R, T, J, S, P> Transaction for StellarRelayerTransaction<R, T, J, S, P>
 where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: Signer + Send + Sync,
+    P: StellarProviderTrait + Send + Sync,
 {
     async fn prepare_transaction(
         &self,
@@ -131,4 +153,5 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
     InMemoryTransactionRepository,
     JobProducer,
     StellarSigner,
+    StellarProvider,
 >;

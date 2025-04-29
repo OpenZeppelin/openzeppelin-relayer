@@ -192,7 +192,7 @@ pub trait SolanaRelayerTrait {
 pub enum NetworkRelayer {
     Evm(DefaultEvmRelayer),
     Solana(SolanaRelayer),
-    Stellar(StellarRelayer),
+    Stellar(DefaultStellarRelayer),
 }
 
 #[async_trait]
@@ -366,7 +366,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Solana(relayer))
             }
             NetworkType::Stellar => {
-                let relayer = StellarRelayer::new(
+                let relayer = DefaultStellarRelayer::new(
                     relayer,
                     relayer_repository,
                     transaction_repository,
