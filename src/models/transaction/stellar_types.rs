@@ -265,7 +265,24 @@ mod tests {
             assert!(Memo::try_from(memo_spec).is_ok());
         }
 
-        // ── serialization / deserialization ───────────────────────────────
+        #[test]
+        fn memo_id_conversion() {
+            let memo_spec = MemoSpec::Id(123456);
+            let memo = Memo::try_from(memo_spec).unwrap();
+            assert!(matches!(memo, Memo::Id(123456)));
+        }
+
+        #[test]
+        fn memo_return_conversion() {
+            let memo_spec = MemoSpec::Return([1u8; 32]);
+            let memo = Memo::try_from(memo_spec).unwrap();
+            if let Memo::Return(hash) = memo {
+                assert_eq!(hash.0, [1u8; 32]);
+            } else {
+                panic!("Expected Memo::Return");
+            }
+        }
+
         #[test]
         fn memo_spec_none_serde() {
             let spec = MemoSpec::None;
@@ -310,6 +327,15 @@ mod tests {
             let json = r#"{"type":"TEXT"}"#;
             let res: Result<MemoSpec, _> = serde_json::from_str(json);
             assert!(res.is_err());
+        }
+
+        #[test]
+        fn memo_spec_id_serde() {
+            let spec = MemoSpec::Id(12345);
+            let json = serde_json::to_string(&spec).unwrap();
+            assert_eq!(json, r#"{"type":"ID","value":12345}"#);
+            let de: MemoSpec = serde_json::from_str(&json).unwrap();
+            assert_eq!(de, spec);
         }
     }
 
@@ -423,6 +449,24 @@ mod tests {
             };
             assert!(Asset::try_from(spec).is_err());
         }
+
+        #[test]
+        fn try_from_credit12_ok() {
+            let spec = AssetSpec::Credit12 {
+                code: "LONGERTOKEN".into(),
+                issuer: TEST_PK.into(),
+            };
+            assert!(Asset::try_from(spec).is_ok());
+        }
+
+        #[test]
+        fn try_from_credit12_invalid_issuer_err() {
+            let spec = AssetSpec::Credit12 {
+                code: "VALIDTOKEN".into(),
+                issuer: "BADISSUER".into(),
+            };
+            assert!(Asset::try_from(spec).is_err());
+        }
     }
 
     mod operationspec {
@@ -448,7 +492,6 @@ mod tests {
             assert!(Operation::try_from(op_spec).is_err());
         }
 
-        // ── serialization / deserialization ───────────────────────────────
         #[test]
         fn operation_spec_payment_native_serde() {
             let spec = OperationSpec::Payment {
@@ -481,7 +524,6 @@ mod tests {
             assert_eq!(de, spec);
         }
 
-        // ── try_from ───────────────────────────────────────────────────────
         #[test]
         fn try_from_payment_native_ok() {
             let spec = OperationSpec::Payment {
@@ -535,6 +577,12 @@ mod tests {
         #[test]
         fn valid_until_invalid() {
             assert!(valid_until_to_time_bounds(Some("not a date".to_string())).is_none());
+        }
+
+        #[test]
+        fn valid_until_none() {
+            let result = valid_until_to_time_bounds(None);
+            assert!(result.is_none());
         }
     }
 
@@ -599,6 +647,51 @@ mod tests {
                 hash: None,
             };
             assert!(Transaction::try_from(data).is_err());
+        }
+
+        #[test]
+        fn stellar_tx_with_time_bounds() {
+            let data = StellarTransactionData {
+                source_account: TEST_PK.to_string(),
+                fee: Some(100),
+                sequence_number: Some(1),
+                memo: None,
+                valid_until: Some("1735689600".to_string()), // "2025-01-01T00:00:00Z"
+                operations: vec![payment_op(TEST_PK)],
+                network: StellarNamedNetwork::Testnet,
+                envelope_xdr: None,
+                hash: None,
+            };
+            let tx = Transaction::try_from(data).unwrap();
+            if let Preconditions::Time(time_bounds) = tx.cond {
+                assert_eq!(time_bounds.min_time.0, 0);
+                assert_eq!(time_bounds.max_time.0, 1735689600);
+            } else {
+                panic!("Expected Preconditions::Time");
+            }
+        }
+
+        #[test]
+        fn stellar_tx_with_memo() {
+            let data = StellarTransactionData {
+                source_account: TEST_PK.to_string(),
+                fee: None,
+                sequence_number: None,
+                memo: Some(MemoSpec::Id(12345)),
+                valid_until: None,
+                operations: vec![payment_op(TEST_PK)],
+                network: StellarNamedNetwork::Testnet,
+                envelope_xdr: None,
+                hash: None,
+            };
+            let tx = Transaction::try_from(data).unwrap();
+            assert_eq!(tx.fee, 100); // Default fee
+            assert_eq!(tx.seq_num.0, 0); // Default sequence
+            if let Memo::Id(id) = tx.memo {
+                assert_eq!(id, 12345);
+            } else {
+                panic!("Expected Memo::Id");
+            }
         }
     }
 }
