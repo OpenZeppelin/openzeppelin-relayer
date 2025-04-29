@@ -22,8 +22,9 @@ use crate::{
         RelayerRepositoryStorage,
     },
     services::{
-        get_network_extra_fee_calculator_service, get_solana_network_provider, EvmGasPriceService,
-        EvmProvider, EvmSignerFactory, StellarProvider, StellarSignerFactory,
+        get_evm_network_provider, get_network_extra_fee_calculator_service,
+        get_solana_network_provider, EvmGasPriceService, EvmSignerFactory, StellarProvider,
+        StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -389,23 +390,8 @@ impl RelayerTransactionFactory {
                     Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
                 };
 
-                let rpc_url = relayer
-                    .custom_rpc_urls
-                    .as_ref()
-                    .and_then(|urls| urls.first().cloned())
-                    .or_else(|| {
-                        network
-                            .public_rpc_urls()
-                            .and_then(|urls| urls.first().cloned())
-                            .map(String::from)
-                    })
-                    .ok_or_else(|| {
-                        TransactionError::NetworkConfiguration("No RPC URLs configured".to_string())
-                    })?;
-
-                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url)
-                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
-
+                let evm_provider =
+                    get_evm_network_provider(network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network, evm_provider.clone());

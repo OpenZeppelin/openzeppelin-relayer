@@ -3,6 +3,7 @@ use strum::Display;
 use utoipa::ToSchema;
 
 use crate::{
+    config::RpcConfig,
     constants::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_EVM_MIN_BALANCE,
         DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE, MAX_SOLANA_TX_DATA_SIZE,
@@ -243,7 +244,7 @@ pub struct RelayerRepoModel {
     pub address: String,
     pub notification_id: Option<String>,
     pub system_disabled: bool,
-    pub custom_rpc_urls: Option<Vec<String>>,
+    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
 impl RelayerRepoModel {
@@ -294,7 +295,9 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
-            custom_rpc_urls: None,
+            custom_rpc_urls: Some(vec![RpcConfig::new(
+                "https://test-rpc.example.com".to_string(),
+            )]),
         }
     }
 

@@ -6,6 +6,7 @@
 //! - Transaction validation rules
 //! - Network endpoints
 use super::{ConfigFileError, ConfigFileNetworkType};
+use crate::config::RpcConfig;
 use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -104,7 +105,7 @@ pub struct RelayerFileConfig {
     #[serde(default)]
     pub notification_id: Option<String>,
     #[serde(default)]
-    pub custom_rpc_urls: Option<Vec<String>>,
+    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 use serde::{de, Deserializer};
 use serde_json::Value;
@@ -192,7 +193,16 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
+                    .filter_map(|v| {
+                        // Handle both string format (legacy) and object format (new)
+                        if let Some(url_str) = v.as_str() {
+                            // Convert string to RpcConfig with default weight
+                            Some(RpcConfig::new(url_str.to_string()))
+                        } else {
+                            // Try to parse as a RpcConfig object
+                            serde_json::from_value::<RpcConfig>(v.clone()).ok()
+                        }
+                    })
                     .collect()
             });
 
@@ -305,11 +315,20 @@ impl RelayerFileConfig {
     }
 
     fn validate_custom_rpc_urls(&self) -> Result<(), ConfigFileError> {
-        if let Some(urls) = &self.custom_rpc_urls {
-            for url in urls {
-                reqwest::Url::parse(url).map_err(|_| {
-                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", url))
+        if let Some(configs) = &self.custom_rpc_urls {
+            for config in configs {
+                reqwest::Url::parse(&config.url).map_err(|_| {
+                    ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", config.url))
                 })?;
+
+                // Validate weight is greater than zero if specified
+                if let Some(weight) = config.weight {
+                    if weight < 1 {
+                        return Err(ConfigFileError::InvalidFormat(
+                            "RPC URL weight must be greater than zero".to_string(),
+                        ));
+                    }
+                }
             }
         }
         Ok(())
@@ -528,6 +547,33 @@ mod tests {
             "signer_id": "test-signer",
             "paused": false,
             "custom_rpc_urls": [
+                { "url": "https://api.example.com/rpc", "weight": 2 },
+                { "url": "https://rpc.example.com" }
+            ]
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        assert!(relayer.validate().is_ok());
+
+        let rpc_urls = relayer.custom_rpc_urls.unwrap();
+        assert_eq!(rpc_urls.len(), 2);
+        assert_eq!(rpc_urls[0].url, "https://api.example.com/rpc");
+        assert_eq!(rpc_urls[0].weight, Some(2));
+        assert_eq!(rpc_urls[1].url, "https://rpc.example.com");
+        assert_eq!(rpc_urls[1].weight, None);
+        assert_eq!(rpc_urls[1].get_weight(), 1);
+    }
+
+    #[test]
+    fn test_valid_custom_rpc_urls_string_format() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": [
                 "https://api.example.com/rpc",
                 "https://rpc.example.com"
             ]
@@ -535,6 +581,15 @@ mod tests {
 
         let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
         assert!(relayer.validate().is_ok());
+
+        let rpc_urls = relayer.custom_rpc_urls.unwrap();
+        assert_eq!(rpc_urls.len(), 2);
+        assert_eq!(rpc_urls[0].url, "https://api.example.com/rpc");
+        assert_eq!(rpc_urls[0].weight, Some(1));
+        assert_eq!(rpc_urls[0].get_weight(), 1);
+        assert_eq!(rpc_urls[1].url, "https://rpc.example.com");
+        assert_eq!(rpc_urls[1].weight, Some(1));
+        assert_eq!(rpc_urls[1].get_weight(), 1);
     }
 
     #[test]
@@ -547,8 +602,8 @@ mod tests {
             "signer_id": "test-signer",
             "paused": false,
             "custom_rpc_urls": [
-                "not-a-url",
-                "https://api.example.com/rpc"
+                { "url": "not-a-url", "weight": 1 },
+                { "url": "https://api.example.com/rpc", "weight": 2 }
             ]
         });
 
@@ -559,6 +614,30 @@ mod tests {
             assert!(msg.contains("Invalid RPC URL"));
         } else {
             panic!("Expected ConfigFileError::InvalidFormat");
+        }
+    }
+
+    #[test]
+    fn test_invalid_custom_rpc_urls_weight() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": [
+                { "url": "https://api.example.com/rpc", "weight": 0 }
+            ]
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(ConfigFileError::InvalidFormat(msg)) = result {
+            assert_eq!(msg, "RPC URL weight must be greater than zero");
+        } else {
+            panic!("Expected ConfigFileError::InvalidFormat for zero weight");
         }
     }
 

@@ -13,7 +13,6 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use crate::{
-    config::ServerConfig,
     jobs::JobProducer,
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
@@ -25,12 +24,11 @@ use crate::{
         RelayerRepositoryStorage,
     },
     services::{
-        get_solana_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
-        TransactionCounterService,
+        get_evm_network_provider, get_solana_network_provider, EvmSignerFactory, JupiterService,
+        SolanaSignerFactory, TransactionCounterService,
     },
 };
 
-use crate::services::EvmProvider;
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -309,17 +307,8 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
 
-                // Try custom RPC URL first, then fall back to public RPC URLs
-                let rpc_url = network
-                    .get_rpc_url(relayer.custom_rpc_urls.clone())
-                    .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
-                    })?;
-
-                let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
-                let evm_provider = EvmProvider::new_with_timeout(&rpc_url, rpc_timeout_ms)
-                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-
+                let evm_provider =
+                    get_evm_network_provider(network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
