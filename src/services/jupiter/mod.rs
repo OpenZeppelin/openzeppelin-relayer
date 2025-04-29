@@ -7,11 +7,23 @@ use crate::{
     utils::field_as_string,
 };
 use async_trait::async_trait;
-use eyre::Result;
 #[cfg(test)]
 use mockall::automock;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum JupiterServiceError {
+    #[error("HTTP request failed: {0}")]
+    HttpRequestError(#[from] reqwest::Error),
+    #[error("API returned an error: {message}")]
+    ApiError { message: String },
+    #[error("Failed to deserialize response: {0}")]
+    DeserializationError(#[from] serde_json::Error),
+    #[error("An unknown error occurred")]
+    UnknownError,
+}
 
 #[derive(Debug, Serialize)]
 pub struct QuoteRequest {
@@ -24,7 +36,7 @@ pub struct QuoteRequest {
     pub slippage: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[allow(dead_code)]
 pub struct QuoteResponse {
     #[serde(rename = "inputMint")]
@@ -45,16 +57,47 @@ pub struct QuoteResponse {
     pub price_impact_pct: f64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwapRequest {
+    pub quote_response: QuoteResponse,
+    pub user_public_key: String,
+    pub wrap_and_unwrap_sol: Option<bool>,
+    pub fee_account: Option<String>,
+    pub token_ledger: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute_unit_price_micro_lamports: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prioritization_fee_lamports: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwapResponse {
+    pub swap_transaction: String, // base64 encoded transaction
+    pub last_valid_block_height: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prioritization_fee_lamports: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute_unit_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_error: Option<String>,
+}
+
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait JupiterServiceTrait: Send + Sync {
-    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse>;
+    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse, JupiterServiceError>;
     async fn get_sol_to_token_quote(
         &self,
         input_mint: &str,
         amount: u64,
         slippage: f32,
-    ) -> Result<QuoteResponse>;
+    ) -> Result<QuoteResponse, JupiterServiceError>;
+    async fn get_swap_transaction(
+        &self,
+        request: SwapRequest,
+    ) -> Result<SwapResponse, JupiterServiceError>;
 }
 
 pub enum JupiterService {
@@ -85,7 +128,7 @@ impl Default for MainnetJupiterService {
 #[async_trait]
 impl JupiterServiceTrait for MainnetJupiterService {
     /// Get a quote for a given input and output mint
-    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse> {
+    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse, JupiterServiceError> {
         let slippage_bps: u32 = request.slippage as u32 * 100;
         let url = format!("{}/quote", self.base_url);
 
@@ -112,7 +155,7 @@ impl JupiterServiceTrait for MainnetJupiterService {
         output_mint: &str,
         amount: u64,
         slippage: f32,
-    ) -> Result<QuoteResponse> {
+    ) -> Result<QuoteResponse, JupiterServiceError> {
         let request = QuoteRequest {
             input_mint: WRAPPED_SOL_MINT.to_string(),
             output_mint: output_mint.to_string(),
@@ -121,6 +164,29 @@ impl JupiterServiceTrait for MainnetJupiterService {
         };
 
         self.get_quote(request).await
+    }
+
+    async fn get_swap_transaction(
+        &self,
+        request: SwapRequest,
+    ) -> Result<SwapResponse, JupiterServiceError> {
+        let url = format!("{}/swap", self.base_url);
+        let response = self.client.post(&url).json(&request).send().await?;
+
+        if response.status().is_success() {
+            response
+                .json::<SwapResponse>()
+                .await
+                .map_err(JupiterServiceError::from)
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(JupiterServiceError::ApiError {
+                message: error_text,
+            })
+        }
     }
 }
 
@@ -143,7 +209,7 @@ impl Default for MockJupiterService {
 
 #[async_trait]
 impl JupiterServiceTrait for MockJupiterService {
-    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse> {
+    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse, JupiterServiceError> {
         let quote = QuoteResponse {
             input_mint: request.input_mint.clone(),
             output_mint: request.output_mint.clone(),
@@ -161,7 +227,7 @@ impl JupiterServiceTrait for MockJupiterService {
         output_mint: &str,
         amount: u64,
         slippage: f32,
-    ) -> Result<QuoteResponse> {
+    ) -> Result<QuoteResponse, JupiterServiceError> {
         let request = QuoteRequest {
             input_mint: WRAPPED_SOL_MINT.to_string(),
             output_mint: output_mint.to_string(),
@@ -170,6 +236,20 @@ impl JupiterServiceTrait for MockJupiterService {
         };
 
         self.get_quote(request).await
+    }
+
+    async fn get_swap_transaction(
+        &self,
+        _request: SwapRequest,
+    ) -> Result<SwapResponse, JupiterServiceError> {
+        // Provide realistic-looking mock data
+        Ok(SwapResponse {
+            swap_transaction: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...".to_string(),
+            last_valid_block_height: 279632475,
+            prioritization_fee_lamports: Some(9999),
+            compute_unit_limit: Some(388876),
+            simulation_error: None,
+        })
     }
 }
 
@@ -180,7 +260,7 @@ impl JupiterServiceTrait for JupiterService {
         output_mint: &str,
         amount: u64,
         slippage: f32,
-    ) -> Result<QuoteResponse> {
+    ) -> Result<QuoteResponse, JupiterServiceError> {
         match self {
             JupiterService::Mock(service) => {
                 service
@@ -195,10 +275,20 @@ impl JupiterServiceTrait for JupiterService {
         }
     }
 
-    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse> {
+    async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse, JupiterServiceError> {
         match self {
             JupiterService::Mock(service) => service.get_quote(request).await,
             JupiterService::Mainnet(service) => service.get_quote(request).await,
+        }
+    }
+
+    async fn get_swap_transaction(
+        &self,
+        request: SwapRequest,
+    ) -> Result<SwapResponse, JupiterServiceError> {
+        match self {
+            JupiterService::Mock(service) => service.get_swap_transaction(request).await,
+            JupiterService::Mainnet(service) => service.get_swap_transaction(request).await,
         }
     }
 }

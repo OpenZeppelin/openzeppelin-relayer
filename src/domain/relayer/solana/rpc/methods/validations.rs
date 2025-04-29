@@ -617,6 +617,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 max_allowed_fee: Some(100),
                 conversion_slippage_percentage: None,
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         };
@@ -1232,6 +1235,9 @@ mod tests {
             symbol: Some("USDT".to_string()),
             max_allowed_fee: None,
             conversion_slippage_percentage: None,
+            swap_max_amount: None,
+            swap_min_amount: None,
+            swap_retain_min_amount: None,
         }]);
 
         let result = SolanaTransactionValidator::validate_token_transfers(

@@ -86,6 +86,9 @@ mod tests {
                     decimals: Some(9),
                     max_allowed_fee: Some(1000),
                     conversion_slippage_percentage: None,
+                    swap_max_amount: None,
+                    swap_min_amount: None,
+                    swap_retain_min_amount: None,
                 },
                 SolanaAllowedTokensPolicy {
                     mint: "mint2".to_string(),
@@ -93,6 +96,9 @@ mod tests {
                     decimals: Some(6),
                     max_allowed_fee: None,
                     conversion_slippage_percentage: None,
+                    swap_max_amount: None,
+                    swap_min_amount: None,
+                    swap_retain_min_amount: None,
                 },
             ]),
             ..Default::default()

@@ -321,6 +321,9 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                                     token.mint.clone(),
                                     token.max_allowed_fee,
                                     token.conversion_slippage_percentage,
+                                    token.swap_min_amount,
+                                    token.swap_max_amount,
+                                    token.swap_retain_min_amount,
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -347,6 +350,8 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
                     max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
+                    swap_cron_schedule: solana.swap_cron_schedule.clone(),
+                    swap_min_balance_threshold: solana.swap_min_balance_threshold,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {

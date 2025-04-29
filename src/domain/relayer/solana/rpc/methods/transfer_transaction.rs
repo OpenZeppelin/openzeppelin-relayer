@@ -285,6 +285,9 @@ mod tests {
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
                 conversion_slippage_percentage: Some(1.0),
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -378,6 +381,9 @@ mod tests {
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
                 conversion_slippage_percentage: Some(1.0),
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -471,6 +477,9 @@ mod tests {
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
                 conversion_slippage_percentage: Some(1.0),
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -579,6 +588,9 @@ mod tests {
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
                 conversion_slippage_percentage: Some(1.0),
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -713,6 +725,9 @@ mod tests {
                     decimals: Some(6),
                     max_allowed_fee: Some(1000),
                     conversion_slippage_percentage: Some(1.0),
+                    swap_max_amount: None,
+                    swap_min_amount: None,
+                    swap_retain_min_amount: None,
                 }]),
                 min_balance: 10000,
                 allowed_programs: None,
@@ -720,6 +735,8 @@ mod tests {
                 disallowed_accounts: None,
                 max_allowed_fee_lamports: None,
                 max_tx_data_size: 1000,
+                swap_min_balance_threshold: None,
+                swap_cron_schedule: None,
             }),
             signer_id: "test".to_string(),
             address: Keypair::new().pubkey().to_string(),

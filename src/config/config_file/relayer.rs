@@ -7,9 +7,11 @@
 //! - Network endpoints
 use super::{ConfigFileError, ConfigFileNetworkType};
 use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
+use apalis_cron::Schedule;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::str::FromStr;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -34,8 +36,14 @@ pub struct AllowedToken {
     pub mint: String,
     /// Maximum supported token fee (in lamports) for a transaction. Optional.
     pub max_allowed_fee: Option<u64>,
-    // Conversion slippage percentage for token. Optional.
+    /// Conversion slippage percentage for token. Optional.
     pub conversion_slippage_percentage: Option<f32>,
+    /// Minimum amount of tokens to swap. Optional.
+    pub swap_min_amount: Option<u64>,
+    /// Maximum amount of tokens to swap. Optional.
+    pub swap_max_amount: Option<u64>,
+    /// Minimum amount of tokens to retain after swap. Optional.
+    pub swap_retain_min_amount: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -80,6 +88,12 @@ pub struct ConfigFileRelayerSolanaPolicy {
 
     /// Maximum allowed fee (in lamports) for a transaction. Optional.
     pub max_allowed_fee_lamports: Option<u64>,
+
+    /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
+    pub swap_cron_schedule: Option<String>,
+
+    /// Min sol balance to execute token swap logic to keep relayer funded. Optional.
+    pub swap_min_balance_threshold: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -274,6 +288,21 @@ impl RelayerFileConfig {
         Ok(())
     }
 
+    fn validate_solana_swan_cron_schedule(
+        &self,
+        swap_cron_schedule: Option<String>,
+    ) -> Result<(), ConfigFileError> {
+        if let Some(schedule) = swap_cron_schedule {
+            let parsed_schedule = Schedule::from_str(&schedule);
+            if parsed_schedule.is_err() {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "Invalid cron schedule format".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_policies(&self) -> Result<(), ConfigFileError> {
         match self.network_type {
             ConfigFileNetworkType::Solana => {
@@ -289,6 +318,7 @@ impl RelayerFileConfig {
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
                     self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
+                    self.validate_solana_swan_cron_schedule(policy.swap_cron_schedule.clone())?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(

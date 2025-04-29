@@ -80,6 +80,12 @@ pub struct SolanaAllowedTokensPolicy {
     pub max_allowed_fee: Option<u64>,
     #[schema(nullable = false)]
     pub conversion_slippage_percentage: Option<f32>,
+    #[schema(nullable = false)]
+    pub swap_min_amount: Option<u64>,
+    #[schema(nullable = false)]
+    pub swap_max_amount: Option<u64>,
+    #[schema(nullable = false)]
+    pub swap_retain_min_amount: Option<u64>,
 }
 
 impl SolanaAllowedTokensPolicy {
@@ -89,6 +95,9 @@ impl SolanaAllowedTokensPolicy {
         symbol: Option<String>,
         max_allowed_fee: Option<u64>,
         conversion_slippage_percentage: Option<f32>,
+        swap_min_amount: Option<u64>,
+        swap_max_amount: Option<u64>,
+        swap_retain_min_amount: Option<u64>,
     ) -> Self {
         Self {
             mint,
@@ -96,6 +105,9 @@ impl SolanaAllowedTokensPolicy {
             symbol,
             max_allowed_fee,
             conversion_slippage_percentage,
+            swap_min_amount,
+            swap_max_amount,
+            swap_retain_min_amount,
         }
     }
 
@@ -106,6 +118,9 @@ impl SolanaAllowedTokensPolicy {
         mint: String,
         max_allowed_fee: Option<u64>,
         conversion_slippage_percentage: Option<f32>,
+        swap_min_amount: Option<u64>,
+        swap_max_amount: Option<u64>,
+        swap_retain_min_amount: Option<u64>,
     ) -> Self {
         Self {
             mint,
@@ -113,6 +128,9 @@ impl SolanaAllowedTokensPolicy {
             symbol: None,
             max_allowed_fee,
             conversion_slippage_percentage,
+            swap_min_amount,
+            swap_max_amount,
+            swap_retain_min_amount,
         }
     }
 }
@@ -137,6 +155,8 @@ pub struct RelayerSolanaPolicy {
     pub max_signatures: Option<u8>,
     pub max_tx_data_size: u16,
     pub max_allowed_fee_lamports: Option<u64>,
+    pub swap_cron_schedule: Option<String>,
+    pub swap_min_balance_threshold: Option<u64>,
 }
 
 impl RelayerSolanaPolicy {
@@ -209,6 +229,8 @@ impl Default for RelayerSolanaPolicy {
             max_signatures: None,
             max_tx_data_size: MAX_SOLANA_TX_DATA_SIZE,
             max_allowed_fee_lamports: None,
+            swap_cron_schedule: None,
+            swap_min_balance_threshold: None,
         }
     }
 }

@@ -258,6 +258,9 @@ mod tests {
                 decimals: Some(9),
                 max_allowed_fee: None,
                 conversion_slippage_percentage: None,
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -503,6 +506,9 @@ mod tests {
                 decimals: Some(9),
                 max_allowed_fee: None,
                 conversion_slippage_percentage: None,
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -563,6 +569,9 @@ mod tests {
                 decimals: Some(9),
                 max_allowed_fee: None,
                 conversion_slippage_percentage: None,
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -647,6 +656,9 @@ mod tests {
                 decimals: Some(9),
                 max_allowed_fee: None,
                 conversion_slippage_percentage: None,
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });
@@ -737,6 +749,9 @@ mod tests {
                 decimals: Some(9),
                 max_allowed_fee: None,
                 conversion_slippage_percentage: None,
+                swap_max_amount: None,
+                swap_min_amount: None,
+                swap_retain_min_amount: None,
             }]),
             ..Default::default()
         });

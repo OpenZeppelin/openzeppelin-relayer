@@ -66,6 +66,12 @@ pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub max_allowed_fee_lamports: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_cron_schedule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub swap_min_balance_threshold: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -98,6 +104,8 @@ impl From<RelayerRepoModel> for RelayerResponse {
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size,
                     max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
+                    swap_cron_schedule: solana.swap_cron_schedule,
+                    swap_min_balance_threshold: solana.swap_min_balance_threshold,
                 })
             }
             RelayerNetworkPolicy::Stellar(stellar) => {
@@ -194,6 +202,9 @@ mod tests {
                     symbol: Some("SOL".to_string()),
                     max_allowed_fee: Some(1000),
                     conversion_slippage_percentage: Some(100.0),
+                    swap_max_amount: None,
+                    swap_min_amount: None,
+                    swap_retain_min_amount: None,
                 }]),
                 allowed_programs: Some(vec!["program1".to_string()]),
                 allowed_accounts: Some(vec!["account1".to_string()]),
@@ -201,6 +212,8 @@ mod tests {
                 max_signatures: Some(10),
                 max_tx_data_size: 1024,
                 max_allowed_fee_lamports: Some(10000),
+                swap_cron_schedule: None,
+                swap_min_balance_threshold: None,
             }),
             address: "solana-address".to_string(),
             system_disabled: false,

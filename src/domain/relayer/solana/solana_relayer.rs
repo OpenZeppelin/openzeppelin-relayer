@@ -14,7 +14,7 @@ use crate::{
     domain::{
         relayer::RelayerError, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SolanaRelayerTrait,
     },
-    jobs::{JobProducer, JobProducerTrait},
+    jobs::{JobProducer, JobProducerTrait, SolanaTokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
@@ -121,6 +121,9 @@ impl SolanaRelayer {
                 Some(token_metadata.symbol.to_string()),
                 token.max_allowed_fee,
                 token.conversion_slippage_percentage,
+                token.swap_min_amount,
+                token.swap_max_amount,
+                token.swap_retain_min_amount,
             ))
         });
 
@@ -178,6 +181,48 @@ impl SolanaRelayer {
 
         Ok(())
     }
+
+    /// Checks the relayer's balance and triggers a token swap if the balance is below the
+    /// specified threshold.
+    async fn check_balance_and_trigger_token_swap_if_needed(&self) -> Result<(), RelayerError> {
+        let policy = self.relayer.policies.get_solana_policy();
+        let swap_min_balance_threshold = match policy.swap_min_balance_threshold {
+            Some(threshold) => threshold,
+            None => {
+                info!("No swap min balance threshold specified; skipping validation.");
+                return Ok(());
+            }
+        };
+
+        let balance = self
+            .provider
+            .get_balance(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        if balance < swap_min_balance_threshold {
+            info!(
+                "Sending job request for for relayer  {} swapping tokens due to relayer swap_min_balance_threshold: Balance: {}, swap_min_balance_threshold: {}",
+                self.relayer.id, balance, swap_min_balance_threshold
+            );
+
+            self.job_producer
+                .produce_solana_token_swap_request_job(
+                    SolanaTokenSwapRequest {
+                        relayer_id: self.relayer.id.clone(),
+                    },
+                    None,
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_token_swap_request(&self, relayer_id: String) -> Result<(), RelayerError> {
+        info!("Handling token swap request for relayer: {}", relayer_id);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -231,14 +276,20 @@ impl SolanaRelayerTrait for SolanaRelayer {
                             msg
                         ),
                     ),
-                    SolanaRpcError::InsufficientFunds(msg) => JsonRpcResponse::error(
-                        -32002,
-                        "INSUFFICIENT_FUNDS",
-                        &format!(
-                            "The sender does not have enough funds for the transfer: {}",
-                            msg
-                        ),
-                    ),
+                    SolanaRpcError::InsufficientFunds(msg) => {
+                        // Trigger a token swap request if the relayer has insufficient funds
+                        self.check_balance_and_trigger_token_swap_if_needed()
+                            .await?;
+
+                        JsonRpcResponse::error(
+                            -32002,
+                            "INSUFFICIENT_FUNDS",
+                            &format!(
+                                "The sender does not have enough funds for the transfer: {}",
+                                msg
+                            ),
+                        )
+                    }
                     SolanaRpcError::TransactionPreparation(msg) => JsonRpcResponse::error(
                         -32003,
                         "TRANSACTION_PREPARATION_ERROR",
@@ -351,6 +402,7 @@ impl SolanaRelayerTrait for SolanaRelayer {
         })?;
 
         let validate_rpc_result = self.validate_rpc().await;
+
         let validate_min_balance_result = self.validate_min_balance().await;
 
         // disable relayer if any check fails
@@ -386,6 +438,10 @@ impl SolanaRelayerTrait for SolanaRelayer {
                     .await?;
             }
         }
+
+        self.check_balance_and_trigger_token_swap_if_needed()
+            .await?;
+
         Ok(())
     }
 }
