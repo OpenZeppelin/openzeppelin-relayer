@@ -1019,7 +1019,6 @@ When using custom RPC URLs:
 * The weight must be an integer between 0 and 100 (inclusive).
 * A weight of 0 disables the endpoint.
 * If a weight is not specified for an endpoint, it defaults to 100.
-
 ====
 
 == Important Considerations
