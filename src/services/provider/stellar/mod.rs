@@ -165,6 +165,9 @@ impl StellarProviderTrait for StellarProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::provider::stellar::{
+        GetEventsRequest, StellarProvider, StellarProviderTrait,
+    };
     use eyre::eyre;
     use futures::FutureExt;
     use mockall::predicate as p;
@@ -174,8 +177,9 @@ mod tests {
         GetTransactionsResponse, SimulateTransactionResponse,
     };
     use soroban_rs::xdr::{
-        AccountEntryExt, OperationResult, String32, Thresholds, TransactionResult,
-        TransactionResultExt, TransactionResultResult, VecM,
+        AccountEntryExt, Hash, LedgerKey, OperationResult, String32, Thresholds,
+        TransactionEnvelope, TransactionResult, TransactionResultExt, TransactionResultResult,
+        VecM,
     };
     use soroban_rs::{create_mock_set_options_tx_envelope, SorobanTransactionResponse};
     use std::str::FromStr;
@@ -489,5 +493,143 @@ mod tests {
     fn test_provider_send_sync_bounds() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<StellarProvider>();
+    }
+
+    #[cfg(test)]
+    mod concrete_tests {
+        use super::*;
+
+        const NON_EXISTENT_URL: &str = "http://127.0.0.1:9999";
+
+        fn setup_provider() -> StellarProvider {
+            StellarProvider::new(NON_EXISTENT_URL)
+                .expect("Provider creation should succeed even with bad URL")
+        }
+
+        #[tokio::test]
+        async fn test_concrete_get_account_error() {
+            let provider = setup_provider();
+            let result = provider.get_account("SOME_ACCOUNT_ID").await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get account"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_simulate_transaction_envelope_error() {
+            let provider = setup_provider();
+            let envelope: TransactionEnvelope = dummy_transaction_envelope();
+            let result = provider.simulate_transaction_envelope(&envelope).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to simulate transaction"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_send_transaction_polling_error() {
+            let provider = setup_provider();
+            let envelope: TransactionEnvelope = dummy_transaction_envelope();
+            let result = provider.send_transaction_polling(&envelope).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to send transaction (polling)"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_get_network_error() {
+            let provider = setup_provider();
+            let result = provider.get_network().await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get network"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_get_latest_ledger_error() {
+            let provider = setup_provider();
+            let result = provider.get_latest_ledger().await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get latest ledger"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_send_transaction_error() {
+            let provider = setup_provider();
+            let envelope: TransactionEnvelope = dummy_transaction_envelope();
+            let result = provider.send_transaction(&envelope).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to send transaction"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_get_transaction_error() {
+            let provider = setup_provider();
+            let hash: Hash = dummy_hash();
+            let result = provider.get_transaction(&hash).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get transaction"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_get_transactions_error() {
+            let provider = setup_provider();
+            let req = GetTransactionsRequest {
+                start_ledger: None,
+                pagination: None,
+            };
+            let result = provider.get_transactions(req).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get transactions"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_get_ledger_entries_error() {
+            let provider = setup_provider();
+            let key: LedgerKey = dummy_ledger_key();
+            let result = provider.get_ledger_entries(&[key]).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get ledger entries"));
+        }
+
+        #[tokio::test]
+        async fn test_concrete_get_events_error() {
+            let provider = setup_provider();
+            let req = GetEventsRequest {
+                start: EventStart::Ledger(1),
+                event_type: None,
+                contract_ids: vec![],
+                topics: vec![],
+                limit: None,
+            };
+            let result = provider.get_events(req).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get events"));
+        }
     }
 }
