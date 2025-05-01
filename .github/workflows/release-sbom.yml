@@ -56,7 +56,7 @@ jobs:
           }}-spdx.json
 
       - name: SBOM attestation
-        uses: actions/attest-build-provenance@d3b713ade6128010830a9be91a036ed11e065550  # main
+        uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd  # main
         with:
           subject-path: ./openzeppelin-relayer-${{ inputs.tag }}-spdx.json
           github-token: ${{ steps.gh-app-token.outputs.token }}
