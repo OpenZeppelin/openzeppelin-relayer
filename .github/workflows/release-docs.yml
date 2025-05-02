@@ -56,6 +56,8 @@ jobs:
           DOCS_BRANCH="docs-v${MAJOR}.${MINOR}"
           echo "DOCS_BRANCH=${DOCS_BRANCH}" >> $GITHUB_OUTPUT
           echo "RELEASE_BRANCH=${RELEASE_BRANCH}" >> $GITHUB_OUTPUT
+          echo "MAJOR=${MAJOR}" >> $GITHUB_OUTPUT
+          echo "MINOR=${MINOR}" >> $GITHUB_OUTPUT
           if [ "$PATCH" -ne 0 ]; then
             # If it's a patch version, create a PR to merge release branch into docs branch
             echo "Creating PR to merge ${RELEASE_BRANCH} into ${DOCS_BRANCH}"
@@ -65,6 +67,12 @@ jobs:
             echo "Creating new docs branch ${DOCS_BRANCH}"
           fi
           echo "PR_TITLE=${PR_TITLE:-}" >> $GITHUB_OUTPUT
+
+      - name: Update the technical docs link in the structure.adoc file
+        run: |
+          MAJOR_MINOR="${{ steps.validate_tag.outputs.MAJOR }}-${{ steps.validate_tag.outputs.MINOR }}"
+          echo "Major and minor version extracted: $MAJOR_MINOR"
+          sed -i '' -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1docs-v${MAJOR_MINOR}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/pages/structure.adoc
 
       - name: Create Pull Request for Docs
         if: ${{ steps.validate_tag.outputs.PR_TITLE != '' }}
@@ -86,3 +94,14 @@ jobs:
           git push origin "${DOCS_BRANCH}"
         env:
           DOCS_BRANCH: ${{ steps.validate_tag.outputs.DOCS_BRANCH }}
+
+      - name: Create Pull Request to update the technical docs version
+        if: ${{ steps.validate_tag.outputs.PR_TITLE == '' }}
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
+        with:
+          token: ${{ steps.gh-app-token.outputs.token }}
+          title: "chore: update technical docs version in the quickstart.adoc file"
+          body: Automatically generated PR to update technical docs version in the quickstart.adoc file.
+          base: ${{ steps.validate_tag.outputs.DOCS_BRANCH }}
+          sign-commits: true
+          commit-message: "chore: update technical docs version in the quickstart.adoc file"
