@@ -54,7 +54,7 @@ Project documentation:
 * API documentation
 * Configuration examples
 * Architecture diagrams
-* link:https://deploy-preview-180%2D%2Dopenzeppelin-relayer.netlify.app/openzeppelin_relayer/[Technical Rust Documentation^]
+* link:https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/[Technical Rust Documentation^]
 
 
 == Configuration
