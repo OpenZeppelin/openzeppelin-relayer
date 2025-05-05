@@ -2,6 +2,8 @@
 
 [![codecov](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer/graph/badge.svg?token=HKHIQNSJ6H)](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer)
 
+[![Netlify Status](https://api.netlify.com/api/v1/badges/089ed86a-f30b-456e-9979-578d15e5dafc/deploy-status)](https://app.netlify.com/sites/openzeppelin-relayer/deploys)
+
 > :warning: This software is in alpha. Use in production environments at your own risk.
 
 This relayer service
