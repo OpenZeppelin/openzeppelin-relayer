@@ -156,7 +156,7 @@ pub enum SolanaSwapStrategy {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerSolanaSwapConfig {
-    pub strategy: SolanaSwapStrategy,
+    pub strategy: Option<SolanaSwapStrategy>,
     pub cron_schedule: Option<String>,
     pub min_balance_threshold: Option<u64>,
 }

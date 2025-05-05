@@ -69,7 +69,7 @@ pub enum ConfigFileRelayerSolanaSwapStrategy {
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaSwapPolicy {
     /// DEX strategy to use for token swaps.
-    pub strategy: ConfigFileRelayerSolanaSwapStrategy,
+    pub strategy: Option<ConfigFileRelayerSolanaSwapStrategy>,
 
     /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
     pub cron_schedule: Option<String>,

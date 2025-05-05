@@ -313,7 +313,10 @@ impl TryFrom<ConfigFileRelayerSolanaSwapPolicy> for RelayerSolanaSwapConfig {
         Ok(RelayerSolanaSwapConfig {
             cron_schedule: config.cron_schedule,
             min_balance_threshold: config.min_balance_threshold,
-            strategy: SolanaSwapStrategy::try_from(config.strategy)?,
+            strategy: config
+                .strategy
+                .map(SolanaSwapStrategy::try_from)
+                .transpose()?,
         })
     }
 }
