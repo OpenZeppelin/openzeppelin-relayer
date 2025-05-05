@@ -92,20 +92,3 @@ jobs:
             git checkout -b $branch $commit_sha
             git push -f origin $branch
           fi
-
-      - name: Update the technical docs link in the nav.adoc file
-        run: |
-          major_minor_version=$(echo "${{ steps.get_version.outputs.version }}" | cut -d'.' -f1,2)
-          echo "Major and minor version extracted: $major_minor_version"
-          sed -i '' -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
-
-      - name: Create Pull Request to update the technical docs version
-        if: ${{ steps.update_branch.outputs.branch != '' }}
-        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
-        with:
-          token: ${{ steps.gh-app-token.outputs.token }}
-          title: "chore: update technical docs version in the quickstart.adoc file"
-          body: Automatically generated PR to update technical docs version in the quickstart.adoc file.
-          base: ${{ steps.update_branch.outputs.branch }}
-          sign-commits: true
-          commit-message: "chore: update technical docs version in the quickstart.adoc file"

@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - 'release-v*'
-      - 'rust-docs'
 
 jobs:
   update-docs-link:
@@ -47,13 +46,10 @@ jobs:
 
           if [[ "$branch" == release-v* ]]; then
             echo "Updating the release branch"
-            sed -i -E "s|(https://)[^/]*--openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
-          elif [[ "$branch" == rust-* ]]; then
-            echo "Updating the test branch"
-            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1qest-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
+            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
           elif [[ "$branch" == docs-v* ]]; then
             echo "Updating the docs branch"
-            sed -i -E "s|(https://)[^/]*--openzeppelin-relayer\.netlify\.app|\1docs-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
+            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1docs-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
           else
             echo "No matching release or docs related branch. Skipping update..."
           fi
@@ -63,8 +59,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          title: "docs: update technical docs version in the quickstart.adoc file"
-          body: Automatically generated PR to update technical docs version in the quickstart.adoc file.
+          title: "docs: update technical docs version in the nav.adoc file"
+          body: Automatically generated PR to update technical docs version in the nav.adoc file.
           base: ${{ steps.get_branch.outputs.branch }}
           sign-commits: true
-          commit-message: "docs: update technical docs version in the quickstart.adoc file"
+          commit-message: "docs: update technical docs version in the nav.adoc file"
