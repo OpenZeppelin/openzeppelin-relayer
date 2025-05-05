@@ -50,7 +50,7 @@ jobs:
             sed -i -E "s|(https://)[^/]*--openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
           elif [[ "$branch" == rust-* ]]; then
             echo "Updating the test branch"
-            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1qest-v${short_version}--openzeppelin-relayer.netlify.app|g" modules/ROOT/pages/structure.adoc
+            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1qest-v${short_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
           elif [[ "$branch" == docs-v* ]]; then
             echo "Updating the docs branch"
             sed -i -E "s|(https://)[^/]*--openzeppelin-relayer\.netlify\.app|\1docs-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
