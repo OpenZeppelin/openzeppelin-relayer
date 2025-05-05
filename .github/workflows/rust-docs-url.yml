@@ -47,13 +47,13 @@ jobs:
 
           if [[ "$branch" == release-v* ]]; then
             echo "Updating the release branch"
-            sed -i '' -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
+            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
           elif [[ "$branch" == rust-* ]]; then
-            echo "Updating the release branch"
-            sed -i '' -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
+            echo "Updating the tesy branch"
+            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\test-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
           elif [[ "$branch" == docs-v* ]]; then
             echo "Updating the docs branch"
-            sed -i '' -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1docs-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
+            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1docs-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
           else
             echo "No matching release or docs related branch. Skipping update..."
           fi
