@@ -232,7 +232,10 @@ mod tests {
 
     use crate::{
         constants::WRAPPED_SOL_MINT,
-        models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
+        models::{
+            RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig,
+        },
         services::QuoteResponse,
     };
 
@@ -257,10 +260,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -505,10 +507,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -568,10 +569,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -655,10 +655,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -748,10 +747,9 @@ mod tests {
                 symbol: Some("ALLOWED".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });

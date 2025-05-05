@@ -120,10 +120,7 @@ impl SolanaRelayer {
                 Some(token_metadata.decimals),
                 Some(token_metadata.symbol.to_string()),
                 token.max_allowed_fee,
-                token.conversion_slippage_percentage,
-                token.swap_min_amount,
-                token.swap_max_amount,
-                token.swap_retain_min_amount,
+                token.swap_config.clone(),
             ))
         });
 
@@ -186,7 +183,14 @@ impl SolanaRelayer {
     /// specified threshold.
     async fn check_balance_and_trigger_token_swap_if_needed(&self) -> Result<(), RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
-        let swap_min_balance_threshold = match policy.swap_min_balance_threshold {
+        let swap_config = match policy.get_swap_config() {
+            Some(config) => config,
+            None => {
+                info!("No swap configuration specified; skipping validation.");
+                return Ok(());
+            }
+        };
+        let swap_min_balance_threshold = match swap_config.min_balance_threshold {
             Some(threshold) => threshold,
             None => {
                 info!("No swap min balance threshold specified; skipping validation.");

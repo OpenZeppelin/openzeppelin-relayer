@@ -303,7 +303,9 @@ where
 
         // Get slippage from policy
         let slippage = token_entry
-            .conversion_slippage_percentage
+            .swap_config
+            .as_ref()
+            .and_then(|config| config.slippage_percentage)
             .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE);
 
         // Get Jupiter quote
@@ -891,7 +893,10 @@ mod tests {
 
     use crate::{
         constants::WRAPPED_SOL_MINT,
-        models::{RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy},
+        models::{
+            RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig,
+        },
         services::QuoteResponse,
     };
 
@@ -952,10 +957,10 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -990,10 +995,10 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000_000),
-                conversion_slippage_percentage: Some(1.0),
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -1537,10 +1542,9 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(9),
                 max_allowed_fee: None,
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             fee_margin_percentage: None,
             ..Default::default()
@@ -1598,10 +1602,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000_000),
-                conversion_slippage_percentage: Some(1.0),
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -1900,10 +1903,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -2117,10 +2119,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -2301,10 +2302,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -2450,10 +2450,9 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });

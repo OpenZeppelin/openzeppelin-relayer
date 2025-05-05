@@ -7,8 +7,14 @@
 //! The `RelayerRepository` trait is designed to be implemented by any storage backend,
 //! allowing for flexibility in how relayers are stored and managed. The in-memory
 //! implementation is useful for testing and development purposes.
-use crate::config::ConfigFileRelayerSolanaFeePaymentStrategy;
-use crate::models::{PaginationQuery, SolanaFeePaymentStrategy};
+use crate::config::{
+    ConfigFileRelayerSolanaFeePaymentStrategy, ConfigFileRelayerSolanaPolicy,
+    ConfigFileRelayerSolanaSwapPolicy, ConfigFileRelayerSolanaSwapStrategy,
+};
+use crate::models::{
+    PaginationQuery, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,
+    SolanaFeePaymentStrategy, SolanaSwapStrategy,
+};
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
     constants::{
@@ -290,6 +296,28 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
     }
 }
 
+impl TryFrom<ConfigFileRelayerSolanaSwapStrategy> for SolanaSwapStrategy {
+    type Error = eyre::Error;
+
+    fn try_from(config: ConfigFileRelayerSolanaSwapStrategy) -> Result<Self, Self::Error> {
+        match config {
+            ConfigFileRelayerSolanaSwapStrategy::JupiterSwap => Ok(SolanaSwapStrategy::JupiterSwap),
+        }
+    }
+}
+
+impl TryFrom<ConfigFileRelayerSolanaSwapPolicy> for RelayerSolanaSwapConfig {
+    type Error = eyre::Error;
+
+    fn try_from(config: ConfigFileRelayerSolanaSwapPolicy) -> Result<Self, Self::Error> {
+        Ok(RelayerSolanaSwapConfig {
+            cron_schedule: config.cron_schedule,
+            min_balance_threshold: config.min_balance_threshold,
+            strategy: SolanaSwapStrategy::try_from(config.strategy)?,
+        })
+    }
+}
+
 impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
     type Error = eyre::Error;
 
@@ -317,13 +345,19 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                         tokens
                             .iter()
                             .map(|token| {
+                                let swap_config = token.swap_config.as_ref().map(|sc| {
+                                    SolanaAllowedTokensSwapConfig {
+                                        slippage_percentage: sc.slippage_percentage,
+                                        min_amount: sc.min_amount,
+                                        max_amount: sc.max_amount,
+                                        retain_min_amount: sc.retain_min_amount,
+                                    }
+                                });
+
                                 SolanaAllowedTokensPolicy::new_partial(
                                     token.mint.clone(),
                                     token.max_allowed_fee,
-                                    token.conversion_slippage_percentage,
-                                    token.swap_min_amount,
-                                    token.swap_max_amount,
-                                    token.swap_retain_min_amount,
+                                    swap_config,
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -339,6 +373,10 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                         }
                     },
                 );
+                let swap_config = solana.swap_config.as_ref()
+                .map(|sc| RelayerSolanaSwapConfig::try_from(sc.clone())) // Clone only needed for try_from
+                .transpose()?;
+
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                     fee_payment_strategy,
                     fee_margin_percentage: solana.fee_margin_percentage,
@@ -350,8 +388,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     max_signatures: solana.max_signatures,
                     max_tx_data_size: solana.max_tx_data_size.unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
                     max_allowed_fee_lamports: solana.max_allowed_fee_lamports,
-                    swap_cron_schedule: solana.swap_cron_schedule.clone(),
-                    swap_min_balance_threshold: solana.swap_min_balance_threshold,
+                    swap_config,
                 }))
             }
             ConfigFileRelayerNetworkPolicy::Stellar(stellar) => {
@@ -379,7 +416,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
 ///
 /// ```rust,no_run
 /// use std::sync::Arc;
-/// use crate::repositories::{InMemoryRelayerRepository, RelayerRepositoryStorage};
+/// use crate::repositories::{InAllowedTokenSwapConfigMemoryRelayerRepository, RelayerRepositoryStorage};
 ///
 /// let repository = InMemoryRelayerRepository::new();
 /// let storage = Arc::new(RelayerRepositoryStorage::in_memory(repository));

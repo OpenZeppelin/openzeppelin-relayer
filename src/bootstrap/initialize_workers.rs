@@ -155,9 +155,16 @@ pub async fn initialize_solana_swap_workers(
         .await?
         .into_iter()
         .filter(|relayer| {
-            let rel = relayer.policies.get_solana_policy();
+            let policy = relayer.policies.get_solana_policy();
+            let swap_config = match policy.get_swap_config() {
+                Some(config) => config,
+                None => {
+                    info!("No swap configuration specified; skipping validation.");
+                    return false;
+                }
+            };
 
-            if rel.swap_cron_schedule.is_none() || rel.swap_cron_schedule.is_none() {
+            if swap_config.cron_schedule.is_none() {
                 return false;
             }
             return true;
@@ -178,9 +185,16 @@ pub async fn initialize_solana_swap_workers(
     for relayer in solena_relayers_with_swap_enabled {
         info!("Found solana relayer with swap enabled: {:?}", relayer);
 
-        let schedule = relayer.policies.get_solana_policy().swap_cron_schedule;
+        let policy = relayer.policies.get_solana_policy();
+        let swap_config = match policy.get_swap_config() {
+            Some(config) => config,
+            None => {
+                info!("No swap configuration specified; skipping validation.");
+                continue;
+            }
+        };
 
-        let calendar_schedule = match schedule {
+        let calendar_schedule = match swap_config.cron_schedule {
             Some(schedule) => apalis_cron::Schedule::from_str(&schedule).unwrap(),
             None => {
                 info!("No swap cron schedule found for relayer: {:?}", relayer);

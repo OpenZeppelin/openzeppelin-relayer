@@ -32,25 +32,50 @@ pub struct ConfigFileRelayerEvmPolicy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AllowedTokenSwapConfig {
+    /// Conversion slippage percentage for token. Optional.
+    pub slippage_percentage: Option<f32>,
+    /// Minimum amount of tokens to swap. Optional.
+    pub min_amount: Option<u64>,
+    /// Maximum amount of tokens to swap. Optional.
+    pub max_amount: Option<u64>,
+    /// Minimum amount of tokens to retain after swap. Optional.
+    pub retain_min_amount: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AllowedToken {
     pub mint: String,
     /// Maximum supported token fee (in lamports) for a transaction. Optional.
     pub max_allowed_fee: Option<u64>,
-    /// Conversion slippage percentage for token. Optional.
-    pub conversion_slippage_percentage: Option<f32>,
-    /// Minimum amount of tokens to swap. Optional.
-    pub swap_min_amount: Option<u64>,
-    /// Maximum amount of tokens to swap. Optional.
-    pub swap_max_amount: Option<u64>,
-    /// Minimum amount of tokens to retain after swap. Optional.
-    pub swap_retain_min_amount: Option<u64>,
+    /// Swap configuration for the token. Optional.
+    pub swap_config: Option<AllowedTokenSwapConfig>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConfigFileRelayerSolanaFeePaymentStrategy {
     User,
     Relayer,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigFileRelayerSolanaSwapStrategy {
+    JupiterSwap,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFileRelayerSolanaSwapPolicy {
+    /// DEX strategy to use for token swaps.
+    pub strategy: ConfigFileRelayerSolanaSwapStrategy,
+
+    /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
+    pub cron_schedule: Option<String>,
+
+    /// Min sol balance to execute token swap logic to keep relayer funded. Optional.
+    pub min_balance_threshold: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -89,11 +114,8 @@ pub struct ConfigFileRelayerSolanaPolicy {
     /// Maximum allowed fee (in lamports) for a transaction. Optional.
     pub max_allowed_fee_lamports: Option<u64>,
 
-    /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
-    pub swap_cron_schedule: Option<String>,
-
-    /// Min sol balance to execute token swap logic to keep relayer funded. Optional.
-    pub swap_min_balance_threshold: Option<u64>,
+    /// Swap dex config to use for token swaps. Optional.
+    pub swap_config: Option<ConfigFileRelayerSolanaSwapPolicy>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -290,16 +312,19 @@ impl RelayerFileConfig {
 
     fn validate_solana_swan_cron_schedule(
         &self,
-        swap_cron_schedule: Option<String>,
+        swap_config: &Option<ConfigFileRelayerSolanaSwapPolicy>,
     ) -> Result<(), ConfigFileError> {
-        if let Some(schedule) = swap_cron_schedule {
-            let parsed_schedule = Schedule::from_str(&schedule);
-            if parsed_schedule.is_err() {
-                return Err(ConfigFileError::InvalidPolicy(
-                    "Invalid cron schedule format".into(),
-                ));
-            }
+        let swap_config = match swap_config {
+            Some(config) => config,
+            None => return Ok(()),
+        };
+
+        if let Some(schedule) = &swap_config.cron_schedule {
+            Schedule::from_str(schedule).map_err(|_| {
+                ConfigFileError::InvalidPolicy("Invalid cron schedule format".into())
+            })?;
         }
+
         Ok(())
     }
 
@@ -318,7 +343,7 @@ impl RelayerFileConfig {
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
                     self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
-                    self.validate_solana_swan_cron_schedule(policy.swap_cron_schedule.clone())?;
+                    self.validate_solana_swan_cron_schedule(&policy.swap_config)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(

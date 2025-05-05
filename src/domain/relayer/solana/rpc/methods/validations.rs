@@ -554,7 +554,7 @@ impl SolanaTransactionValidator {
 #[cfg(test)]
 mod tests {
     use crate::{
-        models::SolanaAllowedTokensPolicy,
+        models::{SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig},
         services::{MockSolanaProviderTrait, SolanaProviderError},
     };
 
@@ -616,10 +616,9 @@ mod tests {
                 decimals: Some(9),
                 symbol: Some("USDC".to_string()),
                 max_allowed_fee: Some(100),
-                conversion_slippage_percentage: None,
-                swap_max_amount: None,
-                swap_min_amount: None,
-                swap_retain_min_amount: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         };
@@ -1234,10 +1233,9 @@ mod tests {
             decimals: Some(9),
             symbol: Some("USDT".to_string()),
             max_allowed_fee: None,
-            conversion_slippage_percentage: None,
-            swap_max_amount: None,
-            swap_min_amount: None,
-            swap_retain_min_amount: None,
+            swap_config: Some(SolanaAllowedTokensSwapConfig {
+                ..Default::default()
+            }),
         }]);
 
         let result = SolanaTransactionValidator::validate_token_transfers(
