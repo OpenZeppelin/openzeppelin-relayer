@@ -20,8 +20,14 @@ use solana_client::{
     rpc_response::{RpcPrioritizationFee, RpcSimulateTransactionResult},
 };
 use solana_sdk::{
-    account::Account, commitment_config::CommitmentConfig, hash::Hash, message::Message,
-    program_pack::Pack, pubkey::Pubkey, signature::Signature, transaction::Transaction,
+    account::Account,
+    commitment_config::CommitmentConfig,
+    hash::Hash,
+    message::Message,
+    program_pack::Pack,
+    pubkey::Pubkey,
+    signature::Signature,
+    transaction::{Transaction, VersionedTransaction},
 };
 use spl_token::state::Mint;
 use std::{str::FromStr, time::Duration};
@@ -58,6 +64,12 @@ pub trait SolanaProviderTrait: Send + Sync {
     async fn send_transaction(
         &self,
         transaction: &Transaction,
+    ) -> Result<Signature, SolanaProviderError>;
+
+    /// Sends a transaction to the Solana network.
+    async fn send_versioned_transaction(
+        &self,
+        transaction: &VersionedTransaction,
     ) -> Result<Signature, SolanaProviderError>;
 
     /// Confirms a transaction given its signature.
@@ -208,6 +220,17 @@ impl SolanaProviderTrait for SolanaProvider {
     async fn send_transaction(
         &self,
         transaction: &Transaction,
+    ) -> Result<Signature, SolanaProviderError> {
+        self.client
+            .send_transaction(transaction)
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+    }
+
+    /// Sends a transaction to the network.
+    async fn send_versioned_transaction(
+        &self,
+        transaction: &VersionedTransaction,
     ) -> Result<Signature, SolanaProviderError> {
         self.client
             .send_transaction(transaction)

@@ -11,7 +11,7 @@ use crate::services::{
 };
 use async_trait::async_trait;
 use log::info;
-use solana_sdk::transaction::Transaction;
+use solana_sdk::transaction::VersionedTransaction;
 
 pub struct JupiterSwapDex {
     provider: Arc<SolanaProvider>,
@@ -83,27 +83,26 @@ impl DexStrategy for JupiterSwapDex {
 
         // 3. Sign the transaction using the signer service
         info!("Signing swap transaction");
-        let mut swap_tx =
-            Transaction::try_from(EncodedSerializedTransaction::new(swap_tx.swap_transaction))
-                .map_err(|e| {
-                    RelayerError::DexError(format!("Failed to decode swap transaction: {}", e))
-                })?;
+        let mut swap_tx = VersionedTransaction::try_from(EncodedSerializedTransaction::new(
+            swap_tx.swap_transaction,
+        ))
+        .map_err(|e| RelayerError::DexError(format!("Failed to decode swap transaction: {}", e)))?;
         let signature = self
             .signer
-            .sign(&swap_tx.message_data())
+            .sign(&swap_tx.message.serialize())
             .await
             .map_err(|e| {
                 RelayerError::ProviderError(format!("Failed to sign transaction: {}", e))
                 // TODO improve error handling
             })?;
 
-        swap_tx.signatures.push(signature);
+        swap_tx.signatures[0] = signature;
 
         // 4. Send the transaction and get the signature
         info!("Sending swap transaction to the network");
         let signature = self
             .provider
-            .send_transaction(&swap_tx)
+            .send_versioned_transaction(&swap_tx)
             .await
             .map_err(|e| {
                 RelayerError::ProviderError(format!("Failed to send transaction: {}", e))
