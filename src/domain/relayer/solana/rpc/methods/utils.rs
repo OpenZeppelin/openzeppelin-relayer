@@ -890,7 +890,7 @@ mod tests {
             RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
             SolanaAllowedTokensSwapConfig,
         },
-        services::QuoteResponse,
+        services::{QuoteResponse, RoutePlan},
     };
 
     use super::*;
@@ -1007,6 +1007,12 @@ mod tests {
                         out_amount: 2_000_000, // 1 SOL = 2 USDC
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -1618,6 +1624,12 @@ mod tests {
                         out_amount: 2_000_000, // 1 SOL = 2 USDC
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -2325,6 +2337,12 @@ mod tests {
                         out_amount: amount * 2, // 1 SOL = 2 USDC
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });

@@ -155,10 +155,11 @@ mod tests {
     use crate::{
         constants::WRAPPED_SOL_MINT,
         models::{RelayerNetworkPolicy, RelayerSolanaPolicy},
-        services::QuoteResponse,
+        services::{QuoteResponse, RoutePlan},
     };
 
     use super::*;
+    use actix_web::Route;
     use mockall::predicate::{self};
     use solana_sdk::{
         message::Message,
@@ -319,6 +320,12 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -520,6 +527,12 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });

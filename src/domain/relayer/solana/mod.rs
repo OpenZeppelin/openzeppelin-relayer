@@ -15,16 +15,12 @@ mod token;
 pub use token::*;
 
 use crate::{
-    api::routes::relayer::sign,
     jobs::JobProducer,
-    models::{RelayerError, RelayerRepoModel, SignerRepoModel, SolanaSwapStrategy},
+    models::{RelayerError, RelayerRepoModel, SignerRepoModel},
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
-    services::{
-        get_solana_network_provider, JupiterService, SolanaProvider, SolanaSigner,
-        SolanaSignerFactory,
-    },
+    services::{get_solana_network_provider, JupiterService, SolanaSignerFactory},
 };
 
 pub fn create_solana_relayer(

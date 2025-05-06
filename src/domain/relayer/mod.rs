@@ -24,10 +24,7 @@ use crate::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
-    services::{
-        get_solana_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
-        TransactionCounterService,
-    },
+    services::{EvmSignerFactory, TransactionCounterService},
 };
 
 use crate::services::EvmProvider;

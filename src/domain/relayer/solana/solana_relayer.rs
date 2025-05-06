@@ -236,20 +236,6 @@ impl SolanaRelayer {
         Ok(())
     }
 
-    async fn should_execute_token_swap(&self, token_policy: &SolanaAllowedTokensPolicy) -> bool {
-        // Check if swap config exists
-        match token_policy.swap_config.as_ref() {
-            Some(_) => return true,
-            None => {
-                info!(
-                    "No swap configuration specified for token: {}",
-                    token_policy.mint
-                );
-                return false;
-            }
-        };
-    }
-
     // Helper function to calculate swap amount
     fn calculate_swap_amount(
         &self,
@@ -372,8 +358,6 @@ impl SolanaRelayer {
             let token = candidate.policy;
             let swap_amount = candidate.swap_amount;
             let dex = &self.dex_service;
-            let provider = &self.provider;
-            let signer = &self.signer;
             let relayer_address = self.relayer.address.clone();
             let token_mint = token.mint.clone();
             let relayer_id_clone = relayer_id.clone();

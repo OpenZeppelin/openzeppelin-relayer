@@ -36,7 +36,35 @@ pub struct QuoteRequest {
     pub slippage: f32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(dead_code)]
+pub struct SwapInfo {
+    #[serde(rename = "ammKey")]
+    pub amm_key: String,
+    pub label: String,
+    #[serde(rename = "inputMint")]
+    pub input_mint: String,
+    #[serde(rename = "outputAmount")]
+    pub output_amount: String,
+    #[serde(rename = "inAmount")]
+    pub in_amount: String,
+    #[serde(rename = "outAmount")]
+    pub out_amount: String,
+    #[serde(rename = "feeAmount")]
+    pub fee_amount: String,
+    #[serde(rename = "feeMint")]
+    pub fee_mint: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(dead_code)]
+pub struct RoutePlan {
+    pub percent: u32,
+    #[serde(rename = "swapInfo")]
+    pub swap_info: Vec<SwapInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[allow(dead_code)]
 pub struct QuoteResponse {
     #[serde(rename = "inputMint")]
@@ -55,6 +83,12 @@ pub struct QuoteResponse {
     #[serde(rename = "priceImpactPct")]
     #[serde(with = "field_as_string")]
     pub price_impact_pct: f64,
+    #[serde(rename = "swapMode")]
+    pub swap_mode: String,
+    #[serde(rename = "slippageBps")]
+    pub slippage_bps: u32,
+    #[serde(rename = "routePlan")]
+    pub route_plan: Vec<RoutePlan>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,7 +98,6 @@ pub struct SwapRequest {
     pub user_public_key: String,
     pub wrap_and_unwrap_sol: Option<bool>,
     pub fee_account: Option<String>,
-    pub token_ledger: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_unit_price_micro_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,6 +250,21 @@ impl JupiterServiceTrait for MockJupiterService {
             out_amount: request.amount,
             other_amount_threshold: 0,
             price_impact_pct: 0.0,
+            swap_mode: "ExactIn".to_string(),
+            slippage_bps: 0,
+            route_plan: vec![RoutePlan {
+                percent: 100,
+                swap_info: vec![SwapInfo {
+                    amm_key: "mock_amm_key".to_string(),
+                    label: "mock_label".to_string(),
+                    input_mint: request.input_mint.clone(),
+                    output_amount: request.amount.to_string(),
+                    in_amount: request.amount.to_string(),
+                    out_amount: request.amount.to_string(),
+                    fee_amount: "0".to_string(),
+                    fee_mint: "mock_fee_mint".to_string(),
+                }],
+            }],
         };
         Ok(quote)
     }

@@ -161,7 +161,10 @@ async fn validate_sign_and_send_transaction<P: SolanaProviderTrait + Send + Sync
 
 #[cfg(test)]
 mod tests {
-    use crate::{constants::WRAPPED_SOL_MINT, services::QuoteResponse};
+    use crate::{
+        constants::WRAPPED_SOL_MINT,
+        services::{QuoteResponse, RoutePlan},
+    };
 
     use super::*;
     use mockall::predicate::{self};
@@ -319,6 +322,12 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -456,6 +465,12 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -608,6 +623,12 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });

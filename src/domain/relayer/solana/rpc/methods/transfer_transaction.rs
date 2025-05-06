@@ -243,7 +243,7 @@ mod tests {
             NetworkType, RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
             SolanaAllowedTokensSwapConfig,
         },
-        services::QuoteResponse,
+        services::{QuoteResponse, RoutePlan},
     };
 
     use super::*;
@@ -532,6 +532,12 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -675,6 +681,12 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });

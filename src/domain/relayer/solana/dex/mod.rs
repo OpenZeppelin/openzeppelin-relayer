@@ -66,8 +66,5 @@ pub fn create_network_dex(
         SolanaSwapStrategy::JupiterSwap => Ok(NetworkDex::JupiterSwap {
             dex: jupiter_swap::JupiterSwapDex::new(provider, signer_service, jupiter_service),
         }),
-        _ => Err(RelayerError::InvalidDexName(
-            "Unsupported DEX strategy".to_string(),
-        )),
     }
 }

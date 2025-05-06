@@ -8,8 +8,8 @@
 //! allowing for flexibility in how relayers are stored and managed. The in-memory
 //! implementation is useful for testing and development purposes.
 use crate::config::{
-    ConfigFileRelayerSolanaFeePaymentStrategy, ConfigFileRelayerSolanaPolicy,
-    ConfigFileRelayerSolanaSwapPolicy, ConfigFileRelayerSolanaSwapStrategy,
+    ConfigFileRelayerSolanaFeePaymentStrategy, ConfigFileRelayerSolanaSwapPolicy,
+    ConfigFileRelayerSolanaSwapStrategy,
 };
 use crate::models::{
     PaginationQuery, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,

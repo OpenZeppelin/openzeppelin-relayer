@@ -216,7 +216,7 @@ mod tests {
             RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
             SolanaAllowedTokensSwapConfig,
         },
-        services::{MockSolanaProviderTrait, QuoteResponse, SolanaProviderError},
+        services::{MockSolanaProviderTrait, QuoteResponse, RoutePlan, SolanaProviderError},
     };
 
     use super::*;
@@ -271,6 +271,12 @@ mod tests {
                         out_amount: 80000000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -416,6 +422,12 @@ mod tests {
                         out_amount: 80000000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        swap_mode: "ExactIn".to_string(),
+                        slippage_bps: 0,
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -493,6 +505,12 @@ mod tests {
                         out_amount: 20_000,   // 0.02 USDT
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -565,6 +583,12 @@ mod tests {
                         out_amount: 1_770_000, // 0.0177 UNI
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: vec![],
+                            percent: 1,
+                        }],
                     })
                 })
             });
