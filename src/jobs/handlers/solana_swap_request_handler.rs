@@ -5,18 +5,19 @@
 
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
+use chrono::{DateTime, Utc};
 use eyre::Result;
 use log::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
-    domain::{create_solana_relayer, get_network_relayer, get_relayer_by_id},
+    domain::{create_solana_relayer, get_relayer_by_id},
     jobs::{handle_result, Job, JobProducer, SolanaTokenSwapRequest},
     models::AppState,
     repositories::Repository,
 };
 
-/// Handles incoming notification jobs from the queue.
+/// Handles incoming swap jobs from the queue.
 ///
 /// # Arguments
 /// * `job` - The notification job containing recipient and message details
@@ -32,6 +33,39 @@ pub async fn solana_token_swap_request_handler(
     info!("handling solana token swap request: {:?}", job.data);
 
     let result = handle_request(job.data, context).await;
+
+    handle_result(
+        result,
+        attempt,
+        "SolanaTokenSwapRequest",
+        WORKER_DEFAULT_MAXIMUM_RETRIES,
+    )
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct CronReminder(DateTime<Utc>);
+impl From<DateTime<Utc>> for CronReminder {
+    fn from(t: DateTime<Utc>) -> Self {
+        CronReminder(t)
+    }
+}
+
+/// Handles incoming swap jobs from the cron queue.
+pub async fn solana_token_swap_cron_handler(
+    job: CronReminder,
+    relayer_id: Data<String>,
+    data: Data<ThinData<AppState<JobProducer>>>,
+    attempt: Attempt,
+) -> Result<(), Error> {
+    info!("handling solana token swap cron request: {:?}", job);
+
+    let result = handle_request(
+        SolanaTokenSwapRequest {
+            relayer_id: relayer_id.to_string(),
+        },
+        data,
+    )
+    .await;
 
     handle_result(
         result,

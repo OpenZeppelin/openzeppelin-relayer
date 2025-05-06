@@ -4,7 +4,6 @@
 use actix_web::web::ThinData;
 use apalis::{layers::ErrorHandlingLayer, prelude::*};
 use apalis_cron::CronStream;
-use chrono::{DateTime, Utc};
 use eyre::Result;
 use log::{error, info};
 use std::{str::FromStr, time::Duration};
@@ -12,9 +11,9 @@ use tokio::signal::unix::SignalKind;
 
 use crate::{
     jobs::{
-        notification_handler, solana_token_swap_request_handler, transaction_request_handler,
-        transaction_status_handler, transaction_submission_handler, BackoffRetryPolicy,
-        JobProducer,
+        notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
+        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
+        BackoffRetryPolicy, JobProducer,
     },
     models::AppState,
     repositories::RelayerRepository,
@@ -30,28 +29,6 @@ const TRANSACTION_SENDER: &str = "transaction_sender";
 const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
 const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
-
-#[derive(Default, Debug, Clone)]
-struct Reminder(DateTime<Utc>);
-impl From<DateTime<Utc>> for Reminder {
-    fn from(t: DateTime<Utc>) -> Self {
-        Reminder(t)
-    }
-}
-
-async fn handle_tick(
-    job: Reminder,
-    relayer_id: Data<String>,
-    data: Data<ThinData<AppState<JobProducer>>>,
-) {
-    info!("Handling tick: {:?}", job.0);
-
-    println!("Handling tick: {:?}", relayer_id);
-    // Perform the job logic here
-    // For example, you can send a notification or perform a transaction
-
-    // Do something with the current tick
-}
 
 pub async fn initialize_workers(app_state: ThinData<AppState<JobProducer>>) -> Result<()> {
     let queue = app_state.job_producer.get_queue().await?;
@@ -213,7 +190,7 @@ pub async fn initialize_solana_swap_workers(
             .data(relayer.id.clone())
             .data(app_state.clone())
             .backend(CronStream::new(calendar_schedule))
-            .build_fn(handle_tick);
+            .build_fn(solana_token_swap_cron_handler);
 
         workers.push(worker);
         info!(

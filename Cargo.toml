@@ -46,7 +46,7 @@ redis = { version = "0.30" }
 rand = "0.9"
 parking_lot = "0.12"
 tower = "0.5"
-oz-keystore = { version = "0.1.2"}
+oz-keystore = { version = "0.1.4"}
 hex = { version = "0.4"}
 bytes = { version = "1.9" }
 reqwest = { version = "0.12", features = ["json"] }

@@ -4689,9 +4689,9 @@ checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
 
 [[package]]
 name = "oz-keystore"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bb691c7845692a1c33f6e57a7fbfe53f2156d032744f17919a4c4e1d102dd63"
+checksum = "827d7f806953487d6b49ba11138209ad5290c0e9fbe464cc49760c4ef234cad7"
 dependencies = [
  "base64 0.22.1",
  "bs58",
