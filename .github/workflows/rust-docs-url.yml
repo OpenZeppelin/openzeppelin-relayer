@@ -1,67 +1,60 @@
+---
 name: Update Technical Docs Link
-
 on:
+  workflow_dispatch: {}
   push:
     branches:
-      - 'release-v*'
-      - 'docs-v*'
-
+      - docs-v*
+  workflow_call:
+    inputs:
+      branch:
+        type: string
+        description: The branch to update the technical docs link.
+        required: true
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  packages: write
+  id-token: write
 jobs:
   update-docs-link:
     runs-on: ubuntu-latest
-
     steps:
-
       - uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5  # v2.0.2
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           token: ${{ steps.gh-app-token.outputs.token }}
-
-      - name: Get version from Cargo.toml
-        id: get_version
-        run: |
-          version=$(grep -A 5 "\[package\]" Cargo.toml | grep "^version" | cut -d'"' -f2)
-          if [ -z "$version" ]; then
-            echo "Version not found in Cargo.toml" >&2
-            exit 1
-          fi
-          echo "version=$version" >> $GITHUB_OUTPUT
-
-      - name: Get the branch name
+      - name: Use branch input
         id: get_branch
         run: |
-          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
-
-      - name: Update the technical docs link in the nav.adoc file
+          echo "branch=${{ inputs.branch }}" >> $GITHUB_OUTPUT
+      - name: Update the technical docs link in nav.adoc
         run: |
-          major_minor_version=$(echo "${{ steps.get_version.outputs.version }}" | cut -d'.' -f1,2)
-          branch="${{ steps.get_branch.outputs.branch }}"
-          echo "Major and minor version: $major_minor_version"
-          echo "Branch: $branch"
-
-          if [[ "$branch" == release-v* ]]; then
-            echo "Updating the release branch"
-            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1release-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
-          elif [[ "$branch" == docs-v* ]]; then
-            echo "Updating the docs branch"
-            sed -i -E "s|(https://)[^/]*openzeppelin-relayer\.netlify\.app|\1docs-v${major_minor_version}--openzeppelin-relayer.netlify.app|g" docs/modules/ROOT/nav.adoc
-          else
-            echo "No matching release or docs related branch. Skipping update..."
+          branch="${{ inputs.branch }}"
+          # Netlify uses `-` instead of `.` in branch names for constructing the URL
+          slug="${branch//./-}"
+          target="https://${slug}%2D%2Dopenzeppelin-relayer.netlify.app"
+          file="docs/modules/ROOT/nav.adoc"
+          if grep -q "${target}" "${file}"; then
+            echo "nav.adoc is already using ${target}"
+            exit 0
           fi
-
+          echo "Updating to branch URL: ${target}"
+          sed -i "s|(https://)[^/]*openzeppelin-relayer.netlify.app|${target}|g" "${file}"
+          echo "Updated nav.adoc to use ${target}"
       - name: Create Pull Request to update the technical docs version
         if: ${{ steps.get_branch.outputs.branch != '' }}
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "docs: update technical docs version in the nav.adoc file"
+          token: ${{ steps.gh-app-token.outputs.token }}
+          title: 'docs: Update technical docs version in the nav.adoc file'
           body: Automatically generated PR to update technical docs version in the nav.adoc file.
-          base: ${{ steps.get_branch.outputs.branch }}
+          branch-suffix: short-commit-hash
           sign-commits: true
-          commit-message: "docs: update technical docs version in the nav.adoc file"
+          commit-message: 'docs: update technical docs version in the nav.adoc file'

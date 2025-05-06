@@ -1,6 +1,9 @@
 # OpenZeppelin Relayer
 
-[![codecov](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer/graph/badge.svg?token=HKHIQNSJ6H)](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer)  [![Netlify Status](https://api.netlify.com/api/v1/badges/089ed86a-f30b-456e-9979-578d15e5dafc/deploy-status)](https://app.netlify.com/sites/openzeppelin-relayer/deploys)
+[![codecov](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer/graph/badge.svg?token=HKHIQNSJ6H)](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer)
+[![CLA Assistant](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/cla.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/cla.yml)
+[![CI](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml)
+[![Release Workflow](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml)
 
 > :warning: This software is in alpha. Use in production environments at your own risk.
 
