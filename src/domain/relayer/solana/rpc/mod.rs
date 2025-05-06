@@ -14,6 +14,8 @@ use crate::{
     services::SolanaProviderError,
 };
 
+use super::TokenError;
+
 #[derive(Debug, Error)]
 #[allow(dead_code)]
 pub enum SolanaRpcError {

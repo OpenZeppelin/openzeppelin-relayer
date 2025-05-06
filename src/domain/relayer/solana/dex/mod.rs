@@ -1,6 +1,7 @@
 //! DEX integration module for Solana token swaps
 
 use crate::domain::relayer::RelayerError;
+use crate::models::SolanaSwapStrategy;
 use crate::services::{SolanaProvider, SolanaSigner};
 use async_trait::async_trait;
 
@@ -32,21 +33,37 @@ pub trait DexStrategy: Send + Sync {
         signer: &SolanaSigner,
         params: SwapParams,
     ) -> Result<SwapResult, RelayerError>;
-
-    /// Get the name of the DEX implementation
-    fn name(&self) -> &str;
 }
 
 // Re-export the specific implementations
-pub mod jupiter;
+pub mod jupiter_swap;
 
-/// Create a DEX strategy based on the given name
-pub fn create_dex_strategy(name: &str) -> Result<Box<dyn DexStrategy>, RelayerError> {
-    match name.to_lowercase().as_str() {
-        "jupiter" => Ok(Box::new(jupiter::JupiterDex::new())),
-        _ => Err(RelayerError::PolicyConfigurationError(format!(
-            "Unsupported DEX: {}",
-            name
-        ))),
+pub enum NetworkDex {
+    JupiterSwap(jupiter_swap::JupiterSwapDex),
+}
+
+#[async_trait]
+impl DexStrategy for NetworkDex {
+    async fn execute_swap(
+        &self,
+        provider: &SolanaProvider,
+        signer: &SolanaSigner,
+        params: SwapParams,
+    ) -> Result<SwapResult, RelayerError> {
+        match self {
+            NetworkDex::JupiterSwap(dex) => dex.execute_swap(provider, signer, params).await,
+        }
+    }
+}
+
+/// Factory function to create the appropriate DEX strategy
+pub fn create_dex_strategy(strategy: &SolanaSwapStrategy) -> Result<NetworkDex, RelayerError> {
+    match strategy {
+        SolanaSwapStrategy::JupiterSwap => {
+            Ok(NetworkDex::JupiterSwap(jupiter_swap::JupiterSwapDex::new()))
+        }
+        _ => Err(RelayerError::InvalidDexName(
+            "Unsupported DEX strategy".to_string(),
+        )),
     }
 }

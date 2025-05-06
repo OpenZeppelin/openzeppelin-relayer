@@ -10,9 +10,10 @@ use log::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
-    domain::get_network_relayer,
+    domain::{create_solana_relayer, get_network_relayer, get_relayer_by_id},
     jobs::{handle_result, Job, JobProducer, SolanaTokenSwapRequest},
     models::AppState,
+    repositories::Repository,
 };
 
 /// Handles incoming notification jobs from the queue.
@@ -46,7 +47,25 @@ async fn handle_request(
 ) -> Result<()> {
     info!("handling solana token swap request: {:?}", request);
 
-    let relayer = get_network_relayer(request.relayer_id, &context).await?;
+    let relayer_model = get_relayer_by_id(request.relayer_id.clone(), &context).await?;
+    let signer_model = context
+        .signer_repository
+        .get_by_id(relayer_model.signer_id.clone())
+        .await?;
+
+    let relayer = create_solana_relayer(
+        relayer_model,
+        signer_model,
+        context.relayer_repository(),
+        context.transaction_repository(),
+        context.transaction_counter_store(),
+        context.job_producer(),
+    )?;
+
+    relayer
+        .handle_token_swap_request(request.relayer_id.clone())
+        .await
+        .map_err(|e| eyre::eyre!("Failed to handle solana token swap request: {}", e))?;
 
     Ok(())
 }

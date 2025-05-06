@@ -23,9 +23,8 @@
 //!
 //! The implementation leverages the Jupiter API for token price quotes and the Solana
 //! SDK for transaction manipulation.
+use super::*;
 use std::str::FromStr;
-
-use super::{token::SolanaTokenProgram, *};
 
 use log::debug;
 use solana_sdk::{
@@ -47,6 +46,7 @@ use crate::{
     constants::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, NATIVE_SOL, SOLANA_DECIMALS, WRAPPED_SOL_MINT,
     },
+    domain::{SolanaTokenProgram, TokenInstruction},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
@@ -439,16 +439,9 @@ where
             SolanaTokenProgram::get_associated_token_address(&program_id, destination, token_mint);
 
         // Verify source account and balance
-        let source_account = self
-            .provider
-            .get_account_from_pubkey(&source_ata)
-            .await
-            .map_err(|e| {
-                SolanaRpcError::TokenAccount(format!("Invalid source token account: {}", e))
-            })?;
-
         let unpacked_source_account =
-            SolanaTokenProgram::unpack_account(&program_id, &source_account)?;
+            SolanaTokenProgram::get_and_unpack_token_account(&*self.provider, source, token_mint)
+                .await?;
 
         if unpacked_source_account.amount < amount {
             return Err(SolanaRpcError::InsufficientFunds(format!(

@@ -6,16 +6,16 @@ use crate::services::{SolanaProvider, SolanaSigner};
 use async_trait::async_trait;
 use log::info;
 
-pub struct JupiterDex {}
+pub struct JupiterSwapDex {}
 
-impl JupiterDex {
+impl JupiterSwapDex {
     pub fn new() -> Self {
         Self {}
     }
 }
 
 #[async_trait]
-impl DexStrategy for JupiterDex {
+impl DexStrategy for JupiterSwapDex {
     async fn execute_swap(
         &self,
         provider: &SolanaProvider,
@@ -43,9 +43,5 @@ impl DexStrategy for JupiterDex {
             destination_amount: params.amount, // In a real implementation, this would be the actual amount received
             transaction_signature: "simulated_jupiter_swap_signature".to_string(),
         })
-    }
-
-    fn name(&self) -> &str {
-        "Jupiter"
     }
 }

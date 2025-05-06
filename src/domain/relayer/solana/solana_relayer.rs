@@ -7,12 +7,13 @@
 //!
 //! It integrates with other parts of the system including the job queue ([`JobProducer`]),
 //! in-memory repositories, and the application's domain models.
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 use crate::{
-    constants::SOLANA_SMALLEST_UNIT_NAME,
+    constants::{DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME},
     domain::{
-        relayer::RelayerError, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SolanaRelayerTrait,
+        create_dex_strategy, relayer::RelayerError, BalanceResponse, DexStrategy, JsonRpcRequest,
+        JsonRpcResponse, SolanaRelayerTrait, SwapParams,
     },
     jobs::{JobProducer, JobProducerTrait, SolanaTokenSwapRequest},
     models::{
@@ -22,7 +23,7 @@ use crate::{
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepository,
-        RelayerRepositoryStorage,
+        RelayerRepositoryStorage, Repository,
     },
     services::{SolanaProvider, SolanaProviderTrait, SolanaSigner},
 };
@@ -30,9 +31,17 @@ use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
 use log::{error, info, warn};
-use solana_sdk::account::Account;
+use solana_sdk::{account::Account, pubkey::Pubkey};
 
-use super::{SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl};
+use super::{
+    SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl, SolanaTokenProgram, TokenAccount,
+};
+
+struct TokenSwapCandidate<'a> {
+    policy: &'a SolanaAllowedTokensPolicy,
+    account: TokenAccount,
+    swap_amount: u64,
+}
 
 #[allow(dead_code)]
 pub struct SolanaRelayer {
@@ -223,8 +232,203 @@ impl SolanaRelayer {
         Ok(())
     }
 
-    async fn handle_token_swap_request(&self, relayer_id: String) -> Result<(), RelayerError> {
+    async fn should_execute_token_swap(&self, token_policy: &SolanaAllowedTokensPolicy) -> bool {
+        // Check if swap config exists
+        match token_policy.swap_config.as_ref() {
+            Some(_) => return true,
+            None => {
+                info!(
+                    "No swap configuration specified for token: {}",
+                    token_policy.mint
+                );
+                return false;
+            }
+        };
+    }
+
+    // Helper function to calculate swap amount
+    fn calculate_swap_amount(
+        &self,
+        current_balance: u64,
+        min_amount: Option<u64>,
+        max_amount: Option<u64>,
+        retain_min: Option<u64>,
+    ) -> Result<u64, RelayerError> {
+        // Cap the swap amount at the maximum if specified
+        let mut amount = max_amount
+            .map(|max| std::cmp::min(current_balance, max))
+            .unwrap_or(current_balance);
+
+        // Adjust for retain minimum if specified
+        if let Some(retain) = retain_min {
+            if current_balance > retain {
+                amount = std::cmp::min(amount, current_balance - retain);
+            } else {
+                // Not enough to retain the minimum after swap
+                return Ok(0);
+            }
+        }
+
+        // Check if we have enough tokens to meet minimum swap requirement
+        if let Some(min) = min_amount {
+            if amount < min {
+                return Ok(0); // Not enough tokens to swap
+            }
+        }
+
+        Ok(amount)
+    }
+
+    pub async fn handle_token_swap_request(&self, relayer_id: String) -> Result<(), RelayerError> {
         info!("Handling token swap request for relayer: {}", relayer_id);
+        let relayer = self
+            .relayer_repository
+            .get_by_id(relayer_id.clone())
+            .await?;
+
+        let policy = relayer.policies.get_solana_policy();
+        let swap_config = match policy.get_swap_config() {
+            Some(config) => config,
+            None => {
+                info!("No swap configuration specified; skipping validation.");
+                return Ok(());
+            }
+        };
+
+        let swap_strategy = match swap_config.strategy {
+            Some(strategy) => strategy,
+            None => {
+                info!("No swap strategy specified; skipping validation.");
+                return Ok(());
+            }
+        };
+
+        let relayer_pubkey = Pubkey::from_str(&relayer.address)
+            .map_err(|e| RelayerError::ProviderError(format!("Invalid relayer address: {}", e)))?;
+
+        let tokens_to_swap = {
+            let mut eligible_tokens = Vec::<TokenSwapCandidate>::new();
+
+            if let Some(allowed_tokens) = policy.allowed_tokens.as_ref() {
+                for token in allowed_tokens {
+                    let token_mint = Pubkey::from_str(&token.mint).map_err(|e| {
+                        RelayerError::ProviderError(format!("Invalid token mint: {}", e))
+                    })?;
+                    let token_account = SolanaTokenProgram::get_and_unpack_token_account(
+                        &*self.provider,
+                        &relayer_pubkey,
+                        &token_mint,
+                    )
+                    .await
+                    .map_err(|e| {
+                        RelayerError::ProviderError(format!("Failed to get token account: {}", e))
+                    })?;
+
+                    let swap_amount = self
+                        .calculate_swap_amount(
+                            token_account.amount,
+                            token
+                                .swap_config
+                                .as_ref()
+                                .and_then(|config| config.min_amount),
+                            token
+                                .swap_config
+                                .as_ref()
+                                .and_then(|config| config.max_amount),
+                            token
+                                .swap_config
+                                .as_ref()
+                                .and_then(|config| config.retain_min_amount),
+                        )
+                        .unwrap_or(0);
+                    if swap_amount > 0 {
+                        info!(
+                            "Token swap eligible for token: {}. Current balance: {}, min amount: {:?}, max amount: {:?}, retain min: {:?}",
+                            token.mint,
+                            token_account.amount,
+                            token.swap_config.as_ref().and_then(|config| config.min_amount),
+                            token.swap_config.as_ref().and_then(|config| config.max_amount),
+                            token.swap_config.as_ref().and_then(|config| config.retain_min_amount)
+                        );
+                        // Add the token to the list of eligible tokens for swapping
+                        eligible_tokens.push(TokenSwapCandidate {
+                            policy: token,
+                            account: token_account,
+                            swap_amount,
+                        });
+                    }
+                }
+            }
+
+            eligible_tokens
+        };
+
+        let dex = create_dex_strategy(&swap_strategy)?;
+
+        // Execute swap for every eligible token
+        let swap_futures = tokens_to_swap.iter().map(|candidate| {
+            let token = candidate.policy;
+            let swap_amount = candidate.swap_amount;
+            let dex = &dex;
+            let provider = &self.provider;
+            let signer = &self.signer;
+            let relayer_address = self.relayer.address.clone();
+            let token_mint = token.mint.clone();
+            let relayer_id_clone = relayer_id.clone();
+            let slippage_percent = token
+                .swap_config
+                .as_ref()
+                .and_then(|config| config.slippage_percentage)
+                .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE)
+                as f64;
+
+            async move {
+                info!(
+                    "Swapping {} tokens of type {} for relayer: {}",
+                    swap_amount, token_mint, relayer_id_clone
+                );
+
+                let swap_result = dex
+                    .execute_swap(
+                        provider,
+                        signer,
+                        SwapParams {
+                            owner_address: relayer_address,
+                            source_mint: token_mint.clone(),
+                            destination_mint: "So11111111111111111111111111111111111111112"
+                                .to_string(), // SOL mint
+                            amount: swap_amount,
+                            slippage_percent,
+                        },
+                    )
+                    .await?;
+
+                info!(
+                    "Successfully swapped {} tokens of type {} to {} SOL for relayer {}",
+                    swap_amount, token_mint, swap_result.destination_amount, relayer_id_clone
+                );
+
+                Ok::<_, RelayerError>(swap_result)
+            }
+        });
+        // Wait for all swaps to complete
+        let swap_results = try_join_all(swap_futures).await?;
+
+        // Log summary of swaps
+        if !swap_results.is_empty() {
+            let total_sol_received: u64 = swap_results
+                .iter()
+                .map(|result| result.destination_amount)
+                .sum();
+
+            info!(
+                "Completed {} token swaps for relayer {}, total SOL received: {}",
+                swap_results.len(),
+                relayer_id,
+                total_sol_received
+            );
+        }
+
         Ok(())
     }
 }

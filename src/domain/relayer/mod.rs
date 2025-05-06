@@ -291,6 +291,7 @@ pub trait RelayerFactoryTrait {
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
+
 pub struct RelayerFactory;
 
 impl RelayerFactoryTrait for RelayerFactory {
@@ -340,30 +341,15 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let provider = Arc::new(get_solana_network_provider(
-                    &relayer.network,
-                    relayer.custom_rpc_urls.clone(),
-                )?);
-                let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
-                let jupiter_service = JupiterService::new_from_network(relayer.network.as_str());
-                let rpc_methods = SolanaRpcMethodsImpl::new(
-                    relayer.clone(),
-                    provider.clone(),
-                    signer_service.clone(),
-                    Arc::new(jupiter_service),
-                    job_producer.clone(),
-                );
-                let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
-                let relayer = SolanaRelayer::new(
+                let solana_relayer = create_solana_relayer(
                     relayer,
-                    signer_service,
+                    signer,
                     relayer_repository,
-                    provider,
-                    rpc_handler,
                     transaction_repository,
-                    job_producer,
+                    transaction_counter_store,
+                    job_producer.clone(),
                 )?;
-                Ok(NetworkRelayer::Solana(relayer))
+                Ok(NetworkRelayer::Solana(solana_relayer))
             }
             NetworkType::Stellar => {
                 let relayer = StellarRelayer::new(
