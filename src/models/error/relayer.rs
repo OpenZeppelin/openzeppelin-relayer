@@ -5,6 +5,7 @@ use crate::{
 };
 
 use super::{ApiError, RepositoryError};
+use crate::models::NetworkError;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -63,6 +64,12 @@ impl From<RelayerError> for ApiError {
 impl From<RepositoryError> for RelayerError {
     fn from(error: RepositoryError) -> Self {
         RelayerError::NetworkConfiguration(error.to_string())
+    }
+}
+
+impl From<NetworkError> for RelayerError {
+    fn from(err: NetworkError) -> Self {
+        RelayerError::NetworkConfiguration(err.to_string())
     }
 }
 

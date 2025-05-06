@@ -52,6 +52,8 @@ use async_trait::async_trait;
 use eyre::Result;
 use log::{info, warn};
 
+use super::EvmTransactionValidator;
+
 #[allow(dead_code)]
 pub struct EvmRelayer<P, R, T, J, S, C>
 where
@@ -312,25 +314,14 @@ where
     ///
     /// A `Result` indicating success or a `RelayerError` if the balance is insufficient.
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
-        let balance: u128 = self
-            .provider
-            .get_balance(&self.relayer.address)
-            .await
-            .map_err(|e| RelayerError::ProviderError(e.to_string()))?
-            .try_into()
-            .map_err(|_| {
-                RelayerError::ProviderError("Failed to convert balance to u128".to_string())
-            })?;
-
-        info!("Balance : {} for relayer: {}", balance, self.relayer.id);
-
         let policy = self.relayer.policies.get_evm_policy();
-
-        if balance < policy.min_balance {
-            return Err(RelayerError::InsufficientBalanceError(
-                "Insufficient balance".to_string(),
-            ));
-        }
+        EvmTransactionValidator::init_balance_validation(
+            &self.relayer.address,
+            &policy,
+            &self.provider,
+        )
+        .await
+        .map_err(|e| RelayerError::InsufficientBalanceError(e.to_string()))?;
 
         Ok(())
     }

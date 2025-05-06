@@ -3,37 +3,53 @@ use crate::{
         BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
         SignTypedDataRequest,
     },
-    jobs::JobProducer,
+    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel,
-        StellarNetwork, StellarRpcResult, TransactionRepoModel,
+        RepositoryError, StellarNetwork, StellarRpcResult, TransactionRepoModel,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepository,
+        RelayerRepositoryStorage, Repository,
     },
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
 use std::sync::Arc;
 
 use crate::domain::relayer::{Relayer, RelayerError};
 
 #[allow(dead_code)]
-pub struct StellarRelayer {
+pub struct StellarRelayer<R, T, J>
+where
+    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+{
     relayer: RelayerRepoModel,
     network: StellarNetwork,
-    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-    transaction_repository: Arc<InMemoryTransactionRepository>,
-    job_producer: Arc<JobProducer>,
+    relayer_repository: Arc<R>,
+    transaction_repository: Arc<T>,
+    job_producer: Arc<J>,
 }
 
-impl StellarRelayer {
+pub type DefaultStellarRelayer = StellarRelayer<
+    RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    InMemoryTransactionRepository,
+    JobProducer,
+>;
+
+impl<R, T, J> StellarRelayer<R, T, J>
+where
+    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+{
     pub fn new(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-        job_producer: Arc<JobProducer>,
+        relayer_repository: Arc<R>,
+        transaction_repository: Arc<T>,
+        job_producer: Arc<J>,
     ) -> Result<Self, RelayerError> {
         let network = match StellarNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
@@ -51,14 +67,30 @@ impl StellarRelayer {
 }
 
 #[async_trait]
-impl Relayer for StellarRelayer {
+impl<R, T, J> Relayer for StellarRelayer<R, T, J>
+where
+    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+{
     async fn process_transaction_request(
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
         let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
 
-        info!("Stellar Sending transaction...");
+        self.transaction_repository
+            .create(transaction.clone())
+            .await
+            .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
+
+        self.job_producer
+            .produce_transaction_request_job(
+                TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                None,
+            )
+            .await?;
+
         Ok(transaction)
     }
 

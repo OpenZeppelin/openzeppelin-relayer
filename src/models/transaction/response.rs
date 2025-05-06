@@ -1,8 +1,6 @@
 use crate::{
     models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus, U256},
-    utils::{
-        deserialize_optional_u128, deserialize_optional_u64, deserialize_u128, deserialize_u64,
-    },
+    utils::{deserialize_optional_u128, deserialize_optional_u64, deserialize_u64},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -21,6 +19,7 @@ pub struct EvmTransactionResponse {
     #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
+    pub status_reason: Option<String>,
     pub created_at: String,
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
@@ -69,9 +68,8 @@ pub struct StellarTransactionResponse {
     #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
     pub source_account: String,
-    #[serde(deserialize_with = "deserialize_u128")]
-    pub fee: u128,
-    pub sequence_number: u64,
+    pub fee: u32,
+    pub sequence_number: i64,
 }
 
 impl From<TransactionRepoModel> for TransactionResponse {
@@ -82,6 +80,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     id: model.id,
                     hash: evm_data.hash,
                     status: model.status,
+                    status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
@@ -115,8 +114,8 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
                     source_account: stellar_data.source_account,
-                    fee: stellar_data.fee,
-                    sequence_number: stellar_data.sequence_number,
+                    fee: stellar_data.fee.unwrap_or(0),
+                    sequence_number: stellar_data.sequence_number.unwrap_or(0),
                 })
             }
         }
@@ -127,8 +126,8 @@ impl From<TransactionRepoModel> for TransactionResponse {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionData, NetworkType, SolanaTransactionData, StellarTransactionData,
-        TransactionRepoModel,
+        EvmTransactionData, NetworkType, SolanaTransactionData, StellarNamedNetwork,
+        StellarTransactionData, TransactionRepoModel,
     };
     use chrono::Utc;
 
@@ -138,6 +137,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx123".to_string(),
             status: TransactionStatus::Pending,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: Some(now.clone()),
             confirmed_at: None,
@@ -194,6 +194,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx456".to_string(),
             status: TransactionStatus::Confirmed,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: Some(now.clone()),
             confirmed_at: Some(now.clone()),
@@ -235,6 +236,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx789".to_string(),
             status: TransactionStatus::Failed,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: Some(now.clone()),
             confirmed_at: Some(now.clone()),
@@ -244,9 +246,13 @@ mod tests {
             network_data: NetworkTransactionData::Stellar(StellarTransactionData {
                 hash: Some("stellar_hash_123".to_string()),
                 source_account: "source_account_id".to_string(),
-                fee: 100,
-                sequence_number: 12345,
+                fee: Some(100),
+                sequence_number: Some(12345),
                 operations: vec![],
+                network: StellarNamedNetwork::Testnet,
+                memo: None,
+                valid_until: None,
+                envelope_xdr: None,
             }),
             valid_until: None,
             network_type: NetworkType::Stellar,
@@ -278,6 +284,7 @@ mod tests {
         let model = TransactionRepoModel {
             id: "tx456".to_string(),
             status: TransactionStatus::Pending,
+            status_reason: None,
             created_at: now.clone(),
             sent_at: None,
             confirmed_at: None,

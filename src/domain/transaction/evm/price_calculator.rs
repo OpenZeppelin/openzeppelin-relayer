@@ -38,7 +38,7 @@ use crate::{
     constants::DEFAULT_TRANSACTION_SPEED,
     models::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
-        TransactionError, TransactionRepoModel,
+        TransactionError, TransactionRepoModel, U256,
     },
     services::{
         gas::{EvmGasPriceServiceTrait, NetworkExtraFeeCalculatorServiceTrait},
@@ -83,6 +83,24 @@ pub struct PriceParams {
     pub max_priority_fee_per_gas: Option<u128>,
     pub is_min_bumped: Option<bool>,
     pub extra_fee: Option<u128>,
+    pub total_cost: U256,
+}
+
+impl PriceParams {
+    pub fn calculate_total_cost(&self, is_eip1559: bool, gas_limit: u64, value: U256) -> U256 {
+        match is_eip1559 {
+            true => {
+                U256::from(self.max_fee_per_gas.unwrap_or(0)) * U256::from(gas_limit)
+                    + value
+                    + U256::from(self.extra_fee.unwrap_or(0))
+            }
+            false => {
+                U256::from(self.gas_price.unwrap_or(0)) * U256::from(gas_limit)
+                    + value
+                    + U256::from(self.extra_fee.unwrap_or(0))
+            }
+        }
+    }
 }
 
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
@@ -158,6 +176,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: max_priority_fee_per_gas_capped,
             is_min_bumped: None,
             extra_fee: None,
+            total_cost: U256::ZERO,
         };
 
         match &self.network_extra_fee_calculator_service {
@@ -171,6 +190,12 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                 final_params.extra_fee = Some(extra_fee.try_into().unwrap_or(0));
             }
         }
+
+        final_params.total_cost = final_params.calculate_total_cost(
+            tx_data.is_eip1559(),
+            tx_data.gas_limit,
+            U256::from(tx_data.value),
+        );
 
         Ok(final_params)
     }
@@ -235,6 +260,9 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
 
         // Add extra fee if needed
         let mut final_params = bumped_price_params;
+        let value = evm_data.value;
+        let gas_limit = evm_data.gas_limit;
+        let is_eip1559 = evm_data.is_eip1559();
 
         match &self.network_extra_fee_calculator_service {
             NetworkExtraFeeCalculator::None => {}
@@ -247,6 +275,9 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                 final_params.extra_fee = Some(extra_fee.try_into().unwrap_or(0));
             }
         }
+
+        final_params.total_cost =
+            final_params.calculate_total_cost(is_eip1559, gas_limit, U256::from(value));
 
         Ok(final_params)
     }
@@ -328,6 +359,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: Some(capped_max_fee),
             is_min_bumped: Some(is_min_bumped),
             extra_fee: None,
+            total_cost: U256::ZERO,
         })
     }
 
@@ -369,6 +401,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_fee_per_gas: None,
             is_min_bumped: Some(is_min_bumped),
             extra_fee: None,
+            total_cost: U256::ZERO,
         })
     }
     /// Fetches price params based on the type of transaction (legacy, EIP1559, speed-based).
@@ -410,6 +443,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
             extra_fee: None,
+            total_cost: U256::ZERO,
         })
     }
 
@@ -434,6 +468,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: Some(max_priority_fee),
             is_min_bumped: None,
             extra_fee: None,
+            total_cost: U256::ZERO,
         })
     }
     /// Handles gas price calculation for speed-based transactions.
@@ -487,6 +522,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: Some(priority_fee),
             is_min_bumped: None,
             extra_fee: None,
+            total_cost: U256::ZERO,
         })
     }
     /// Calculates legacy gas prices based on the requested speed.
@@ -513,6 +549,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
             extra_fee: None,
+            total_cost: U256::ZERO,
         })
     }
 
@@ -1400,5 +1437,114 @@ mod tests {
             price_params.extra_fee,
             Some(expected_extra_fee.try_into().unwrap_or(0))
         );
+    }
+
+    #[test]
+    fn test_calculate_total_cost_eip1559() {
+        let price_params = PriceParams {
+            gas_price: None,
+            max_fee_per_gas: Some(30_000_000_000),
+            max_priority_fee_per_gas: Some(2_000_000_000),
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::ZERO,
+        };
+
+        let gas_limit = 100_000;
+        let value = U256::from(1_000_000_000_000_000_000u128); // 1 ETH
+        let is_eip1559 = true;
+
+        let total_cost = price_params.calculate_total_cost(is_eip1559, gas_limit, value);
+
+        // Expected: max_fee_per_gas * gas_limit + value
+        let expected = U256::from(30_000_000_000u128) * U256::from(gas_limit) + value;
+        assert_eq!(total_cost, expected);
+    }
+
+    #[test]
+    fn test_calculate_total_cost_legacy() {
+        let price_params = PriceParams {
+            gas_price: Some(20_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::ZERO,
+        };
+
+        let gas_limit = 100_000;
+        let value = U256::from(1_000_000_000_000_000_000u128); // 1 ETH
+        let is_eip1559 = false;
+
+        let total_cost = price_params.calculate_total_cost(is_eip1559, gas_limit, value);
+
+        // Expected: gas_price * gas_limit + value
+        let expected = U256::from(20_000_000_000u128) * U256::from(gas_limit) + value;
+        assert_eq!(total_cost, expected);
+    }
+
+    #[test]
+    fn test_calculate_total_cost_with_extra_fee() {
+        let price_params = PriceParams {
+            gas_price: Some(20_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: Some(5_000_000_000),
+            total_cost: U256::ZERO,
+        };
+
+        let gas_limit = 100_000;
+        let value = U256::from(1_000_000_000_000_000_000u128); // 1 ETH
+        let is_eip1559 = false;
+
+        let total_cost = price_params.calculate_total_cost(is_eip1559, gas_limit, value);
+
+        let expected = U256::from(20_000_000_000u128) * U256::from(gas_limit)
+            + value
+            + U256::from(5_000_000_000u128);
+        assert_eq!(total_cost, expected);
+    }
+
+    #[test]
+    fn test_calculate_total_cost_zero_values() {
+        let price_params = PriceParams {
+            gas_price: Some(0),
+            max_fee_per_gas: Some(0),
+            max_priority_fee_per_gas: Some(0),
+            is_min_bumped: None,
+            extra_fee: Some(0),
+            total_cost: U256::ZERO,
+        };
+
+        let gas_limit = 0;
+        let value = U256::from(0);
+
+        let legacy_total_cost = price_params.calculate_total_cost(false, gas_limit, value);
+        assert_eq!(legacy_total_cost, U256::ZERO);
+
+        let eip1559_total_cost = price_params.calculate_total_cost(true, gas_limit, value);
+        assert_eq!(eip1559_total_cost, U256::ZERO);
+    }
+
+    #[test]
+    fn test_calculate_total_cost_missing_values() {
+        let price_params = PriceParams {
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::ZERO,
+        };
+
+        let gas_limit = 100_000;
+        let value = U256::from(1_000_000_000_000_000_000u128);
+
+        let legacy_total = price_params.calculate_total_cost(false, gas_limit, value);
+        assert_eq!(legacy_total, value);
+
+        let eip1559_total = price_params.calculate_total_cost(true, gas_limit, value);
+        assert_eq!(eip1559_total, value);
     }
 }

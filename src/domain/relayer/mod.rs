@@ -16,9 +16,9 @@ use crate::{
     config::ServerConfig,
     jobs::JobProducer,
     models::{
-        EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
-        TransactionError, TransactionRepoModel,
+        DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+        SignerRepoModel, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -192,7 +192,7 @@ pub trait SolanaRelayerTrait {
 pub enum NetworkRelayer {
     Evm(DefaultEvmRelayer),
     Solana(SolanaRelayer),
-    Stellar(StellarRelayer),
+    Stellar(DefaultStellarRelayer),
 }
 
 #[async_trait]
@@ -366,7 +366,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Solana(relayer))
             }
             NetworkType::Stellar => {
-                let relayer = StellarRelayer::new(
+                let relayer = DefaultStellarRelayer::new(
                     relayer,
                     relayer_repository,
                     transaction_repository,
@@ -410,17 +410,23 @@ pub struct SignTypedDataRequest {
     pub hash_struct_message: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SignTransactionResponseEvm {
     pub hash: String,
     pub signature: EvmTransactionDataSignature,
     pub raw: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SignTransactionResponseStellar {
+    pub signature: DecoratedSignature,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
     Solana(Vec<u8>),
+    Stellar(SignTransactionResponseStellar),
 }
 
 impl SignTransactionResponse {

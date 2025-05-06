@@ -34,6 +34,9 @@ pub enum SignerError {
 
     #[error("Invalid configuration: {0}")]
     Configuration(String),
+
+    #[error("Transaction conversion error: {0}")]
+    ConversionError(String),
 }
 
 #[derive(Error, Debug, Serialize)]

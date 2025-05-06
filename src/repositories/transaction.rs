@@ -308,6 +308,9 @@ impl TransactionRepository for InMemoryTransactionRepository {
             if let Some(status) = update.status {
                 tx.status = status;
             }
+            if let Some(status_reason) = update.status_reason {
+                tx.status_reason = Some(status_reason);
+            }
             if let Some(sent_at) = update.sent_at {
                 tx.sent_at = Some(sent_at);
             }
@@ -384,6 +387,7 @@ mod tests {
             id: id.to_string(),
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Pending,
+            status_reason: None,
             created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
             sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
@@ -417,6 +421,7 @@ mod tests {
             id: id.to_string(),
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Pending,
+            status_reason: None,
             created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
             sent_at: None,
             confirmed_at: None,
@@ -555,6 +560,7 @@ mod tests {
         // Test updating only status
         let update1 = TransactionUpdateRequest {
             status: Some(TransactionStatus::Sent),
+            status_reason: None,
             sent_at: None,
             confirmed_at: None,
             network_data: None,
@@ -573,6 +579,7 @@ mod tests {
         // Test updating multiple fields
         let update2 = TransactionUpdateRequest {
             status: Some(TransactionStatus::Confirmed),
+            status_reason: None,
             sent_at: Some("2023-01-01T12:00:00Z".to_string()),
             confirmed_at: Some("2023-01-01T12:05:00Z".to_string()),
             network_data: None,
@@ -598,6 +605,7 @@ mod tests {
         // Test updating non-existent transaction
         let update3 = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
+            status_reason: None,
             sent_at: None,
             confirmed_at: None,
             network_data: None,
