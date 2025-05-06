@@ -92,7 +92,6 @@ async fn handle_request(
         signer_model,
         context.relayer_repository(),
         context.transaction_repository(),
-        context.transaction_counter_store(),
         context.job_producer(),
     )?;
 

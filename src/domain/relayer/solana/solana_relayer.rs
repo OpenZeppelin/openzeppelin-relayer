@@ -12,8 +12,8 @@ use std::{str::FromStr, sync::Arc};
 use crate::{
     constants::{DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME},
     domain::{
-        create_dex_strategy, relayer::RelayerError, BalanceResponse, DexStrategy, JsonRpcRequest,
-        JsonRpcResponse, SolanaRelayerTrait, SwapParams,
+        relayer::RelayerError, BalanceResponse, DexStrategy, JsonRpcRequest, JsonRpcResponse,
+        SolanaRelayerTrait, SwapParams,
     },
     jobs::{JobProducer, JobProducerTrait, SolanaTokenSwapRequest},
     models::{
@@ -34,7 +34,8 @@ use log::{error, info, warn};
 use solana_sdk::{account::Account, pubkey::Pubkey};
 
 use super::{
-    SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl, SolanaTokenProgram, TokenAccount,
+    NetworkDex, SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl, SolanaTokenProgram,
+    TokenAccount,
 };
 
 struct TokenSwapCandidate<'a> {
@@ -53,6 +54,7 @@ pub struct SolanaRelayer {
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
+    dex_service: Arc<NetworkDex>,
 }
 
 impl SolanaRelayer {
@@ -64,6 +66,7 @@ impl SolanaRelayer {
         rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
+        dex_service: Arc<NetworkDex>,
     ) -> Result<Self, RelayerError> {
         let network = match SolanaNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
@@ -79,6 +82,7 @@ impl SolanaRelayer {
             relayer_repository,
             transaction_repository,
             job_producer,
+            dex_service,
         })
     }
 
@@ -363,13 +367,11 @@ impl SolanaRelayer {
             eligible_tokens
         };
 
-        let dex = create_dex_strategy(&swap_strategy)?;
-
         // Execute swap for every eligible token
         let swap_futures = tokens_to_swap.iter().map(|candidate| {
             let token = candidate.policy;
             let swap_amount = candidate.swap_amount;
-            let dex = &dex;
+            let dex = &self.dex_service;
             let provider = &self.provider;
             let signer = &self.signer;
             let relayer_address = self.relayer.address.clone();
@@ -389,18 +391,13 @@ impl SolanaRelayer {
                 );
 
                 let swap_result = dex
-                    .execute_swap(
-                        provider,
-                        signer,
-                        SwapParams {
-                            owner_address: relayer_address,
-                            source_mint: token_mint.clone(),
-                            destination_mint: "So11111111111111111111111111111111111111112"
-                                .to_string(), // SOL mint
-                            amount: swap_amount,
-                            slippage_percent,
-                        },
-                    )
+                    .execute_swap(SwapParams {
+                        owner_address: relayer_address,
+                        source_mint: token_mint.clone(),
+                        destination_mint: "So11111111111111111111111111111111111111112".to_string(), // SOL mint
+                        amount: swap_amount,
+                        slippage_percent,
+                    })
                     .await?;
 
                 info!(

@@ -1,27 +1,36 @@
 //! Jupiter DEX integration
 
+use std::sync::Arc;
+
 use super::{DexStrategy, SwapParams, SwapResult};
 use crate::domain::relayer::RelayerError;
-use crate::services::{SolanaProvider, SolanaSigner};
+use crate::services::{JupiterService, SolanaProvider, SolanaSigner};
 use async_trait::async_trait;
 use log::info;
 
-pub struct JupiterSwapDex {}
+pub struct JupiterSwapDex {
+    provider: Arc<SolanaProvider>,
+    signer: Arc<SolanaSigner>,
+    jupiter_service: Arc<JupiterService>,
+}
 
 impl JupiterSwapDex {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(
+        provider: Arc<SolanaProvider>,
+        signer: Arc<SolanaSigner>,
+        jupiter_service: Arc<JupiterService>,
+    ) -> Self {
+        Self {
+            provider,
+            signer,
+            jupiter_service,
+        }
     }
 }
 
 #[async_trait]
 impl DexStrategy for JupiterSwapDex {
-    async fn execute_swap(
-        &self,
-        provider: &SolanaProvider,
-        signer: &SolanaSigner,
-        params: SwapParams,
-    ) -> Result<SwapResult, RelayerError> {
+    async fn execute_swap(&self, params: SwapParams) -> Result<SwapResult, RelayerError> {
         info!(
             "Executing Jupiter swap: {} -> {}, amount: {}, slippage: {}%",
             params.source_mint, params.destination_mint, params.amount, params.slippage_percent

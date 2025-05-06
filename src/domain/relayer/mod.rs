@@ -346,7 +346,6 @@ impl RelayerFactoryTrait for RelayerFactory {
                     signer,
                     relayer_repository,
                     transaction_repository,
-                    transaction_counter_store,
                     job_producer.clone(),
                 )?;
                 Ok(NetworkRelayer::Solana(solana_relayer))

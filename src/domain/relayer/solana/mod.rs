@@ -15,13 +15,16 @@ mod token;
 pub use token::*;
 
 use crate::{
+    api::routes::relayer::sign,
     jobs::JobProducer,
-    models::{RelayerError, RelayerRepoModel, SignerRepoModel},
+    models::{RelayerError, RelayerRepoModel, SignerRepoModel, SolanaSwapStrategy},
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
-    services::{get_solana_network_provider, JupiterService, SolanaSignerFactory},
+    services::{
+        get_solana_network_provider, JupiterService, SolanaProvider, SolanaSigner,
+        SolanaSignerFactory,
+    },
 };
 
 pub fn create_solana_relayer(
@@ -29,7 +32,6 @@ pub fn create_solana_relayer(
     signer: SignerRepoModel,
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
-    transaction_counter_store: Arc<InMemoryTransactionCounter>,
     job_producer: Arc<JobProducer>,
 ) -> Result<SolanaRelayer, RelayerError> {
     let provider = Arc::new(get_solana_network_provider(
@@ -37,15 +39,22 @@ pub fn create_solana_relayer(
         relayer.custom_rpc_urls.clone(),
     )?);
     let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
-    let jupiter_service = JupiterService::new_from_network(relayer.network.as_str());
+    let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
     let rpc_methods = SolanaRpcMethodsImpl::new(
         relayer.clone(),
         provider.clone(),
         signer_service.clone(),
-        Arc::new(jupiter_service),
+        jupiter_service.clone(),
         job_producer.clone(),
     );
     let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
+    let dex_service = create_network_dex(
+        &relayer,
+        provider.clone(),
+        signer_service.clone(),
+        jupiter_service.clone(),
+    )?;
+
     let relayer = SolanaRelayer::new(
         relayer,
         signer_service,
@@ -54,6 +63,7 @@ pub fn create_solana_relayer(
         rpc_handler,
         transaction_repository,
         job_producer,
+        Arc::new(dex_service),
     )?;
 
     Ok(relayer)
