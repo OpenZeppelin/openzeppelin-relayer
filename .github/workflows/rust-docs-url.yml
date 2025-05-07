@@ -39,7 +39,7 @@ jobs:
           branch="${{ inputs.branch }}"
           # Netlify uses `-` instead of `.` in branch names for constructing the URL
           slug="${branch//./-}"
-          target="https://${slug}--openzeppelin-relayer.netlify.app"
+          target="https://${slug}%2D%2Dopenzeppelin-relayer.netlify.app"
           file="docs/modules/ROOT/nav.adoc"
           if grep -q "${target}" "${file}"; then
             echo "nav.adoc is already using ${target}"
