@@ -1,6 +1,6 @@
 //! This module contains the status-related functionality for EVM transactions.
 //! It includes methods for checking transaction status, determining when to resubmit
-//! or replace transactions with NOOPs, and updating transaction status in the repository.
+//! or replace transactions with NOPs, and updating transaction status in the repository.
 
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;

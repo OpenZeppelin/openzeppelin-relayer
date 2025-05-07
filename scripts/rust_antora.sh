@@ -1,34 +1,31 @@
 #!/bin/bash
 
 # Exit immediately if a command exits with a non-zero status
-set -e
+set -euo pipefail
 
 # Base directories
-NAME=$(grep '^name:' antora.yml | awk '{print $2}')
-VERSION=$(grep '^version:' antora.yml | awk '{print $2}')
-BUILD_DIR="build/site"
-RUST_DOCS_DIR="modules/ROOT/pages/rust_docs"
+REPO_ROOT="$PWD"
+DOCS_DIR="$REPO_ROOT/docs"
+NAME=$(grep '^name:' "$DOCS_DIR/antora.yml" | awk '{print $2}')
+VERSION=$(grep '^version:' "$DOCS_DIR/antora.yml" | awk '{print $2}')
+BUILD_DIR="$DOCS_DIR/build/site"
+RUST_DOCS_DIR="$DOCS_DIR/rust_docs"
 
-if [ "$(basename "$PWD")" != "docs" ]; then
-  echo "Error: You must run this script from the 'docs' directory."
-  exit 1
-fi
 # Check if the target directory exists
-TARGET_DIR="$BUILD_DIR/$NAME/$VERSION"
-if [ ! -d "$TARGET_DIR" ]; then
-  echo "Error: Target directory '$TARGET_DIR' not found."
+if [ ! -d "$BUILD_DIR" ]; then
+  echo "Error: Build directory '$BUILD_DIR' not found."
   exit 1
 fi
-
-# Check if the Rust docs directory exists
-DEST_DIR="$TARGET_DIR/rust_docs"
-mkdir -p "$DEST_DIR"
 
 # Copy the Rust docs to the target directory
 if [ -d "$RUST_DOCS_DIR" ] && [ "$(ls -A "$RUST_DOCS_DIR")" ]; then
-  echo "Copying '$RUST_DOCS_DIR' to '$DEST_DIR'..."
-  cp -r "$RUST_DOCS_DIR/"* "$DEST_DIR/"
-  echo "Rust docs successfully copied to '$DEST_DIR'."
+  echo "Copying '$RUST_DOCS_DIR' to '$BUILD_DIR'..."
+  cp -r "$RUST_DOCS_DIR/doc/"* "$BUILD_DIR/"
+  echo "Rust docs successfully copied to '$BUILD_DIR'."
+  # Remove the original Rust docs directory
+  echo "Removing original Rust docs directory '$RUST_DOCS_DIR'..."
+  rm -rf "$RUST_DOCS_DIR"
+  echo "Original Rust docs directory '$RUST_DOCS_DIR' removed."
 else
   echo "Source directory '$RUST_DOCS_DIR' does not exist or is empty."
 fi
