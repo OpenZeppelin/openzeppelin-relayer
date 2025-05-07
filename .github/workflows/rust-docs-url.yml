@@ -39,14 +39,14 @@ jobs:
           branch="${{ inputs.branch }}"
           # Netlify uses `-` instead of `.` in branch names for constructing the URL
           slug="${branch//./-}"
-          target="https://${slug}%2D%2Dopenzeppelin-relayer.netlify.app"
+          target="https://${slug}--openzeppelin-relayer.netlify.app"
           file="docs/modules/ROOT/nav.adoc"
           if grep -q "${target}" "${file}"; then
             echo "nav.adoc is already using ${target}"
             exit 0
           fi
           echo "Updating to branch URL: ${target}"
-          sed -i "s|(https://)[^/]*openzeppelin-relayer.netlify.app|${target}|g" "${file}"
+          sed -i -E "s|(https://)[^/]*openzeppelin-relayer.netlify.app|${target}|g" "${file}"
           echo "Updated nav.adoc to use ${target}"
       - name: Create Pull Request to update the technical docs version
         if: ${{ steps.get_branch.outputs.branch != '' }}
