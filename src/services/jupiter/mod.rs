@@ -44,8 +44,8 @@ pub struct SwapInfo {
     pub label: String,
     #[serde(rename = "inputMint")]
     pub input_mint: String,
-    #[serde(rename = "outputAmount")]
-    pub output_amount: String,
+    #[serde(rename = "outputMint")]
+    pub output_mint: String,
     #[serde(rename = "inAmount")]
     pub in_amount: String,
     #[serde(rename = "outAmount")]
@@ -61,7 +61,7 @@ pub struct SwapInfo {
 pub struct RoutePlan {
     pub percent: u32,
     #[serde(rename = "swapInfo")]
-    pub swap_info: Vec<SwapInfo>,
+    pub swap_info: SwapInfo,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -249,7 +249,7 @@ impl JupiterServiceTrait for MainnetJupiterService {
             .await?
             .error_for_status()?;
 
-        let quote: QuoteResponse = response.json().await.unwrap();
+        let quote: QuoteResponse = response.json().await?;
         Ok(quote)
     }
 
@@ -306,6 +306,7 @@ impl JupiterServiceTrait for MainnetJupiterService {
                 ("inputMint", request.input_mint),
                 ("outputMint", request.output_mint),
                 ("amount", request.amount.to_string()),
+                ("taker", request.taker),
             ])
             .send()
             .await?
@@ -367,16 +368,16 @@ impl JupiterServiceTrait for MockJupiterService {
             slippage_bps: 0,
             route_plan: vec![RoutePlan {
                 percent: 100,
-                swap_info: vec![SwapInfo {
+                swap_info: SwapInfo {
                     amm_key: "mock_amm_key".to_string(),
                     label: "mock_label".to_string(),
                     input_mint: request.input_mint.clone(),
-                    output_amount: request.amount.to_string(),
+                    output_mint: request.output_mint.to_string(),
                     in_amount: request.amount.to_string(),
                     out_amount: request.amount.to_string(),
                     fee_amount: "0".to_string(),
                     fee_mint: "mock_fee_mint".to_string(),
-                }],
+                },
             }],
         };
         Ok(quote)
@@ -419,7 +420,7 @@ impl JupiterServiceTrait for MockJupiterService {
     ) -> Result<UltraOrderResponse, JupiterServiceError> {
         Ok(UltraOrderResponse {
             input_mint: request.input_mint.clone(),
-            output_mint: request.output_mint,
+            output_mint: request.output_mint.clone(),
             in_amount: 10,
             out_amount: 10,
             other_amount_threshold: 1,
@@ -427,16 +428,16 @@ impl JupiterServiceTrait for MockJupiterService {
             price_impact_pct: 0.0,
             route_plan: vec![RoutePlan {
                 percent: 100,
-                swap_info: vec![SwapInfo {
+                swap_info: SwapInfo {
                     amm_key: "mock_amm_key".to_string(),
                     label: "mock_label".to_string(),
                     input_mint: request.input_mint,
-                    output_amount: request.amount.to_string(),
+                    output_mint: request.output_mint.to_string(),
                     in_amount: request.amount.to_string(),
                     out_amount: request.amount.to_string(),
                     fee_amount: "0".to_string(),
                     fee_mint: "mock_fee_mint".to_string(),
-                }],
+                },
             }],
             prioritization_fee_lamports: 0,
             transaction: Some("test_transaction".to_string()),
