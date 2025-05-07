@@ -20,4 +20,7 @@ pub use base64::*;
 mod url;
 pub use url::*;
 
+mod retry;
+pub use retry::*;
+
 pub mod rpc_selector;

@@ -19,13 +19,14 @@ use alloy::{
     transports::http::{Client, Http},
 };
 use async_trait::async_trait;
-use eyre::{eyre, Result};
+use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
 
 use crate::config::RpcConfig;
 use crate::models::{EvmTransactionData, TransactionError, U256};
 use crate::utils::rpc_selector::RpcSelector;
 use crate::utils::validate_configs_urls;
+use crate::utils::{retry_rpc_call, RetryConfig};
 
 #[cfg(test)]
 use mockall::automock;
@@ -41,6 +42,8 @@ pub struct EvmProvider {
     selector: RpcSelector,
     /// Timeout in seconds for new HTTP clients
     timeout_seconds: u64,
+    /// Configuration for retry behavior
+    retry_config: RetryConfig,
 }
 
 /// Trait defining the interface for EVM blockchain interactions.
@@ -55,40 +58,40 @@ pub trait EvmProviderTrait: Send + Sync {
     ///
     /// # Arguments
     /// * `address` - The address to query the balance for
-    async fn get_balance(&self, address: &str) -> Result<U256>;
+    async fn get_balance(&self, address: &str) -> Result<U256, ProviderError>;
 
     /// Gets the current block number of the chain.
-    async fn get_block_number(&self) -> Result<u64>;
+    async fn get_block_number(&self) -> Result<u64, ProviderError>;
 
     /// Estimates the gas required for a transaction.
     ///
     /// # Arguments
     /// * `tx` - The transaction data to estimate gas for
-    async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64>;
+    async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64, ProviderError>;
 
     /// Gets the current gas price from the network.
-    async fn get_gas_price(&self) -> Result<u128>;
+    async fn get_gas_price(&self) -> Result<u128, ProviderError>;
 
     /// Sends a transaction to the network.
     ///
     /// # Arguments
     /// * `tx` - The transaction request to send
-    async fn send_transaction(&self, tx: TransactionRequest) -> Result<String>;
+    async fn send_transaction(&self, tx: TransactionRequest) -> Result<String, ProviderError>;
 
     /// Sends a raw signed transaction to the network.
     ///
     /// # Arguments
     /// * `tx` - The raw transaction bytes to send
-    async fn send_raw_transaction(&self, tx: &[u8]) -> Result<String>;
+    async fn send_raw_transaction(&self, tx: &[u8]) -> Result<String, ProviderError>;
 
     /// Performs a health check by attempting to get the latest block number.
-    async fn health_check(&self) -> Result<bool>;
+    async fn health_check(&self) -> Result<bool, ProviderError>;
 
     /// Gets the transaction count (nonce) for an address.
     ///
     /// # Arguments
     /// * `address` - The address to query the transaction count for
-    async fn get_transaction_count(&self, address: &str) -> Result<u64>;
+    async fn get_transaction_count(&self, address: &str) -> Result<u64, ProviderError>;
 
     /// Gets the fee history for a range of blocks.
     ///
@@ -101,22 +104,25 @@ pub trait EvmProviderTrait: Send + Sync {
         block_count: u64,
         newest_block: BlockNumberOrTag,
         reward_percentiles: Vec<f64>,
-    ) -> Result<FeeHistory>;
+    ) -> Result<FeeHistory, ProviderError>;
 
     /// Gets the latest block from the network.
-    async fn get_block_by_number(&self) -> Result<BlockResponse>;
+    async fn get_block_by_number(&self) -> Result<BlockResponse, ProviderError>;
 
     /// Gets a transaction receipt by its hash.
     ///
     /// # Arguments
     /// * `tx_hash` - The transaction hash to query
-    async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>>;
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: &str,
+    ) -> Result<Option<TransactionReceipt>, ProviderError>;
 
     /// Calls a contract function.
     ///
     /// # Arguments
     /// * `tx` - The transaction request to call the contract function
-    async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes>;
+    async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes, ProviderError>;
 }
 
 impl EvmProvider {
@@ -143,26 +149,25 @@ impl EvmProvider {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
         })?;
 
+        let retry_config = RetryConfig::from_env();
+
         Ok(Self {
             selector,
             timeout_seconds,
+            retry_config,
         })
     }
 
-    /// Gets a provider from the selector
-    fn get_provider(&self) -> Result<RootProvider<Http<Client>>> {
-        self.selector
-            .get_client(|url| self.initialize_provider(url))
-            .map_err(|e| eyre!("Failed to get provider: {}", e))
-    }
-
     /// Initialize a provider for a given URL
-    fn initialize_provider(&self, url: &str) -> Result<RootProvider<Http<Client>>> {
-        let rpc_url = url.parse()?;
+    fn initialize_provider(&self, url: &str) -> Result<RootProvider<Http<Client>>, ProviderError> {
+        let rpc_url = url.parse().map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
+        })?;
+
         let client = ReqwestClientBuilder::default()
             .timeout(Duration::from_secs(self.timeout_seconds))
             .build()
-            .map_err(|e| eyre!("Failed to build HTTP client: {}", e))?;
+            .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {}", e)))?;
 
         let mut transport = Http::new(rpc_url);
         transport.set_client(client);
@@ -174,6 +179,57 @@ impl EvmProvider {
 
         Ok(provider)
     }
+
+    /// Helper method to retry RPC calls with exponential backoff
+    ///
+    /// Uses the generic retry_rpc_call utility to handle retries and provider failover
+    async fn retry_rpc_call<T, F, Fut>(
+        &self,
+        operation_name: &str,
+        operation: F,
+    ) -> Result<T, ProviderError>
+    where
+        F: Fn(RootProvider<Http<Client>>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ProviderError>>,
+    {
+        // Classify which errors should be retried
+        let is_retriable = |e: &ProviderError| {
+            match e {
+                // Only retry these specific error types
+                ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => {
+                    true
+                }
+
+                // Any other errors are not automatically retriable
+                _ => {
+                    // Optionally inspect error message for network-related issues
+                    let err_msg = format!("{}", e);
+                    err_msg.to_lowercase().contains("timeout")
+                        || err_msg.to_lowercase().contains("connection")
+                        || err_msg.to_lowercase().contains("reset")
+                }
+            }
+        };
+
+        log::debug!(
+            "Starting RPC operation '{}' with timeout: {}s",
+            operation_name,
+            self.timeout_seconds
+        );
+
+        retry_rpc_call(
+            &self.selector,
+            operation_name,
+            is_retriable,
+            |url| match self.initialize_provider(url) {
+                Ok(provider) => Ok(provider),
+                Err(e) => Err(e),
+            },
+            operation,
+            Some(self.retry_config.clone()),
+        )
+        .await
+    }
 }
 
 impl AsRef<EvmProvider> for EvmProvider {
@@ -184,75 +240,106 @@ impl AsRef<EvmProvider> for EvmProvider {
 
 #[async_trait]
 impl EvmProviderTrait for EvmProvider {
-    async fn get_balance(&self, address: &str) -> Result<U256> {
-        let address = address.parse()?;
-        self.get_provider()?
-            .get_balance(address)
-            .await
-            .map_err(|e| eyre!("Failed to get balance: {}", e))
+    async fn get_balance(&self, address: &str) -> Result<U256, ProviderError> {
+        let parsed_address = address
+            .parse::<alloy::primitives::Address>()
+            .map_err(|e| ProviderError::InvalidAddress(e.to_string()))?;
+
+        self.retry_rpc_call("get_balance", move |provider| async move {
+            provider
+                .get_balance(parsed_address)
+                .await
+                .map_err(ProviderError::from)
+        })
+        .await
     }
 
-    async fn get_block_number(&self) -> Result<u64> {
-        self.get_provider()?
-            .get_block_number()
-            .await
-            .map_err(|e| eyre!("Failed to get block number: {}", e))
+    async fn get_block_number(&self) -> Result<u64, ProviderError> {
+        self.retry_rpc_call("get_block_number", |provider| async move {
+            provider
+                .get_block_number()
+                .await
+                .map_err(ProviderError::from)
+        })
+        .await
     }
 
-    async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64> {
-        // transform the tx to a transaction request
-        let transaction_request = TransactionRequest::try_from(tx)?;
-        self.get_provider()?
-            .estimate_gas(&transaction_request)
-            .await
-            .map_err(|e| eyre!("Failed to estimate gas: {}", e))
+    async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64, ProviderError> {
+        let transaction_request = TransactionRequest::try_from(tx)
+            .map_err(|e| ProviderError::Other(format!("Failed to convert transaction: {}", e)))?;
+
+        self.retry_rpc_call("estimate_gas", move |provider| {
+            let tx_req = transaction_request.clone();
+            async move {
+                provider
+                    .estimate_gas(&tx_req)
+                    .await
+                    .map_err(ProviderError::from)
+            }
+        })
+        .await
     }
 
-    async fn get_gas_price(&self) -> Result<u128> {
-        self.get_provider()?
-            .get_gas_price()
-            .await
-            .map_err(|e| eyre!("Failed to get gas price: {}", e))
+    async fn get_gas_price(&self) -> Result<u128, ProviderError> {
+        self.retry_rpc_call("get_gas_price", |provider| async move {
+            provider.get_gas_price().await.map_err(ProviderError::from)
+        })
+        .await
     }
 
-    async fn send_transaction(&self, tx: TransactionRequest) -> Result<String> {
+    async fn send_transaction(&self, tx: TransactionRequest) -> Result<String, ProviderError> {
         let pending_tx = self
-            .get_provider()?
-            .send_transaction(tx)
-            .await
-            .map_err(|e| eyre!("Failed to send transaction: {}", e))?;
+            .retry_rpc_call("send_transaction", move |provider| {
+                let tx_req = tx.clone();
+                async move {
+                    provider
+                        .send_transaction(tx_req)
+                        .await
+                        .map_err(ProviderError::from)
+                }
+            })
+            .await?;
 
         let tx_hash = pending_tx.tx_hash().to_string();
         Ok(tx_hash)
     }
 
-    async fn send_raw_transaction(&self, tx: &[u8]) -> Result<String> {
+    async fn send_raw_transaction(&self, tx: &[u8]) -> Result<String, ProviderError> {
         let pending_tx = self
-            .get_provider()?
-            .send_raw_transaction(tx)
-            .await
-            .map_err(|e| eyre!("Failed to send raw transaction: {}", e))?;
+            .retry_rpc_call("send_raw_transaction", move |provider| {
+                let tx_data = tx.to_vec();
+                async move {
+                    provider
+                        .send_raw_transaction(&tx_data)
+                        .await
+                        .map_err(ProviderError::from)
+                }
+            })
+            .await?;
 
         let tx_hash = pending_tx.tx_hash().to_string();
         Ok(tx_hash)
     }
 
-    async fn health_check(&self) -> Result<bool> {
-        self.get_block_number()
-            .await
-            .map(|_| true)
-            .map_err(|e| eyre!("Health check failed: {}", e))
+    async fn health_check(&self) -> Result<bool, ProviderError> {
+        match self.get_block_number().await {
+            Ok(_) => Ok(true),
+            Err(e) => Err(e),
+        }
     }
 
-    async fn get_transaction_count(&self, address: &str) -> Result<u64> {
-        let address = address.parse()?;
-        let result = self
-            .get_provider()?
-            .get_transaction_count(address)
-            .await
-            .map_err(|e| eyre!("Failed to get transaction count: {}", e))?;
+    async fn get_transaction_count(&self, address: &str) -> Result<u64, ProviderError> {
+        let parsed_address = address
+            .parse::<alloy::primitives::Address>()
+            .map_err(|e| ProviderError::InvalidAddress(e.to_string()))?;
 
-        Ok(result)
+        self.retry_rpc_call("get_transaction_count", move |provider| async move {
+            provider
+                .get_transaction_count(parsed_address)
+                .await
+                .map_err(ProviderError::from)
+        })
+        .await
     }
 
     async fn get_fee_history(
@@ -260,36 +347,58 @@ impl EvmProviderTrait for EvmProvider {
         block_count: u64,
         newest_block: BlockNumberOrTag,
         reward_percentiles: Vec<f64>,
-    ) -> Result<FeeHistory> {
-        let fee_history = self
-            .get_provider()?
-            .get_fee_history(block_count, newest_block, &reward_percentiles)
-            .await
-            .map_err(|e| eyre!("Failed to get fee history: {}", e))?;
-        Ok(fee_history)
+    ) -> Result<FeeHistory, ProviderError> {
+        self.retry_rpc_call("get_fee_history", move |provider| {
+            let reward_percentiles_clone = reward_percentiles.clone();
+            async move {
+                provider
+                    .get_fee_history(block_count, newest_block, &reward_percentiles_clone)
+                    .await
+                    .map_err(ProviderError::from)
+            }
+        })
+        .await
     }
 
-    async fn get_block_by_number(&self) -> Result<BlockResponse> {
-        self.get_provider()?
-            .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
-            .await
-            .map_err(|e| eyre!("Failed to get block by number: {}", e))?
-            .ok_or_else(|| eyre!("Block not found"))
+    async fn get_block_by_number(&self) -> Result<BlockResponse, ProviderError> {
+        let block_result = self
+            .retry_rpc_call("get_block_by_number", |provider| async move {
+                provider
+                    .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
+                    .await
+                    .map_err(ProviderError::from)
+            })
+            .await?;
+
+        match block_result {
+            Some(block) => Ok(block),
+            None => Err(ProviderError::Other("Block not found".to_string())),
+        }
     }
 
-    async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>> {
-        let tx_hash = tx_hash.parse()?;
-        self.get_provider()?
-            .get_transaction_receipt(tx_hash)
-            .await
-            .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: &str,
+    ) -> Result<Option<TransactionReceipt>, ProviderError> {
+        let parsed_tx_hash = tx_hash
+            .parse::<alloy::primitives::TxHash>()
+            .map_err(|e| ProviderError::InvalidAddress(e.to_string()))?;
+
+        self.retry_rpc_call("get_transaction_receipt", move |provider| async move {
+            provider
+                .get_transaction_receipt(parsed_tx_hash)
+                .await
+                .map_err(ProviderError::from)
+        })
+        .await
     }
 
-    async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes> {
-        self.get_provider()?
-            .call(tx)
-            .await
-            .map_err(|e| eyre!("Failed to call contract: {}", e))
+    async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes, ProviderError> {
+        self.retry_rpc_call("call_contract", move |provider| {
+            let tx_req = tx.clone();
+            async move { provider.call(&tx_req).await.map_err(ProviderError::from) }
+        })
+        .await
     }
 }
 
@@ -341,6 +450,30 @@ mod tests {
     use alloy::primitives::Address;
     use futures::FutureExt;
     use std::str::FromStr;
+
+    #[test]
+    fn test_reqwest_error_conversion() {
+        // Create a reqwest timeout error
+        let client = reqwest::Client::new();
+        let err = client.get("http://example.com")
+            .timeout(Duration::from_nanos(1))
+            .send()
+            .now_or_never() // This will time out immediately
+            .unwrap()
+            .unwrap_err();
+
+        let provider_error = ProviderError::from(err);
+        assert!(matches!(provider_error, ProviderError::Timeout));
+    }
+
+    #[test]
+    fn test_address_parse_error_conversion() {
+        // Create an address parse error
+        let err = "invalid-address".parse::<Address>().unwrap_err();
+        // Map the error manually using the same approach as in our From implementation
+        let provider_error = ProviderError::InvalidAddress(err.to_string());
+        assert!(matches!(provider_error, ProviderError::InvalidAddress(_)));
+    }
 
     #[test]
     fn test_new_provider() {

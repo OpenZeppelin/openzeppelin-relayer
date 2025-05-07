@@ -187,7 +187,7 @@ impl<P: EvmProviderTrait> NetworkExtraFeeCalculatorServiceTrait for OptimismExtr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::MockEvmProviderTrait;
+    use crate::services::{MockEvmProviderTrait, ProviderError};
     use alloy::primitives::TxKind;
 
     fn setup_mock_provider_for_modifiers() -> MockEvmProviderTrait {
@@ -370,9 +370,9 @@ mod tests {
     async fn test_get_modifiers_error_handling() {
         let mut mock_provider = MockEvmProviderTrait::new();
 
-        mock_provider
-            .expect_call_contract()
-            .returning(|_| Box::pin(async { Err(eyre::eyre!("Simulated RPC error")) }));
+        mock_provider.expect_call_contract().returning(|_| {
+            Box::pin(async { Err(ProviderError::Other("Simulated RPC error".to_string())) })
+        });
 
         let service = OptimismExtraFeeService::new(mock_provider);
         let result = service.get_modifiers().await;
