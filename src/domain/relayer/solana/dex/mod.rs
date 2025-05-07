@@ -34,9 +34,11 @@ pub trait DexStrategy: Send + Sync {
 
 // Re-export the specific implementations
 pub mod jupiter_swap;
+pub mod jupiter_ultra;
 
 pub enum NetworkDex {
     JupiterSwap { dex: jupiter_swap::JupiterSwapDex },
+    JupiterUltra { dex: jupiter_ultra::JupiterUltraDex },
 }
 
 #[async_trait]
@@ -44,6 +46,7 @@ impl DexStrategy for NetworkDex {
     async fn execute_swap(&self, params: SwapParams) -> Result<SwapResult, RelayerError> {
         match self {
             NetworkDex::JupiterSwap { dex } => dex.execute_swap(params).await,
+            NetworkDex::JupiterUltra { dex } => dex.execute_swap(params).await,
         }
     }
 }
@@ -65,6 +68,9 @@ pub fn create_network_dex(
     match strategy {
         SolanaSwapStrategy::JupiterSwap => Ok(NetworkDex::JupiterSwap {
             dex: jupiter_swap::JupiterSwapDex::new(provider, signer_service, jupiter_service),
+        }),
+        SolanaSwapStrategy::JupiterUltra => Ok(NetworkDex::JupiterUltra {
+            dex: jupiter_ultra::JupiterUltraDex::new(provider, signer_service, jupiter_service),
         }),
     }
 }

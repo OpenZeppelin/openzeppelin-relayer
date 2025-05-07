@@ -302,6 +302,9 @@ impl TryFrom<ConfigFileRelayerSolanaSwapStrategy> for SolanaSwapStrategy {
     fn try_from(config: ConfigFileRelayerSolanaSwapStrategy) -> Result<Self, Self::Error> {
         match config {
             ConfigFileRelayerSolanaSwapStrategy::JupiterSwap => Ok(SolanaSwapStrategy::JupiterSwap),
+            ConfigFileRelayerSolanaSwapStrategy::JupiterUltra => {
+                Ok(SolanaSwapStrategy::JupiterUltra)
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 //! Jupiter is not supported on devnet/testnet, so a mock service is used instead
 //! The mock service returns a quote with the same input and output amount
 use crate::{
-    constants::{JUPITER_API_URL, WRAPPED_SOL_MINT},
+    constants::{JUPITER_BASE_API_URL, WRAPPED_SOL_MINT},
     utils::field_as_string,
 };
 use async_trait::async_trait;
@@ -104,7 +104,7 @@ pub struct SwapRequest {
     pub prioritization_fee_lamports: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SwapResponse {
     pub swap_transaction: String, // base64 encoded transaction
@@ -114,6 +114,69 @@ pub struct SwapResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_unit_limit: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UltraOrderRequest {
+    #[serde(rename = "inputMint")]
+    pub input_mint: String,
+    #[serde(rename = "outputMint")]
+    pub output_mint: String,
+    #[serde(with = "field_as_string")]
+    pub amount: u64,
+    pub taker: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UltraOrderResponse {
+    #[serde(rename = "inputMint")]
+    pub input_mint: String,
+    #[serde(rename = "outputMint")]
+    pub output_mint: String,
+    #[serde(rename = "inAmount")]
+    #[serde(with = "field_as_string")]
+    pub in_amount: u64,
+    #[serde(rename = "outAmount")]
+    #[serde(with = "field_as_string")]
+    pub out_amount: u64,
+    #[serde(rename = "otherAmountThreshold")]
+    #[serde(with = "field_as_string")]
+    pub other_amount_threshold: u64,
+    #[serde(rename = "priceImpactPct")]
+    #[serde(with = "field_as_string")]
+    pub price_impact_pct: f64,
+    #[serde(rename = "swapMode")]
+    pub swap_mode: String,
+    #[serde(rename = "slippageBps")]
+    pub slippage_bps: u32,
+    #[serde(rename = "routePlan")]
+    pub route_plan: Vec<RoutePlan>,
+    #[serde(rename = "prioritizationFeeLamports")]
+    pub prioritization_fee_lamports: u32,
+    pub transaction: Option<String>,
+    #[serde(rename = "requestId")]
+    pub request_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UltraExecuteRequest {
+    #[serde(rename = "signedTransaction")]
+    pub signed_transaction: String,
+    #[serde(rename = "requestId")]
+    pub request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UltraExecuteResponse {
+    pub swap_transaction: String,
+    pub last_valid_block_height: u64,
+    pub prioritization_fee_lamports: Option<u64>,
+    pub compute_unit_limit: Option<u64>,
     pub simulation_error: Option<String>,
 }
 
@@ -131,6 +194,14 @@ pub trait JupiterServiceTrait: Send + Sync {
         &self,
         request: SwapRequest,
     ) -> Result<SwapResponse, JupiterServiceError>;
+    async fn get_ultra_order(
+        &self,
+        request: UltraOrderRequest,
+    ) -> Result<UltraOrderResponse, JupiterServiceError>;
+    async fn execute_ultra_order(
+        &self,
+        request: UltraExecuteRequest,
+    ) -> Result<UltraExecuteResponse, JupiterServiceError>;
 }
 
 pub enum JupiterService {
@@ -147,7 +218,7 @@ impl MainnetJupiterService {
     pub fn new() -> Self {
         Self {
             client: Client::new(),
-            base_url: JUPITER_API_URL.to_string(),
+            base_url: JUPITER_BASE_API_URL.to_string(),
         }
     }
 }
@@ -163,7 +234,7 @@ impl JupiterServiceTrait for MainnetJupiterService {
     /// Get a quote for a given input and output mint
     async fn get_quote(&self, request: QuoteRequest) -> Result<QuoteResponse, JupiterServiceError> {
         let slippage_bps: u32 = request.slippage as u32 * 100;
-        let url = format!("{}/quote", self.base_url);
+        let url = format!("{}/swap/v1/quote", self.base_url);
 
         let response = self
             .client
@@ -203,7 +274,7 @@ impl JupiterServiceTrait for MainnetJupiterService {
         &self,
         request: SwapRequest,
     ) -> Result<SwapResponse, JupiterServiceError> {
-        let url = format!("{}/swap", self.base_url);
+        let url = format!("{}/swap/v1/swap", self.base_url);
         let response = self.client.post(&url).json(&request).send().await?;
 
         if response.status().is_success() {
@@ -211,6 +282,48 @@ impl JupiterServiceTrait for MainnetJupiterService {
                 .json::<SwapResponse>()
                 .await
                 .map_err(JupiterServiceError::from)
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(JupiterServiceError::ApiError {
+                message: error_text,
+            })
+        }
+    }
+
+    async fn get_ultra_order(
+        &self,
+        request: UltraOrderRequest,
+    ) -> Result<UltraOrderResponse, JupiterServiceError> {
+        let url = format!("{}/ultra/v1/order", self.base_url);
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&[
+                ("inputMint", request.input_mint),
+                ("outputMint", request.output_mint),
+                ("amount", request.amount.to_string()),
+            ])
+            .send()
+            .await?
+            .error_for_status()?;
+
+        response.json().await.map_err(JupiterServiceError::from)
+    }
+
+    async fn execute_ultra_order(
+        &self,
+        request: UltraExecuteRequest,
+    ) -> Result<UltraExecuteResponse, JupiterServiceError> {
+        let url = format!("{}/ultra/v1/execute", self.base_url);
+
+        let response = self.client.post(&url).json(&request).send().await?;
+
+        if response.status().is_success() {
+            response.json().await.map_err(JupiterServiceError::from)
         } else {
             let error_text = response
                 .text()
@@ -299,6 +412,51 @@ impl JupiterServiceTrait for MockJupiterService {
             simulation_error: None,
         })
     }
+
+    async fn get_ultra_order(
+        &self,
+        request: UltraOrderRequest,
+    ) -> Result<UltraOrderResponse, JupiterServiceError> {
+        Ok(UltraOrderResponse {
+            input_mint: request.input_mint.clone(),
+            output_mint: request.output_mint,
+            in_amount: 10,
+            out_amount: 10,
+            other_amount_threshold: 1,
+            swap_mode: "ExactIn".to_string(),
+            price_impact_pct: 0.0,
+            route_plan: vec![RoutePlan {
+                percent: 100,
+                swap_info: vec![SwapInfo {
+                    amm_key: "mock_amm_key".to_string(),
+                    label: "mock_label".to_string(),
+                    input_mint: request.input_mint,
+                    output_amount: request.amount.to_string(),
+                    in_amount: request.amount.to_string(),
+                    out_amount: request.amount.to_string(),
+                    fee_amount: "0".to_string(),
+                    fee_mint: "mock_fee_mint".to_string(),
+                }],
+            }],
+            prioritization_fee_lamports: 0,
+            transaction: Some("test_transaction".to_string()),
+            request_id: "mock_request_id".to_string(),
+            slippage_bps: 0,
+        })
+    }
+
+    async fn execute_ultra_order(
+        &self,
+        _request: UltraExecuteRequest,
+    ) -> Result<UltraExecuteResponse, JupiterServiceError> {
+        Ok(UltraExecuteResponse {
+            swap_transaction: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...".to_string(),
+            last_valid_block_height: 279632475,
+            prioritization_fee_lamports: Some(9999),
+            compute_unit_limit: Some(388876),
+            simulation_error: None,
+        })
+    }
 }
 
 #[async_trait]
@@ -337,6 +495,26 @@ impl JupiterServiceTrait for JupiterService {
         match self {
             JupiterService::Mock(service) => service.get_swap_transaction(request).await,
             JupiterService::Mainnet(service) => service.get_swap_transaction(request).await,
+        }
+    }
+
+    async fn get_ultra_order(
+        &self,
+        request: UltraOrderRequest,
+    ) -> Result<UltraOrderResponse, JupiterServiceError> {
+        match self {
+            JupiterService::Mock(service) => service.get_ultra_order(request).await,
+            JupiterService::Mainnet(service) => service.get_ultra_order(request).await,
+        }
+    }
+
+    async fn execute_ultra_order(
+        &self,
+        request: UltraExecuteRequest,
+    ) -> Result<UltraExecuteResponse, JupiterServiceError> {
+        match self {
+            JupiterService::Mock(service) => service.execute_ultra_order(request).await,
+            JupiterService::Mainnet(service) => service.execute_ultra_order(request).await,
         }
     }
 }

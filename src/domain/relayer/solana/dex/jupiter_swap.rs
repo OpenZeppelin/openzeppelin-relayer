@@ -36,36 +36,22 @@ impl JupiterSwapDex {
 #[async_trait]
 impl DexStrategy for JupiterSwapDex {
     async fn execute_swap(&self, params: SwapParams) -> Result<SwapResult, RelayerError> {
-        info!(
-            "Executing Jupiter swap: {} -> {}, amount: {}, slippage: {}%",
-            params.source_mint, params.destination_mint, params.amount, params.slippage_percent
-        );
-
-        // Convert slippage from percentage to basis points (1% = 100 bps)
-        let slippage_bps = (params.slippage_percent * 100.0) as f32;
+        info!("Executing Jupiter swap: {:?}", params);
 
         // 1. Get the best route from Jupiter's API
-        info!("Getting quote from Jupiter for swap");
         let quote = self
             .jupiter_service
             .get_quote(QuoteRequest {
                 input_mint: params.source_mint.clone(),
                 output_mint: params.destination_mint.clone(),
                 amount: params.amount,
-                slippage: slippage_bps,
+                slippage: params.slippage_percent as f32,
             })
             .await
             .map_err(|e| RelayerError::DexError(format!("Failed to get Jupiter quote: {}", e)))?;
-
-        info!(
-            "Received quote: in_amount={}, out_amount={}, price_impact={}%",
-            quote.in_amount,
-            quote.out_amount.clone(),
-            quote.price_impact_pct
-        );
+        info!("Received quote: {:?}", quote);
 
         // 2. Get the swap transaction from Jupiter's API
-        info!("Getting swap transaction from Jupiter");
         let swap_tx = self
             .jupiter_service
             .get_swap_transaction(SwapRequest {
@@ -81,8 +67,9 @@ impl DexStrategy for JupiterSwapDex {
                 RelayerError::DexError(format!("Failed to get swap transaction: {}", e))
             })?;
 
+        info!("Received swap transaction: {:?}", swap_tx);
+
         // 3. Sign the transaction using the signer service
-        info!("Signing swap transaction");
         let mut swap_tx = VersionedTransaction::try_from(EncodedSerializedTransaction::new(
             swap_tx.swap_transaction,
         ))
@@ -99,7 +86,6 @@ impl DexStrategy for JupiterSwapDex {
         swap_tx.signatures[0] = signature;
 
         // 4. Send the transaction and get the signature
-        info!("Sending swap transaction to the network");
         let signature = self
             .provider
             .send_versioned_transaction(&swap_tx)
@@ -116,6 +102,8 @@ impl DexStrategy for JupiterSwapDex {
             .map_err(|e| {
                 RelayerError::ProviderError(format!("Transaction failed to confirm: {}", e))
             })?;
+
+        info!("Transaction confirmed: {}", signature);
 
         // 6. Return the result with actual amounts
         Ok(SwapResult {

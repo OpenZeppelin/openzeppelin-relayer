@@ -63,6 +63,7 @@ pub enum ConfigFileRelayerSolanaFeePaymentStrategy {
 #[serde(rename_all = "lowercase")]
 pub enum ConfigFileRelayerSolanaSwapStrategy {
     JupiterSwap,
+    JupiterUltra,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
