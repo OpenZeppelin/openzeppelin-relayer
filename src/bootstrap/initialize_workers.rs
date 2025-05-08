@@ -13,9 +13,9 @@ use crate::{
     jobs::{
         notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
-        BackoffRetryPolicy, JobProducer,
+        BackoffRetryPolicy,
     },
-    models::AppState,
+    models::DefaultAppState,
     repositories::RelayerRepository,
 };
 
@@ -30,7 +30,7 @@ const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
 const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
 
-pub async fn initialize_workers(app_state: ThinData<AppState<JobProducer>>) -> Result<()> {
+pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
     let queue = app_state.job_producer.get_queue().await?;
 
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
@@ -123,9 +123,7 @@ pub async fn initialize_workers(app_state: ThinData<AppState<JobProducer>>) -> R
     Ok(())
 }
 
-pub async fn initialize_solana_swap_workers(
-    app_state: ThinData<AppState<JobProducer>>,
-) -> Result<()> {
+pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
     let solena_relayers_with_swap_enabled = app_state
         .relayer_repository
         .list_active()

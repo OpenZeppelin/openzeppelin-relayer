@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
+#[cfg(test)]
+use mockall::automock;
+
 use crate::{
     config::ServerConfig,
     jobs::JobProducer,
@@ -143,10 +146,24 @@ pub trait Relayer {
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
+/// Solana Relayer Dex Trait
+/// Subset of methods for Solana relayer
+#[async_trait]
+#[allow(dead_code)]
+#[cfg_attr(test, automock)]
+pub trait SolanaRelayerDexTrait {
+    /// Handles a token swap request.
+    async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError>;
+}
+
 /// Solana Relayer Trait
 /// Subset of methods for Solana relayer
 #[async_trait]
 #[allow(dead_code)]
+#[cfg_attr(test, automock)]
 pub trait SolanaRelayerTrait {
     /// Retrieves the current balance of the relayer.
     ///
@@ -188,7 +205,7 @@ pub trait SolanaRelayerTrait {
 
 pub enum NetworkRelayer {
     Evm(DefaultEvmRelayer),
-    Solana(SolanaRelayer),
+    Solana(DefaultSolanaRelayer),
     Stellar(StellarRelayer),
 }
 

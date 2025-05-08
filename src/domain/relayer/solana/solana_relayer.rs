@@ -10,22 +10,27 @@
 use std::{str::FromStr, sync::Arc};
 
 use crate::{
-    constants::{DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME},
+    constants::{
+        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
+    },
     domain::{
         relayer::RelayerError, BalanceResponse, DexStrategy, JsonRpcRequest, JsonRpcResponse,
-        SolanaRelayerTrait, SwapParams,
+        SolanaRelayerDexTrait, SolanaRelayerTrait, SwapParams,
     },
     jobs::{JobProducer, JobProducerTrait, SolanaTokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
-        SolanaNetwork,
+        SolanaNetwork, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepository,
         RelayerRepositoryStorage, Repository,
     },
-    services::{SolanaProvider, SolanaProviderTrait, SolanaSigner},
+    services::{
+        JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
+        SolanaSigner,
+    },
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -35,7 +40,7 @@ use solana_sdk::{account::Account, pubkey::Pubkey};
 
 use super::{
     NetworkDex, SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl, SolanaTokenProgram,
-    TokenAccount,
+    SwapResult, TokenAccount,
 };
 
 struct TokenSwapCandidate<'a> {
@@ -45,28 +50,53 @@ struct TokenSwapCandidate<'a> {
 }
 
 #[allow(dead_code)]
-pub struct SolanaRelayer {
+pub struct SolanaRelayer<R, T, J, S, JS, SP>
+where
+    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+    S: SolanaSignTrait + Send + Sync + 'static,
+    JS: JupiterServiceTrait + Send + Sync + 'static,
+    SP: SolanaProviderTrait + Send + Sync + 'static,
+{
     relayer: RelayerRepoModel,
-    signer: Arc<SolanaSigner>,
+    signer: Arc<S>,
     network: SolanaNetwork,
-    provider: Arc<SolanaProvider>,
+    provider: Arc<SP>,
     rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
-    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-    transaction_repository: Arc<InMemoryTransactionRepository>,
-    job_producer: Arc<JobProducer>,
-    dex_service: Arc<NetworkDex>,
+    relayer_repository: Arc<R>,
+    transaction_repository: Arc<T>,
+    job_producer: Arc<J>,
+    dex_service: Arc<NetworkDex<SP, S, JS>>,
 }
 
-impl SolanaRelayer {
+pub type DefaultSolanaRelayer = SolanaRelayer<
+    RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    InMemoryTransactionRepository,
+    JobProducer,
+    SolanaSigner,
+    JupiterService,
+    SolanaProvider,
+>;
+
+impl<R, T, J, S, JS, SP> SolanaRelayer<R, T, J, S, JS, SP>
+where
+    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+    S: SolanaSignTrait + Send + Sync,
+    JS: JupiterServiceTrait + Send + Sync,
+    SP: SolanaProviderTrait + Send + Sync,
+{
     pub fn new(
         relayer: RelayerRepoModel,
-        signer: Arc<SolanaSigner>,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        provider: Arc<SolanaProvider>,
+        signer: Arc<S>,
+        relayer_repository: Arc<R>,
+        provider: Arc<SP>,
         rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-        job_producer: Arc<JobProducer>,
-        dex_service: Arc<NetworkDex>,
+        transaction_repository: Arc<T>,
+        job_producer: Arc<J>,
+        dex_service: Arc<NetworkDex<SP, S, JS>>,
     ) -> Result<Self, RelayerError> {
         let network = match SolanaNetwork::from_network_str(&relayer.network) {
             Ok(network) => network,
@@ -268,8 +298,23 @@ impl SolanaRelayer {
 
         Ok(amount)
     }
+}
 
-    pub async fn handle_token_swap_request(&self, relayer_id: String) -> Result<(), RelayerError> {
+#[async_trait]
+// impl SolanaRelayerDexTrait for SolanaRelayer {
+impl<R, T, J, S, JS, SP> SolanaRelayerDexTrait for SolanaRelayer<R, T, J, S, JS, SP>
+where
+    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+    S: SolanaSignTrait + Send + Sync,
+    JS: JupiterServiceTrait + Send + Sync,
+    SP: SolanaProviderTrait + Send + Sync,
+{
+    async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError> {
         info!("Handling token swap request for relayer: {}", relayer_id);
         let relayer = self
             .relayer_repository
@@ -277,19 +322,20 @@ impl SolanaRelayer {
             .await?;
 
         let policy = relayer.policies.get_solana_policy();
+
         let swap_config = match policy.get_swap_config() {
             Some(config) => config,
             None => {
-                info!("No swap configuration specified; skipping validation.");
-                return Ok(());
+                info!("No swap configuration specified; Exiting.");
+                return Ok(vec![]);
             }
         };
 
-        let swap_strategy = match swap_config.strategy {
+        match swap_config.strategy {
             Some(strategy) => strategy,
             None => {
-                info!("No swap strategy specified; skipping validation.");
-                return Ok(());
+                info!("No swap strategy specified; Exiting.");
+                return Ok(vec![]);
             }
         };
 
@@ -331,15 +377,10 @@ impl SolanaRelayer {
                                 .and_then(|config| config.retain_min_amount),
                         )
                         .unwrap_or(0);
+
                     if swap_amount > 0 {
-                        info!(
-                            "Token swap eligible for token: {}. Current balance: {}, min amount: {:?}, max amount: {:?}, retain min: {:?}",
-                            token.mint,
-                            token_account.amount,
-                            token.swap_config.as_ref().and_then(|config| config.min_amount),
-                            token.swap_config.as_ref().and_then(|config| config.max_amount),
-                            token.swap_config.as_ref().and_then(|config| config.retain_min_amount)
-                        );
+                        info!("Token swap eligible for token: {:?}", token);
+
                         // Add the token to the list of eligible tokens for swapping
                         eligible_tokens.push(TokenSwapCandidate {
                             policy: token,
@@ -378,24 +419,23 @@ impl SolanaRelayer {
                     .execute_swap(SwapParams {
                         owner_address: relayer_address,
                         source_mint: token_mint.clone(),
-                        destination_mint: "So11111111111111111111111111111111111111112".to_string(), // SOL mint
+                        destination_mint: WRAPPED_SOL_MINT.to_string(), // SOL mint
                         amount: swap_amount,
                         slippage_percent,
                     })
                     .await?;
 
                 info!(
-                    "Successfully swapped {} tokens of type {} to {} SOL for relayer {}",
-                    swap_amount, token_mint, swap_result.destination_amount, relayer_id_clone
+                    "Successfully swapped token {} for relayer {},  {:?}",
+                    relayer_id_clone, token.mint, swap_result,
                 );
 
-                Ok::<_, RelayerError>(swap_result)
+                Ok::<SwapResult, RelayerError>(swap_result)
             }
         });
-        // Wait for all swaps to complete
+
         let swap_results = try_join_all(swap_futures).await?;
 
-        // Log summary of swaps
         if !swap_results.is_empty() {
             let total_sol_received: u64 = swap_results
                 .iter()
@@ -410,12 +450,20 @@ impl SolanaRelayer {
             );
         }
 
-        Ok(())
+        Ok(swap_results)
     }
 }
 
 #[async_trait]
-impl SolanaRelayerTrait for SolanaRelayer {
+impl<R, T, J, S, JS, SP> SolanaRelayerTrait for SolanaRelayer<R, T, J, S, JS, SP>
+where
+    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+    S: SolanaSignTrait + Send + Sync,
+    JS: JupiterServiceTrait + Send + Sync,
+    SP: SolanaProviderTrait + Send + Sync,
+{
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let address = &self.relayer.address;
         let balance = self.provider.get_balance(address).await?;

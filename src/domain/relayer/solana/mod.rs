@@ -29,7 +29,7 @@ pub fn create_solana_relayer(
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
-) -> Result<SolanaRelayer, RelayerError> {
+) -> Result<DefaultSolanaRelayer, RelayerError> {
     let provider = Arc::new(get_solana_network_provider(
         &relayer.network,
         relayer.custom_rpc_urls.clone(),
@@ -51,7 +51,7 @@ pub fn create_solana_relayer(
         jupiter_service.clone(),
     )?;
 
-    let relayer = SolanaRelayer::new(
+    let relayer = DefaultSolanaRelayer::new(
         relayer,
         signer_service,
         relayer_repository,

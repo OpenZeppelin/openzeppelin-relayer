@@ -11,7 +11,7 @@ use log::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
-    domain::{create_solana_relayer, get_relayer_by_id},
+    domain::{create_solana_relayer, get_relayer_by_id, SolanaRelayerDexTrait},
     jobs::{handle_result, Job, JobProducer, SolanaTokenSwapRequest},
     models::AppState,
     repositories::Repository,

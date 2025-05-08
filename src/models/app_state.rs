@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::{
-    jobs::JobProducerTrait,
+    jobs::{JobProducer, JobProducerTrait},
     repositories::{
         InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
         InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
@@ -28,6 +28,8 @@ pub struct AppState<J: JobProducerTrait> {
     /// Producer for managing job creation and execution.
     pub job_producer: Arc<J>,
 }
+
+pub type DefaultAppState = AppState<JobProducer>;
 
 impl<J: JobProducerTrait> AppState<J> {
     /// Returns a clone of the relayer repository.

@@ -170,7 +170,7 @@ pub struct UltraExecuteRequest {
     pub request_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UltraExecuteResponse {
     pub swap_transaction: String,
@@ -533,6 +533,10 @@ impl JupiterService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     #[tokio::test]
     async fn test_get_quote() {
@@ -607,5 +611,232 @@ mod tests {
             "So11111111111111111111111111111111111111112"
         );
         assert!(quote.out_amount > 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_swap_transaction() {
+        // Start a mock server
+        let mock_server = MockServer::start().await;
+
+        let quote = QuoteResponse {
+            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            output_mint: "So11111111111111111111111111111111111111112".to_string(),
+            in_amount: 1000000,
+            out_amount: 24860952,
+            other_amount_threshold: 24362733,
+            price_impact_pct: 0.1,
+            swap_mode: "ExactIn".to_string(),
+            slippage_bps: 50,
+            route_plan: vec![RoutePlan {
+                percent: 100,
+                swap_info: SwapInfo {
+                    amm_key: "test_amm_key".to_string(),
+                    label: "test_label".to_string(),
+                    input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    output_mint: "So11111111111111111111111111111111111111112".to_string(),
+                    in_amount: "1000000".to_string(),
+                    out_amount: "24860952".to_string(),
+                    fee_amount: "1000".to_string(),
+                    fee_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                },
+            }],
+        };
+
+        let swap_response = SwapResponse {
+            swap_transaction:
+                "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                    .to_string(),
+            last_valid_block_height: 12345678,
+            prioritization_fee_lamports: Some(5000),
+            compute_unit_limit: Some(200000),
+            simulation_error: None,
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/swap/v1/swap"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&swap_response))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Create service using the mock server URL
+        let service = MainnetJupiterService {
+            client: Client::new(),
+            base_url: mock_server.uri(),
+        };
+
+        // Create and send swap request
+        let request = SwapRequest {
+            quote_response: quote,
+            user_public_key: "test_public_key".to_string(),
+            wrap_and_unwrap_sol: Some(true),
+            fee_account: None,
+            compute_unit_price_micro_lamports: None,
+            prioritization_fee_lamports: None,
+        };
+
+        let result = service.get_swap_transaction(request).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.last_valid_block_height, 12345678);
+        assert_eq!(response.prioritization_fee_lamports, Some(5000));
+        assert_eq!(response.compute_unit_limit, Some(200000));
+    }
+
+    #[tokio::test]
+    async fn test_get_ultra_order() {
+        let mock_server = MockServer::start().await;
+
+        // Prepare mock response
+        let ultra_response = UltraOrderResponse {
+            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            output_mint: "So11111111111111111111111111111111111111112".to_string(),
+            in_amount: 1000000,
+            out_amount: 24860952,
+            other_amount_threshold: 24362733,
+            price_impact_pct: 0.1,
+            swap_mode: "ExactIn".to_string(),
+            slippage_bps: 50,
+            route_plan: vec![RoutePlan {
+                percent: 100,
+                swap_info: SwapInfo {
+                    amm_key: "test_amm_key".to_string(),
+                    label: "test_label".to_string(),
+                    input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    output_mint: "So11111111111111111111111111111111111111112".to_string(),
+                    in_amount: "1000000".to_string(),
+                    out_amount: "24860952".to_string(),
+                    fee_amount: "1000".to_string(),
+                    fee_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                },
+            }],
+            prioritization_fee_lamports: 5000,
+            transaction: Some("test_transaction".to_string()),
+            request_id: "test_request_id".to_string(),
+        };
+
+        // Mock the ultra order endpoint with query parameters
+        Mock::given(method("GET"))
+            .and(path("/ultra/v1/order"))
+            .and(query_param(
+                "inputMint",
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            ))
+            .and(query_param(
+                "outputMint",
+                "So11111111111111111111111111111111111111112",
+            ))
+            .and(query_param("amount", "1000000"))
+            .and(query_param("taker", "test_taker"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&ultra_response))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        // Create service using the mock server URL
+        let service = MainnetJupiterService {
+            client: Client::new(),
+            base_url: mock_server.uri(),
+        };
+
+        // Create and send order request
+        let request = UltraOrderRequest {
+            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            output_mint: "So11111111111111111111111111111111111111112".to_string(),
+            amount: 1000000,
+            taker: "test_taker".to_string(),
+        };
+
+        let result = service.get_ultra_order(request).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.in_amount, 1000000);
+        assert_eq!(response.out_amount, 24860952);
+        assert_eq!(response.request_id, "test_request_id");
+        assert!(response.transaction.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_execute_ultra_order() {
+        let mock_server = MockServer::start().await;
+
+        let execute_response = UltraExecuteResponse {
+            swap_transaction:
+                "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                    .to_string(),
+            last_valid_block_height: 12345678,
+            prioritization_fee_lamports: Some(5000),
+            compute_unit_limit: Some(200000),
+            simulation_error: None,
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/ultra/v1/execute"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&execute_response))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let service = MainnetJupiterService {
+            client: Client::new(),
+            base_url: mock_server.uri(),
+        };
+
+        // Create and send execute request
+        let request = UltraExecuteRequest {
+            signed_transaction: "signed_transaction_data".to_string(),
+            request_id: "test_request_id".to_string(),
+        };
+
+        let result = service.execute_ultra_order(request).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.last_valid_block_height, 12345678);
+        assert_eq!(response.prioritization_fee_lamports, Some(5000));
+        assert_eq!(response.compute_unit_limit, Some(200000));
+    }
+
+    #[tokio::test]
+    async fn test_error_handling_for_api_errors() {
+        let mock_server = MockServer::start().await;
+
+        // Mock an error response
+        Mock::given(method("GET"))
+            .and(path("/ultra/v1/order"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("Invalid request"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Create service using the mock server URL
+        let service = MainnetJupiterService {
+            client: Client::new(),
+            base_url: mock_server.uri(),
+        };
+
+        // Create and send request that should fail
+        let request = UltraOrderRequest {
+            input_mint: "invalid_mint".to_string(),
+            output_mint: "invalid_mint".to_string(),
+            amount: 1000000,
+            taker: "test_taker".to_string(),
+        };
+
+        let result = service.get_ultra_order(request).await;
+
+        // result.unwrap();
+
+        // Verify we get an API error
+        assert!(result.is_err());
+        match result {
+            Err(JupiterServiceError::HttpRequestError(err)) => {
+                assert!(err
+                    .to_string()
+                    .contains("HTTP status client error (400 Bad Request)"));
+            }
+            _ => panic!("Expected ApiError but got different error type"),
+        }
     }
 }
