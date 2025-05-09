@@ -9,7 +9,8 @@ use crate::services::{
     SolanaSigner,
 };
 use async_trait::async_trait;
-
+#[cfg(test)]
+use mockall::automock;
 /// Result of a swap operation
 #[derive(Debug)]
 pub struct SwapResult {
@@ -30,6 +31,7 @@ pub struct SwapParams {
 
 /// Trait defining DEX swap functionality
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait DexStrategy: Send + Sync {
     /// Execute a token swap operation
     async fn execute_swap(&self, params: SwapParams) -> Result<SwapResult, RelayerError>;
@@ -94,6 +96,39 @@ pub fn create_network_dex(
         }),
         SolanaSwapStrategy::JupiterUltra => Ok(DefaultNetworkDex::JupiterUltra {
             dex: jupiter_ultra::DefaultJupiterUltraDex::new(signer_service, jupiter_service),
+        }),
+    }
+}
+
+// Helper function to create the appropriate DEX implementation
+pub fn create_network_dex_generic<P, S, J>(
+    relayer: &RelayerRepoModel,
+    provider: Arc<P>,
+    signer_service: Arc<S>,
+    jupiter_service: Arc<J>,
+) -> Result<NetworkDex<P, S, J>, RelayerError>
+where
+    P: SolanaProviderTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Send + Sync + 'static,
+    J: JupiterServiceTrait + Send + Sync + 'static,
+{
+    // Get the DEX strategy from the relayer's policies
+    let policy = relayer.policies.get_solana_policy();
+    let strategy = match policy.get_swap_config() {
+        Some(config) => config.strategy.unwrap_or(SolanaSwapStrategy::JupiterUltra),
+        None => SolanaSwapStrategy::JupiterUltra, // Default to Jupiter Ultra if not specified
+    };
+
+    match strategy {
+        SolanaSwapStrategy::JupiterSwap => Ok(NetworkDex::JupiterSwap {
+            dex: jupiter_swap::JupiterSwapDex::<P, S, J>::new(
+                provider,
+                signer_service,
+                jupiter_service,
+            ),
+        }),
+        SolanaSwapStrategy::JupiterUltra => Ok(NetworkDex::JupiterUltra {
+            dex: jupiter_ultra::JupiterUltraDex::<S, J>::new(signer_service, jupiter_service),
         }),
     }
 }

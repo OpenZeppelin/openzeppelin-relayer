@@ -54,7 +54,7 @@ pub struct SolanaRelayer<R, T, J, S, JS, SP>
 where
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
+    J: JobProducerTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
@@ -63,7 +63,7 @@ where
     signer: Arc<S>,
     network: SolanaNetwork,
     provider: Arc<SP>,
-    rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
+    rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J>>>,
     relayer_repository: Arc<R>,
     transaction_repository: Arc<T>,
     job_producer: Arc<J>,
@@ -93,7 +93,7 @@ where
         signer: Arc<S>,
         relayer_repository: Arc<R>,
         provider: Arc<SP>,
-        rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl>>,
+        rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J>>>,
         transaction_repository: Arc<T>,
         job_producer: Arc<J>,
         dex_service: Arc<NetworkDex<SP, S, JS>>,
@@ -301,7 +301,6 @@ where
 }
 
 #[async_trait]
-// impl SolanaRelayerDexTrait for SolanaRelayer {
 impl<R, T, J, S, JS, SP> SolanaRelayerDexTrait for SolanaRelayer<R, T, J, S, JS, SP>
 where
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
@@ -684,4 +683,78 @@ where
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::{
+        domain::{create_network_dex_generic, MockDexStrategy, MockSolanaRpcMethods},
+        jobs::MockJobProducerTrait,
+        models::{RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaSwapStrategy},
+        repositories::{MockRelayerRepository, MockRepository},
+        services::{
+            MockJupiterService, MockJupiterServiceTrait, MockSolanaProviderTrait,
+            MockSolanaSignTrait,
+        },
+    };
+    use mockall::predicate::*;
+
+    // Helper function to create a test relayer model
+    fn create_test_relayer() -> RelayerRepoModel {
+        let mut relayer = RelayerRepoModel::default();
+        relayer.id = "test-relayer-id".to_string();
+        relayer.address = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string();
+        relayer
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_swap_request_no_swap_config() {
+        let mut mock_relayer_repo = MockRelayerRepository::new();
+        let mock_tx_repo = MockRepository::<TransactionRepoModel, String>::new();
+        let mock_job_producer_arc = Arc::new(MockJobProducerTrait::new());
+        let mock_provider_arc = Arc::new(MockSolanaProviderTrait::new());
+        let mock_jupiter_service_arc = Arc::new(MockJupiterServiceTrait::new());
+        let mock_signer_arc = Arc::new(MockSolanaSignTrait::new());
+        let relayer = create_test_relayer();
+        let mock_dex = create_network_dex_generic(
+            &relayer,
+            mock_provider_arc.clone(),
+            mock_signer_arc.clone(),
+            mock_jupiter_service_arc.clone(),
+        )
+        .unwrap();
+        let mock_rpc_handler = Arc::new(SolanaRpcHandler::new(SolanaRpcMethodsImpl::new_mock(
+            relayer.clone(),
+            mock_provider_arc.clone(),
+            mock_signer_arc.clone(),
+            mock_jupiter_service_arc.clone(),
+            mock_job_producer_arc.clone(),
+        )));
+
+        let relayer_clone = relayer.clone();
+
+        mock_relayer_repo
+            .expect_get_by_id()
+            .with(eq("test-relayer-id".to_string()))
+            .times(1)
+            .returning(move |_| Ok(relayer.clone()));
+
+        let relayer = SolanaRelayer {
+            relayer: relayer_clone,
+            signer: mock_signer_arc.clone(),
+            network: SolanaNetwork::from_network_str("devnet").unwrap(),
+            provider: mock_provider_arc.clone(),
+            rpc_handler: mock_rpc_handler,
+            relayer_repository: Arc::new(mock_relayer_repo),
+            transaction_repository: Arc::new(mock_tx_repo),
+            job_producer: mock_job_producer_arc.clone(),
+            dex_service: Arc::new(mock_dex),
+        };
+
+        let result = relayer
+            .handle_token_swap_request("test-relayer-id".to_string())
+            .await;
+
+        assert!(result.is_ok());
+        let swap_results = result.unwrap();
+        assert!(swap_results.is_empty());
+    }
+}
