@@ -1,5 +1,8 @@
+use crate::models::NetworkError;
 use core::{fmt, time::Duration};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use soroban_rs::xdr::Hash;
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -44,6 +47,19 @@ impl StellarNamedNetwork {
         }
     }
 
+    pub const fn passphrase(&self) -> &'static str {
+        match self {
+            StellarNamedNetwork::Mainnet => "Public Global Stellar Network ; September 2015",
+            StellarNamedNetwork::Testnet => "Test SDF Network ; September 2015",
+        }
+    }
+
+    pub fn network_id(&self) -> Result<Hash, NetworkError> {
+        let passphrase = self.passphrase();
+        let hash_bytes: [u8; 32] = Sha256::digest(passphrase.as_bytes()).into();
+        Ok(Hash(hash_bytes))
+    }
+
     pub const fn is_testnet(&self) -> bool {
         matches!(self, StellarNamedNetwork::Testnet)
     }
@@ -62,15 +78,16 @@ impl AsRef<str> for StellarNamedNetwork {
 }
 
 impl FromStr for StellarNamedNetwork {
-    type Err = (); // Define an appropriate error type
+    type Err = NetworkError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            // Add your specific string-to-network mappings here
             "mainnet" => Ok(StellarNamedNetwork::Mainnet),
             "testnet" => Ok(StellarNamedNetwork::Testnet),
-            // Add other network mappings as needed
-            _ => Err(()), // Return an error for unrecognized strings
+            _ => Err(NetworkError::InvalidNetwork(format!(
+                "Invalid Stellar network: {}",
+                s
+            ))),
         }
     }
 }
@@ -165,6 +182,18 @@ mod tests {
         assert_eq!(
             StellarNamedNetwork::Testnet.average_blocktime(),
             Some(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn test_passphrase() {
+        assert_eq!(
+            StellarNamedNetwork::Mainnet.passphrase(),
+            "Public Global Stellar Network ; September 2015"
+        );
+        assert_eq!(
+            StellarNamedNetwork::Testnet.passphrase(),
+            "Test SDF Network ; September 2015"
         );
     }
 

@@ -3,4 +3,7 @@
 /// the `evm_relayer` submodule which contains the core logic for
 /// relaying transactions and events between different EVM networks.
 mod evm_relayer;
+mod validations;
+
 pub use evm_relayer::*;
+pub use validations::*;

@@ -57,10 +57,11 @@ pub trait Signer: Send + Sync {
 }
 
 #[allow(dead_code)]
+#[allow(clippy::large_enum_variant)]
 pub enum NetworkSigner {
     Evm(EvmSigner),
     Solana(SolanaSigner),
-    Stellar(EvmSigner), // TODO replace with StellarSigner
+    Stellar(StellarSigner),
 }
 
 #[async_trait]
@@ -142,7 +143,8 @@ impl SignerFactory {
                 NetworkSigner::Solana(solana_signer)
             }
             NetworkType::Stellar => {
-                return Err(SignerFactoryError::UnsupportedType("Vault".into()));
+                let stellar_signer = StellarSignerFactory::create_stellar_signer(signer_model)?;
+                NetworkSigner::Stellar(stellar_signer)
             }
         };
 
