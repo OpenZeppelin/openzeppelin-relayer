@@ -60,7 +60,7 @@ pub enum ConfigFileRelayerSolanaFeePaymentStrategy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ConfigFileRelayerSolanaSwapStrategy {
     JupiterSwap,
     JupiterUltra,
@@ -313,13 +313,24 @@ impl RelayerFileConfig {
 
     fn validate_solana_swap_config(
         &self,
-        swap_config: &Option<ConfigFileRelayerSolanaSwapPolicy>,
+        policy: &ConfigFileRelayerSolanaPolicy,
         network: &str,
     ) -> Result<(), ConfigFileError> {
-        let swap_config = match swap_config {
+        let swap_config = match &policy.swap_config {
             Some(config) => config,
             None => return Ok(()),
         };
+
+        if let Some(fee_payment_strategy) = &policy.fee_payment_strategy {
+            match fee_payment_strategy {
+                ConfigFileRelayerSolanaFeePaymentStrategy::User => {}
+                ConfigFileRelayerSolanaFeePaymentStrategy::Relayer => {
+                    return Err(ConfigFileError::InvalidPolicy(
+                        "Swap config only supported for user fee payment strategy".into(),
+                    ));
+                }
+            }
+        }
 
         if let Some(strategy) = &swap_config.strategy {
             match strategy {
@@ -372,7 +383,7 @@ impl RelayerFileConfig {
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
                     self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
-                    self.validate_solana_swap_config(&policy.swap_config, &self.network)?;
+                    self.validate_solana_swap_config(&policy, &self.network)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(

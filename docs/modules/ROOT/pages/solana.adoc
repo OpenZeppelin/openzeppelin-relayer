@@ -1,0 +1,65 @@
+= Solana Integration
+
+== Solana DEX integration
+
+The Relayer can perform automated token‐swaps on Solana using one of two strategies:
+
+* **jupiter-swap** – uses the https://dev.jup.ag/docs/swap-api/[Jupiter Swap API]  
+* **jupiter-ultra** – uses the https://dev.jup.ag/docs/ultra-api/[Jupiter Ultra API]  
+
+== Configuration
+
+In your relayer’s `policies.swap_config`:
+
+[source,json]
+----
+"swap_config": {
+  "strategy": "jupiter-swap",
+  "cron_schedule": "0 0 * * * *",      // every hour on the hour
+  "min_balance_threshold": 1_000_000   // lamports
+}
+----
+
+* `strategy` (jupiter-swap | jupiter-ultra)  
+* `cron_schedule` (string, six‐field cron)  
+* `min_balance_threshold` (u64 lamports)
+
+Per token configuration allows setting more granular configuration for swap amounts.
+
+[source,json]
+----
+"allowed_tokens": [
+  {
+    "mint": "So111…",
+    "swap_config": {
+      "min_amount": 10,
+      "max_amount": 1000,
+      "retain_min_amount": 50
+    }
+  }
+]
+----
+
+* `min_amount` (unsigned 64)  
+  If the computed swap amount would be less than this, *no* swap occurs for that token.  
+* `max_amount` (unsigned 64)  
+  The cap on how many token units may be swapped in one job.  
+* `retain_min_amount` (unsigned 64)  
+  Ensures at least this many tokens remain in the account after the swap.
+
+
+== How It Works
+
+
+The Solana DEX integration operates in two modes:
+
+- **Scheduled Swaps**  
+  A background job enqueues `handle_token_swap_request` according to the `cron_schedule` you’ve configured in `policies.swap_config`.  
+- **On-Demand Swaps**  
+  If any RPC call fails with an `InsufficientFunds` error (e.g. during a transfer or fee estimation), the relayer will automatically invoke the same swap logic before returning the RPC error to the client.
+
+=== Notes
+
+* Only tokens explicitly listed in `allowed_tokens` will ever be swapped.  
+* Swaps are gated by your chosen fee payment strategy—you must use “user” fees for automated token-swap support.  
+* Strategies `jupiter-swap` and `jupiter-ultra` are only available on `mainnet-beta`.  
