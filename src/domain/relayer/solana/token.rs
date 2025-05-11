@@ -357,9 +357,7 @@ impl SolanaTokenProgram {
             .map_err(|e| {
                 TokenError::AccountError(format!(
                     "Failed to fetch token account for owner {} and mint {}: {}",
-                    owner.to_string(),
-                    mint.to_string(),
-                    e
+                    owner, mint, e
                 ))
             })?;
 

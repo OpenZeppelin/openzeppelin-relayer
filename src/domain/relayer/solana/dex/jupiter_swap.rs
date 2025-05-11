@@ -124,7 +124,7 @@ where
         // 6. Return the result with actual amounts
         Ok(SwapResult {
             source_amount: params.amount,
-            destination_amount: quote.out_amount.clone(),
+            destination_amount: quote.out_amount,
             transaction_signature: signature.to_string(),
         })
     }

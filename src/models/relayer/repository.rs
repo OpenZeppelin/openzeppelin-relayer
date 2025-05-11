@@ -69,7 +69,7 @@ impl Default for RelayerEvmPolicy {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 pub struct SolanaAllowedTokensSwapConfig {
     #[schema(nullable = false)]
     pub slippage_percentage: Option<f32>,
@@ -79,17 +79,6 @@ pub struct SolanaAllowedTokensSwapConfig {
     pub max_amount: Option<u64>,
     #[schema(nullable = false)]
     pub retain_min_amount: Option<u64>,
-}
-
-impl Default for SolanaAllowedTokensSwapConfig {
-    fn default() -> Self {
-        Self {
-            slippage_percentage: None,
-            min_amount: None,
-            max_amount: None,
-            retain_min_amount: None,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

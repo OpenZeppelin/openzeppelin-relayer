@@ -142,7 +142,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
             if swap_config.cron_schedule.is_none() {
                 return false;
             }
-            return true;
+            true
         })
         .collect::<Vec<_>>();
 

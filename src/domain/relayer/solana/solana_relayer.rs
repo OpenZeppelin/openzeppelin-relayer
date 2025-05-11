@@ -89,6 +89,7 @@ where
     JS: JupiterServiceTrait + Send + Sync,
     SP: SolanaProviderTrait + Send + Sync,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         relayer: RelayerRepoModel,
         signer: Arc<S>,
@@ -747,11 +748,10 @@ mod tests {
             let job = Arc::new(MockJobProducerTrait::new());
             let tx_repo = Arc::new(MockRepository::<TransactionRepoModel, String>::new());
 
-            let relayer_model = {
-                let mut r = RelayerRepoModel::default();
-                r.id = "test-id".to_string();
-                r.address = "...".to_string();
-                r
+            let relayer_model = RelayerRepoModel {
+                id: "test-id".to_string(),
+                address: "...".to_string(),
+                ..Default::default()
             };
 
             let dex = Arc::new(
@@ -787,7 +787,7 @@ mod tests {
     }
 
     impl TestCtx {
-        fn into_relayer<R>(
+        fn into_relayer(
             self,
         ) -> SolanaRelayer<
             MockRelayerRepository,
@@ -812,10 +812,11 @@ mod tests {
     }
 
     fn create_test_relayer() -> RelayerRepoModel {
-        let mut relayer = RelayerRepoModel::default();
-        relayer.id = "test-relayer-id".to_string();
-        relayer.address = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string();
-        relayer
+        RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(),
+            ..Default::default()
+        }
     }
 
     fn create_token_policy(
@@ -833,11 +834,12 @@ mod tests {
             symbol: Some("SOL".to_string()),
         };
 
-        let mut swap_config = SolanaAllowedTokensSwapConfig::default();
-        swap_config.min_amount = min_amount;
-        swap_config.max_amount = max_amount;
-        swap_config.retain_min_amount = retain_min;
-        swap_config.slippage_percentage = slippage.map(|s| s as f32);
+        let swap_config = SolanaAllowedTokensSwapConfig {
+            min_amount,
+            max_amount,
+            retain_min_amount: retain_min,
+            slippage_percentage: slippage.map(|s| s as f32),
+        };
 
         token.swap_config = Some(swap_config);
         token
@@ -846,7 +848,7 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_no_limits() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         assert_eq!(
             sut.calculate_swap_amount(100, None, None, None).unwrap(),
@@ -857,7 +859,7 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_with_max() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         assert_eq!(
             sut.calculate_swap_amount(100, None, Some(60), None)
@@ -869,7 +871,7 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_with_retain() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         assert_eq!(
             sut.calculate_swap_amount(100, None, None, Some(30))
@@ -886,7 +888,7 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_with_min() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         assert_eq!(
             sut.calculate_swap_amount(40, Some(50), None, None).unwrap(),
@@ -903,7 +905,7 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_combined() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         assert_eq!(
             sut.calculate_swap_amount(100, None, Some(50), Some(30))
@@ -1064,7 +1066,7 @@ mod tests {
             dex,
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
         let res = sut
             .handle_token_swap_request(create_test_relayer().id)
             .await
@@ -1208,7 +1210,7 @@ mod tests {
             dex,
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let res = sut
             .handle_token_swap_request(create_test_relayer().id)
@@ -1255,7 +1257,7 @@ mod tests {
             mock_repo: mock_relayer_repo,
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let res = sut.handle_token_swap_request(id).await;
         assert!(res.is_ok());
@@ -1289,7 +1291,7 @@ mod tests {
             mock_repo: mock_relayer_repo,
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let res = sut.handle_token_swap_request(id).await.unwrap();
         assert!(res.is_empty(), "should return empty when no strategy");
@@ -1322,7 +1324,7 @@ mod tests {
             mock_repo: mock_relayer_repo,
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let res = sut.handle_token_swap_request(id).await.unwrap();
         assert!(res.is_empty(), "should return empty when no allowed_tokens");
@@ -1340,7 +1342,7 @@ mod tests {
             provider: Arc::new(raw_provider),
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
         let res = sut.validate_rpc().await;
 
         assert!(
@@ -1364,7 +1366,7 @@ mod tests {
             ..Default::default()
         };
 
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
         let err = sut.validate_rpc().await.unwrap_err();
 
         match err {
@@ -1379,7 +1381,7 @@ mod tests {
     async fn test_check_balance_no_swap_config() {
         // default ctx has no swap_config
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         // should do nothing and succeed
         assert!(sut
@@ -1402,7 +1404,7 @@ mod tests {
             ..Default::default()
         });
         ctx.relayer_model = model;
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         assert!(sut
             .check_balance_and_trigger_token_swap_if_needed()
@@ -1443,7 +1445,7 @@ mod tests {
         let mut ctx = ctx;
         ctx.relayer_model = model;
 
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
         assert!(sut
             .check_balance_and_trigger_token_swap_if_needed()
             .await
@@ -1457,7 +1459,6 @@ mod tests {
             .expect_get_balance()
             .times(1)
             .returning(|_| Box::pin(async { Ok(5_u64) }));
-        let provider = Arc::new(raw_provider);
 
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
@@ -1467,10 +1468,7 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let job_producer = Arc::new(raw_job);
 
-        let mut ctx = TestCtx::default();
-        ctx.provider = provider;
-        ctx.job_producer = job_producer;
-        let mut model = ctx.relayer_model.clone();
+        let mut model = create_test_relayer();
         model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             swap_config: Some(RelayerSolanaSwapConfig {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
@@ -1479,9 +1477,15 @@ mod tests {
             }),
             ..Default::default()
         });
-        ctx.relayer_model = model;
 
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let ctx = TestCtx {
+            relayer_model: model,
+            provider: Arc::new(raw_provider),
+            job_producer,
+            ..Default::default()
+        };
+
+        let sut = ctx.into_relayer();
         assert!(sut
             .check_balance_and_trigger_token_swap_if_needed()
             .await
@@ -1499,7 +1503,7 @@ mod tests {
             provider: Arc::new(raw_provider),
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let res = sut.get_balance().await.unwrap();
 
@@ -1518,7 +1522,7 @@ mod tests {
             provider: Arc::new(raw_provider),
             ..Default::default()
         };
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let err = sut.get_balance().await.unwrap_err();
 
@@ -1532,23 +1536,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_min_balance_success() {
-        use crate::models::{RelayerNetworkPolicy, RelayerSolanaPolicy};
         let mut raw_provider = MockSolanaProviderTrait::new();
         raw_provider
             .expect_get_balance()
             .times(1)
             .returning(|_| Box::pin(async { Ok(100_u64) }));
-        let mut ctx = TestCtx::default();
-        ctx.provider = Arc::new(raw_provider);
 
-        let mut model = ctx.relayer_model.clone();
+        let mut model = create_test_relayer();
         model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             min_balance: 50,
             ..Default::default()
         });
-        ctx.relayer_model = model;
 
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let ctx = TestCtx {
+            relayer_model: model,
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let sut = ctx.into_relayer();
         assert!(sut.validate_min_balance().await.is_ok());
     }
 
@@ -1559,17 +1565,20 @@ mod tests {
             .expect_get_balance()
             .times(1)
             .returning(|_| Box::pin(async { Ok(10_u64) }));
-        let mut ctx = TestCtx::default();
-        ctx.provider = Arc::new(raw_provider);
 
-        let mut model = ctx.relayer_model.clone();
+        let mut model = create_test_relayer();
         model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             min_balance: 50,
             ..Default::default()
         });
-        ctx.relayer_model = model;
 
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let ctx = TestCtx {
+            relayer_model: model,
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+
+        let sut = ctx.into_relayer();
         let err = sut.validate_min_balance().await.unwrap_err();
         match err {
             RelayerError::InsufficientBalanceError(msg) => {
@@ -1586,10 +1595,12 @@ mod tests {
             .expect_get_balance()
             .times(1)
             .returning(|_| Box::pin(async { Err(SolanaProviderError::RpcError("fail".into())) }));
-        let mut ctx = TestCtx::default();
-        ctx.provider = Arc::new(raw_provider);
+        let ctx = TestCtx {
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
 
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
         let err = sut.validate_min_balance().await.unwrap_err();
         match err {
             RelayerError::ProviderError(msg) => {
@@ -1602,7 +1613,7 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_invalid_params() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -1625,7 +1636,7 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_success() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let sut = ctx.into_relayer();
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),

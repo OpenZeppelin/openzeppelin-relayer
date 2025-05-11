@@ -99,7 +99,7 @@ where
 
         Ok(SwapResult {
             source_amount: params.amount,
-            destination_amount: order.out_amount.clone(),
+            destination_amount: order.out_amount,
             transaction_signature: signature.to_string(),
         })
     }
