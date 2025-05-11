@@ -5,7 +5,6 @@
 
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
-use chrono::{DateTime, Utc};
 use eyre::Result;
 use log::info;
 
@@ -43,12 +42,7 @@ pub async fn solana_token_swap_request_handler(
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct CronReminder(DateTime<Utc>);
-impl From<DateTime<Utc>> for CronReminder {
-    fn from(t: DateTime<Utc>) -> Self {
-        CronReminder(t)
-    }
-}
+pub struct CronReminder();
 
 /// Handles incoming swap jobs from the cron queue.
 pub async fn solana_token_swap_cron_handler(

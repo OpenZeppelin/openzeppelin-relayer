@@ -43,6 +43,7 @@ use super::{
     SwapResult, TokenAccount,
 };
 
+#[allow(dead_code)]
 struct TokenSwapCandidate<'a> {
     policy: &'a SolanaAllowedTokensPolicy,
     account: TokenAccount,
@@ -310,6 +311,15 @@ where
     JS: JupiterServiceTrait + Send + Sync,
     SP: SolanaProviderTrait + Send + Sync,
 {
+    /// Processes a token‐swap request for the given relayer ID:
+    ///
+    /// 1. Loads the relayer’s on‐chain policy (must include swap_config & strategy).
+    /// 2. Iterates allowed tokens, fetching each SPL token account and calculating how much
+    ///    to swap based on min, max, and retain settings.
+    /// 3. Executes each swap through the DEX service (e.g. Jupiter).
+    /// 4. Collects and returns all `SwapResult`s (empty if no swaps were needed).
+    ///
+    /// Returns a `RelayerError` on any repository, provider, or swap execution failure.
     async fn handle_token_swap_request(
         &self,
         relayer_id: String,
@@ -686,18 +696,121 @@ where
 mod tests {
     use super::*;
     use crate::{
-        domain::{create_network_dex_generic, MockDexStrategy, MockSolanaRpcMethods},
+        domain::create_network_dex_generic,
         jobs::MockJobProducerTrait,
-        models::{RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaSwapStrategy},
+        models::{
+            EncodedSerializedTransaction, FeeEstimateRequestParams,
+            GetFeaturesEnabledRequestParams, RelayerSolanaSwapConfig,
+            SolanaAllowedTokensSwapConfig, SolanaRpcResult, SolanaSwapStrategy,
+        },
         repositories::{MockRelayerRepository, MockRepository},
         services::{
-            MockJupiterService, MockJupiterServiceTrait, MockSolanaProviderTrait,
-            MockSolanaSignTrait,
+            MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait, QuoteResponse,
+            RoutePlan, SolanaProviderError, SwapInfo, SwapResponse, UltraExecuteResponse,
+            UltraOrderResponse,
         },
     };
     use mockall::predicate::*;
+    use solana_sdk::{hash::Hash, program_pack::Pack, signature::Signature};
+    use spl_token::state::Account as SplAccount;
 
-    // Helper function to create a test relayer model
+    /// Bundles all the pieces you need to instantiate a SolanaRelayer.
+    /// Default::default gives you fresh mocks, but you can override any of them.
+    #[allow(dead_code)]
+    struct TestCtx {
+        relayer_model: RelayerRepoModel,
+        mock_repo: MockRelayerRepository,
+        provider: Arc<MockSolanaProviderTrait>,
+        signer: Arc<MockSolanaSignTrait>,
+        jupiter: Arc<MockJupiterServiceTrait>,
+        job_producer: Arc<MockJobProducerTrait>,
+        tx_repo: Arc<MockRepository<TransactionRepoModel, String>>,
+        dex: Arc<NetworkDex<MockSolanaProviderTrait, MockSolanaSignTrait, MockJupiterServiceTrait>>,
+        rpc_handler: Arc<
+            SolanaRpcHandler<
+                SolanaRpcMethodsImpl<
+                    MockSolanaProviderTrait,
+                    MockSolanaSignTrait,
+                    MockJupiterServiceTrait,
+                    MockJobProducerTrait,
+                >,
+            >,
+        >,
+    }
+
+    impl Default for TestCtx {
+        fn default() -> Self {
+            let mock_repo = MockRelayerRepository::new();
+            let provider = Arc::new(MockSolanaProviderTrait::new());
+            let signer = Arc::new(MockSolanaSignTrait::new());
+            let jupiter = Arc::new(MockJupiterServiceTrait::new());
+            let job = Arc::new(MockJobProducerTrait::new());
+            let tx_repo = Arc::new(MockRepository::<TransactionRepoModel, String>::new());
+
+            let relayer_model = {
+                let mut r = RelayerRepoModel::default();
+                r.id = "test-id".to_string();
+                r.address = "...".to_string();
+                r
+            };
+
+            let dex = Arc::new(
+                create_network_dex_generic(
+                    &relayer_model,
+                    provider.clone(),
+                    signer.clone(),
+                    jupiter.clone(),
+                )
+                .unwrap(),
+            );
+
+            let rpc_handler = Arc::new(SolanaRpcHandler::new(SolanaRpcMethodsImpl::new_mock(
+                relayer_model.clone(),
+                provider.clone(),
+                signer.clone(),
+                jupiter.clone(),
+                job.clone(),
+            )));
+
+            TestCtx {
+                relayer_model,
+                mock_repo,
+                provider,
+                signer,
+                jupiter,
+                job_producer: job,
+                tx_repo,
+                dex,
+                rpc_handler,
+            }
+        }
+    }
+
+    impl TestCtx {
+        fn into_relayer<R>(
+            self,
+        ) -> SolanaRelayer<
+            MockRelayerRepository,
+            MockRepository<TransactionRepoModel, String>,
+            MockJobProducerTrait,
+            MockSolanaSignTrait,
+            MockJupiterServiceTrait,
+            MockSolanaProviderTrait,
+        > {
+            SolanaRelayer {
+                relayer: self.relayer_model.clone(),
+                signer: self.signer,
+                network: SolanaNetwork::from_network_str("devnet").unwrap(),
+                provider: self.provider,
+                rpc_handler: self.rpc_handler,
+                relayer_repository: Arc::new(self.mock_repo),
+                transaction_repository: self.tx_repo,
+                job_producer: self.job_producer,
+                dex_service: self.dex,
+            }
+        }
+    }
+
     fn create_test_relayer() -> RelayerRepoModel {
         let mut relayer = RelayerRepoModel::default();
         relayer.id = "test-relayer-id".to_string();
@@ -705,56 +818,834 @@ mod tests {
         relayer
     }
 
-    #[tokio::test]
-    async fn test_handle_token_swap_request_no_swap_config() {
-        let mut mock_relayer_repo = MockRelayerRepository::new();
-        let mock_tx_repo = MockRepository::<TransactionRepoModel, String>::new();
-        let mock_job_producer_arc = Arc::new(MockJobProducerTrait::new());
-        let mock_provider_arc = Arc::new(MockSolanaProviderTrait::new());
-        let mock_jupiter_service_arc = Arc::new(MockJupiterServiceTrait::new());
-        let mock_signer_arc = Arc::new(MockSolanaSignTrait::new());
-        let relayer = create_test_relayer();
-        let mock_dex = create_network_dex_generic(
-            &relayer,
-            mock_provider_arc.clone(),
-            mock_signer_arc.clone(),
-            mock_jupiter_service_arc.clone(),
-        )
-        .unwrap();
-        let mock_rpc_handler = Arc::new(SolanaRpcHandler::new(SolanaRpcMethodsImpl::new_mock(
-            relayer.clone(),
-            mock_provider_arc.clone(),
-            mock_signer_arc.clone(),
-            mock_jupiter_service_arc.clone(),
-            mock_job_producer_arc.clone(),
-        )));
+    fn create_token_policy(
+        mint: &str,
+        min_amount: Option<u64>,
+        max_amount: Option<u64>,
+        retain_min: Option<u64>,
+        slippage: Option<u64>,
+    ) -> SolanaAllowedTokensPolicy {
+        let mut token = SolanaAllowedTokensPolicy {
+            mint: mint.to_string(),
+            max_allowed_fee: Some(0),
+            swap_config: None,
+            decimals: Some(9),
+            symbol: Some("SOL".to_string()),
+        };
 
-        let relayer_clone = relayer.clone();
+        let mut swap_config = SolanaAllowedTokensSwapConfig::default();
+        swap_config.min_amount = min_amount;
+        swap_config.max_amount = max_amount;
+        swap_config.retain_min_amount = retain_min;
+        swap_config.slippage_percentage = slippage.map(|s| s as f32);
+
+        token.swap_config = Some(swap_config);
+        token
+    }
+
+    #[test]
+    fn test_calculate_swap_amount_no_limits() {
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        assert_eq!(
+            sut.calculate_swap_amount(100, None, None, None).unwrap(),
+            100
+        );
+    }
+
+    #[test]
+    fn test_calculate_swap_amount_with_max() {
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        assert_eq!(
+            sut.calculate_swap_amount(100, None, Some(60), None)
+                .unwrap(),
+            60
+        );
+    }
+
+    #[test]
+    fn test_calculate_swap_amount_with_retain() {
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        assert_eq!(
+            sut.calculate_swap_amount(100, None, None, Some(30))
+                .unwrap(),
+            70
+        );
+
+        assert_eq!(
+            sut.calculate_swap_amount(20, None, None, Some(30)).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_calculate_swap_amount_with_min() {
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        assert_eq!(
+            sut.calculate_swap_amount(40, Some(50), None, None).unwrap(),
+            0
+        );
+
+        assert_eq!(
+            sut.calculate_swap_amount(100, Some(50), None, None)
+                .unwrap(),
+            100
+        );
+    }
+
+    #[test]
+    fn test_calculate_swap_amount_combined() {
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        assert_eq!(
+            sut.calculate_swap_amount(100, None, Some(50), Some(30))
+                .unwrap(),
+            50
+        );
+
+        assert_eq!(
+            sut.calculate_swap_amount(100, Some(20), Some(50), Some(30))
+                .unwrap(),
+            50
+        );
+
+        assert_eq!(
+            sut.calculate_swap_amount(100, Some(60), Some(50), Some(30))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_swap_request_successful_swap_jupiter_swap_strategy() {
+        let mut relayer_model = create_test_relayer();
+
+        let mut mock_relayer_repo = MockRelayerRepository::new();
+        let id = relayer_model.id.clone();
+
+        relayer_model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: Some(SolanaSwapStrategy::JupiterSwap),
+                cron_schedule: None,
+                min_balance_threshold: None,
+            }),
+            allowed_tokens: Some(vec![create_token_policy(
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                Some(1),
+                None,
+                None,
+                Some(50),
+            )]),
+            ..Default::default()
+        });
+        let cloned = relayer_model.clone();
 
         mock_relayer_repo
             .expect_get_by_id()
-            .with(eq("test-relayer-id".to_string()))
+            .with(eq(id.clone()))
             .times(1)
-            .returning(move |_| Ok(relayer.clone()));
+            .returning(move |_| Ok(cloned.clone()));
 
-        let relayer = SolanaRelayer {
-            relayer: relayer_clone,
-            signer: mock_signer_arc.clone(),
-            network: SolanaNetwork::from_network_str("devnet").unwrap(),
-            provider: mock_provider_arc.clone(),
-            rpc_handler: mock_rpc_handler,
-            relayer_repository: Arc::new(mock_relayer_repo),
-            transaction_repository: Arc::new(mock_tx_repo),
-            job_producer: mock_job_producer_arc.clone(),
-            dex_service: Arc::new(mock_dex),
+        let mut raw_provider = MockSolanaProviderTrait::new();
+
+        raw_provider
+            .expect_get_account_from_pubkey()
+            .returning(|_| {
+                Box::pin(async {
+                    let mut account_data = vec![0; SplAccount::LEN];
+
+                    let token_account = spl_token::state::Account {
+                        mint: Pubkey::new_unique(),
+                        owner: Pubkey::new_unique(),
+                        amount: 10000000,
+                        state: spl_token::state::AccountState::Initialized,
+                        ..Default::default()
+                    };
+                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let mut jupiter_mock = MockJupiterServiceTrait::new();
+
+        jupiter_mock.expect_get_quote().returning(|_| {
+            Box::pin(async {
+                Ok(QuoteResponse {
+                    input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    output_mint: WRAPPED_SOL_MINT.to_string(),
+                    in_amount: 10,
+                    out_amount: 10,
+                    other_amount_threshold: 1,
+                    swap_mode: "ExactIn".to_string(),
+                    price_impact_pct: 0.0,
+                    route_plan: vec![RoutePlan {
+                        percent: 100,
+                        swap_info: SwapInfo {
+                            amm_key: "mock_amm_key".to_string(),
+                            label: "mock_label".to_string(),
+                            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                            output_mint: WRAPPED_SOL_MINT.to_string(),
+                            in_amount: "1000".to_string(),
+                            out_amount: "1000".to_string(),
+                            fee_amount: "0".to_string(),
+                            fee_mint: "mock_fee_mint".to_string(),
+                        },
+                    }],
+                    slippage_bps: 0,
+                })
+            })
+        });
+
+        jupiter_mock.expect_get_swap_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(SwapResponse {
+                    swap_transaction: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAKEZhsMunBegjHhwObzSrJeKhnl3sehIwqA8OCTejBJ/Z+O7sAR2gDS0+R1HXkqqjr0Wo3+auYeJQtq0il4DAumgiiHZpJZ1Uy9xq1yiOta3BcBOI7Dv+jmETs0W7Leny+AsVIwZWPN51bjn3Xk4uSzTFeAEom3HHY/EcBBpOfm7HkzWyukBvmNY5l9pnNxB/lTC52M7jy0Pxg6NhYJ37e1WXRYOFdoHOThs0hoFy/UG3+mVBbkR4sB9ywdKopv6IHO9+wuF/sV/02h9w+AjIBszK2bmCBPIrCZH4mqBdRcBFVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABPS2wOQQj9KmokeOrgrMWdshu07fURwWLPYC0eDAkB+1Jh0UqsxbwO7GNdqHBaH3CjnuNams8L+PIsxs5JAZ16jJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FmsH4P9uc5VDeldVYzceVRhzPQ3SsaI7BOphAAiCnjaBgMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAtD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ejnStls42Wf0xNRAChL93gEW4UQqPNOSYySLu5vwwX4aQR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKkGtJJ5s3DlXjsp517KoA8Lg71wC+tMHoDO9HDeQbotrwUMAAUCwFwVAAwACQOhzhsAAAAAAAoGAAQAIgcQAQEPOxAIAAUGAgQgIg8PDQ8hEg4JExEGARQUFAgQKAgmKgEDFhgXFSUnJCkQIywQIysIHSIqAh8DHhkbGhwLL8EgmzNB1pyBBwMAAAA6AWQAAU9kAQIvAABkAgNAQg8AAAAAAE3WYgAAAAAADwAAEAMEAAABCQMW8exZwhONJLLrrr9eKTOouI7XVrRLBjytPl3cL6rziwS+v7vCBB+8CQctooGHnRbQ3aoExfOLSH0uJhZijTPAKrJbYSJJ5hP1VwRmY2FlBkRkC2JtQsJRwDIR3Tbag/HLEdZxTPfqLWdCCyd0nco65bHdIoy/ByorMycoLzADMiYs".to_string(),
+                    last_valid_block_height: 100,
+                    prioritization_fee_lamports: None,
+                    compute_unit_limit: None,
+                    simulation_error: None,
+                })
+            })
+        });
+
+        let mut signer = MockSolanaSignTrait::new();
+        let test_signature = Signature::from_str("2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP").unwrap();
+
+        signer
+            .expect_sign()
+            .times(1)
+            .returning(move |_| Box::pin(async move { Ok(test_signature) }));
+
+        raw_provider
+            .expect_send_versioned_transaction()
+            .times(1)
+            .returning(move |_| Box::pin(async move { Ok(test_signature) }));
+
+        raw_provider
+            .expect_confirm_transaction()
+            .times(1)
+            .returning(move |_| Box::pin(async move { Ok(true) }));
+
+        let provider_arc = Arc::new(raw_provider);
+        let jupiter_arc = Arc::new(jupiter_mock);
+        let signer_arc = Arc::new(signer);
+
+        let dex = Arc::new(
+            create_network_dex_generic(
+                &relayer_model,
+                provider_arc.clone(),
+                signer_arc.clone(),
+                jupiter_arc.clone(),
+            )
+            .unwrap(),
+        );
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo: mock_relayer_repo,
+            provider: provider_arc.clone(),
+            jupiter: jupiter_arc.clone(),
+            signer: signer_arc.clone(),
+            dex,
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let res = sut
+            .handle_token_swap_request(create_test_relayer().id)
+            .await
+            .unwrap();
+        assert_eq!(res.len(), 1);
+        let swap = &res[0];
+        assert_eq!(swap.source_amount, 10000000);
+        assert_eq!(swap.destination_amount, 10);
+        assert_eq!(swap.transaction_signature, test_signature.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_swap_request_successful_swap_jupiter_ultra_strategy() {
+        let mut relayer_model = create_test_relayer();
+
+        let mut mock_relayer_repo = MockRelayerRepository::new();
+        let id = relayer_model.id.clone();
+
+        relayer_model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: Some(SolanaSwapStrategy::JupiterUltra),
+                cron_schedule: None,
+                min_balance_threshold: None,
+            }),
+            allowed_tokens: Some(vec![create_token_policy(
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                Some(1),
+                None,
+                None,
+                Some(50),
+            )]),
+            ..Default::default()
+        });
+        let cloned = relayer_model.clone();
+
+        mock_relayer_repo
+            .expect_get_by_id()
+            .with(eq(id.clone()))
+            .times(1)
+            .returning(move |_| Ok(cloned.clone()));
+
+        let mut raw_provider = MockSolanaProviderTrait::new();
+
+        raw_provider
+            .expect_get_account_from_pubkey()
+            .returning(|_| {
+                Box::pin(async {
+                    let mut account_data = vec![0; SplAccount::LEN];
+
+                    let token_account = spl_token::state::Account {
+                        mint: Pubkey::new_unique(),
+                        owner: Pubkey::new_unique(),
+                        amount: 10000000,
+                        state: spl_token::state::AccountState::Initialized,
+                        ..Default::default()
+                    };
+                    spl_token::state::Account::pack(token_account, &mut account_data).unwrap();
+
+                    Ok(solana_sdk::account::Account {
+                        lamports: 1_000_000,
+                        data: account_data,
+                        owner: spl_token::id(),
+                        executable: false,
+                        rent_epoch: 0,
+                    })
+                })
+            });
+
+        let mut jupiter_mock = MockJupiterServiceTrait::new();
+        jupiter_mock.expect_get_ultra_order().returning(|_| {
+            Box::pin(async {
+                Ok(UltraOrderResponse {
+                    transaction: Some("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAKEZhsMunBegjHhwObzSrJeKhnl3sehIwqA8OCTejBJ/Z+O7sAR2gDS0+R1HXkqqjr0Wo3+auYeJQtq0il4DAumgiiHZpJZ1Uy9xq1yiOta3BcBOI7Dv+jmETs0W7Leny+AsVIwZWPN51bjn3Xk4uSzTFeAEom3HHY/EcBBpOfm7HkzWyukBvmNY5l9pnNxB/lTC52M7jy0Pxg6NhYJ37e1WXRYOFdoHOThs0hoFy/UG3+mVBbkR4sB9ywdKopv6IHO9+wuF/sV/02h9w+AjIBszK2bmCBPIrCZH4mqBdRcBFVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABPS2wOQQj9KmokeOrgrMWdshu07fURwWLPYC0eDAkB+1Jh0UqsxbwO7GNdqHBaH3CjnuNams8L+PIsxs5JAZ16jJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FmsH4P9uc5VDeldVYzceVRhzPQ3SsaI7BOphAAiCnjaBgMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAtD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ejnStls42Wf0xNRAChL93gEW4UQqPNOSYySLu5vwwX4aQR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKkGtJJ5s3DlXjsp517KoA8Lg71wC+tMHoDO9HDeQbotrwUMAAUCwFwVAAwACQOhzhsAAAAAAAoGAAQAIgcQAQEPOxAIAAUGAgQgIg8PDQ8hEg4JExEGARQUFAgQKAgmKgEDFhgXFSUnJCkQIywQIysIHSIqAh8DHhkbGhwLL8EgmzNB1pyBBwMAAAA6AWQAAU9kAQIvAABkAgNAQg8AAAAAAE3WYgAAAAAADwAAEAMEAAABCQMW8exZwhONJLLrrr9eKTOouI7XVrRLBjytPl3cL6rziwS+v7vCBB+8CQctooGHnRbQ3aoExfOLSH0uJhZijTPAKrJbYSJJ5hP1VwRmY2FlBkRkC2JtQsJRwDIR3Tbag/HLEdZxTPfqLWdCCyd0nco65bHdIoy/ByorMycoLzADMiYs".to_string()),
+                    input_mint: "PjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    output_mint: WRAPPED_SOL_MINT.to_string(),
+                    in_amount: 10,
+                    out_amount: 10,
+                    other_amount_threshold: 1,
+                    swap_mode: "ExactIn".to_string(),
+                    price_impact_pct: 0.0,
+                    route_plan: vec![RoutePlan {
+                        percent: 100,
+                        swap_info: SwapInfo {
+                            amm_key: "mock_amm_key".to_string(),
+                            label: "mock_label".to_string(),
+                            input_mint: "PjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                            output_mint: WRAPPED_SOL_MINT.to_string(),
+                            in_amount: "1000".to_string(),
+                            out_amount: "1000".to_string(),
+                            fee_amount: "0".to_string(),
+                            fee_mint: "mock_fee_mint".to_string(),
+                        },
+                    }],
+                    prioritization_fee_lamports: 0,
+                    request_id: "mock_request_id".to_string(),
+                    slippage_bps: 0,
+                })
+            })
+        });
+
+        jupiter_mock.expect_execute_ultra_order().returning(|_| {
+            Box::pin(async {
+                Ok(UltraExecuteResponse {
+                    swap_transaction: "".to_string(),
+                    last_valid_block_height: 100,
+                    prioritization_fee_lamports: None,
+                    compute_unit_limit: None,
+                    simulation_error: None,
+                })
+            })
+        });
+
+        let mut signer = MockSolanaSignTrait::new();
+        let test_signature = Signature::from_str("2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP").unwrap();
+
+        signer
+            .expect_sign()
+            .times(1)
+            .returning(move |_| Box::pin(async move { Ok(test_signature) }));
+
+        let provider_arc = Arc::new(raw_provider);
+        let jupiter_arc = Arc::new(jupiter_mock);
+        let signer_arc = Arc::new(signer);
+
+        let dex = Arc::new(
+            create_network_dex_generic(
+                &relayer_model,
+                provider_arc.clone(),
+                signer_arc.clone(),
+                jupiter_arc.clone(),
+            )
+            .unwrap(),
+        );
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo: mock_relayer_repo,
+            provider: provider_arc.clone(),
+            jupiter: jupiter_arc.clone(),
+            signer: signer_arc.clone(),
+            dex,
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let res = sut
+            .handle_token_swap_request(create_test_relayer().id)
+            .await
+            .unwrap();
+        assert_eq!(res.len(), 1);
+        let swap = &res[0];
+        assert_eq!(swap.source_amount, 10000000);
+        assert_eq!(swap.destination_amount, 10);
+        assert_eq!(swap.transaction_signature, test_signature.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_swap_request_no_swap_config() {
+        let mut relayer_model = create_test_relayer();
+
+        let mut mock_relayer_repo = MockRelayerRepository::new();
+        let id = relayer_model.id.clone();
+        let cloned = relayer_model.clone();
+        mock_relayer_repo
+            .expect_get_by_id()
+            .with(eq(id.clone()))
+            .times(1)
+            .returning(move |_| Ok(cloned.clone()));
+
+        relayer_model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: Some(SolanaSwapStrategy::JupiterSwap),
+                cron_schedule: None,
+                min_balance_threshold: None,
+            }),
+            allowed_tokens: Some(vec![create_token_policy(
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                Some(1),
+                None,
+                None,
+                Some(50),
+            )]),
+            ..Default::default()
+        });
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo: mock_relayer_repo,
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let res = sut.handle_token_swap_request(id).await;
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_swap_request_no_strategy() {
+        let mut relayer_model: RelayerRepoModel = create_test_relayer();
+
+        let mut mock_relayer_repo = MockRelayerRepository::new();
+        let id = relayer_model.id.clone();
+        let cloned = relayer_model.clone();
+        mock_relayer_repo
+            .expect_get_by_id()
+            .with(eq(id.clone()))
+            .times(1)
+            .returning(move |_| Ok(cloned.clone()));
+
+        relayer_model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: None,
+                cron_schedule: None,
+                min_balance_threshold: Some(1),
+            }),
+            ..Default::default()
+        });
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo: mock_relayer_repo,
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let res = sut.handle_token_swap_request(id).await.unwrap();
+        assert!(res.is_empty(), "should return empty when no strategy");
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_swap_request_no_allowed_tokens() {
+        let mut relayer_model: RelayerRepoModel = create_test_relayer();
+        let mut mock_relayer_repo = MockRelayerRepository::new();
+        let id = relayer_model.id.clone();
+        let cloned = relayer_model.clone();
+        mock_relayer_repo
+            .expect_get_by_id()
+            .with(eq(id.clone()))
+            .times(1)
+            .returning(move |_| Ok(cloned.clone()));
+
+        relayer_model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: Some(SolanaSwapStrategy::JupiterSwap),
+                cron_schedule: None,
+                min_balance_threshold: Some(1),
+            }),
+            allowed_tokens: None,
+            ..Default::default()
+        });
+
+        let ctx = TestCtx {
+            relayer_model,
+            mock_repo: mock_relayer_repo,
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let res = sut.handle_token_swap_request(id).await.unwrap();
+        assert!(res.is_empty(), "should return empty when no allowed_tokens");
+    }
+
+    #[tokio::test]
+    async fn test_validate_rpc_success() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_latest_blockhash()
+            .times(1)
+            .returning(|| Box::pin(async { Ok(Hash::new_unique()) }));
+
+        let ctx = TestCtx {
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let res = sut.validate_rpc().await;
+
+        assert!(
+            res.is_ok(),
+            "validate_rpc should succeed when blockhash fetch succeeds"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_rpc_provider_error() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_latest_blockhash()
+            .times(1)
+            .returning(|| {
+                Box::pin(async { Err(SolanaProviderError::RpcError("rpc failure".to_string())) })
+            });
+
+        let ctx = TestCtx {
+            provider: Arc::new(raw_provider),
+            ..Default::default()
         };
 
-        let result = relayer
-            .handle_token_swap_request("test-relayer-id".to_string())
-            .await;
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let err = sut.validate_rpc().await.unwrap_err();
 
-        assert!(result.is_ok());
-        let swap_results = result.unwrap();
-        assert!(swap_results.is_empty());
+        match err {
+            RelayerError::ProviderError(msg) => {
+                assert!(msg.contains("rpc failure"));
+            }
+            other => panic!("expected ProviderError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_balance_no_swap_config() {
+        // default ctx has no swap_config
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        // should do nothing and succeed
+        assert!(sut
+            .check_balance_and_trigger_token_swap_if_needed()
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_balance_no_threshold() {
+        // override policy to have a swap_config with no min_balance_threshold
+        let mut ctx = TestCtx::default();
+        let mut model = ctx.relayer_model.clone();
+        model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: Some(SolanaSwapStrategy::JupiterSwap),
+                cron_schedule: None,
+                min_balance_threshold: None,
+            }),
+            ..Default::default()
+        });
+        ctx.relayer_model = model;
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        assert!(sut
+            .check_balance_and_trigger_token_swap_if_needed()
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_balance_above_threshold() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(20_u64) }));
+        let provider = Arc::new(raw_provider);
+        let mut raw_job = MockJobProducerTrait::new();
+        raw_job
+            .expect_produce_solana_token_swap_request_job()
+            .withf(move |req, _opts| req.relayer_id == "test-id")
+            .times(0);
+        let job_producer = Arc::new(raw_job);
+
+        let ctx = TestCtx {
+            provider,
+            job_producer,
+            ..Default::default()
+        };
+        // set threshold to 10
+        let mut model = ctx.relayer_model.clone();
+        model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: Some(SolanaSwapStrategy::JupiterSwap),
+                cron_schedule: None,
+                min_balance_threshold: Some(10),
+            }),
+            ..Default::default()
+        });
+        let mut ctx = ctx;
+        ctx.relayer_model = model;
+
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        assert!(sut
+            .check_balance_and_trigger_token_swap_if_needed()
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_balance_below_threshold_triggers_job() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(5_u64) }));
+        let provider = Arc::new(raw_provider);
+
+        let mut raw_job = MockJobProducerTrait::new();
+        raw_job
+            .expect_produce_solana_token_swap_request_job()
+            .withf(move |req, _opts| req.relayer_id == "test-id")
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let job_producer = Arc::new(raw_job);
+
+        let mut ctx = TestCtx::default();
+        ctx.provider = provider;
+        ctx.job_producer = job_producer;
+        let mut model = ctx.relayer_model.clone();
+        model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
+                strategy: Some(SolanaSwapStrategy::JupiterSwap),
+                cron_schedule: None,
+                min_balance_threshold: Some(10),
+            }),
+            ..Default::default()
+        });
+        ctx.relayer_model = model;
+
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        assert!(sut
+            .check_balance_and_trigger_token_swap_if_needed()
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_balance_success() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(42_u64) }));
+        let ctx = TestCtx {
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let res = sut.get_balance().await.unwrap();
+
+        assert_eq!(res.balance, 42_u128);
+        assert_eq!(res.unit, SOLANA_SMALLEST_UNIT_NAME);
+    }
+
+    #[tokio::test]
+    async fn test_get_balance_provider_error() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(SolanaProviderError::RpcError("oops".into())) }));
+        let ctx = TestCtx {
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let err = sut.get_balance().await.unwrap_err();
+
+        match err {
+            RelayerError::UnderlyingSolanaProvider(err) => {
+                assert!(err.to_string().contains("oops"));
+            }
+            other => panic!("expected ProviderError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_min_balance_success() {
+        use crate::models::{RelayerNetworkPolicy, RelayerSolanaPolicy};
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(100_u64) }));
+        let mut ctx = TestCtx::default();
+        ctx.provider = Arc::new(raw_provider);
+
+        let mut model = ctx.relayer_model.clone();
+        model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            min_balance: 50,
+            ..Default::default()
+        });
+        ctx.relayer_model = model;
+
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        assert!(sut.validate_min_balance().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_min_balance_insufficient() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(10_u64) }));
+        let mut ctx = TestCtx::default();
+        ctx.provider = Arc::new(raw_provider);
+
+        let mut model = ctx.relayer_model.clone();
+        model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+            min_balance: 50,
+            ..Default::default()
+        });
+        ctx.relayer_model = model;
+
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let err = sut.validate_min_balance().await.unwrap_err();
+        match err {
+            RelayerError::InsufficientBalanceError(msg) => {
+                assert_eq!(msg, "Insufficient balance");
+            }
+            other => panic!("expected InsufficientBalanceError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_min_balance_provider_error() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        raw_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(SolanaProviderError::RpcError("fail".into())) }));
+        let mut ctx = TestCtx::default();
+        ctx.provider = Arc::new(raw_provider);
+
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+        let err = sut.validate_min_balance().await.unwrap_err();
+        match err {
+            RelayerError::ProviderError(msg) => {
+                assert!(msg.contains("fail"));
+            }
+            other => panic!("expected ProviderError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_invalid_params() {
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::FeeEstimate(
+                FeeEstimateRequestParams {
+                    transaction: EncodedSerializedTransaction::new("".to_string()),
+                    fee_token: "".to_string(),
+                },
+            )),
+            id: 1,
+        };
+        let resp = sut.rpc(req).await.unwrap();
+
+        assert!(resp.error.is_some(), "expected an error object");
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32601);
+        assert_eq!(err.message, "INVALID_PARAMS");
+    }
+
+    #[tokio::test]
+    async fn test_rpc_success() {
+        let ctx = TestCtx::default();
+        let sut = ctx.into_relayer::<MockRelayerRepository>();
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetFeaturesEnabled(
+                GetFeaturesEnabledRequestParams {},
+            )),
+            id: 1,
+        };
+        let resp = sut.rpc(req).await.unwrap();
+
+        assert!(resp.error.is_none(), "error should be None");
+        let data = resp.result.unwrap();
+        let sol_res = match data {
+            NetworkRpcResult::Solana(inner) => inner,
+            other => panic!("expected Solana, got {:?}", other),
+        };
+        let features = match sol_res {
+            SolanaRpcResult::GetFeaturesEnabled(f) => f,
+            other => panic!("expected GetFeaturesEnabled, got {:?}", other),
+        };
+        assert_eq!(features.features, vec!["gasless".to_string()]);
     }
 }
