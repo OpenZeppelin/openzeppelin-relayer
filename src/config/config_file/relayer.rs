@@ -311,14 +311,42 @@ impl RelayerFileConfig {
         Ok(())
     }
 
-    fn validate_solana_swan_cron_schedule(
+    fn validate_solana_swap_config(
         &self,
         swap_config: &Option<ConfigFileRelayerSolanaSwapPolicy>,
+        network: &str,
     ) -> Result<(), ConfigFileError> {
         let swap_config = match swap_config {
             Some(config) => config,
             None => return Ok(()),
         };
+
+        if let Some(strategy) = &swap_config.strategy {
+            match strategy {
+                ConfigFileRelayerSolanaSwapStrategy::JupiterSwap => {
+                    if network != "mainnet-beta" {
+                        return Err(ConfigFileError::InvalidPolicy(
+                            "JupiterSwap strategy is only supported on mainnet-beta".into(),
+                        ));
+                    }
+                }
+                ConfigFileRelayerSolanaSwapStrategy::JupiterUltra => {
+                    if network != "mainnet-beta" {
+                        return Err(ConfigFileError::InvalidPolicy(
+                            "JupiterUltra strategy is only supported on mainnet-beta".into(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(cron_schedule) = &swap_config.cron_schedule {
+            if cron_schedule.is_empty() {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "Empty cron schedule is not accepted".into(),
+                ));
+            }
+        }
 
         if let Some(schedule) = &swap_config.cron_schedule {
             Schedule::from_str(schedule).map_err(|_| {
@@ -344,7 +372,7 @@ impl RelayerFileConfig {
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
                     self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
-                    self.validate_solana_swan_cron_schedule(&policy.swap_config)?;
+                    self.validate_solana_swap_config(&policy.swap_config, &self.network)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(
