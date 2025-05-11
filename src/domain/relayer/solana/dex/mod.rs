@@ -53,6 +53,9 @@ where
     JupiterUltra {
         dex: jupiter_ultra::JupiterUltraDex<S, J>,
     },
+    Noop {
+        dex: NoopDex,
+    },
 }
 
 pub type DefaultNetworkDex = NetworkDex<SolanaProvider, SolanaSigner, JupiterService>;
@@ -68,7 +71,29 @@ where
         match self {
             NetworkDex::JupiterSwap { dex } => dex.execute_swap(params).await,
             NetworkDex::JupiterUltra { dex } => dex.execute_swap(params).await,
+            NetworkDex::Noop { dex } => dex.execute_swap(params).await,
         }
+    }
+}
+
+fn resolve_strategy(relayer: &RelayerRepoModel) -> SolanaSwapStrategy {
+    relayer
+        .policies
+        .get_solana_policy()
+        .get_swap_config()
+        .and_then(|cfg| cfg.strategy)
+        .unwrap_or(SolanaSwapStrategy::Noop) // Provide a default strategy
+}
+
+pub struct NoopDex;
+#[async_trait]
+impl DexStrategy for NoopDex {
+    async fn execute_swap(&self, _params: SwapParams) -> Result<SwapResult, RelayerError> {
+        Ok(SwapResult {
+            source_amount: 0,
+            destination_amount: 0,
+            transaction_signature: "".into(),
+        })
     }
 }
 
@@ -79,14 +104,7 @@ pub fn create_network_dex(
     signer_service: Arc<SolanaSigner>,
     jupiter_service: Arc<JupiterService>,
 ) -> Result<DefaultNetworkDex, RelayerError> {
-    // Get the DEX strategy from the relayer's policies
-    let policy = relayer.policies.get_solana_policy();
-    let strategy = match policy.get_swap_config() {
-        Some(config) => config.strategy.unwrap_or(SolanaSwapStrategy::JupiterUltra),
-        None => SolanaSwapStrategy::JupiterUltra, // Default to Jupiter Ultra if not specified
-    };
-
-    match strategy {
+    match resolve_strategy(relayer) {
         SolanaSwapStrategy::JupiterSwap => Ok(DefaultNetworkDex::JupiterSwap {
             dex: jupiter_swap::DefaultJupiterSwapDex::new(
                 provider,
@@ -97,6 +115,7 @@ pub fn create_network_dex(
         SolanaSwapStrategy::JupiterUltra => Ok(DefaultNetworkDex::JupiterUltra {
             dex: jupiter_ultra::DefaultJupiterUltraDex::new(signer_service, jupiter_service),
         }),
+        _ => Ok(DefaultNetworkDex::Noop { dex: NoopDex }),
     }
 }
 
@@ -112,14 +131,7 @@ where
     S: SolanaSignTrait + Send + Sync + 'static,
     J: JupiterServiceTrait + Send + Sync + 'static,
 {
-    // Get the DEX strategy from the relayer's policies
-    let policy = relayer.policies.get_solana_policy();
-    let strategy = match policy.get_swap_config() {
-        Some(config) => config.strategy.unwrap_or(SolanaSwapStrategy::JupiterUltra),
-        None => SolanaSwapStrategy::JupiterUltra, // Default to Jupiter Ultra if not specified
-    };
-
-    match strategy {
+    match resolve_strategy(relayer) {
         SolanaSwapStrategy::JupiterSwap => Ok(NetworkDex::JupiterSwap {
             dex: jupiter_swap::JupiterSwapDex::<P, S, J>::new(
                 provider,
@@ -130,6 +142,7 @@ where
         SolanaSwapStrategy::JupiterUltra => Ok(NetworkDex::JupiterUltra {
             dex: jupiter_ultra::JupiterUltraDex::<S, J>::new(signer_service, jupiter_service),
         }),
+        _ => Ok(NetworkDex::Noop { dex: NoopDex }),
     }
 }
 
@@ -241,8 +254,7 @@ mod tests {
 
         assert!(result.is_ok());
         match result.unwrap() {
-            DefaultNetworkDex::JupiterUltra { .. } => { /* Success case - should default to Jupiter */
-            }
+            DefaultNetworkDex::Noop { .. } => {}
             _ => panic!("Expected default JupiterUltra strategy"),
         }
     }
@@ -268,7 +280,7 @@ mod tests {
 
         assert!(result.is_ok());
         match result.unwrap() {
-            DefaultNetworkDex::JupiterUltra { .. } => {}
+            DefaultNetworkDex::Noop { .. } => {}
             _ => panic!("Expected default JupiterUltra strategy"),
         }
     }

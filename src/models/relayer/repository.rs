@@ -141,6 +141,7 @@ pub enum SolanaFeePaymentStrategy {
 pub enum SolanaSwapStrategy {
     JupiterSwap,
     JupiterUltra,
+    Noop,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
