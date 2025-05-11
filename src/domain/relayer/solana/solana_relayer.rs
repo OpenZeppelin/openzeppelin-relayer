@@ -848,10 +848,12 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_no_limits() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         assert_eq!(
-            sut.calculate_swap_amount(100, None, None, None).unwrap(),
+            solana_relayer
+                .calculate_swap_amount(100, None, None, None)
+                .unwrap(),
             100
         );
     }
@@ -859,10 +861,11 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_with_max() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         assert_eq!(
-            sut.calculate_swap_amount(100, None, Some(60), None)
+            solana_relayer
+                .calculate_swap_amount(100, None, Some(60), None)
                 .unwrap(),
             60
         );
@@ -871,16 +874,19 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_with_retain() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         assert_eq!(
-            sut.calculate_swap_amount(100, None, None, Some(30))
+            solana_relayer
+                .calculate_swap_amount(100, None, None, Some(30))
                 .unwrap(),
             70
         );
 
         assert_eq!(
-            sut.calculate_swap_amount(20, None, None, Some(30)).unwrap(),
+            solana_relayer
+                .calculate_swap_amount(20, None, None, Some(30))
+                .unwrap(),
             0
         );
     }
@@ -888,15 +894,18 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_with_min() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         assert_eq!(
-            sut.calculate_swap_amount(40, Some(50), None, None).unwrap(),
+            solana_relayer
+                .calculate_swap_amount(40, Some(50), None, None)
+                .unwrap(),
             0
         );
 
         assert_eq!(
-            sut.calculate_swap_amount(100, Some(50), None, None)
+            solana_relayer
+                .calculate_swap_amount(100, Some(50), None, None)
                 .unwrap(),
             100
         );
@@ -905,22 +914,25 @@ mod tests {
     #[test]
     fn test_calculate_swap_amount_combined() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         assert_eq!(
-            sut.calculate_swap_amount(100, None, Some(50), Some(30))
+            solana_relayer
+                .calculate_swap_amount(100, None, Some(50), Some(30))
                 .unwrap(),
             50
         );
 
         assert_eq!(
-            sut.calculate_swap_amount(100, Some(20), Some(50), Some(30))
+            solana_relayer
+                .calculate_swap_amount(100, Some(20), Some(50), Some(30))
                 .unwrap(),
             50
         );
 
         assert_eq!(
-            sut.calculate_swap_amount(100, Some(60), Some(50), Some(30))
+            solana_relayer
+                .calculate_swap_amount(100, Some(60), Some(50), Some(30))
                 .unwrap(),
             0
         );
@@ -1066,8 +1078,8 @@ mod tests {
             dex,
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
-        let res = sut
+        let solana_relayer = ctx.into_relayer();
+        let res = solana_relayer
             .handle_token_swap_request(create_test_relayer().id)
             .await
             .unwrap();
@@ -1210,9 +1222,9 @@ mod tests {
             dex,
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
-        let res = sut
+        let res = solana_relayer
             .handle_token_swap_request(create_test_relayer().id)
             .await
             .unwrap();
@@ -1257,9 +1269,9 @@ mod tests {
             mock_repo: mock_relayer_repo,
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
-        let res = sut.handle_token_swap_request(id).await;
+        let res = solana_relayer.handle_token_swap_request(id).await;
         assert!(res.is_ok());
         assert!(res.unwrap().is_empty());
     }
@@ -1291,9 +1303,9 @@ mod tests {
             mock_repo: mock_relayer_repo,
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
-        let res = sut.handle_token_swap_request(id).await.unwrap();
+        let res = solana_relayer.handle_token_swap_request(id).await.unwrap();
         assert!(res.is_empty(), "should return empty when no strategy");
     }
 
@@ -1324,9 +1336,9 @@ mod tests {
             mock_repo: mock_relayer_repo,
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
-        let res = sut.handle_token_swap_request(id).await.unwrap();
+        let res = solana_relayer.handle_token_swap_request(id).await.unwrap();
         assert!(res.is_empty(), "should return empty when no allowed_tokens");
     }
 
@@ -1342,8 +1354,8 @@ mod tests {
             provider: Arc::new(raw_provider),
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
-        let res = sut.validate_rpc().await;
+        let solana_relayer = ctx.into_relayer();
+        let res = solana_relayer.validate_rpc().await;
 
         assert!(
             res.is_ok(),
@@ -1366,8 +1378,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sut = ctx.into_relayer();
-        let err = sut.validate_rpc().await.unwrap_err();
+        let solana_relayer = ctx.into_relayer();
+        let err = solana_relayer.validate_rpc().await.unwrap_err();
 
         match err {
             RelayerError::ProviderError(msg) => {
@@ -1381,10 +1393,10 @@ mod tests {
     async fn test_check_balance_no_swap_config() {
         // default ctx has no swap_config
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         // should do nothing and succeed
-        assert!(sut
+        assert!(solana_relayer
             .check_balance_and_trigger_token_swap_if_needed()
             .await
             .is_ok());
@@ -1404,9 +1416,9 @@ mod tests {
             ..Default::default()
         });
         ctx.relayer_model = model;
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
-        assert!(sut
+        assert!(solana_relayer
             .check_balance_and_trigger_token_swap_if_needed()
             .await
             .is_ok());
@@ -1445,8 +1457,8 @@ mod tests {
         let mut ctx = ctx;
         ctx.relayer_model = model;
 
-        let sut = ctx.into_relayer();
-        assert!(sut
+        let solana_relayer = ctx.into_relayer();
+        assert!(solana_relayer
             .check_balance_and_trigger_token_swap_if_needed()
             .await
             .is_ok());
@@ -1484,8 +1496,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sut = ctx.into_relayer();
-        assert!(sut
+        let solana_relayer = ctx.into_relayer();
+        assert!(solana_relayer
             .check_balance_and_trigger_token_swap_if_needed()
             .await
             .is_ok());
@@ -1502,9 +1514,9 @@ mod tests {
             provider: Arc::new(raw_provider),
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
-        let res = sut.get_balance().await.unwrap();
+        let res = solana_relayer.get_balance().await.unwrap();
 
         assert_eq!(res.balance, 42_u128);
         assert_eq!(res.unit, SOLANA_SMALLEST_UNIT_NAME);
@@ -1521,9 +1533,9 @@ mod tests {
             provider: Arc::new(raw_provider),
             ..Default::default()
         };
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
-        let err = sut.get_balance().await.unwrap_err();
+        let err = solana_relayer.get_balance().await.unwrap_err();
 
         match err {
             RelayerError::UnderlyingSolanaProvider(err) => {
@@ -1553,8 +1565,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sut = ctx.into_relayer();
-        assert!(sut.validate_min_balance().await.is_ok());
+        let solana_relayer = ctx.into_relayer();
+        assert!(solana_relayer.validate_min_balance().await.is_ok());
     }
 
     #[tokio::test]
@@ -1577,8 +1589,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sut = ctx.into_relayer();
-        let err = sut.validate_min_balance().await.unwrap_err();
+        let solana_relayer = ctx.into_relayer();
+        let err = solana_relayer.validate_min_balance().await.unwrap_err();
         match err {
             RelayerError::InsufficientBalanceError(msg) => {
                 assert_eq!(msg, "Insufficient balance");
@@ -1599,8 +1611,8 @@ mod tests {
             ..Default::default()
         };
 
-        let sut = ctx.into_relayer();
-        let err = sut.validate_min_balance().await.unwrap_err();
+        let solana_relayer = ctx.into_relayer();
+        let err = solana_relayer.validate_min_balance().await.unwrap_err();
         match err {
             RelayerError::ProviderError(msg) => {
                 assert!(msg.contains("fail"));
@@ -1612,7 +1624,7 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_invalid_params() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -1624,7 +1636,7 @@ mod tests {
             )),
             id: 1,
         };
-        let resp = sut.rpc(req).await.unwrap();
+        let resp = solana_relayer.rpc(req).await.unwrap();
 
         assert!(resp.error.is_some(), "expected an error object");
         let err = resp.error.unwrap();
@@ -1635,7 +1647,7 @@ mod tests {
     #[tokio::test]
     async fn test_rpc_success() {
         let ctx = TestCtx::default();
-        let sut = ctx.into_relayer();
+        let solana_relayer = ctx.into_relayer();
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -1644,7 +1656,7 @@ mod tests {
             )),
             id: 1,
         };
-        let resp = sut.rpc(req).await.unwrap();
+        let resp = solana_relayer.rpc(req).await.unwrap();
 
         assert!(resp.error.is_none(), "error should be None");
         let data = resp.result.unwrap();
