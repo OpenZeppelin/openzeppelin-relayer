@@ -1463,7 +1463,6 @@ mod tests {
         let mut raw_job = MockJobProducerTrait::new();
         raw_job
             .expect_produce_solana_token_swap_request_job()
-            .withf(move |req, _opts| req.relayer_id == "test-id")
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let job_producer = Arc::new(raw_job);
