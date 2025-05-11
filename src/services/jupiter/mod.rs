@@ -93,6 +93,13 @@ pub struct QuoteResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PriorityLevelWitMaxLamports {
+    pub priority_level: Option<String>,
+    pub max_lamports: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SwapRequest {
     pub quote_response: QuoteResponse,
     pub user_public_key: String,
@@ -101,7 +108,9 @@ pub struct SwapRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_unit_price_micro_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prioritization_fee_lamports: Option<u64>,
+    pub prioritization_fee_lamports: Option<PriorityLevelWitMaxLamports>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic_compute_unit_limit: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -673,6 +682,7 @@ mod tests {
             fee_account: None,
             compute_unit_price_micro_lamports: None,
             prioritization_fee_lamports: None,
+            dynamic_compute_unit_limit: Some(true),
         };
 
         let result = service.get_swap_transaction(request).await;

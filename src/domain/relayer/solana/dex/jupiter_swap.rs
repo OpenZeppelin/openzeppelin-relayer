@@ -6,8 +6,8 @@ use super::{DexStrategy, SwapParams, SwapResult};
 use crate::domain::relayer::RelayerError;
 use crate::models::EncodedSerializedTransaction;
 use crate::services::{
-    JupiterService, JupiterServiceTrait, QuoteRequest, SolanaProvider, SolanaProviderError,
-    SolanaProviderTrait, SolanaSignTrait, SolanaSigner, SwapRequest,
+    JupiterService, JupiterServiceTrait, PriorityLevelWitMaxLamports, QuoteRequest, SolanaProvider,
+    SolanaProviderError, SolanaProviderTrait, SolanaSignTrait, SolanaSigner, SwapRequest,
 };
 use async_trait::async_trait;
 use log::info;
@@ -73,7 +73,11 @@ where
                 wrap_and_unwrap_sol: Some(true),
                 fee_account: None,
                 compute_unit_price_micro_lamports: None,
-                prioritization_fee_lamports: None,
+                prioritization_fee_lamports: Some(PriorityLevelWitMaxLamports {
+                    max_lamports: None,
+                    priority_level: Some("high".to_string()),
+                }),
+                dynamic_compute_unit_limit: Some(true),
             })
             .await
             .map_err(|e| {
