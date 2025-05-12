@@ -388,6 +388,8 @@ impl RelayersFileConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::constants::DEFAULT_RPC_WEIGHT;
+
     use super::*;
     use serde_json::json;
 
@@ -549,10 +551,10 @@ mod tests {
         let rpc_urls = relayer.custom_rpc_urls.unwrap();
         assert_eq!(rpc_urls.len(), 2);
         assert_eq!(rpc_urls[0].url, "https://api.example.com/rpc");
-        assert_eq!(rpc_urls[0].weight, Some(2));
+        assert_eq!(rpc_urls[0].weight, 2_u8);
         assert_eq!(rpc_urls[1].url, "https://rpc.example.com");
-        assert_eq!(rpc_urls[1].weight, None);
-        assert_eq!(rpc_urls[1].get_weight(), 1);
+        assert_eq!(rpc_urls[1].weight, DEFAULT_RPC_WEIGHT);
+        assert_eq!(rpc_urls[1].get_weight(), DEFAULT_RPC_WEIGHT);
     }
 
     #[test]
@@ -576,11 +578,11 @@ mod tests {
         let rpc_urls = relayer.custom_rpc_urls.unwrap();
         assert_eq!(rpc_urls.len(), 2);
         assert_eq!(rpc_urls[0].url, "https://api.example.com/rpc");
-        assert_eq!(rpc_urls[0].weight, Some(1));
-        assert_eq!(rpc_urls[0].get_weight(), 1);
+        assert_eq!(rpc_urls[0].weight, DEFAULT_RPC_WEIGHT);
+        assert_eq!(rpc_urls[0].get_weight(), DEFAULT_RPC_WEIGHT);
         assert_eq!(rpc_urls[1].url, "https://rpc.example.com");
-        assert_eq!(rpc_urls[1].weight, Some(1));
-        assert_eq!(rpc_urls[1].get_weight(), 1);
+        assert_eq!(rpc_urls[1].weight, DEFAULT_RPC_WEIGHT);
+        assert_eq!(rpc_urls[1].get_weight(), DEFAULT_RPC_WEIGHT);
     }
 
     #[test]

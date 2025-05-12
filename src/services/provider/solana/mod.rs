@@ -432,7 +432,7 @@ mod tests {
     fn create_test_rpc_config() -> RpcConfig {
         RpcConfig {
             url: "https://api.devnet.solana.com".to_string(),
-            weight: Some(1),
+            weight: 1,
         }
     }
 
@@ -496,7 +496,7 @@ mod tests {
     async fn test_new_with_invalid_url() {
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
         let timeout = 30;
 
@@ -513,7 +513,7 @@ mod tests {
     async fn test_new_with_commitment_invalid_url() {
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
@@ -533,7 +533,7 @@ mod tests {
             create_test_rpc_config(),
             RpcConfig {
                 url: "https://api.mainnet-beta.solana.com".to_string(),
-                weight: Some(2),
+                weight: 1,
             },
         ];
         let timeout = 30;
@@ -629,7 +629,7 @@ mod tests {
     async fn test_get_token_metadata_from_pubkey() {
         let configs = vec![RpcConfig {
             url: "https://api.mainnet-beta.solana.com".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -698,7 +698,7 @@ mod tests {
             create_test_rpc_config(),
             RpcConfig {
                 url: "https://api.mainnet-beta.solana.com".to_string(),
-                weight: Some(2),
+                weight: 2,
             },
         ];
         let timeout = 30;

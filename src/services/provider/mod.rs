@@ -130,11 +130,11 @@ mod tests {
         let custom_urls = vec![
             RpcConfig {
                 url: "https://custom-rpc1.example.com".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
             RpcConfig {
                 url: "https://custom-rpc2.example.com".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
         ];
         let result = get_evm_network_provider(network, Some(custom_urls));
@@ -186,11 +186,11 @@ mod tests {
         let custom_urls = vec![
             RpcConfig {
                 url: "https://custom-rpc1.example.com".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
             RpcConfig {
                 url: "https://custom-rpc2.example.com".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
         ];
         let result = get_solana_network_provider("testnet", Some(custom_urls));

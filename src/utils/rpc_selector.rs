@@ -37,13 +37,13 @@ impl<T> From<PoisonError<T>> for RpcSelectorError {
 /// * `configs` - A slice of RPC configurations with weights
 ///
 /// # Returns
-/// * `Option<Arc<WeightedIndex<u32>>>` - A weighted distribution if configs have different weights, None otherwise
-pub fn create_weights_distribution(configs: &[RpcConfig]) -> Option<Arc<WeightedIndex<u32>>> {
+/// * `Option<Arc<WeightedIndex<u8>>>` - A weighted distribution if configs have different weights, None otherwise
+pub fn create_weights_distribution(configs: &[RpcConfig]) -> Option<Arc<WeightedIndex<u8>>> {
     if configs.len() <= 1 {
         return None;
     }
 
-    let weights: Vec<u32> = configs.iter().map(|config| config.get_weight()).collect();
+    let weights: Vec<u8> = configs.iter().map(|config| config.get_weight()).collect();
 
     // Check if all weights are equal (in that case we'll use round-robin instead)
     if weights.iter().all(|&w| w == weights[0]) {
@@ -62,7 +62,7 @@ pub struct RpcSelector {
     /// RPC configurations
     configs: Vec<RpcConfig>,
     /// Pre-computed weighted distribution for faster provider selection
-    weights_dist: Option<Arc<WeightedIndex<u32>>>,
+    weights_dist: Option<Arc<WeightedIndex<u8>>>,
     /// Counter for round-robin selection as a fallback or for equal weights
     next_index: Arc<AtomicUsize>,
 }
@@ -161,7 +161,7 @@ mod tests {
     fn test_create_weights_distribution_single_config() {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
 
         let result = create_weights_distribution(&configs);
@@ -173,15 +173,15 @@ mod tests {
         let configs = vec![
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
-                weight: Some(5),
+                weight: 5,
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
-                weight: Some(5),
+                weight: 5,
             },
             RpcConfig {
                 url: "https://example3.com/rpc".to_string(),
-                weight: Some(5),
+                weight: 5,
             },
         ];
 
@@ -194,15 +194,15 @@ mod tests {
         let configs = vec![
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
-                weight: Some(2),
+                weight: 2,
             },
             RpcConfig {
                 url: "https://example3.com/rpc".to_string(),
-                weight: Some(3),
+                weight: 3,
             },
         ];
 
@@ -222,7 +222,7 @@ mod tests {
     fn test_rpc_selector_new_single_config() {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
 
         let result = RpcSelector::new(configs);
@@ -236,11 +236,11 @@ mod tests {
         let configs = vec![
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
-                weight: Some(5),
+                weight: 5,
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
-                weight: Some(5),
+                weight: 5,
             },
         ];
 
@@ -255,11 +255,11 @@ mod tests {
         let configs = vec![
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
-                weight: Some(3),
+                weight: 3,
             },
         ];
 
@@ -273,7 +273,7 @@ mod tests {
     fn test_rpc_selector_select_url_single_provider() {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
 
         let selector = RpcSelector::new(configs).unwrap();
@@ -287,11 +287,11 @@ mod tests {
         let configs = vec![
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
         ];
 
@@ -313,7 +313,7 @@ mod tests {
     fn test_rpc_selector_get_client_success() {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
 
         let selector = RpcSelector::new(configs).unwrap();
@@ -330,7 +330,7 @@ mod tests {
     fn test_rpc_selector_get_client_failure() {
         let configs = vec![RpcConfig {
             url: "https://example.com/rpc".to_string(),
-            weight: Some(1),
+            weight: 1,
         }];
 
         let selector = RpcSelector::new(configs).unwrap();
@@ -348,11 +348,11 @@ mod tests {
         let configs = vec![
             RpcConfig {
                 url: "https://example1.com/rpc".to_string(),
-                weight: Some(1),
+                weight: 1,
             },
             RpcConfig {
                 url: "https://example2.com/rpc".to_string(),
-                weight: Some(3),
+                weight: 3,
             },
         ];
 
