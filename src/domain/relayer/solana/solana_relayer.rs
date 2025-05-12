@@ -743,8 +743,8 @@ mod tests {
         repositories::{MockRelayerRepository, MockRepository},
         services::{
             MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait, QuoteResponse,
-            RoutePlan, SolanaProviderError, SwapInfo, SwapResponse, UltraExecuteResponse,
-            UltraOrderResponse,
+            RoutePlan, SolanaProviderError, SwapEvents, SwapInfo, SwapResponse,
+            UltraExecuteResponse, UltraOrderResponse,
         },
     };
     use mockall::predicate::*;
@@ -1228,11 +1228,21 @@ mod tests {
         jupiter_mock.expect_execute_ultra_order().returning(|_| {
             Box::pin(async {
                 Ok(UltraExecuteResponse {
-                    swap_transaction: "".to_string(),
-                    last_valid_block_height: 100,
-                    prioritization_fee_lamports: None,
-                    compute_unit_limit: None,
-                    simulation_error: None,
+                    signature: Some("mock_signature".to_string()),
+                    status: "success".to_string(),
+                    slot: Some("123456789".to_string()),
+                    error: None,
+                    code: 0,
+                    total_input_amount: Some("1000000".to_string()),
+                    total_output_amount: Some("1000000".to_string()),
+                    input_amount_result: Some("1000000".to_string()),
+                    output_amount_result: Some("1000000".to_string()),
+                    swap_events: Some(vec![SwapEvents {
+                        input_mint: "mock_input_mint".to_string(),
+                        output_mint: "mock_output_mint".to_string(),
+                        input_amount: "1000000".to_string(),
+                        output_amount: "1000000".to_string(),
+                    }]),
                 })
             })
         });

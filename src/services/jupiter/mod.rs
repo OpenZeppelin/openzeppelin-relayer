@@ -93,6 +93,12 @@ pub struct QuoteResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PrioritizationFeeLamports {
+    pub priority_level_with_max_lamports: PriorityLevelWitMaxLamports,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PriorityLevelWitMaxLamports {
     pub priority_level: Option<String>,
     pub max_lamports: Option<u64>,
@@ -108,7 +114,7 @@ pub struct SwapRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_unit_price_micro_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prioritization_fee_lamports: Option<PriorityLevelWitMaxLamports>,
+    pub prioritization_fee_lamports: Option<PrioritizationFeeLamports>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_compute_unit_limit: Option<bool>,
 }
@@ -180,13 +186,36 @@ pub struct UltraExecuteRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[allow(dead_code)]
+pub struct SwapEvents {
+    #[serde(rename = "inputMint")]
+    pub input_mint: String,
+    #[serde(rename = "outputMint")]
+    pub output_mint: String,
+    #[serde(rename = "inputAmount")]
+    pub input_amount: String,
+    #[serde(rename = "outputAmount")]
+    pub output_amount: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UltraExecuteResponse {
-    pub swap_transaction: String,
-    pub last_valid_block_height: u64,
-    pub prioritization_fee_lamports: Option<u64>,
-    pub compute_unit_limit: Option<u64>,
-    pub simulation_error: Option<String>,
+    pub signature: Option<String>,
+    pub status: String,
+    pub slot: Option<String>,
+    pub error: Option<String>,
+    pub code: u32,
+    #[serde(rename = "totalInputAmount")]
+    pub total_input_amount: Option<String>,
+    #[serde(rename = "totalOutputAmount")]
+    pub total_output_amount: Option<String>,
+    #[serde(rename = "inputAmountResult")]
+    pub input_amount_result: Option<String>,
+    #[serde(rename = "outputAmountResult")]
+    pub output_amount_result: Option<String>,
+    #[serde(rename = "swapEvents")]
+    pub swap_events: Option<Vec<SwapEvents>>,
 }
 
 #[async_trait]
@@ -329,7 +358,6 @@ impl JupiterServiceTrait for MainnetJupiterService {
         request: UltraExecuteRequest,
     ) -> Result<UltraExecuteResponse, JupiterServiceError> {
         let url = format!("{}/ultra/v1/execute", self.base_url);
-
         let response = self.client.post(&url).json(&request).send().await?;
 
         if response.status().is_success() {
@@ -460,11 +488,21 @@ impl JupiterServiceTrait for MockJupiterService {
         _request: UltraExecuteRequest,
     ) -> Result<UltraExecuteResponse, JupiterServiceError> {
         Ok(UltraExecuteResponse {
-            swap_transaction: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...".to_string(),
-            last_valid_block_height: 279632475,
-            prioritization_fee_lamports: Some(9999),
-            compute_unit_limit: Some(388876),
-            simulation_error: None,
+            signature: Some("mock_signature".to_string()),
+            status: "success".to_string(),
+            slot: Some("123456789".to_string()),
+            error: None,
+            code: 0,
+            total_input_amount: Some("1000000".to_string()),
+            total_output_amount: Some("1000000".to_string()),
+            input_amount_result: Some("1000000".to_string()),
+            output_amount_result: Some("1000000".to_string()),
+            swap_events: Some(vec![SwapEvents {
+                input_mint: "mock_input_mint".to_string(),
+                output_mint: "mock_output_mint".to_string(),
+                input_amount: "1000000".to_string(),
+                output_amount: "1000000".to_string(),
+            }]),
         })
     }
 }
@@ -765,13 +803,21 @@ mod tests {
         let mock_server = MockServer::start().await;
 
         let execute_response = UltraExecuteResponse {
-            swap_transaction:
-                "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                    .to_string(),
-            last_valid_block_height: 12345678,
-            prioritization_fee_lamports: Some(5000),
-            compute_unit_limit: Some(200000),
-            simulation_error: None,
+            signature: Some("mock_signature".to_string()),
+            status: "success".to_string(),
+            slot: Some("123456789".to_string()),
+            error: None,
+            code: 0,
+            total_input_amount: Some("1000000".to_string()),
+            total_output_amount: Some("1000000".to_string()),
+            input_amount_result: Some("1000000".to_string()),
+            output_amount_result: Some("1000000".to_string()),
+            swap_events: Some(vec![SwapEvents {
+                input_mint: "mock_input_mint".to_string(),
+                output_mint: "mock_output_mint".to_string(),
+                input_amount: "1000000".to_string(),
+                output_amount: "1000000".to_string(),
+            }]),
         };
 
         Mock::given(method("POST"))
@@ -795,9 +841,7 @@ mod tests {
 
         assert!(result.is_ok());
         let response = result.unwrap();
-        assert_eq!(response.last_valid_block_height, 12345678);
-        assert_eq!(response.prioritization_fee_lamports, Some(5000));
-        assert_eq!(response.compute_unit_limit, Some(200000));
+        assert_eq!(response.signature, Some("mock_signature".to_string()));
     }
 
     #[tokio::test]

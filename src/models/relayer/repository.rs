@@ -137,7 +137,7 @@ pub enum SolanaFeePaymentStrategy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum SolanaSwapStrategy {
     JupiterSwap,
     JupiterUltra,

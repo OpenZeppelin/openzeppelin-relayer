@@ -100,15 +100,17 @@ where
                 request_id: order.request_id,
             })
             .await
-            .map_err(|e| RelayerError::DexError(format!("Failed to execute order: {}", e)))?;
+            .map_err(|e| {
+                RelayerError::DexError(format!("Failed to execute order: {}", e.to_string()))
+            })?;
         info!("Order executed successfully, response: {:?}", response);
 
         Ok(SwapResult {
             mint: params.source_mint,
             source_amount: params.amount,
             destination_amount: order.out_amount,
-            transaction_signature: signature.to_string(),
-            error: None,
+            transaction_signature: response.signature.unwrap_or_default(),
+            error: response.error,
         })
     }
 }
@@ -119,7 +121,7 @@ mod tests {
     use crate::{
         models::SignerError,
         services::{
-            MockJupiterServiceTrait, MockSolanaSignTrait, RoutePlan, SwapInfo,
+            MockJupiterServiceTrait, MockSolanaSignTrait, RoutePlan, SwapEvents, SwapInfo,
             UltraExecuteResponse, UltraOrderResponse,
         },
     };
@@ -188,11 +190,21 @@ mod tests {
 
         // Expected execute response
         let expected_execute_response = UltraExecuteResponse {
-            swap_transaction: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAKEZhsMunBegjHhwObzSrJeKhnl3sehIwqA8OCTejBJ/Z+O7sAR2gDS0+R1HXkqqjr0Wo3+auYeJQtq0il4DAumgiiHZpJZ1Uy9xq1yiOta3BcBOI7Dv+jmETs0W7Leny+AsVIwZWPN51bjn3Xk4uSzTFeAEom3HHY/EcBBpOfm7HkzWyukBvmNY5l9pnNxB/lTC52M7jy0Pxg6NhYJ37e1WXRYOFdoHOThs0hoFy/UG3+mVBbkR4sB9ywdKopv6IHO9+wuF/sV/02h9w+AjIBszK2bmCBPIrCZH4mqBdRcBFVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABPS2wOQQj9KmokeOrgrMWdshu07fURwWLPYC0eDAkB+1Jh0UqsxbwO7GNdqHBaH3CjnuNams8L+PIsxs5JAZ16jJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FmsH4P9uc5VDeldVYzceVRhzPQ3SsaI7BOphAAiCnjaBgMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAAtD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ejnStls42Wf0xNRAChL93gEW4UQqPNOSYySLu5vwwX4aQR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKkGtJJ5s3DlXjsp517KoA8Lg71wC+tMHoDO9HDeQbotrwUMAAUCwFwVAAwACQOhzhsAAAAAAAoGAAQAIgcQAQEPOxAIAAUGAgQgIg8PDQ8hEg4JExEGARQUFAgQKAgmKgEDFhgXFSUnJCkQIywQIysIHSIqAh8DHhkbGhwLL8EgmzNB1pyBBwMAAAA6AWQAAU9kAQIvAABkAgNAQg8AAAAAAE3WYgAAAAAADwAAEAMEAAABCQMW8exZwhONJLLrrr9eKTOouI7XVrRLBjytPl3cL6rziwS+v7vCBB+8CQctooGHnRbQ3aoExfOLSH0uJhZijTPAKrJbYSJJ5hP1VwRmY2FlBkRkC2JtQsJRwDIR3Tbag/HLEdZxTPfqLWdCCyd0nco65bHdIoy/ByorMycoLzADMiYs".to_string(),
-            last_valid_block_height: 123456789,
-            prioritization_fee_lamports: Some(5000),
-            compute_unit_limit: Some(200000),
-            simulation_error: None,
+            signature: Some("mock_signature".to_string()),
+            status: "success".to_string(),
+            slot: Some("123456789".to_string()),
+            error: None,
+            code: 0,
+            total_input_amount: Some("1000000".to_string()),
+            total_output_amount: Some("1000000".to_string()),
+            input_amount_result: Some("1000000".to_string()),
+            output_amount_result: Some("1000000".to_string()),
+            swap_events: Some(vec![SwapEvents {
+                input_mint: "mock_input_mint".to_string(),
+                output_mint: "mock_output_mint".to_string(),
+                input_amount: "1000000".to_string(),
+                output_amount: "1000000".to_string(),
+            }]),
         };
 
         mock_jupiter_service
