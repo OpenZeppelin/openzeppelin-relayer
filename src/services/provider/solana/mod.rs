@@ -41,13 +41,7 @@ pub enum SolanaProviderError {
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
     #[error("RPC selector error: {0}")]
-    SelectorError(String),
-}
-
-impl From<RpcSelectorError> for SolanaProviderError {
-    fn from(error: RpcSelectorError) -> Self {
-        SolanaProviderError::SelectorError(error.to_string())
-    }
+    SelectorError(RpcSelectorError),
 }
 
 /// A trait that abstracts common Solana provider operations.
@@ -211,7 +205,7 @@ impl SolanaProvider {
                     self.commitment,
                 ))
             })
-            .map_err(|e| SolanaProviderError::SelectorError(e.to_string()))
+            .map_err(SolanaProviderError::SelectorError)
     }
 }
 

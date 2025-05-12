@@ -3,10 +3,11 @@ use std::sync::{atomic::AtomicUsize, Arc, PoisonError};
 use eyre::Result;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
+use serde::Serialize;
 
 use crate::models::RpcConfig;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum RpcSelectorError {
     NoProviders,
     MutexLockError(String),
