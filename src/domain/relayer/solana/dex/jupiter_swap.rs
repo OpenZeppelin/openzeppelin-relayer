@@ -1,5 +1,12 @@
-//! Jupiter DEX integration
-
+//! JupiterSwapDex
+//!
+//! Implements the `DexStrategy` trait to perform Solana token swaps via the
+//! Jupiter Swap REST API. This module handles:
+//!  1. Fetching a swap quote from Jupiter.
+//!  2. Building the swap transaction.
+//!  3. Decoding and signing the transaction.
+//!  4. Sending the signed transaction on-chain.
+//!  5. Confirming transaction execution.
 use std::sync::Arc;
 
 use super::{DexStrategy, SwapParams, SwapResult};
@@ -51,7 +58,6 @@ where
     async fn execute_swap(&self, params: SwapParams) -> Result<SwapResult, RelayerError> {
         info!("Executing Jupiter swap: {:?}", params);
 
-        // 1. Get the best route from Jupiter's API
         let quote = self
             .jupiter_service
             .get_quote(QuoteRequest {
@@ -64,7 +70,6 @@ where
             .map_err(|e| RelayerError::DexError(format!("Failed to get Jupiter quote: {}", e)))?;
         info!("Received quote: {:?}", quote);
 
-        // 2. Get the swap transaction from Jupiter's API
         let swap_tx = self
             .jupiter_service
             .get_swap_transaction(SwapRequest {
@@ -86,7 +91,7 @@ where
 
         info!("Received swap transaction: {:?}", swap_tx);
 
-        // 3. Sign the transaction using the signer service
+        // Sign the transaction using the signer service
         let mut swap_tx = VersionedTransaction::try_from(EncodedSerializedTransaction::new(
             swap_tx.swap_transaction,
         ))
@@ -96,13 +101,12 @@ where
             .sign(&swap_tx.message.serialize())
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to sign transaction: {}", e))
-                // TODO improve error handling
+                RelayerError::DexError(format!("Failed to sign Dex transaction: {}", e))
             })?;
 
         swap_tx.signatures[0] = signature;
 
-        // 4. Send the transaction and get the signature
+        // Send the transaction and get the signature
         let signature = self
             .provider
             .send_versioned_transaction(&swap_tx)
@@ -114,7 +118,7 @@ where
                 _ => RelayerError::ProviderError(format!("Unexpected error: {}", e)),
             })?;
 
-        // 5. Wait for transaction confirmation
+        // Wait for transaction confirmation
         info!("Waiting for transaction confirmation: {}", signature);
         self.provider
             .confirm_transaction(&signature)
@@ -506,8 +510,8 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        if let Err(RelayerError::ProviderError(error_message)) = result {
-            assert!(error_message.contains("Failed to sign transaction"));
+        if let Err(RelayerError::DexError(error_message)) = result {
+            assert!(error_message.contains("Failed to sign Dex transaction"));
             assert!(error_message.contains("Failed to sign: invalid key"));
         } else {
             panic!(

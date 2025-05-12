@@ -133,7 +133,6 @@ where
 pub type DefaultSolanaRpcMethodsImpl =
     SolanaRpcMethodsImpl<DefaultProvider, DefaultSigner, DefaultJupiterService, DefaultJobProducer>;
 
-// Keep the generic implementation but add 'static to match the struct definition
 impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
     P: SolanaProviderTrait + Send + Sync + 'static,

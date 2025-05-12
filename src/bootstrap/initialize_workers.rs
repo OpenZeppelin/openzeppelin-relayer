@@ -123,6 +123,8 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
     Ok(())
 }
 
+/// Initializes the Solana swap workers
+/// This function creates and registers workers for Solana relayers that have swap enabled and cron schedule set.
 pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
     let solena_relayers_with_swap_enabled = app_state
         .relayer_repository

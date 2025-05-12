@@ -379,9 +379,11 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                         }
                     },
                 );
-                let swap_config = solana.swap_config.as_ref()
-                .map(|sc| RelayerSolanaSwapConfig::try_from(sc.clone())) // Clone only needed for try_from
-                .transpose()?;
+                let swap_config = solana
+                    .swap_config
+                    .as_ref()
+                    .map(|sc| RelayerSolanaSwapConfig::try_from(sc.clone()))
+                    .transpose()?;
 
                 Ok(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                     fee_payment_strategy,
@@ -422,7 +424,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
 ///
 /// ```rust,no_run
 /// use std::sync::Arc;
-/// use crate::repositories::{InAllowedTokenSwapConfigMemoryRelayerRepository, RelayerRepositoryStorage};
+/// use crate::repositories::{InMemoryRelayerRepository, RelayerRepositoryStorage};
 ///
 /// let repository = InMemoryRelayerRepository::new();
 /// let storage = Arc::new(RelayerRepositoryStorage::in_memory(repository));

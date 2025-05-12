@@ -98,28 +98,6 @@ impl DexStrategy for NoopDex {
 }
 
 // Helper function to create the appropriate DEX implementation
-pub fn create_network_dex(
-    relayer: &RelayerRepoModel,
-    provider: Arc<SolanaProvider>,
-    signer_service: Arc<SolanaSigner>,
-    jupiter_service: Arc<JupiterService>,
-) -> Result<DefaultNetworkDex, RelayerError> {
-    match resolve_strategy(relayer) {
-        SolanaSwapStrategy::JupiterSwap => Ok(DefaultNetworkDex::JupiterSwap {
-            dex: jupiter_swap::DefaultJupiterSwapDex::new(
-                provider,
-                signer_service,
-                jupiter_service,
-            ),
-        }),
-        SolanaSwapStrategy::JupiterUltra => Ok(DefaultNetworkDex::JupiterUltra {
-            dex: jupiter_ultra::DefaultJupiterUltraDex::new(signer_service, jupiter_service),
-        }),
-        _ => Ok(DefaultNetworkDex::Noop { dex: NoopDex }),
-    }
-}
-
-// Helper function to create the appropriate DEX implementation
 pub fn create_network_dex_generic<P, S, J>(
     relayer: &RelayerRepoModel,
     provider: Arc<P>,
@@ -190,7 +168,8 @@ mod tests {
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
-        let result = create_network_dex(&relayer, provider, signer_service, jupiter_service);
+        let result =
+            create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
         assert!(result.is_ok());
         match result.unwrap() {
@@ -220,7 +199,8 @@ mod tests {
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
-        let result = create_network_dex(&relayer, provider, signer_service, jupiter_service);
+        let result =
+            create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
         assert!(result.is_ok());
         match result.unwrap() {
@@ -250,7 +230,8 @@ mod tests {
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
-        let result = create_network_dex(&relayer, provider, signer_service, jupiter_service);
+        let result =
+            create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
         assert!(result.is_ok());
         match result.unwrap() {
@@ -276,7 +257,8 @@ mod tests {
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
-        let result = create_network_dex(&relayer, provider, signer_service, jupiter_service);
+        let result =
+            create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
         assert!(result.is_ok());
         match result.unwrap() {

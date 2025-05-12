@@ -47,30 +47,3 @@ pub async fn initialize_app_state() -> Result<web::ThinData<DefaultAppState>> {
 
     Ok(app_state)
 }
-
-// #[cfg(test)]
-// pub async fn initialize_test_app_state<J>(
-//     job_producer: Arc<J>,
-// ) -> Result<web::ThinData<AppState<J>>>
-// where
-//     J: JobProducerTrait + 'static,
-// {
-//     let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
-//         InMemoryRelayerRepository::new(),
-//     ));
-//     let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
-//     let signer_repository = Arc::new(InMemorySignerRepository::new());
-//     let notification_repository = Arc::new(InMemoryNotificationRepository::new());
-//     let transaction_counter_store = Arc::new(InMemoryTransactionCounter::new());
-
-//     let app_state = web::ThinData(AppState {
-//         relayer_repository,
-//         transaction_repository,
-//         signer_repository,
-//         notification_repository,
-//         transaction_counter_store,
-//         job_producer,
-//     });
-
-//     Ok(app_state)
-// }

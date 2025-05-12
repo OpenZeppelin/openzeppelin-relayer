@@ -1,4 +1,11 @@
-//! Jupiter Ultra API DEX integration
+//! JupiterUltraDex
+//!
+//! Implements the `DexStrategy` trait to perform Solana token swaps via the
+//! Jupiter Ultra REST API. This module handles:
+//!  1. Fetching an Ultra order from Jupiter.
+//!  2. Decoding and signing the transaction.
+//!  3. Serializing and executing the signed order via Jupiter Ultra.
+//!  4. Returning the swap result as `SwapResult`.
 
 use std::sync::Arc;
 
@@ -76,8 +83,7 @@ where
             .sign(&swap_tx.message.serialize())
             .await
             .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to sign transaction: {}", e))
-                // TODO improve error handling
+                RelayerError::DexError(format!("Failed to sign Dex swap transaction: {}", e))
             })?;
 
         swap_tx.signatures[0] = signature;
@@ -426,8 +432,8 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        if let Err(RelayerError::ProviderError(error_message)) = result {
-            assert!(error_message.contains("Failed to sign transaction"));
+        if let Err(RelayerError::DexError(error_message)) = result {
+            assert!(error_message.contains("Failed to sign Dex swap transaction"));
             assert!(error_message.contains("Failed to sign: invalid key"));
         } else {
             panic!(

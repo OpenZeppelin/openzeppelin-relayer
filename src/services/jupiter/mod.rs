@@ -624,7 +624,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_swap_transaction() {
-        // Start a mock server
         let mock_server = MockServer::start().await;
 
         let quote = QuoteResponse {
@@ -668,13 +667,11 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        // Create service using the mock server URL
         let service = MainnetJupiterService {
             client: Client::new(),
             base_url: mock_server.uri(),
         };
 
-        // Create and send swap request
         let request = SwapRequest {
             quote_response: quote,
             user_public_key: "test_public_key".to_string(),
@@ -698,7 +695,6 @@ mod tests {
     async fn test_get_ultra_order() {
         let mock_server = MockServer::start().await;
 
-        // Prepare mock response
         let ultra_response = UltraOrderResponse {
             input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             output_mint: "So11111111111111111111111111111111111111112".to_string(),
@@ -726,7 +722,6 @@ mod tests {
             request_id: "test_request_id".to_string(),
         };
 
-        // Mock the ultra order endpoint with query parameters
         Mock::given(method("GET"))
             .and(path("/ultra/v1/order"))
             .and(query_param(
@@ -743,13 +738,11 @@ mod tests {
             .expect(1)
             .mount(&mock_server)
             .await;
-        // Create service using the mock server URL
         let service = MainnetJupiterService {
             client: Client::new(),
             base_url: mock_server.uri(),
         };
 
-        // Create and send order request
         let request = UltraOrderRequest {
             input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             output_mint: "So11111111111111111111111111111111111111112".to_string(),
@@ -793,7 +786,6 @@ mod tests {
             base_url: mock_server.uri(),
         };
 
-        // Create and send execute request
         let request = UltraExecuteRequest {
             signed_transaction: "signed_transaction_data".to_string(),
             request_id: "test_request_id".to_string(),
@@ -812,7 +804,6 @@ mod tests {
     async fn test_error_handling_for_api_errors() {
         let mock_server = MockServer::start().await;
 
-        // Mock an error response
         Mock::given(method("GET"))
             .and(path("/ultra/v1/order"))
             .respond_with(ResponseTemplate::new(400).set_body_string("Invalid request"))
@@ -820,13 +811,11 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        // Create service using the mock server URL
         let service = MainnetJupiterService {
             client: Client::new(),
             base_url: mock_server.uri(),
         };
 
-        // Create and send request that should fail
         let request = UltraOrderRequest {
             input_mint: "invalid_mint".to_string(),
             output_mint: "invalid_mint".to_string(),
@@ -836,9 +825,6 @@ mod tests {
 
         let result = service.get_ultra_order(request).await;
 
-        // result.unwrap();
-
-        // Verify we get an API error
         assert!(result.is_err());
         match result {
             Err(JupiterServiceError::HttpRequestError(err)) => {

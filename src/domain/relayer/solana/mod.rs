@@ -44,7 +44,7 @@ pub fn create_solana_relayer(
         job_producer.clone(),
     );
     let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
-    let dex_service = create_network_dex(
+    let dex_service = create_network_dex_generic(
         &relayer,
         provider.clone(),
         signer_service.clone(),
