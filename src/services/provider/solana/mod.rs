@@ -123,7 +123,7 @@ pub struct SolanaProvider {
     // RPC selector for handling multiple client connections
     selector: RpcSelector,
     // Default timeout in seconds
-    timeout: Duration,
+    timeout_seconds: Duration,
     // Default commitment level
     commitment: CommitmentConfig,
 }
@@ -147,8 +147,8 @@ impl std::fmt::Display for TokenMetadata {
 
 #[allow(dead_code)]
 impl SolanaProvider {
-    pub fn new(configs: Vec<RpcConfig>, timeout: u64) -> Result<Self, ProviderError> {
-        Self::new_with_commitment(configs, timeout, CommitmentConfig::confirmed())
+    pub fn new(configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
+        Self::new_with_commitment(configs, timeout_seconds, CommitmentConfig::confirmed())
     }
 
     /// Creates a new SolanaProvider with RPC configurations and optional settings.
@@ -164,7 +164,7 @@ impl SolanaProvider {
     /// A Result containing the provider or an error
     pub fn new_with_commitment(
         configs: Vec<RpcConfig>,
-        timeout: u64,
+        timeout_seconds: u64,
         commitment: CommitmentConfig,
     ) -> Result<Self, ProviderError> {
         if configs.is_empty() {
@@ -183,7 +183,7 @@ impl SolanaProvider {
 
         Ok(Self {
             selector,
-            timeout: Duration::from_secs(timeout),
+            timeout_seconds: Duration::from_secs(timeout_seconds),
             commitment,
         })
     }
@@ -201,7 +201,7 @@ impl SolanaProvider {
             .get_client(|url| {
                 Ok(RpcClient::new_with_timeout_and_commitment(
                     url.to_string(),
-                    self.timeout,
+                    self.timeout_seconds,
                     self.commitment,
                 ))
             })
@@ -440,7 +440,7 @@ mod tests {
 
         assert!(result.is_ok());
         let provider = result.unwrap();
-        assert_eq!(provider.timeout, Duration::from_secs(timeout));
+        assert_eq!(provider.timeout_seconds, Duration::from_secs(timeout));
         assert_eq!(provider.commitment, CommitmentConfig::confirmed());
     }
 
@@ -454,7 +454,7 @@ mod tests {
 
         assert!(result.is_ok());
         let provider = result.unwrap();
-        assert_eq!(provider.timeout, Duration::from_secs(timeout));
+        assert_eq!(provider.timeout_seconds, Duration::from_secs(timeout));
         assert_eq!(provider.commitment, commitment);
     }
 

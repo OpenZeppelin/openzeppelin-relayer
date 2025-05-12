@@ -17,15 +17,15 @@ use crate::{
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, TransactionError, TransactionRepoModel,
+        SignerRepoModel, SolanaNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
     services::{
-        get_evm_network_provider, get_solana_network_provider, EvmSignerFactory, JupiterService,
-        SolanaSignerFactory, TransactionCounterService,
+        get_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
+        TransactionCounterService,
     },
 };
 
@@ -307,8 +307,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
 
-                let evm_provider =
-                    get_evm_network_provider(network, relayer.custom_rpc_urls.clone())?;
+                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
@@ -329,8 +328,12 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let provider = Arc::new(get_solana_network_provider(
-                    &relayer.network,
+                let network = match SolanaNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
+                };
+                let provider = Arc::new(get_network_provider(
+                    &network,
                     relayer.custom_rpc_urls.clone(),
                 )?);
                 let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);

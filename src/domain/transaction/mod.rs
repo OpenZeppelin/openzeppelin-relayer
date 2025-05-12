@@ -14,17 +14,16 @@
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, TransactionError,
-        TransactionRepoModel,
+        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, SolanaNetwork,
+        TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
     services::{
-        get_evm_network_provider, get_network_extra_fee_calculator_service,
-        get_solana_network_provider, EvmGasPriceService, EvmSignerFactory, StellarProvider,
-        StellarSignerFactory,
+        get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
+        EvmSignerFactory, StellarProvider, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -390,8 +389,7 @@ impl RelayerTransactionFactory {
                     Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
                 };
 
-                let evm_provider =
-                    get_evm_network_provider(network, relayer.custom_rpc_urls.clone())?;
+                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network, evm_provider.clone());
@@ -414,8 +412,12 @@ impl RelayerTransactionFactory {
                 )))
             }
             NetworkType::Solana => {
-                let solana_provider = Arc::new(get_solana_network_provider(
-                    &relayer.network,
+                let network = match SolanaNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
+                };
+                let solana_provider = Arc::new(get_network_provider(
+                    &network,
                     relayer.custom_rpc_urls.clone(),
                 )?);
 
