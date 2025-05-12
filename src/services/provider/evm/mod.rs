@@ -24,7 +24,6 @@ use reqwest::ClientBuilder as ReqwestClientBuilder;
 
 use crate::models::{EvmTransactionData, RpcConfig, TransactionError, U256};
 use crate::utils::rpc_selector::RpcSelector;
-use crate::utils::validate_configs_urls;
 
 #[cfg(test)]
 use mockall::automock;
@@ -134,7 +133,7 @@ impl EvmProvider {
             ));
         }
 
-        validate_configs_urls(&configs)
+        RpcConfig::validate_list(&configs)
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {}", e)))?;
 
         // Create the RPC selector

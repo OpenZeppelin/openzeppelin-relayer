@@ -4,6 +4,7 @@
 //! including URLs and weights for load balancing.
 
 use crate::constants::DEFAULT_RPC_WEIGHT;
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -40,6 +41,44 @@ impl RpcConfig {
     /// Gets the weight of this RPC endpoint.
     pub fn get_weight(&self) -> u8 {
         self.weight
+    }
+
+    /// Validates that a URL has an HTTP or HTTPS scheme.
+    /// Helper function, hence private.
+    fn validate_url_scheme(url: &str) -> Result<()> {
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(eyre!(
+                "Invalid URL scheme for {}: Only HTTP and HTTPS are supported",
+                url
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates all URLs in a slice of RpcConfig objects.
+    ///
+    /// # Arguments
+    /// * `configs` - A slice of RpcConfig objects
+    ///
+    /// # Returns
+    /// * `Result<()>` - Ok if all URLs have valid schemes, error on first invalid URL
+    ///
+    /// # Examples
+    /// ```
+    /// use crate::models::RpcConfig;
+    ///
+    /// let configs = vec![
+    ///     RpcConfig::new("https://api.example.com".to_string()),
+    ///     RpcConfig::new("http://localhost:8545".to_string()),
+    /// ];
+    /// assert!(RpcConfig::validate_list(&configs).is_ok());
+    /// ```
+    pub fn validate_list(configs: &[RpcConfig]) -> Result<()> {
+        for config in configs {
+            // Call the helper function using Self to refer to the type for associated functions
+            Self::validate_url_scheme(&config.url)?;
+        }
+        Ok(())
     }
 }
 
@@ -88,5 +127,88 @@ mod tests {
         assert_eq!(config1, config2);
         assert_ne!(config1, config3);
         assert_ne!(config1, config4);
+    }
+
+    // Tests for URL validation
+    #[test]
+    fn test_validate_url_scheme_with_http() {
+        let result = RpcConfig::validate_url_scheme("http://example.com");
+        assert!(result.is_ok(), "HTTP URL should be valid");
+    }
+
+    #[test]
+    fn test_validate_url_scheme_with_https() {
+        let result = RpcConfig::validate_url_scheme("https://secure.example.com");
+        assert!(result.is_ok(), "HTTPS URL should be valid");
+    }
+
+    #[test]
+    fn test_validate_url_scheme_with_query_params() {
+        let result =
+            RpcConfig::validate_url_scheme("https://example.com/api?param=value&other=123");
+        assert!(result.is_ok(), "URL with query parameters should be valid");
+    }
+
+    #[test]
+    fn test_validate_url_scheme_with_port() {
+        let result = RpcConfig::validate_url_scheme("http://localhost:8545");
+        assert!(result.is_ok(), "URL with port should be valid");
+    }
+
+    #[test]
+    fn test_validate_url_scheme_with_ftp() {
+        let result = RpcConfig::validate_url_scheme("ftp://example.com");
+        assert!(result.is_err(), "FTP URL should be invalid");
+    }
+
+    #[test]
+    fn test_validate_url_scheme_with_invalid_url() {
+        let result = RpcConfig::validate_url_scheme("invalid-url");
+        assert!(result.is_err(), "Invalid URL format should be rejected");
+    }
+
+    #[test]
+    fn test_validate_url_scheme_with_empty_string() {
+        let result = RpcConfig::validate_url_scheme("");
+        assert!(result.is_err(), "Empty string should be rejected");
+    }
+
+    // Tests for validate_list function
+    #[test]
+    fn test_validate_list_with_empty_vec() {
+        let configs: Vec<RpcConfig> = vec![];
+        let result = RpcConfig::validate_list(&configs);
+        assert!(result.is_ok(), "Empty config vector should be valid");
+    }
+
+    #[test]
+    fn test_validate_list_with_valid_urls() {
+        let configs = vec![
+            RpcConfig::new("https://api.example.com".to_string()),
+            RpcConfig::new("http://localhost:8545".to_string()),
+        ];
+        let result = RpcConfig::validate_list(&configs);
+        assert!(result.is_ok(), "All URLs are valid, should return Ok");
+    }
+
+    #[test]
+    fn test_validate_list_with_one_invalid_url() {
+        let configs = vec![
+            RpcConfig::new("https://api.example.com".to_string()),
+            RpcConfig::new("ftp://invalid-scheme.com".to_string()),
+            RpcConfig::new("http://another-valid.com".to_string()),
+        ];
+        let result = RpcConfig::validate_list(&configs);
+        assert!(result.is_err(), "Should fail on first invalid URL");
+    }
+
+    #[test]
+    fn test_validate_list_with_all_invalid_urls() {
+        let configs = vec![
+            RpcConfig::new("ws://websocket.example.com".to_string()),
+            RpcConfig::new("ftp://invalid-scheme.com".to_string()),
+        ];
+        let result = RpcConfig::validate_list(&configs);
+        assert!(result.is_err(), "Should fail with all invalid URLs");
     }
 }

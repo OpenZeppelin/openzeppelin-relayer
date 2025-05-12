@@ -17,7 +17,4 @@ pub use transaction::*;
 mod base64;
 pub use base64::*;
 
-mod url;
-pub use url::*;
-
 pub mod rpc_selector;
