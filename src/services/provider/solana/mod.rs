@@ -544,8 +544,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // The existing tests need to be fixed to use the correct SolanaProvider constructor
-    // Fixing test_provider_creation
     #[tokio::test]
     async fn test_provider_creation() {
         let configs = vec![create_test_rpc_config()];
@@ -554,7 +552,6 @@ mod tests {
         assert!(provider.is_ok());
     }
 
-    // Fixing test_get_balance
     #[tokio::test]
     async fn test_get_balance() {
         let configs = vec![create_test_rpc_config()];
@@ -566,7 +563,6 @@ mod tests {
         assert_eq!(balance.unwrap(), 0);
     }
 
-    // Fixing test_get_balance_funded_account
     #[tokio::test]
     async fn test_get_balance_funded_account() {
         let configs = vec![create_test_rpc_config()];
@@ -578,7 +574,6 @@ mod tests {
         assert_eq!(balance.unwrap(), 1000000000);
     }
 
-    // Fixing test_get_latest_blockhash
     #[tokio::test]
     async fn test_get_latest_blockhash() {
         let configs = vec![create_test_rpc_config()];
@@ -588,7 +583,6 @@ mod tests {
         assert!(blockhash.is_ok());
     }
 
-    // Fixing test_simulate_transaction
     #[tokio::test]
     async fn test_simulate_transaction() {
         let configs = vec![create_test_rpc_config()];
@@ -625,7 +619,6 @@ mod tests {
         );
     }
 
-    // Fixing test_get_token_metadata_from_pubkey
     #[tokio::test]
     async fn test_get_token_metadata_from_pubkey() {
         let configs = vec![RpcConfig {
