@@ -190,7 +190,7 @@ mod tests {
 
         // Expected execute response
         let expected_execute_response = UltraExecuteResponse {
-            signature: Some("mock_signature".to_string()),
+            signature: Some(test_signature.to_string()),
             status: "success".to_string(),
             slot: Some("123456789".to_string()),
             error: None,

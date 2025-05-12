@@ -1228,7 +1228,7 @@ mod tests {
         jupiter_mock.expect_execute_ultra_order().returning(|_| {
             Box::pin(async {
                 Ok(UltraExecuteResponse {
-                    signature: Some("mock_signature".to_string()),
+                    signature: Some("2jg9xbGLtZRsiJBrDWQnz33JuLjDkiKSZuxZPdjJ3qrJbMeTEerXFAKynkPW63J88nq63cvosDNRsg9VqHtGixvP".to_string()),
                     status: "success".to_string(),
                     slot: Some("123456789".to_string()),
                     error: None,
@@ -1268,6 +1268,13 @@ mod tests {
             )
             .unwrap(),
         );
+        let mut job_producer = MockJobProducerTrait::new();
+        job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let job_producer_arc = Arc::new(job_producer);
 
         let ctx = TestCtx {
             relayer_model,
@@ -1276,6 +1283,7 @@ mod tests {
             jupiter: jupiter_arc.clone(),
             signer: signer_arc.clone(),
             dex,
+            job_producer: job_producer_arc.clone(),
             ..Default::default()
         };
         let solana_relayer = ctx.into_relayer();
