@@ -974,10 +974,10 @@ The relayer supports two ways to configure RPC URLs:
 "custom_rpc_urls": [
   {
     "url": "https://primary-rpc.example.com",
-    "weight": 2  // Higher weight means more requests are sent to this endpoint
+    "weight": 2  // Higher weight means more requests are sent to this endpoint. Value must be an integer from 0 to 255.
   },
   {
-    "url": "https://backup-rpc.example.com"  // No weight specified, defaults to 1
+    "url": "https://backup-rpc.example.com"  // No weight specified, defaults to 255
   }
 ]
 ----
@@ -1007,8 +1007,8 @@ When using custom RPC URLs:
 * Ensure the URLs are secure (HTTPS) when accessing over public networks
 * Keep your API keys and authentication tokens secure
 * Test the RPC endpoints' reliability and performance before using it in production
-* Configure appropriate weights to prioritize more reliable/performant endpoints
-* If weight is not specified, a default weight of 1 is used
+* Configure appropriate weights to prioritize more reliable/performant endpoints. The weight must be an integer from 0 to 255.
+* If weight is not specified, a default weight of 255 is used
 ====
 
 == Important Considerations
