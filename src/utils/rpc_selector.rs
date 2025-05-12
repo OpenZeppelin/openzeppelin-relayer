@@ -1,35 +1,19 @@
-use std::sync::{atomic::AtomicUsize, Arc, PoisonError};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use eyre::Result;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use serde::Serialize;
+use thiserror::Error;
 
 use crate::models::RpcConfig;
 
-#[derive(Debug, Serialize)]
+#[derive(Error, Debug, Serialize)]
 pub enum RpcSelectorError {
+    #[error("No providers available")]
     NoProviders,
-    MutexLockError(String),
-    WeightedIndexError(String),
-}
-
-impl std::fmt::Display for RpcSelectorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RpcSelectorError::NoProviders => write!(f, "No providers available"),
-            RpcSelectorError::MutexLockError(e) => write!(f, "Mutex lock error: {}", e),
-            RpcSelectorError::WeightedIndexError(e) => write!(f, "Weighted index error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for RpcSelectorError {}
-
-impl<T> From<PoisonError<T>> for RpcSelectorError {
-    fn from(e: PoisonError<T>) -> Self {
-        RpcSelectorError::MutexLockError(e.to_string())
-    }
+    #[error("Client initialization failed: {0}")]
+    ClientInitializationError(String),
 }
 
 /// Creates a weighted distribution for selecting RPC endpoints based on their weights.
@@ -138,7 +122,10 @@ impl RpcSelector {
         // Always create a new client
         // TODO: This might be improved by caching the client
         initializer(url).map_err(|e| {
-            RpcSelectorError::MutexLockError(format!("Client initialization failed: {}", e))
+            RpcSelectorError::ClientInitializationError(format!(
+                "Client initialization failed: {}",
+                e
+            ))
         })
     }
 }
@@ -342,6 +329,10 @@ mod tests {
 
         let result = selector.get_client(initializer);
         assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RpcSelectorError::ClientInitializationError(_)
+        ));
     }
 
     #[test]
