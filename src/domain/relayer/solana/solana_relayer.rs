@@ -19,9 +19,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, SolanaTokenSwapRequest},
     models::{
-        produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
-        RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
-        SolanaNetwork, TransactionRepoModel,
+        produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, NetworkRpcRequest,
+        NetworkRpcResult, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
+        SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepository,
@@ -433,14 +433,30 @@ where
                         amount: swap_amount,
                         slippage_percent,
                     })
-                    .await?;
+                    .await;
 
-                info!(
-                    "Successfully swapped token {} for relayer {},  {:?}",
-                    relayer_id_clone, token.mint, swap_result,
-                );
-
-                Ok::<SwapResult, RelayerError>(swap_result)
+                match swap_result {
+                    Ok(swap_result) => {
+                        info!(
+                            "Swap successful for relayer: {}. Amount: {}, Destination amount: {}",
+                            relayer_id_clone, swap_amount, swap_result.destination_amount
+                        );
+                        return Ok::<SwapResult, RelayerError>(swap_result);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Error during token swap for relayer: {}. Error: {}",
+                            relayer_id_clone, e
+                        );
+                        return Ok::<SwapResult, RelayerError>(SwapResult {
+                            mint: token_mint.clone(),
+                            source_amount: swap_amount,
+                            destination_amount: 0,
+                            transaction_signature: "".to_string(),
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
             }
         });
 
@@ -458,6 +474,26 @@ where
                 relayer_id,
                 total_sol_received
             );
+
+            if let Some(notification_id) = &self.relayer.notification_id {
+                let webhook_result = self
+                    .job_producer
+                    .produce_send_notification_job(
+                        produce_solana_dex_webhook_payload(
+                            notification_id,
+                            "solana_dex".to_string(),
+                            SolanaDexPayload {
+                                swap_results: swap_results.clone(),
+                            },
+                        ),
+                        None,
+                    )
+                    .await;
+
+                if let Err(e) = webhook_result {
+                    error!("Failed to produce notification job: {}", e);
+                }
+            }
         }
 
         Ok(swap_results)
@@ -815,6 +851,7 @@ mod tests {
         RelayerRepoModel {
             id: "test-relayer-id".to_string(),
             address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(),
+            notification_id: Some("test-notification-id".to_string()),
             ..Default::default()
         }
     }
@@ -1069,6 +1106,14 @@ mod tests {
             .unwrap(),
         );
 
+        let mut job_producer = MockJobProducerTrait::new();
+        job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let job_producer_arc = Arc::new(job_producer);
+
         let ctx = TestCtx {
             relayer_model,
             mock_repo: mock_relayer_repo,
@@ -1076,6 +1121,7 @@ mod tests {
             jupiter: jupiter_arc.clone(),
             signer: signer_arc.clone(),
             dex,
+            job_producer: job_producer_arc.clone(),
             ..Default::default()
         };
         let solana_relayer = ctx.into_relayer();
@@ -1263,10 +1309,15 @@ mod tests {
             )]),
             ..Default::default()
         });
+        let mut job_producer = MockJobProducerTrait::new();
+        job_producer.expect_produce_send_notification_job().times(0);
+
+        let job_producer_arc = Arc::new(job_producer);
 
         let ctx = TestCtx {
             relayer_model,
             mock_repo: mock_relayer_repo,
+            job_producer: job_producer_arc,
             ..Default::default()
         };
         let solana_relayer = ctx.into_relayer();

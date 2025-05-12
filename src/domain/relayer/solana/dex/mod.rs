@@ -11,12 +11,27 @@ use crate::services::{
 use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
+use serde::{Deserialize, Serialize};
 /// Result of a swap operation
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SwapResult {
+    pub mint: String,
     pub source_amount: u64,
     pub destination_amount: u64,
     pub transaction_signature: String,
+    pub error: Option<String>,
+}
+
+impl Default for SwapResult {
+    fn default() -> Self {
+        Self {
+            mint: "".into(),
+            source_amount: 0,
+            destination_amount: 0,
+            transaction_signature: "".into(),
+            error: None,
+        }
+    }
 }
 
 /// Parameters for a swap operation
@@ -89,11 +104,7 @@ pub struct NoopDex;
 #[async_trait]
 impl DexStrategy for NoopDex {
     async fn execute_swap(&self, _params: SwapParams) -> Result<SwapResult, RelayerError> {
-        Ok(SwapResult {
-            source_amount: 0,
-            destination_amount: 0,
-            transaction_signature: "".into(),
-        })
+        Ok(SwapResult::default())
     }
 }
 

@@ -91,7 +91,6 @@ where
 
         info!("Received swap transaction: {:?}", swap_tx);
 
-        // Sign the transaction using the signer service
         let mut swap_tx = VersionedTransaction::try_from(EncodedSerializedTransaction::new(
             swap_tx.swap_transaction,
         ))
@@ -106,7 +105,6 @@ where
 
         swap_tx.signatures[0] = signature;
 
-        // Send the transaction and get the signature
         let signature = self
             .provider
             .send_versioned_transaction(&swap_tx)
@@ -129,11 +127,12 @@ where
 
         info!("Transaction confirmed: {}", signature);
 
-        // 6. Return the result with actual amounts
         Ok(SwapResult {
+            mint: params.source_mint,
             source_amount: params.amount,
             destination_amount: quote.out_amount,
             transaction_signature: signature.to_string(),
+            error: None,
         })
     }
 }

@@ -56,7 +56,7 @@ where
         let order = self
             .jupiter_service
             .get_ultra_order(UltraOrderRequest {
-                input_mint: params.source_mint,
+                input_mint: params.source_mint.clone(),
                 output_mint: params.destination_mint,
                 amount: params.amount,
                 taker: params.owner_address,
@@ -104,9 +104,11 @@ where
         info!("Order executed successfully, response: {:?}", response);
 
         Ok(SwapResult {
+            mint: params.source_mint,
             source_amount: params.amount,
             destination_amount: order.out_amount,
             transaction_signature: signature.to_string(),
+            error: None,
         })
     }
 }
