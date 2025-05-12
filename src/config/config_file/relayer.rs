@@ -67,6 +67,16 @@ pub enum ConfigFileRelayerSolanaSwapStrategy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct JupiterSwapOptions {
+    /// Maximum priority fee (in lamports) for a transaction. Optional.
+    pub priority_fee_max_lamports: Option<u64>,
+    /// Priority. Optional.
+    pub priority_level: Option<String>,
+
+    pub dynamic_compute_unit_limit: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaSwapPolicy {
     /// DEX strategy to use for token swaps.
@@ -77,6 +87,9 @@ pub struct ConfigFileRelayerSolanaSwapPolicy {
 
     /// Min sol balance to execute token swap logic to keep relayer funded. Optional.
     pub min_balance_threshold: Option<u64>,
+
+    /// Swap options for JupiterSwap strategy. Optional.
+    pub jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -363,6 +376,46 @@ impl RelayerFileConfig {
             Schedule::from_str(schedule).map_err(|_| {
                 ConfigFileError::InvalidPolicy("Invalid cron schedule format".into())
             })?;
+        }
+
+        if let Some(strategy) = &swap_config.jupiter_swap_options {
+            // strategy must be jupiter_swap
+            if swap_config.strategy != Some(ConfigFileRelayerSolanaSwapStrategy::JupiterSwap) {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "JupiterSwap options are only valid for JupiterSwap strategy".into(),
+                ));
+            }
+            if let Some(max_lamports) = strategy.priority_fee_max_lamports {
+                if max_lamports == 0 {
+                    return Err(ConfigFileError::InvalidPolicy(
+                        "Max lamports must be greater than 0".into(),
+                    ));
+                }
+            }
+            if let Some(priority_level) = &strategy.priority_level {
+                if priority_level.is_empty() {
+                    return Err(ConfigFileError::InvalidPolicy(
+                        "Priority level cannot be empty".into(),
+                    ));
+                }
+                let valid_levels = vec!["medium", "high", "veryHigh"];
+                if !valid_levels.contains(&priority_level.as_str()) {
+                    return Err(ConfigFileError::InvalidPolicy(
+                        "Priority level must be one of: medium, high, veryHigh".into(),
+                    ));
+                }
+            }
+
+            if strategy.priority_level.is_some() && strategy.priority_fee_max_lamports.is_none() {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "Priority Fee Max lamports must be set if priority level is set".into(),
+                ));
+            }
+            if strategy.priority_fee_max_lamports.is_some() && strategy.priority_level.is_none() {
+                return Err(ConfigFileError::InvalidPolicy(
+                    "Priority level must be set if priority fee max lamports is set".into(),
+                ));
+            }
         }
 
         Ok(())

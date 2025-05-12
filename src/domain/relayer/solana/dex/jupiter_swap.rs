@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use super::{DexStrategy, SwapParams, SwapResult};
 use crate::domain::relayer::RelayerError;
-use crate::models::EncodedSerializedTransaction;
+use crate::models::{EncodedSerializedTransaction, JupiterSwapOptions};
 use crate::services::{
     JupiterService, JupiterServiceTrait, PrioritizationFeeLamports, PriorityLevelWitMaxLamports,
     QuoteRequest, SolanaProvider, SolanaProviderError, SolanaProviderTrait, SolanaSignTrait,
@@ -30,6 +30,7 @@ where
     provider: Arc<P>,
     signer: Arc<S>,
     jupiter_service: Arc<J>,
+    jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 
 pub type DefaultJupiterSwapDex = JupiterSwapDex<SolanaProvider, SolanaSigner, JupiterService>;
@@ -40,11 +41,17 @@ where
     S: SolanaSignTrait + 'static,
     J: JupiterServiceTrait + 'static,
 {
-    pub fn new(provider: Arc<P>, signer: Arc<S>, jupiter_service: Arc<J>) -> Self {
+    pub fn new(
+        provider: Arc<P>,
+        signer: Arc<S>,
+        jupiter_service: Arc<J>,
+        jupiter_swap_options: Option<JupiterSwapOptions>,
+    ) -> Self {
         Self {
             provider,
             signer,
             jupiter_service,
+            jupiter_swap_options,
         }
     }
 }
@@ -81,11 +88,20 @@ where
                 compute_unit_price_micro_lamports: None,
                 prioritization_fee_lamports: Some(PrioritizationFeeLamports {
                     priority_level_with_max_lamports: PriorityLevelWitMaxLamports {
-                        max_lamports: Some(1_000_000),
-                        priority_level: Some("high".to_string()),
+                        max_lamports: self
+                            .jupiter_swap_options
+                            .as_ref()
+                            .and_then(|o| o.priority_fee_max_lamports),
+                        priority_level: self
+                            .jupiter_swap_options
+                            .as_ref()
+                            .and_then(|o| o.priority_level.clone()),
                     },
                 }),
-                dynamic_compute_unit_limit: Some(true),
+                dynamic_compute_unit_limit: self
+                    .jupiter_swap_options
+                    .as_ref()
+                    .map(|o| o.dynamic_compute_unit_limit.unwrap_or_default()),
             })
             .await
             .map_err(|e| {
@@ -260,6 +276,7 @@ mod tests {
             Arc::new(mock_solana_provider),
             Arc::new(mock_solana_signer),
             Arc::new(mock_jupiter_service),
+            None,
         );
 
         let result = dex
@@ -313,6 +330,7 @@ mod tests {
             Arc::new(mock_solana_provider),
             Arc::new(mock_solana_signer),
             Arc::new(mock_jupiter_service),
+            None,
         );
 
         let result = dex
@@ -372,6 +390,7 @@ mod tests {
             Arc::new(mock_solana_provider),
             Arc::new(mock_solana_signer),
             Arc::new(mock_jupiter_service),
+            None,
         );
 
         let result = dex
@@ -430,6 +449,7 @@ mod tests {
             Arc::new(mock_solana_provider),
             Arc::new(mock_solana_signer),
             Arc::new(mock_jupiter_service),
+            None,
         );
 
         let result = dex
@@ -499,6 +519,7 @@ mod tests {
             Arc::new(mock_solana_provider),
             Arc::new(mock_solana_signer),
             Arc::new(mock_jupiter_service),
+            None,
         );
 
         let result = dex
@@ -578,6 +599,7 @@ mod tests {
             Arc::new(mock_solana_provider),
             Arc::new(mock_solana_signer),
             Arc::new(mock_jupiter_service),
+            None,
         );
 
         let result = dex
@@ -662,6 +684,7 @@ mod tests {
             Arc::new(mock_solana_provider),
             Arc::new(mock_solana_signer),
             Arc::new(mock_jupiter_service),
+            None,
         );
 
         let result = dex

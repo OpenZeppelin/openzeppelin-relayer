@@ -146,10 +146,19 @@ pub enum SolanaSwapStrategy {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
+pub struct JupiterSwapOptions {
+    pub priority_fee_max_lamports: Option<u64>,
+    pub priority_level: Option<String>,
+    pub dynamic_compute_unit_limit: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RelayerSolanaSwapConfig {
     pub strategy: Option<SolanaSwapStrategy>,
     pub cron_schedule: Option<String>,
     pub min_balance_threshold: Option<u64>,
+    pub jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 
 #[derive(Debug, Serialize, Clone)]

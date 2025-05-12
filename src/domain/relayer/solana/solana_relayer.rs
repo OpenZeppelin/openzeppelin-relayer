@@ -987,6 +987,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: None,
+                jupiter_swap_options: None,
             }),
             allowed_tokens: Some(vec![create_token_policy(
                 "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -1148,6 +1149,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterUltra),
                 cron_schedule: None,
                 min_balance_threshold: None,
+                jupiter_swap_options: None,
             }),
             allowed_tokens: Some(vec![create_token_policy(
                 "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -1317,6 +1319,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: None,
+                jupiter_swap_options: None,
             }),
             allowed_tokens: Some(vec![create_token_policy(
                 "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -1363,6 +1366,7 @@ mod tests {
                 strategy: None,
                 cron_schedule: None,
                 min_balance_threshold: Some(1),
+                jupiter_swap_options: None,
             }),
             ..Default::default()
         });
@@ -1395,6 +1399,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: Some(1),
+                jupiter_swap_options: None,
             }),
             allowed_tokens: None,
             ..Default::default()
@@ -1481,6 +1486,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: None,
+                jupiter_swap_options: None,
             }),
             ..Default::default()
         });
@@ -1520,6 +1526,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: Some(10),
+                jupiter_swap_options: None,
             }),
             ..Default::default()
         });
@@ -1554,6 +1561,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: Some(10),
+                jupiter_swap_options: None,
             }),
             ..Default::default()
         });

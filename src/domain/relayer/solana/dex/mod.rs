@@ -120,12 +120,19 @@ where
     S: SolanaSignTrait + Send + Sync + 'static,
     J: JupiterServiceTrait + Send + Sync + 'static,
 {
+    let jupiter_swap_options = relayer
+        .policies
+        .get_solana_policy()
+        .get_swap_config()
+        .and_then(|cfg| cfg.jupiter_swap_options.clone());
+
     match resolve_strategy(relayer) {
         SolanaSwapStrategy::JupiterSwap => Ok(NetworkDex::JupiterSwap {
             dex: jupiter_swap::JupiterSwapDex::<P, S, J>::new(
                 provider,
                 signer_service,
                 jupiter_service,
+                jupiter_swap_options,
             ),
         }),
         SolanaSwapStrategy::JupiterUltra => Ok(NetworkDex::JupiterUltra {
@@ -166,6 +173,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: None,
+                jupiter_swap_options: None,
             }),
             ..Default::default()
         });
@@ -197,6 +205,7 @@ mod tests {
                 strategy: Some(SolanaSwapStrategy::JupiterUltra),
                 cron_schedule: None,
                 min_balance_threshold: None,
+                jupiter_swap_options: None,
             }),
             ..Default::default()
         });
@@ -228,6 +237,7 @@ mod tests {
                 strategy: None,
                 cron_schedule: None,
                 min_balance_threshold: None,
+                jupiter_swap_options: None,
             }),
             ..Default::default()
         });

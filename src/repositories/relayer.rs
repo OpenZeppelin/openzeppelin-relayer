@@ -12,7 +12,7 @@ use crate::config::{
     ConfigFileRelayerSolanaSwapStrategy,
 };
 use crate::models::{
-    PaginationQuery, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,
+    JupiterSwapOptions, PaginationQuery, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,
     SolanaFeePaymentStrategy, SolanaSwapStrategy,
 };
 use crate::{
@@ -320,6 +320,13 @@ impl TryFrom<ConfigFileRelayerSolanaSwapPolicy> for RelayerSolanaSwapConfig {
                 .strategy
                 .map(SolanaSwapStrategy::try_from)
                 .transpose()?,
+            jupiter_swap_options: config
+                .jupiter_swap_options
+                .map(|options| JupiterSwapOptions {
+                    priority_fee_max_lamports: options.priority_fee_max_lamports,
+                    dynamic_compute_unit_limit: options.dynamic_compute_unit_limit,
+                    priority_level: options.priority_level,
+                }),
         })
     }
 }
