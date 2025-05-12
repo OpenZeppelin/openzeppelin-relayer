@@ -3,13 +3,14 @@ use strum::Display;
 use utoipa::ToSchema;
 
 use crate::{
-    config::RpcConfig,
     constants::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_EVM_MIN_BALANCE,
         DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE, MAX_SOLANA_TX_DATA_SIZE,
     },
     models::RelayerError,
 };
+
+use super::RpcConfig;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize, Copy, ToSchema)]
 #[serde(rename_all = "lowercase")]

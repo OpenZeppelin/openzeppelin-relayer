@@ -4,7 +4,7 @@ use eyre::Result;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 
-use crate::config::RpcConfig;
+use crate::models::RpcConfig;
 
 #[derive(Debug)]
 pub enum RpcSelectorError {

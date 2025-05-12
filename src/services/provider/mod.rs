@@ -10,8 +10,8 @@ pub use solana::*;
 mod stellar;
 pub use stellar::*;
 
-use crate::config::{RpcConfig, ServerConfig};
-use crate::models::{EvmNetwork, SolanaNetwork};
+use crate::config::ServerConfig;
+use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork};
 
 #[derive(Error, Debug, Serialize)]
 pub enum ProviderError {

@@ -27,9 +27,11 @@ use spl_token::state::Mint;
 use std::{str::FromStr, time::Duration};
 use thiserror::Error;
 
-use crate::config::RpcConfig;
-use crate::utils::rpc_selector::{RpcSelector, RpcSelectorError};
 use crate::utils::validate_configs_urls;
+use crate::{
+    models::RpcConfig,
+    utils::rpc_selector::{RpcSelector, RpcSelectorError},
+};
 
 use super::ProviderError;
 

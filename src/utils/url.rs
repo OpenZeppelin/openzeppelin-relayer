@@ -2,8 +2,9 @@
 //!
 //! This module provides utility functions for validating URLs.
 
-use crate::config::RpcConfig;
 use eyre::{eyre, Result};
+
+use crate::models::RpcConfig;
 
 /// Validates that a URL has an HTTP or HTTPS scheme.
 ///

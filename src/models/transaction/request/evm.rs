@@ -162,10 +162,7 @@ pub fn validate_price_params(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        config::RpcConfig,
-        models::{NetworkType, RelayerEvmPolicy},
-    };
+    use crate::models::{NetworkType, RelayerEvmPolicy, RpcConfig};
 
     use super::*;
     use chrono::{Duration, Utc};

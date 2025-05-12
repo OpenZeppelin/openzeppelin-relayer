@@ -6,13 +6,10 @@
 //! - Transaction validation rules
 //! - Network endpoints
 use super::{ConfigFileError, ConfigFileNetworkType};
-use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
+use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-
-mod rpc_config;
-pub use rpc_config::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]

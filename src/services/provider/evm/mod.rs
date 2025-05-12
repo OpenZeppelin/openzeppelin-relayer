@@ -22,8 +22,7 @@ use async_trait::async_trait;
 use eyre::{eyre, Result};
 use reqwest::ClientBuilder as ReqwestClientBuilder;
 
-use crate::config::RpcConfig;
-use crate::models::{EvmTransactionData, TransactionError, U256};
+use crate::models::{EvmTransactionData, RpcConfig, TransactionError, U256};
 use crate::utils::rpc_selector::RpcSelector;
 use crate::utils::validate_configs_urls;
 
