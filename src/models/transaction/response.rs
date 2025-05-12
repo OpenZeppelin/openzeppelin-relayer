@@ -252,7 +252,7 @@ mod tests {
                 network: StellarNamedNetwork::Testnet,
                 memo: None,
                 valid_until: None,
-                envelope_xdr: None,
+                signatures: Vec::new(),
             }),
             valid_until: None,
             network_type: NetworkType::Stellar,

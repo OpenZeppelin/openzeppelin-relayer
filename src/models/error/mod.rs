@@ -18,3 +18,6 @@ pub use signer::*;
 
 mod address;
 pub use address::*;
+
+mod provider;
+pub use provider::*;

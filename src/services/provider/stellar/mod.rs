@@ -61,8 +61,13 @@ pub trait StellarProviderTrait: Send + Sync {
 
 impl StellarProvider {
     pub fn new(url: &str) -> Result<Self> {
-        let client =
-            Client::new(url).map_err(|e| eyre!("Failed to create Stellar RPC client: {}", e))?;
+        let client = Client::new(url).map_err(|e| {
+            eyre!(
+                "Failed to create Stellar RPC client: {} - URL: '{}'",
+                e,
+                url
+            )
+        })?;
         Ok(Self { client })
     }
 }

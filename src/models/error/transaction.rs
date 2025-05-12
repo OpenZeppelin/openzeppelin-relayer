@@ -4,7 +4,7 @@ use crate::{
     services::{ProviderError, SolanaProviderError},
 };
 
-use super::{ApiError, RepositoryError};
+use super::{ApiError, RepositoryError, StellarProviderError};
 use eyre::Report;
 use serde::Serialize;
 use thiserror::Error;
@@ -40,6 +40,9 @@ pub enum TransactionError {
 
     #[error("Insufficient balance: {0}")]
     InsufficientBalance(String),
+
+    #[error("Stellar transaction simulation failed: {0}")]
+    SimulationFailed(String),
 }
 
 impl From<TransactionError> for ApiError {
@@ -57,6 +60,7 @@ impl From<TransactionError> for ApiError {
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
             TransactionError::SignerError(msg) => ApiError::InternalError(msg),
             TransactionError::InsufficientBalance(msg) => ApiError::BadRequest(msg),
+            TransactionError::SimulationFailed(msg) => ApiError::BadRequest(msg),
         }
     }
 }
@@ -82,6 +86,21 @@ impl From<SignerFactoryError> for TransactionError {
 impl From<SignerError> for TransactionError {
     fn from(error: SignerError) -> Self {
         TransactionError::SignerError(error.to_string())
+    }
+}
+
+impl From<StellarProviderError> for TransactionError {
+    fn from(error: StellarProviderError) -> Self {
+        match error {
+            StellarProviderError::SimulationFailed(msg) => TransactionError::SimulationFailed(msg),
+            StellarProviderError::InsufficientBalance(msg) => {
+                TransactionError::InsufficientBalance(msg)
+            }
+            StellarProviderError::BadSeq(msg) => TransactionError::ValidationError(msg),
+            StellarProviderError::RpcError(msg) | StellarProviderError::Unknown(msg) => {
+                TransactionError::UnderlyingProvider(ProviderError::NetworkConfiguration(msg))
+            }
+        }
     }
 }
 
@@ -120,6 +139,10 @@ mod tests {
                 TransactionError::InsufficientBalance("not enough funds".to_string()),
                 "Insufficient balance: not enough funds",
             ),
+            (
+                TransactionError::SimulationFailed("sim failed".to_string()),
+                "Stellar transaction simulation failed: sim failed",
+            ),
         ];
 
         for (error, expected_message) in test_cases {
@@ -157,6 +180,10 @@ mod tests {
             (
                 TransactionError::InsufficientBalance("not enough funds".to_string()),
                 ApiError::BadRequest("not enough funds".to_string()),
+            ),
+            (
+                TransactionError::SimulationFailed("boom".to_string()),
+                ApiError::BadRequest("boom".to_string()),
             ),
         ];
 
