@@ -153,11 +153,7 @@ mod tests {
         );
         assert_eq!(
             StellarNamedNetwork::Testnet.public_rpc_urls(),
-            &["https://horizon-testnet.stellar.org"]
-        );
-        assert_eq!(
-            StellarNamedNetwork::Testnet.public_rpc_urls(),
-            &["https://horizon-testnet.stellar.org"]
+            &["https://soroban-testnet.stellar.org"]
         );
     }
 
