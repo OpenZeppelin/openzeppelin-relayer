@@ -323,7 +323,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let response = client
-            .get(&mock_server.uri())
+            .get(mock_server.uri())
             .send()
             .await
             .expect("Failed to get response");
@@ -350,7 +350,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let response = client
-            .get(&mock_server.uri())
+            .get(mock_server.uri())
             .send()
             .await
             .expect("Failed to get response");

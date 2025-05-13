@@ -375,8 +375,9 @@ where
 mod tests {
     use super::*;
     use crate::models::RpcConfig;
+    use std::cmp::Ordering;
     use std::env;
-    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
     use std::sync::Arc;
     use std::sync::Mutex;
 
@@ -545,10 +546,17 @@ mod tests {
 
         for _ in 0..iterations {
             let jittered = apply_jitter(base_delay);
-            if jittered.as_millis() > base_delay as u128 {
-                additions += 1;
-            } else if jittered.as_millis() < base_delay as u128 {
-                subtractions += 1;
+            let j_millis = jittered.as_millis();
+            let b_delay = base_delay as u128;
+
+            match j_millis.cmp(&b_delay) {
+                Ordering::Greater => {
+                    additions += 1;
+                }
+                Ordering::Less => {
+                    subtractions += 1;
+                }
+                Ordering::Equal => {}
             }
         }
 
@@ -626,7 +634,7 @@ mod tests {
         let operation = move |_: String| {
             let attempts = attempts_clone.clone();
             async move {
-                let current = attempts.fetch_add(1, Ordering::SeqCst);
+                let current = attempts.fetch_add(1, AtomicOrdering::SeqCst);
                 if current < 2 {
                     Err(TestError("Retriable error".to_string()))
                 } else {
@@ -708,7 +716,7 @@ mod tests {
         let operation = move |_provider: String| {
             let attempts = attempts_clone.clone();
             async move {
-                attempts.fetch_add(1, Ordering::SeqCst);
+                attempts.fetch_add(1, AtomicOrdering::SeqCst);
                 Ok::<_, TestError>(42)
             }
         };
@@ -727,7 +735,7 @@ mod tests {
 
         assert!(result.is_ok(), "Expected OK result but got: {:?}", result);
         assert_eq!(result.unwrap(), 42);
-        assert_eq!(attempts.load(Ordering::SeqCst), 1); // Should be called once
+        assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1); // Should be called once
     }
 
     #[tokio::test]
