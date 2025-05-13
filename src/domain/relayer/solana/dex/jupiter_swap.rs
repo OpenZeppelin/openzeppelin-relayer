@@ -198,7 +198,7 @@ mod tests {
             slippage_bps: 50, // 0.5%
             route_plan: vec![RoutePlan {
                 swap_info: SwapInfo {
-                    amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                    amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(), // noboost
                     label: "Stabble Stable Swap".to_string(),
                     input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
                     output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(),
