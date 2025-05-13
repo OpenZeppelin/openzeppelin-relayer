@@ -40,7 +40,7 @@ impl NetworkConfiguration for EvmNetwork {
         (*self)
             .public_rpc_urls()
             .map(|urls| urls.iter().map(|&url| url.to_string()).collect())
-            .unwrap_or_else(Vec::new)
+            .unwrap_or_default()
     }
 
     fn new_provider(
@@ -75,8 +75,8 @@ impl NetworkConfiguration for SolanaNetwork {
 /// # Type Parameters
 ///
 /// * `N`: The type of the network, which must implement the `NetworkConfiguration` trait.
-///        This determines the specific provider type (`N::Provider`) and how to obtain
-///        public RPC URLs.
+///   This determines the specific provider type (`N::Provider`) and how to obtain
+///   public RPC URLs.
 ///
 /// # Arguments
 ///
