@@ -6,7 +6,14 @@
 use crate::constants::DEFAULT_RPC_WEIGHT;
 use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use utoipa::ToSchema;
+
+#[derive(Debug, Error, PartialEq)]
+pub enum RpcConfigError {
+    #[error("Invalid weight: {value}. Must be between 0 and 100.")]
+    InvalidWeight { value: u8 },
+}
 
 /// Returns the default RPC weight.
 fn default_rpc_weight() -> u8 {
@@ -19,13 +26,17 @@ pub struct RpcConfig {
     /// The RPC endpoint URL.
     pub url: String,
     /// The weight of this endpoint in the weighted round-robin selection.
-    /// Defaults to DEFAULT_RPC_WEIGHT (255). Should be between 0 and 255.
+    /// Defaults to DEFAULT_RPC_WEIGHT (100). Should be between 0 and 100.
     #[serde(default = "default_rpc_weight")]
     pub weight: u8,
 }
 
 impl RpcConfig {
     /// Creates a new RPC configuration with the given URL and default weight (DEFAULT_RPC_WEIGHT).
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - A string slice that holds the URL of the RPC endpoint.
     pub fn new(url: String) -> Self {
         Self {
             url,
@@ -34,11 +45,28 @@ impl RpcConfig {
     }
 
     /// Creates a new RPC configuration with the given URL and weight.
-    pub fn with_weight(url: String, weight: u8) -> Self {
-        Self { url, weight }
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - A string that holds the URL of the RPC endpoint.
+    /// * `weight` - A u8 value representing the weight of the endpoint. Must be between 0 and 100 (inclusive).
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(RpcConfig)` if the weight is valid.
+    /// * `Err(RpcConfigError::InvalidWeight)` if the weight is greater than 100.
+    pub fn with_weight(url: String, weight: u8) -> Result<Self, RpcConfigError> {
+        if weight > 100 {
+            return Err(RpcConfigError::InvalidWeight { value: weight });
+        }
+        Ok(Self { url, weight })
     }
 
     /// Gets the weight of this RPC endpoint.
+    ///
+    /// # Returns
+    ///
+    /// * `u8` - The weight of the RPC endpoint.
     pub fn get_weight(&self) -> u8 {
         self.weight
     }
@@ -100,7 +128,7 @@ mod tests {
     fn test_with_weight_creates_config_with_custom_weight() {
         let url = "https://example.com".to_string();
         let weight: u8 = 5;
-        let config = RpcConfig::with_weight(url.clone(), weight);
+        let config = RpcConfig::with_weight(url.clone(), weight).unwrap();
 
         assert_eq!(config.url, url);
         assert_eq!(config.weight, weight);
@@ -120,9 +148,10 @@ mod tests {
         let url = "https://example.com".to_string();
         let config1 = RpcConfig::new(url.clone());
         let config2 = RpcConfig::new(url.clone()); // Same as config1
-        let config3 = RpcConfig::with_weight(url.clone(), 5u8); // Different weight
+        let config3 = RpcConfig::with_weight(url.clone(), 5u8).unwrap(); // Different weight
         let config4 =
-            RpcConfig::with_weight("https://different.com".to_string(), DEFAULT_RPC_WEIGHT); // Different URL
+            RpcConfig::with_weight("https://different.com".to_string(), DEFAULT_RPC_WEIGHT)
+                .unwrap(); // Different URL
 
         assert_eq!(config1, config2);
         assert_ne!(config1, config3);
