@@ -10,6 +10,8 @@ use crate::{
     models::RelayerError,
 };
 
+use super::RpcConfig;
+
 #[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize, Copy, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkType {
@@ -243,7 +245,7 @@ pub struct RelayerRepoModel {
     pub address: String,
     pub notification_id: Option<String>,
     pub system_disabled: bool,
-    pub custom_rpc_urls: Option<Vec<String>>,
+    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
 impl RelayerRepoModel {
@@ -294,7 +296,9 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
-            custom_rpc_urls: None,
+            custom_rpc_urls: Some(vec![RpcConfig::new(
+                "https://test-rpc.example.com".to_string(),
+            )]),
         }
     }
 

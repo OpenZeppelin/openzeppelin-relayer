@@ -13,24 +13,22 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use crate::{
-    config::ServerConfig,
     jobs::JobProducer,
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
+        SignerRepoModel, SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
     services::{
-        get_solana_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
+        get_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
         StellarProvider, TransactionCounterService,
     },
 };
 
-use crate::services::EvmProvider;
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -309,17 +307,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
 
-                // Try custom RPC URL first, then fall back to public RPC URLs
-                let rpc_url = network
-                    .get_rpc_url(relayer.custom_rpc_urls.clone())
-                    .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
-                    })?;
-
-                let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
-                let evm_provider = EvmProvider::new_with_timeout(&rpc_url, rpc_timeout_ms)
-                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-
+                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
@@ -340,8 +328,12 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let provider = Arc::new(get_solana_network_provider(
-                    &relayer.network,
+                let network = match SolanaNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
+                };
+                let provider = Arc::new(get_network_provider(
+                    &network,
                     relayer.custom_rpc_urls.clone(),
                 )?);
                 let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);

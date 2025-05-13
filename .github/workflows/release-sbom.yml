@@ -1,6 +1,5 @@
 ---
 name: Generate SBOM
-
 on:
   workflow_call:
     inputs:
@@ -8,11 +7,11 @@ on:
         type: string
         description: The tag to use for generating SBOM.
         required: true
-
 jobs:
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
+    environment: release
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_CHANNEL: '#oss-releases'
@@ -23,23 +22,19 @@ jobs:
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
       - name: Checkout tag
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           ref: ${{ inputs.tag }}
           token: ${{ steps.gh-app-token.outputs.token }}
-
       - name: Slack notification
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:
           status: starting
           steps: ${{ toJson(steps) }}
           channel: ${{ env.SLACK_CHANNEL }}
-          message: Starting generating sbom for ${{ github.repository }} with tag
-            ${{ inputs.tag }}......
+          message: Starting generating sbom for ${{ github.repository }} with tag ${{ inputs.tag }}......
         if: always()
-
       - name: Run SBOM
         uses: anchore/sbom-action@9f7302141466aa6482940f15371237e9d9f4c34a  # v0.19.0
         with:
@@ -48,19 +43,15 @@ jobs:
           github-token: ${{ steps.gh-app-token.outputs.token }}
           output-file: openzeppelin-relayer-${{ inputs.tag }}-spdx.json
           artifact-name: openzeppelin-relayer-${{ inputs.tag }}-spdx.json
-
       - name: Upload Release Artifact
         env:
           GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-        run: gh release upload ${{ inputs.tag }} ./openzeppelin-relayer-${{ inputs.tag
-          }}-spdx.json
-
+        run: gh release upload ${{ inputs.tag }} }}-spdx.json
       - name: SBOM attestation
         uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd  # main
         with:
           subject-path: ./openzeppelin-relayer-${{ inputs.tag }}-spdx.json
           github-token: ${{ steps.gh-app-token.outputs.token }}
-
       - name: Slack notification
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:

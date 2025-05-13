@@ -1,9 +1,8 @@
 [tasks.rust-antora]
 description = "Build Antora site and copy rust_docs"
 script = [
-  "cargo doc --target-dir docs/modules/ROOT/pages/rust_docs --no-deps --locked",
-  "cd docs",
-  "bash ../scripts/rust_antora.sh"
+  "cargo doc --target-dir docs/rust_docs --release --no-deps --quiet --locked",
+  "bash scripts/rust_antora.sh"
 ]
 [tasks.docker-compose-up]
 description = "Run docker compose up according to the user defined settings"

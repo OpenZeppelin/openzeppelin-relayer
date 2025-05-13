@@ -708,6 +708,16 @@ Available configuration fields
     "signer_id": "local-signer",
     "network_type": "solana",
     "network": "testnet",
+    "custom_rpc_urls": [
+      {
+        "url": "https://primary-rpc.example.com",
+        "weight": 2  // Higher weight routes more requests to this endpoint. The value must be an integer between 0 and 100 (inclusive).
+      },
+      {
+        "url": "https://backup-rpc.example.com",
+        "weight": 1
+      }
+    ],
     "policies": {
       "allowed_programs": [
           "11111111111111111111111111111111",
@@ -715,7 +725,7 @@ Available configuration fields
           "BPFLoaderUpgradeab1e11111111111111111111111"
         ]
     }
-  },
+  }
 ]
 ----
 
@@ -875,7 +885,16 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "evm",
-      "custom_rpc_urls": ["https://your-private-rpc-url.example.com"],
+      "custom_rpc_urls": [
+        {
+          "url": "https://primary-rpc.example.com",
+          "weight": 2
+        },
+        {
+          "url": "https://backup-rpc.example.com",
+          "weight": 1
+        }
+      ],
       "policies": {
         "gas_price_cap": 30000000000000,
         "eip1559_pricing": true
@@ -889,7 +908,16 @@ Full `config/config.json` example with evm and solana relayers definitions using
       "notification_id": "notification-example",
       "signer_id": "local-signer",
       "network_type": "solana",
-      "custom_rpc_urls": ["https://your-private-solana-rpc.example.com"],
+      "custom_rpc_urls": [
+        {
+          "url": "https://primary-solana-rpc.example.com",
+          "weight": 2
+        },
+        {
+          "url": "https://backup-solana-rpc.example.com",
+          "weight": 1
+        }
+      ],
       "policies": {
         "fee_payment_strategy": "user",
         "min_balance": 0,
@@ -939,23 +967,59 @@ The relayer supports two ways to configure RPC URLs:
 
 1. **Public RPC URLs**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
 
-2. **Custom RPC URL**: You can specify a custom RPC URL using the `custom_rpc_urls` field in the relayer configuration. This is useful when you want to:
-   * Use your own RPC node
+2. **Custom RPC URLs**: You can specify custom RPC URLs using the `custom_rpc_urls` field in the relayer configuration. Each URL can be configured with an optional weight for high availability:
+
+[source,json]
+----
+"custom_rpc_urls": [
+  {
+    "url": "https://primary-rpc.example.com",
+    "weight": 2  // Higher weight routes more requests to this endpoint. The value must be an integer between 0 and 100 (inclusive).
+  },
+  {
+    "url": "https://secondary-rpc.example.com",
+    "weight": 100, // Max allowed weight
+  },
+  {
+    "url": "https://backup-rpc.example.com"  // No weight specified, defaults to 100
+  },
+  {
+    "url": "https://backup2-rpc.example.com",
+    "weight": 0, //  A value of 0 disables the endpoint.
+  }
+]
+----
+
+This is useful when you want to:
+   * Use your own RPC nodes with load balancing
    * Use a paid service provider for better reliability and performance
    * Override the default public RPC URLs
    * Access custom network endpoints
+   * Configure primary and backup endpoints with different weights
 
 When both are available, the relayer will:
-1. First attempt to use the `custom_rpc_urls` if configured
-2. Fall back to the public RPC URLs if no custom URL is configured or if it's not accessible
+1. First attempt to use the `custom_rpc_urls` if configured. 
+2. Fall back to the public RPC URLs if no custom URL is configured.
+
+For backward compatibility, string arrays are still supported:
+
+[source,json]
+----
+"custom_rpc_urls": ["https://your-rpc.example.com"]
+----
 
 [IMPORTANT]
 ====
 When using custom RPC URLs:
 
-* Ensure the URL is secure (HTTPS) when accessing over public networks
+* Ensure the URLs are secure (HTTPS) when accessing over public networks
 * Keep your API keys and authentication tokens secure
-* Test the RPC endpoint's reliability and performance before deploying to production
+* Test the RPC endpoints' reliability and performance before using it in production
+* Configure weights to prioritize endpoints, assigning higher values to more reliable or performant ones.
+* The weight must be an integer between 0 and 100 (inclusive).
+* A weight of 0 disables the endpoint.
+* If a weight is not specified for an endpoint, it defaults to 100.
+
 ====
 
 == Important Considerations

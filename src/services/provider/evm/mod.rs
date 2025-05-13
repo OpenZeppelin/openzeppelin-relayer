@@ -22,17 +22,23 @@ use async_trait::async_trait;
 use eyre::{eyre, Result};
 use reqwest::ClientBuilder as ReqwestClientBuilder;
 
-use crate::models::{EvmTransactionData, TransactionError, U256};
+use crate::models::{EvmTransactionData, RpcConfig, TransactionError, U256};
+use crate::utils::rpc_selector::RpcSelector;
 
 #[cfg(test)]
 use mockall::automock;
+
+use super::ProviderError;
 
 /// Provider implementation for EVM-compatible blockchain networks.
 ///
 /// Wraps an HTTP RPC provider to interact with EVM chains like Ethereum, Polygon, etc.
 #[derive(Clone)]
 pub struct EvmProvider {
-    provider: RootProvider<Http<Client>>,
+    /// RPC selector for managing and selecting providers
+    selector: RpcSelector,
+    /// Timeout in seconds for new HTTP clients
+    timeout_seconds: u64,
 }
 
 /// Trait defining the interface for EVM blockchain interactions.
@@ -115,35 +121,44 @@ impl EvmProvider {
     /// Creates a new EVM provider instance.
     ///
     /// # Arguments
-    /// * `url` - The RPC endpoint URL to connect to
+    /// * `configs` - A vector of RPC configurations (URL and weight)
+    /// * `timeout_seconds` - The timeout duration in seconds (defaults to 30 if None)
     ///
     /// # Returns
     /// * `Result<Self>` - A new provider instance or an error
-    pub fn new(url: &str) -> Result<Self> {
-        let rpc_url = url.parse()?;
-        let provider = ProviderBuilder::new().on_http(rpc_url);
-        Ok(Self { provider })
-    }
-
-    /// Creates a new EVM provider instance with a custom timeout.
-    ///
-    /// # Arguments
-    /// * `url` - The RPC endpoint URL to connect to
-    /// * `timeout_seconds` - The timeout duration in seconds
-    ///
-    /// # Returns
-    /// * `Result<Self>` - A new provider instance or an error
-    pub fn new_with_timeout(url: &str, timeout_seconds: u64) -> Result<Self> {
-        // Check if URL has valid HTTP(S) scheme because this uses and http client
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(eyre!(
-                "Invalid URL scheme. Only HTTP and HTTPS are supported"
+    pub fn new(configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
+        if configs.is_empty() {
+            return Err(ProviderError::NetworkConfiguration(
+                "At least one RPC configuration must be provided".to_string(),
             ));
         }
 
+        RpcConfig::validate_list(&configs)
+            .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL: {}", e)))?;
+
+        // Create the RPC selector
+        let selector = RpcSelector::new(configs).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
+        })?;
+
+        Ok(Self {
+            selector,
+            timeout_seconds,
+        })
+    }
+
+    /// Gets a provider from the selector
+    fn get_provider(&self) -> Result<RootProvider<Http<Client>>> {
+        self.selector
+            .get_client(|url| self.initialize_provider(url))
+            .map_err(|e| eyre!("Failed to get provider: {}", e))
+    }
+
+    /// Initialize a provider for a given URL
+    fn initialize_provider(&self, url: &str) -> Result<RootProvider<Http<Client>>> {
         let rpc_url = url.parse()?;
         let client = ReqwestClientBuilder::default()
-            .timeout(Duration::from_secs(timeout_seconds))
+            .timeout(Duration::from_secs(self.timeout_seconds))
             .build()
             .map_err(|e| eyre!("Failed to build HTTP client: {}", e))?;
 
@@ -155,7 +170,7 @@ impl EvmProvider {
 
         let provider = ProviderBuilder::new().on_client(client);
 
-        Ok(Self { provider })
+        Ok(provider)
     }
 }
 
@@ -169,14 +184,14 @@ impl AsRef<EvmProvider> for EvmProvider {
 impl EvmProviderTrait for EvmProvider {
     async fn get_balance(&self, address: &str) -> Result<U256> {
         let address = address.parse()?;
-        self.provider
+        self.get_provider()?
             .get_balance(address)
             .await
             .map_err(|e| eyre!("Failed to get balance: {}", e))
     }
 
     async fn get_block_number(&self) -> Result<u64> {
-        self.provider
+        self.get_provider()?
             .get_block_number()
             .await
             .map_err(|e| eyre!("Failed to get block number: {}", e))
@@ -185,14 +200,14 @@ impl EvmProviderTrait for EvmProvider {
     async fn estimate_gas(&self, tx: &EvmTransactionData) -> Result<u64> {
         // transform the tx to a transaction request
         let transaction_request = TransactionRequest::try_from(tx)?;
-        self.provider
+        self.get_provider()?
             .estimate_gas(&transaction_request)
             .await
             .map_err(|e| eyre!("Failed to estimate gas: {}", e))
     }
 
     async fn get_gas_price(&self) -> Result<u128> {
-        self.provider
+        self.get_provider()?
             .get_gas_price()
             .await
             .map_err(|e| eyre!("Failed to get gas price: {}", e))
@@ -200,7 +215,7 @@ impl EvmProviderTrait for EvmProvider {
 
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<String> {
         let pending_tx = self
-            .provider
+            .get_provider()?
             .send_transaction(tx)
             .await
             .map_err(|e| eyre!("Failed to send transaction: {}", e))?;
@@ -211,7 +226,7 @@ impl EvmProviderTrait for EvmProvider {
 
     async fn send_raw_transaction(&self, tx: &[u8]) -> Result<String> {
         let pending_tx = self
-            .provider
+            .get_provider()?
             .send_raw_transaction(tx)
             .await
             .map_err(|e| eyre!("Failed to send raw transaction: {}", e))?;
@@ -230,10 +245,10 @@ impl EvmProviderTrait for EvmProvider {
     async fn get_transaction_count(&self, address: &str) -> Result<u64> {
         let address = address.parse()?;
         let result = self
-            .provider
+            .get_provider()?
             .get_transaction_count(address)
             .await
-            .map_err(|e| eyre!("Health check failed: {}", e))?;
+            .map_err(|e| eyre!("Failed to get transaction count: {}", e))?;
 
         Ok(result)
     }
@@ -245,7 +260,7 @@ impl EvmProviderTrait for EvmProvider {
         reward_percentiles: Vec<f64>,
     ) -> Result<FeeHistory> {
         let fee_history = self
-            .provider
+            .get_provider()?
             .get_fee_history(block_count, newest_block, &reward_percentiles)
             .await
             .map_err(|e| eyre!("Failed to get fee history: {}", e))?;
@@ -253,7 +268,7 @@ impl EvmProviderTrait for EvmProvider {
     }
 
     async fn get_block_by_number(&self) -> Result<BlockResponse> {
-        self.provider
+        self.get_provider()?
             .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
             .await
             .map_err(|e| eyre!("Failed to get block by number: {}", e))?
@@ -262,14 +277,14 @@ impl EvmProviderTrait for EvmProvider {
 
     async fn get_transaction_receipt(&self, tx_hash: &str) -> Result<Option<TransactionReceipt>> {
         let tx_hash = tx_hash.parse()?;
-        self.provider
+        self.get_provider()?
             .get_transaction_receipt(tx_hash)
             .await
             .map_err(|e| eyre!("Failed to get transaction receipt: {}", e))
     }
 
     async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes> {
-        self.provider
+        self.get_provider()?
             .call(tx)
             .await
             .map_err(|e| eyre!("Failed to call contract: {}", e))
@@ -327,36 +342,52 @@ mod tests {
 
     #[test]
     fn test_new_provider() {
-        let provider = EvmProvider::new("http://localhost:8545");
+        // Test with valid URL
+        let provider = EvmProvider::new(
+            vec![RpcConfig::new("http://localhost:8545".to_string())],
+            30,
+        );
         assert!(provider.is_ok());
 
-        let provider = EvmProvider::new("invalid-url");
+        // Test with invalid URL
+        let provider = EvmProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
         assert!(provider.is_err());
     }
 
     #[test]
     fn test_new_provider_with_timeout() {
-        let provider = EvmProvider::new_with_timeout("http://localhost:8545", 30);
+        // Test with valid URL and timeout
+        let provider = EvmProvider::new(
+            vec![RpcConfig::new("http://localhost:8545".to_string())],
+            30,
+        );
         assert!(provider.is_ok());
 
-        let provider = EvmProvider::new_with_timeout("invalid-url", 30);
+        // Test with invalid URL
+        let provider = EvmProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
         assert!(provider.is_err());
 
-        let provider = EvmProvider::new_with_timeout("http://localhost:8545", 0);
+        // Test with zero timeout
+        let provider =
+            EvmProvider::new(vec![RpcConfig::new("http://localhost:8545".to_string())], 0);
         assert!(provider.is_ok());
 
-        let provider = EvmProvider::new_with_timeout("http://localhost:8545", 3600);
+        // Test with large timeout
+        let provider = EvmProvider::new(
+            vec![RpcConfig::new("http://localhost:8545".to_string())],
+            3600,
+        );
         assert!(provider.is_ok());
     }
 
     #[test]
     fn test_new_with_timeout_error_handling() {
         // Test with invalid URL
-        let result = EvmProvider::new_with_timeout("not-a-valid-url", 30);
+        let result = EvmProvider::new(vec![RpcConfig::new("not-a-valid-url".to_string())], 30);
         assert!(result.is_err());
 
         // Test with invalid scheme
-        let result = EvmProvider::new_with_timeout("ftp://localhost:8545", 30);
+        let result = EvmProvider::new(vec![RpcConfig::new("ftp://localhost:8545".to_string())], 30);
         assert!(result.is_err());
     }
 

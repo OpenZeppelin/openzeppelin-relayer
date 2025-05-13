@@ -11,6 +11,7 @@ jobs:
   build-push-image:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
+    environment: release
     env:
       DOCKERHUB_IMAGE: openzeppelin/openzeppelin-relayer
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

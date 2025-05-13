@@ -1,11 +1,9 @@
 ---
 name: Run release-please
-
 on:
   push:
     branches:
       - release-v*
-
 permissions:
   actions: read
   contents: write
@@ -13,11 +11,10 @@ permissions:
   attestations: write
   packages: write
   id-token: write
-
-
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    environment: release
     outputs:
       release_created: ${{ steps.release.outputs.releases_created }}
       pr_created: ${{ steps.release.outputs.prs_created }}
@@ -34,7 +31,6 @@ jobs:
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
       - name: Slack notification
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:
@@ -43,13 +39,11 @@ jobs:
           channel: ${{ env.SLACK_CHANNEL }}
           message: Starting release please workflow for ${{ github.repository }}
         if: always()
-
       - name: Checkout release branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
           token: ${{ steps.gh-app-token.outputs.token }}
-
       - name: Get merged PR number from commit
         id: get_pr
         run: |
@@ -58,21 +52,16 @@ jobs:
           echo "pr_number_output=${pr_number:-}" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-
-
       - name: Check for label and unlock conversation
         if: steps.get_pr.outputs.pr_number_output != ''
         run: |
           PR_NUMBER=${{ steps.get_pr.outputs.pr_number_output }}
           echo "Found merged PR number: $PR_NUMBER"
-
           retries=3
           wait=2
-
           while [[ $retries -gt 0 ]]; do
             # Fetch PR details and extract labels
             PR_LABELS=$(gh api --jq '.labels.[].name' /repos/${{ github.repository }}/pulls/$PR_NUMBER)
-
             if echo "$PR_LABELS" | grep -q "autorelease: pending"; then
               echo "Label 'autorelease: pending' found. Attempting to unlock..."
               gh pr unlock $PR_NUMBER
@@ -90,14 +79,12 @@ jobs:
               break
             fi
           done
-
           if [[ $retries -eq 0 ]]; then
             echo "Failed to unlock PR after multiple retries."
             exit 1  # Fail the step if unlocking consistently fails
           fi
         env:
           GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-
       - name: Start release please action
         id: release
         uses: googleapis/release-please-action@a02a34c4d625f9be7cb89156071d8567266a2445  # v4.2.0
@@ -106,14 +93,11 @@ jobs:
           target-branch: ${{ github.ref_name }}
           config-file: .github/release-please/.config.json
           manifest-file: .github/release-please/manifest.json
-
       - name: Get release branch name on release please prs
-        if: ${{ steps.release.outputs.releases_created == 'false' && steps.release.outputs.pr
-          != '' }}
+        if: ${{ steps.release.outputs.releases_created == 'false' && steps.release.outputs.pr != '' }}
         id: get_release_branch
         run: |
           echo "release_branch=${{ fromJSON(steps.release.outputs.pr).headBranchName }}" >> $GITHUB_OUTPUT
-
       - name: Slack notification success or failure
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:
@@ -135,31 +119,24 @@ jobs:
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
       - name: Get PR details
         id: release-branch
         run: |
           echo "pr head branch name: >>>>> ${{ needs.release-please.outputs.release_branch }}"
-
-
       - name: Checkout release branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 2
           token: ${{ steps.gh-app-token.outputs.token }}
           ref: ${{ needs.release-please.outputs.release_branch }}
-
       - name: Get GitHub App User ID
         id: get-user-id
-        run: echo "user-id=$(gh api "/users/${{ steps.gh-app-token.outputs.app-slug
-          }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+        run: echo "user-id=$(gh api "/users/${{ steps.gh-app-token.outputs.app-slug }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
-
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
-
       - name: Cargo Update
         id: lock-file-commit
         run: |-
@@ -170,7 +147,6 @@ jobs:
           else
             echo "Cargo.lock has no changes, skipping commit and push."
           fi
-
       - name: Commit cargo update
         if: ${{ steps.lock-file-commit.outputs.changes == 'true' }}
         uses: iarekylew00t/verified-bot-commit@849c406ce58dfd17ed6a8b981448968d4d0f2012  # v1.3.2
@@ -180,6 +156,15 @@ jobs:
           ref: ${{ needs.release-please.outputs.release_branch }}
           files: |-
             Cargo.lock
+
+  # Update rust docs link in nav.adoc
+  update-rust-docs-link:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'false' }}
+    uses: ./.github/workflows/rust-docs-url.yml
+    with:
+      branch: ${{ needs.release-please.outputs.release_branch }}
+    secrets: inherit
 
   # Trigger workflow to generate sbom
   release-sbom:
@@ -202,7 +187,9 @@ jobs:
   # Trigger workflow to publish docs
   release-docs:
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    needs: [release-please, release-docker]
+    needs:
+      - release-please
+      - release-docker
     uses: ./.github/workflows/release-docs.yml
     with:
       tag: ${{ needs.release-please.outputs.tag }}

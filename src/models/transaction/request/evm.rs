@@ -162,7 +162,7 @@ pub fn validate_price_params(
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{NetworkType, RelayerEvmPolicy};
+    use crate::models::{NetworkType, RelayerEvmPolicy, RpcConfig};
 
     use super::*;
     use chrono::{Duration, Utc};
@@ -193,7 +193,7 @@ mod tests {
             signer_id: "test_signer".to_string(),
             address: "0x".to_string(),
             notification_id: None,
-            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
+            custom_rpc_urls: Some(vec![RpcConfig::new("https://test-rpc-url".to_string())]),
         }
     }
 
