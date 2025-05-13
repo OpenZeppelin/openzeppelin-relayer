@@ -441,20 +441,20 @@ where
                             "Swap successful for relayer: {}. Amount: {}, Destination amount: {}",
                             relayer_id_clone, swap_amount, swap_result.destination_amount
                         );
-                        return Ok::<SwapResult, RelayerError>(swap_result);
+                        Ok::<SwapResult, RelayerError>(swap_result)
                     }
                     Err(e) => {
                         error!(
                             "Error during token swap for relayer: {}. Error: {}",
                             relayer_id_clone, e
                         );
-                        return Ok::<SwapResult, RelayerError>(SwapResult {
+                        Ok::<SwapResult, RelayerError>(SwapResult {
                             mint: token_mint.clone(),
                             source_amount: swap_amount,
                             destination_amount: 0,
                             transaction_signature: "".to_string(),
                             error: Some(e.to_string()),
-                        });
+                        })
                     }
                 }
             }

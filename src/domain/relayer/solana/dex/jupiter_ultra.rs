@@ -100,9 +100,7 @@ where
                 request_id: order.request_id,
             })
             .await
-            .map_err(|e| {
-                RelayerError::DexError(format!("Failed to execute order: {}", e.to_string()))
-            })?;
+            .map_err(|e| RelayerError::DexError(format!("Failed to execute order: {}", e)))?;
         info!("Order executed successfully, response: {:?}", response);
 
         Ok(SwapResult {

@@ -398,7 +398,7 @@ impl RelayerFileConfig {
                         "Priority level cannot be empty".into(),
                     ));
                 }
-                let valid_levels = vec!["medium", "high", "veryHigh"];
+                let valid_levels = ["medium", "high", "veryHigh"];
                 if !valid_levels.contains(&priority_level.as_str()) {
                     return Err(ConfigFileError::InvalidPolicy(
                         "Priority level must be one of: medium, high, veryHigh".into(),
@@ -436,7 +436,7 @@ impl RelayerFileConfig {
                     self.validate_solana_pub_keys(&allowed_token_keys)?;
                     self.validate_solana_pub_keys(&policy.allowed_programs)?;
                     self.validate_solana_fee_margin_percentage(policy.fee_margin_percentage)?;
-                    self.validate_solana_swap_config(&policy, &self.network)?;
+                    self.validate_solana_swap_config(policy, &self.network)?;
                     // check if both allowed_accounts and disallowed_accounts are present
                     if policy.allowed_accounts.is_some() && policy.disallowed_accounts.is_some() {
                         return Err(ConfigFileError::InvalidPolicy(
