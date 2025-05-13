@@ -1,0 +1,52 @@
+---
+name: Nightly Cargo.lock update
+on:
+  schedule:
+    - cron: 0 12 * * *
+  workflow_dispatch: {}
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  id-token: write
+jobs:
+  update-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
+      - name: Prepare
+        id: init
+        uses: ./.github/actions/prepare
+
+      # Get the output of the prepare composite action
+      - name: Get cache-hit output
+        run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
+      - name: Cargo Update
+        id: lock-file-commit
+        run: |-
+          cargo update
+          git add Cargo.lock
+          if ! git diff --cached --quiet Cargo.lock; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "Cargo.lock has no changes, skipping commit and push."
+            exit 0
+          fi
+      - name: Create or update pull request
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: 'chore: Updating lock file'
+          sign-commits: true
+          branch: update-cargo-lock
+          commit-message: 'chore: Updating lock file'
+          body: |-
+            This PR is generated automatically by GitHub Actions.
+            It contains all dependency updates since the last run.
+          base: main
+          labels: dependencies, automation

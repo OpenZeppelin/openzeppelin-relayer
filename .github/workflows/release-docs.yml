@@ -16,6 +16,7 @@ jobs:
   docs:
     name: publish docs
     runs-on: ubuntu-latest
+    environment: release
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_CHANNEL: '#oss-releases'
@@ -56,6 +57,8 @@ jobs:
           DOCS_BRANCH="docs-v${MAJOR}.${MINOR}"
           echo "DOCS_BRANCH=${DOCS_BRANCH}" >> $GITHUB_OUTPUT
           echo "RELEASE_BRANCH=${RELEASE_BRANCH}" >> $GITHUB_OUTPUT
+          echo "MAJOR=${MAJOR}" >> $GITHUB_OUTPUT
+          echo "MINOR=${MINOR}" >> $GITHUB_OUTPUT
           if [ "$PATCH" -ne 0 ]; then
             # If it's a patch version, create a PR to merge release branch into docs branch
             echo "Creating PR to merge ${RELEASE_BRANCH} into ${DOCS_BRANCH}"
