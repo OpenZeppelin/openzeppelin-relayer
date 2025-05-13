@@ -16,6 +16,7 @@ jobs:
   docs:
     name: publish docs
     runs-on: ubuntu-latest
+    environment: release
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_CHANNEL: '#oss-releases'
@@ -67,7 +68,6 @@ jobs:
             echo "Creating new docs branch ${DOCS_BRANCH}"
           fi
           echo "PR_TITLE=${PR_TITLE:-}" >> $GITHUB_OUTPUT
-
       - name: Create Pull Request for Docs
         if: ${{ steps.validate_tag.outputs.PR_TITLE != '' }}
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
@@ -79,7 +79,6 @@ jobs:
           sign-commits: true
           branch: ${{ steps.validate_tag.outputs.RELEASE_BRANCH }}
           commit-message: ${{ steps.validate_tag.outputs.PR_TITLE }}
-
       - name: Create Docs Branch
         if: ${{ steps.validate_tag.outputs.PR_TITLE == '' }}
         run: |

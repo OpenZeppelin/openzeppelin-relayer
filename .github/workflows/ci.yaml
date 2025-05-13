@@ -56,7 +56,6 @@ jobs:
     name: CI
     needs:
       - msrv
-      - lockfile
       - rustfmt
       - clippy
     runs-on: ubuntu-latest
@@ -85,25 +84,6 @@ jobs:
       # Check the minimum supported Rust version
       - name: Default features
         run: cargo hack check --feature-powerset --locked --rust-version --all-targets
-  lockfile:
-    if: ${{ github.event.pull_request.draft == false && github.event_name != 'push' && needs.changed_files.outputs.changed-lockfile-files == 'true' }}
-    needs: changed_files
-    runs-on: ubuntu-latest
-    steps:
-      # Checkout the repository
-      - name: Checkout Code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - name: Prepare
-        id: init
-        uses: ./.github/actions/prepare
-
-      # Get the output of the prepare composite action
-      - name: Get cache-hit output
-        run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-
-      # Check the lockfile
-      - name: Validate lockfile updates
-        run: cargo update --locked
   rustfmt:
     if: ${{ github.event.pull_request.draft == false && github.event_name != 'push' && needs.changed_files.outputs.changed-rust-files == 'true' }}
     needs: changed_files
@@ -174,9 +154,6 @@ jobs:
       # Checkout the repository
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - name: Get disk space
-        run: df -h
-        continue-on-error: true
       - name: free disk space
         run: |
           sudo swapoff -a
@@ -188,20 +165,15 @@ jobs:
           else
             echo "No Docker images found to remove"
           fi
-          df -h
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
+        with:
+          components: llvm-tools-preview
 
       # Get the output of the prepare composite action
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@9399c7bb15d4c7d47b27263d024f0a4978346ba4  # v1.11.0
-        with:
-          toolchain: stable
-          components: llvm-tools-preview
-          rustflags: ''
       - name: Install cargo hack
         uses: taiki-e/install-action@cargo-hack
       - name: Install cargo-llvm-cov

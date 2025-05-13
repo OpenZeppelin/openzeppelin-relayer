@@ -20,6 +20,7 @@ permissions:
 jobs:
   update-docs-link:
     runs-on: ubuntu-latest
+    environment: release
     steps:
       - uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5  # v2.0.2
         id: gh-app-token

@@ -14,8 +14,7 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    environment:
-      name: release
+    environment: release
     outputs:
       release_created: ${{ steps.release.outputs.releases_created }}
       pr_created: ${{ steps.release.outputs.prs_created }}
@@ -175,8 +174,6 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag }}
     secrets: inherit
-    environment:
-      name: release
 
   # Trigger workflow to publish docker images
   release-docker:
@@ -186,8 +183,6 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag }}
     secrets: inherit
-    environment:
-      name: release
 
   # Trigger workflow to publish docs
   release-docs:
@@ -199,5 +194,3 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag }}
     secrets: inherit
-    environment:
-      name: release
