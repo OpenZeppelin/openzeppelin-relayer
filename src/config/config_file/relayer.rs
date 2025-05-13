@@ -740,4 +740,239 @@ mod tests {
         let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
         assert!(relayer.validate().is_ok());
     }
+
+    /// Helper to build a minimal RelayerFileConfig JSON for Solana with given swap_config
+    fn make_relayer_config_with_solana_swap_config(
+        swap_config: serde_json::Value,
+    ) -> serde_json::Value {
+        json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet-beta",
+            "network_type": "solana",
+            "signer_id": "test-signer",
+            "paused": false,
+            "policies": {
+                "fee_payment_strategy": "user",
+                "swap_config": swap_config
+            }
+        })
+    }
+
+    #[test]
+    fn invalid_jupiter_swap_options_without_strategy() {
+        let swap_cfg = json!({
+            "cron_schedule": "0 * * * * *",
+            "min_balance_threshold": 1,
+            "jupiter_swap_options": {
+                "priority_level": "high",
+                "priority_fee_max_lamports": 1000,
+                "dynamic_compute_unit_limit": true
+            }
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: JupiterSwap options are only valid for JupiterSwap strategy"
+        );
+    }
+
+    #[test]
+    fn invalid_priority_fee_zero() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-swap",
+            "cron_schedule": "0 * * * * *",
+            "min_balance_threshold": 1,
+            "jupiter_swap_options": {
+                "priority_level": "medium",
+                "priority_fee_max_lamports": 0,
+                "dynamic_compute_unit_limit": false
+            }
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: Max lamports must be greater than 0"
+        );
+    }
+
+    #[test]
+    fn invalid_empty_priority_level() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-swap",
+            "cron_schedule": "0 * * * * *",
+            "min_balance_threshold": 1,
+            "jupiter_swap_options": {
+                "priority_level": "",
+                "priority_fee_max_lamports": 100,
+                "dynamic_compute_unit_limit": false
+            }
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: Priority level cannot be empty"
+        );
+    }
+
+    #[test]
+    fn invalid_priority_level_value() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-swap",
+            "cron_schedule": "0 * * * * *",
+            "min_balance_threshold": 1,
+            "jupiter_swap_options": {
+                "priority_level": "urgent",
+                "priority_fee_max_lamports": 100,
+                "dynamic_compute_unit_limit": true
+            }
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: Priority level must be one of: medium, high, veryHigh"
+        );
+    }
+
+    #[test]
+    fn valid_jupiter_swap_config() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-swap",
+            "cron_schedule": "0 * * * * *",
+            "min_balance_threshold": 10,
+            "jupiter_swap_options": {
+                "priority_level": "medium",
+                "priority_fee_max_lamports": 2000,
+                "dynamic_compute_unit_limit": true
+            }
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_jupiter_ultra_config() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-ultra",
+            "cron_schedule": "0 * * * * *",
+            "min_balance_threshold": 10,
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_jupiter_swap_options_value_for_ultra() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-ultra",
+            "cron_schedule": "0 * * * * *",
+            "min_balance_threshold": 10,
+            "jupiter_swap_options": {
+                "priority_level": "medium",
+                "priority_fee_max_lamports": 2000,
+                "dynamic_compute_unit_limit": true
+            }
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: JupiterSwap options are only valid for JupiterSwap strategy"
+        );
+    }
+
+    #[test]
+    fn invalid_swap_config_empty_cron() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-ultra",
+            "cron_schedule": "",
+            "min_balance_threshold": 10,
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: Empty cron schedule is not accepted"
+        );
+    }
+
+    #[test]
+    fn invalid_swap_config_invalid_cron() {
+        let swap_cfg = json!({
+            "strategy": "jupiter-ultra",
+            "cron_schedule": "* 1 *",
+            "min_balance_threshold": 10,
+        });
+        let cfg = make_relayer_config_with_solana_swap_config(swap_cfg);
+        let relayer: RelayerFileConfig = serde_json::from_value(cfg).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: Invalid cron schedule format"
+        );
+    }
+
+    #[test]
+    fn invalid_swap_config_invalid_network_jupiter_swap() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "devnet",
+            "network_type": "solana",
+            "signer_id": "test-signer",
+            "paused": false,
+            "policies": {
+                "fee_payment_strategy": "user",
+                "swap_config": {
+                    "strategy": "jupiter-swap",
+                    "cron_schedule": "* 1 *",
+                    "min_balance_threshold": 10,
+                }
+            }
+        });
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: JupiterSwap strategy is only supported on mainnet-beta"
+        );
+    }
+
+    #[test]
+    fn invalid_swap_config_invalid_network_jupiter_ultra() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "devnet",
+            "network_type": "solana",
+            "signer_id": "test-signer",
+            "paused": false,
+            "policies": {
+                "fee_payment_strategy": "user",
+                "swap_config": {
+                    "strategy": "jupiter-ultra",
+                    "cron_schedule": "* 1 *",
+                    "min_balance_threshold": 10,
+                }
+            }
+        });
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        let err = relayer.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid policy: JupiterUltra strategy is only supported on mainnet-beta"
+        );
+    }
 }
