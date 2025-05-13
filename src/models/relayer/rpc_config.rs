@@ -128,8 +128,10 @@ mod tests {
     fn test_with_weight_creates_config_with_custom_weight() {
         let url = "https://example.com".to_string();
         let weight: u8 = 5;
-        let config = RpcConfig::with_weight(url.clone(), weight).unwrap();
+        let result = RpcConfig::with_weight(url.clone(), weight);
+        assert!(result.is_ok());
 
+        let config = result.unwrap();
         assert_eq!(config.url, url);
         assert_eq!(config.weight, weight);
     }
