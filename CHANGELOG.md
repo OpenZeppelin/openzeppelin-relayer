@@ -18,7 +18,6 @@
 
 ### 🐛 Bug Fixes
 
-* change the ampersand to and, as as the shell interpret it ([#206](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/206)) ([d164d6a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d164d6a4d63fbf0acdfe1330cf25147e86280af8))
 * CLA assistant ([#171](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/171)) ([b326a56](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b326a5680722e812263aab949003c214795fd2c0))
 * CLA labels ([#173](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/173)) ([e31405b](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/e31405b8cba9ffd2ff991d56444320ff3d069ad0))
 * Docker Compose ([#156](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/156)) ([6ca012f](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/6ca012fb9b50d5c2159c498679673cb27530fc3c))
@@ -26,8 +25,22 @@
 * Release merge conflicts ([#163](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/163)) ([4cac422](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/4cac4221817373a1ae7eff92db187dbae2f1665b))
 * Skip releases ([ccafcbe](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/ccafcbe11bc6ea46dacb9c59be578abd45112ad3))
 
+## [0.1.1](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.1.0...v0.1.1) (2025-04-08)
+
+
+### 🐛 Bug Fixes
+
+* Skip releases ([e79b2e9](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/e79b2e963439721dd8e151fa0827654e4019df5f))
+* Skip releases with release please ([#158](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/158)) ([e79b2e9](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/e79b2e963439721dd8e151fa0827654e4019df5f))
+
+
+### ⚙️ Miscellaneous Chores
+
+* Fix workflow and missing libs in docker file ([#157](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/157)) ([c7a681d](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/c7a681dea154b06b675a286e936606e2f9ce087b))
+* plat-7575 Docs fixes ([#153](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/153)) ([#154](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/154)) ([44257e8](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/44257e8ea3e658adbf40f69ad809e4e3503e9af4))
 
 ## 0.1.0 (2025-04-07)
+
 
 ### 🚀 Features
 
