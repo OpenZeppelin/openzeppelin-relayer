@@ -16,11 +16,11 @@ pub use token::*;
 
 use crate::{
     jobs::JobProducer,
-    models::{RelayerError, RelayerRepoModel, SignerRepoModel},
+    models::{RelayerError, RelayerRepoModel, SignerRepoModel, SolanaNetwork},
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
-    services::{get_solana_network_provider, JupiterService, SolanaSignerFactory},
+    services::{get_network_provider, JupiterService, SolanaSignerFactory},
 };
 
 /// Function to create a Solana relayer instance
@@ -31,8 +31,14 @@ pub fn create_solana_relayer(
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 ) -> Result<DefaultSolanaRelayer, RelayerError> {
-    let provider = Arc::new(get_solana_network_provider(
-        &relayer.network,
+    let network = SolanaNetwork::from_network_str(&relayer.network).map_err(|_| {
+        RelayerError::NetworkConfiguration(format!(
+            "Invalid network: {}, expected named network or chain ID",
+            relayer.network
+        ))
+    })?;
+    let provider = Arc::new(get_network_provider(
+        &network,
         relayer.custom_rpc_urls.clone(),
     )?);
     let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);

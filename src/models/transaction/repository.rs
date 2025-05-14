@@ -20,6 +20,11 @@ use std::{convert::TryFrom, str::FromStr};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::models::transaction::stellar_types::DecoratedSignature;
+use soroban_rs::xdr::{
+    Transaction as SorobanTransaction, TransactionEnvelope, TransactionV1Envelope, VecM,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
@@ -246,8 +251,48 @@ pub struct StellarTransactionData {
     pub memo: Option<MemoSpec>,
     pub valid_until: Option<String>,
     pub network: StellarNamedNetwork,
-    pub envelope_xdr: Option<String>,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub signatures: Vec<DecoratedSignature>,
     pub hash: Option<String>,
+}
+
+impl StellarTransactionData {
+    pub fn with_sequence_number(mut self, sequence_number: i64) -> Self {
+        self.sequence_number = Some(sequence_number);
+        self
+    }
+
+    /// Build an *unsigned* TransactionEnvelope from the current data. Useful for simulation.
+    pub fn unsigned_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
+        let tx = SorobanTransaction::try_from(self.clone())?;
+        Ok(TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        }))
+    }
+
+    /// Build a *signed* TransactionEnvelope using the stored signatures.
+    pub fn signed_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
+        let tx = SorobanTransaction::try_from(self.clone())?;
+        let sigs = VecM::try_from(self.signatures.clone())
+            .map_err(|_| SignerError::ConversionError("too many signatures".into()))?;
+        Ok(TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: sigs,
+        }))
+    }
+
+    /// Return a new instance with the given signature appended.
+    pub fn attach_signature(mut self, sig: DecoratedSignature) -> Self {
+        self.signatures.push(sig);
+        self
+    }
+
+    /// Return a new instance with the `hash` field populated.
+    pub fn with_hash(mut self, hash: String) -> Self {
+        self.hash = Some(hash);
+        self
+    }
 }
 
 impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRepoModel {
@@ -331,7 +376,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     memo: stellar_request.memo.clone(),
                     valid_until: stellar_request.valid_until.clone(),
                     network: StellarNamedNetwork::from_str(&stellar_request.network)?,
-                    envelope_xdr: None,
+                    signatures: Vec::new(),
                     hash: None,
                     fee: None,
                     sequence_number: None,
@@ -492,6 +537,10 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 
 #[cfg(test)]
 mod tests {
+    use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
+
+    use crate::models::AssetSpec;
+
     use super::*;
 
     #[test]
@@ -752,7 +801,7 @@ mod tests {
             memo: Some(MemoSpec::Text("Test memo".to_string())),
             valid_until: Some("2025-01-01T00:00:00Z".to_string()),
             network: StellarNamedNetwork::Testnet,
-            envelope_xdr: None,
+            signatures: Vec::new(),
             hash: Some("hash123".to_string()),
         };
         let network_data = NetworkTransactionData::Stellar(stellar_tx_data.clone());
@@ -843,5 +892,84 @@ mod tests {
         assert_eq!(tx_legacy.gas_limit, evm_tx_data.gas_limit);
         assert_eq!(tx_legacy.gas_price, evm_tx_data.gas_price.unwrap());
         assert_eq!(tx_legacy.value, evm_tx_data.value);
+    }
+
+    fn dummy_signature() -> DecoratedSignature {
+        let hint = SignatureHint([0; 4]);
+        let bytes: Vec<u8> = vec![0u8; 64];
+        let bytes_m: BytesM<64> = bytes.try_into().expect("BytesM conversion");
+        DecoratedSignature {
+            hint,
+            signature: Signature(bytes_m),
+        }
+    }
+
+    fn test_stellar_tx_data() -> StellarTransactionData {
+        StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            fee: Some(100),
+            sequence_number: Some(1),
+            operations: vec![OperationSpec::Payment {
+                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                amount: 1000,
+                asset: AssetSpec::Native,
+            }],
+            memo: Some(MemoSpec::None),
+            valid_until: None,
+            network: StellarNamedNetwork::Testnet,
+            signatures: Vec::new(),
+            hash: None,
+        }
+    }
+
+    #[test]
+    fn test_with_sequence_number() {
+        let tx = test_stellar_tx_data();
+        let updated = tx.with_sequence_number(42);
+        assert_eq!(updated.sequence_number, Some(42));
+    }
+
+    #[test]
+    fn test_unsigned_envelope() {
+        let tx = test_stellar_tx_data();
+        let env = tx.unsigned_envelope();
+        assert!(env.is_ok());
+        let env = env.unwrap();
+        // Should be a TransactionV1Envelope with no signatures
+        if let soroban_rs::xdr::TransactionEnvelope::Tx(env) = env {
+            assert_eq!(env.signatures.len(), 0);
+        } else {
+            panic!("Expected TransactionEnvelope::Tx");
+        }
+    }
+
+    #[test]
+    fn test_signed_envelope() {
+        let mut tx = test_stellar_tx_data();
+        tx.signatures.push(dummy_signature());
+        let env = tx.signed_envelope();
+        assert!(env.is_ok());
+        let env = env.unwrap();
+        if let soroban_rs::xdr::TransactionEnvelope::Tx(env) = env {
+            assert_eq!(env.signatures.len(), 1);
+        } else {
+            panic!("Expected TransactionEnvelope::Tx");
+        }
+    }
+
+    #[test]
+    fn test_attach_signature() {
+        let tx = test_stellar_tx_data();
+        let sig = dummy_signature();
+        let updated = tx.attach_signature(sig.clone());
+        assert_eq!(updated.signatures.len(), 1);
+        assert_eq!(updated.signatures[0], sig);
+    }
+
+    #[test]
+    fn test_with_hash() {
+        let tx = test_stellar_tx_data();
+        let updated = tx.with_hash("hash123".to_string());
+        assert_eq!(updated.hash, Some("hash123".to_string()));
     }
 }

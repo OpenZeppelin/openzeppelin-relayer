@@ -607,7 +607,7 @@ mod tests {
                 valid_until: None,
                 operations: vec![payment_op(TEST_PK)],
                 network: StellarNamedNetwork::Testnet,
-                envelope_xdr: None,
+                signatures: Vec::new(),
                 hash: None,
             };
             let tx = Transaction::try_from(data).unwrap();
@@ -626,7 +626,7 @@ mod tests {
                 valid_until: None,
                 operations: vec![payment_op(TEST_PK)],
                 network: StellarNamedNetwork::Testnet,
-                envelope_xdr: None,
+                signatures: Vec::new(),
                 hash: None,
             };
             assert!(Transaction::try_from(data).is_err());
@@ -643,7 +643,7 @@ mod tests {
                 valid_until: None,
                 operations: ops,
                 network: StellarNamedNetwork::Testnet,
-                envelope_xdr: None,
+                signatures: Vec::new(),
                 hash: None,
             };
             assert!(Transaction::try_from(data).is_err());
@@ -659,7 +659,7 @@ mod tests {
                 valid_until: Some("1735689600".to_string()), // "2025-01-01T00:00:00Z"
                 operations: vec![payment_op(TEST_PK)],
                 network: StellarNamedNetwork::Testnet,
-                envelope_xdr: None,
+                signatures: Vec::new(),
                 hash: None,
             };
             let tx = Transaction::try_from(data).unwrap();
@@ -681,7 +681,7 @@ mod tests {
                 valid_until: None,
                 operations: vec![payment_op(TEST_PK)],
                 network: StellarNamedNetwork::Testnet,
-                envelope_xdr: None,
+                signatures: Vec::new(),
                 hash: None,
             };
             let tx = Transaction::try_from(data).unwrap();

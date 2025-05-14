@@ -16,21 +16,21 @@ use utoipa::ToSchema;
 use mockall::automock;
 
 use crate::{
-    config::ServerConfig,
     jobs::JobProducer,
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, TransactionError, TransactionRepoModel,
+        SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
-    services::{EvmSignerFactory, TransactionCounterService},
+    services::{
+        get_network_provider, EvmSignerFactory, StellarProvider, TransactionCounterService,
+    },
 };
 
-use crate::services::EvmProvider;
 use async_trait::async_trait;
 use eyre::Result;
 
@@ -324,17 +324,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
 
-                // Try custom RPC URL first, then fall back to public RPC URLs
-                let rpc_url = network
-                    .get_rpc_url(relayer.custom_rpc_urls.clone())
-                    .ok_or_else(|| {
-                        RelayerError::NetworkConfiguration("No RPC URLs configured".to_string())
-                    })?;
-
-                let rpc_timeout_ms = ServerConfig::from_env().rpc_timeout_ms;
-                let evm_provider = EvmProvider::new_with_timeout(&rpc_url, rpc_timeout_ms)
-                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
-
+                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
@@ -365,10 +355,26 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Solana(solana_relayer))
             }
             NetworkType::Stellar => {
+                let network = match StellarNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
+                };
+
+                let stellar_provider = StellarProvider::new(network.public_rpc_urls()[0])
+                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+
+                let transaction_counter_service = Arc::new(TransactionCounterService::new(
+                    relayer.id.clone(),
+                    relayer.address.clone(),
+                    transaction_counter_store,
+                ));
+
                 let relayer = DefaultStellarRelayer::new(
                     relayer,
+                    stellar_provider,
                     relayer_repository,
                     transaction_repository,
+                    transaction_counter_service,
                     job_producer,
                 )?;
                 Ok(NetworkRelayer::Stellar(relayer))

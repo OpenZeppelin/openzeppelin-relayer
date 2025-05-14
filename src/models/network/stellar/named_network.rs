@@ -43,7 +43,7 @@ impl StellarNamedNetwork {
     pub const fn public_rpc_urls(self) -> &'static [&'static str] {
         match self {
             StellarNamedNetwork::Mainnet => &["https://horizon.stellar.org"],
-            StellarNamedNetwork::Testnet => &["https://horizon-testnet.stellar.org"],
+            StellarNamedNetwork::Testnet => &["https://soroban-testnet.stellar.org"],
         }
     }
 
@@ -153,11 +153,7 @@ mod tests {
         );
         assert_eq!(
             StellarNamedNetwork::Testnet.public_rpc_urls(),
-            &["https://horizon-testnet.stellar.org"]
-        );
-        assert_eq!(
-            StellarNamedNetwork::Testnet.public_rpc_urls(),
-            &["https://horizon-testnet.stellar.org"]
+            &["https://soroban-testnet.stellar.org"]
         );
     }
 

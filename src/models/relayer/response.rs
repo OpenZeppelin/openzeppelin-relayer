@@ -154,7 +154,7 @@ mod tests {
             system_disabled: false,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
-            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
+            custom_rpc_urls: None,
         };
 
         let response: RelayerResponse = model.clone().into();
@@ -218,7 +218,7 @@ mod tests {
             system_disabled: false,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
-            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
+            custom_rpc_urls: None,
         };
 
         let response: RelayerResponse = model.clone().into();
@@ -269,7 +269,7 @@ mod tests {
             system_disabled: true,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
-            custom_rpc_urls: Some(vec!["https://test-rpc-url".to_string()]),
+            custom_rpc_urls: None,
         };
 
         let response: RelayerResponse = model.clone().into();

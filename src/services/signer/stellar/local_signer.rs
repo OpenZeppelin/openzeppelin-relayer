@@ -149,7 +149,7 @@ mod tests {
             memo: None,
             valid_until: None,
             network: StellarNamedNetwork::Testnet,
-            envelope_xdr: None,
+            signatures: Vec::new(),
             hash: None,
         };
         let response = signer

@@ -9,3 +9,5 @@ pub const ZERO_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 #[allow(dead_code)]
 pub const STELLAR_SMALLEST_UNIT_NAME: &str = "stroop";
 pub const SOLANA_SMALLEST_UNIT_NAME: &str = "lamport";
+
+pub const DEFAULT_RPC_WEIGHT: u8 = 100;

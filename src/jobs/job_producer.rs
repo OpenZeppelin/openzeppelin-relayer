@@ -137,7 +137,7 @@ impl JobProducerTrait for JobProducer {
                 queue.transaction_request_queue.push(job).await?;
             }
         }
-        info!("Transaction job produced successfully!!!!!!!!!");
+        info!("Transaction job produced successfully");
 
         Ok(())
     }

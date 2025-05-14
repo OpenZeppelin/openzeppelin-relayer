@@ -14,16 +14,16 @@
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, TransactionError,
-        TransactionRepoModel,
+        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, SolanaNetwork, StellarNetwork,
+        TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
     services::{
-        get_network_extra_fee_calculator_service, get_solana_network_provider, EvmGasPriceService,
-        EvmProvider, EvmSignerFactory, StellarProvider, StellarSignerFactory,
+        get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
+        EvmSignerFactory, StellarProvider, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -389,23 +389,7 @@ impl RelayerTransactionFactory {
                     Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
                 };
 
-                let rpc_url = relayer
-                    .custom_rpc_urls
-                    .as_ref()
-                    .and_then(|urls| urls.first().cloned())
-                    .or_else(|| {
-                        network
-                            .public_rpc_urls()
-                            .and_then(|urls| urls.first().cloned())
-                            .map(String::from)
-                    })
-                    .ok_or_else(|| {
-                        TransactionError::NetworkConfiguration("No RPC URLs configured".to_string())
-                    })?;
-
-                let evm_provider: EvmProvider = EvmProvider::new(&rpc_url)
-                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
-
+                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network, evm_provider.clone());
@@ -428,8 +412,12 @@ impl RelayerTransactionFactory {
                 )))
             }
             NetworkType::Solana => {
-                let solana_provider = Arc::new(get_solana_network_provider(
-                    &relayer.network,
+                let network = match SolanaNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
+                };
+                let solana_provider = Arc::new(get_network_provider(
+                    &network,
                     relayer.custom_rpc_urls.clone(),
                 )?);
 
@@ -444,7 +432,13 @@ impl RelayerTransactionFactory {
             NetworkType::Stellar => {
                 let signer_service =
                     Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
-                let stellar_provider = StellarProvider::new(&relayer.network)
+
+                let network = match StellarNetwork::from_network_str(&relayer.network) {
+                    Ok(network) => network,
+                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
+                };
+
+                let stellar_provider = StellarProvider::new(network.public_rpc_urls()[0])
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
@@ -454,6 +448,7 @@ impl RelayerTransactionFactory {
                     job_producer,
                     signer_service,
                     stellar_provider,
+                    transaction_counter_store,
                 )?))
             }
         }
