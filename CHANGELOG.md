@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.2.0...v0.2.1) (2025-05-14)
+
+
+### 🐛 Bug Fixes
+
+* change the ampersand to and, as as the shell interpret it ([#203](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/203)) ([5e9b045](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/5e9b045e04c8391eb667aa6b5725db3a3745f67f))
+
 ## [0.2.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.1.1...v0.2.0) (2025-05-14)
 
 
