@@ -148,8 +148,8 @@ mod tests {
 
     use crate::{
         models::{
-            LocalSignerConfig, RelayerSolanaPolicy, RelayerSolanaSwapConfig, SignerConfig,
-            SignerRepoModel,
+            LocalSignerConfig, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RpcConfig,
+            SignerConfig, SignerRepoModel,
         },
         services::SolanaSignerFactory,
     };
@@ -180,8 +180,16 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider =
-            Arc::new(SolanaProvider::new("https://api.mainnet-beta.solana.com").unwrap());
+        let provider = Arc::new(
+            SolanaProvider::new(
+                vec![RpcConfig {
+                    url: "https://api.mainnet-beta.solana.com".to_string(),
+                    weight: 100,
+                }],
+                10,
+            )
+            .unwrap(),
+        );
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );
@@ -212,8 +220,16 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider =
-            Arc::new(SolanaProvider::new("https://api.mainnet-beta.solana.com").unwrap());
+        let provider = Arc::new(
+            SolanaProvider::new(
+                vec![RpcConfig {
+                    url: "https://api.mainnet-beta.solana.com".to_string(),
+                    weight: 100,
+                }],
+                10,
+            )
+            .unwrap(),
+        );
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );
@@ -244,8 +260,16 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider =
-            Arc::new(SolanaProvider::new("https://api.mainnet-beta.solana.com").unwrap());
+        let provider = Arc::new(
+            SolanaProvider::new(
+                vec![RpcConfig {
+                    url: "https://api.mainnet-beta.solana.com".to_string(),
+                    weight: 100,
+                }],
+                10,
+            )
+            .unwrap(),
+        );
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );
@@ -271,8 +295,16 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider =
-            Arc::new(SolanaProvider::new("https://api.mainnet-beta.solana.com").unwrap());
+        let provider = Arc::new(
+            SolanaProvider::new(
+                vec![RpcConfig {
+                    url: "https://api.mainnet-beta.solana.com".to_string(),
+                    weight: 100,
+                }],
+                10,
+            )
+            .unwrap(),
+        );
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );
