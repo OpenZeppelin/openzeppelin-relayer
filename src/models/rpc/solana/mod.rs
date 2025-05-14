@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
-use solana_sdk::transaction::Transaction;
+use solana_sdk::transaction::{Transaction, VersionedTransaction};
 use thiserror::Error;
 use utoipa::ToSchema;
 
@@ -51,6 +51,31 @@ impl TryFrom<EncodedSerializedTransaction> for solana_sdk::transaction::Transact
             .map_err(|e| SolanaEncodingError::Deserialize(e.to_string()))?;
 
         Ok(decoded_tx)
+    }
+}
+
+// Implement conversion from versioned transaction
+impl TryFrom<&VersionedTransaction> for EncodedSerializedTransaction {
+    type Error = SolanaEncodingError;
+
+    fn try_from(transaction: &VersionedTransaction) -> Result<Self, Self::Error> {
+        let serialized = bincode::serialize(transaction)
+            .map_err(|e| SolanaEncodingError::Serialization(e.to_string()))?;
+
+        Ok(Self(STANDARD.encode(serialized)))
+    }
+}
+
+// Implement conversion to versioned transaction
+impl TryFrom<EncodedSerializedTransaction> for VersionedTransaction {
+    type Error = SolanaEncodingError;
+
+    fn try_from(encoded: EncodedSerializedTransaction) -> Result<Self, Self::Error> {
+        let tx_bytes = STANDARD
+            .decode(&encoded.0)
+            .map_err(|e| SolanaEncodingError::Decode(e.to_string()))?;
+
+        bincode::deserialize(&tx_bytes).map_err(|e| SolanaEncodingError::Deserialize(e.to_string()))
     }
 }
 

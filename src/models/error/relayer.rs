@@ -37,6 +37,10 @@ pub enum RelayerError {
     InsufficientBalanceError(String),
     #[error("Relayer Policy configuration error: {0}")]
     PolicyConfigurationError(String),
+    #[error("Invalid Dex name : {0}")]
+    InvalidDexName(String),
+    #[error("Dex error : {0}")]
+    DexError(String),
 }
 
 impl From<RelayerError> for ApiError {
@@ -57,6 +61,8 @@ impl From<RelayerError> for ApiError {
             RelayerError::UnderlyingProvider(err) => ApiError::InternalError(err.to_string()),
             RelayerError::UnderlyingSolanaProvider(err) => ApiError::InternalError(err.to_string()),
             RelayerError::PolicyConfigurationError(msg) => ApiError::InternalError(msg),
+            RelayerError::InvalidDexName(msg) => ApiError::InternalError(msg),
+            RelayerError::DexError(msg) => ApiError::InternalError(msg),
         }
     }
 }

@@ -241,8 +241,9 @@ mod tests {
         constants::WRAPPED_SOL_MINT,
         models::{
             NetworkType, RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig,
         },
-        services::QuoteResponse,
+        services::{QuoteResponse, RoutePlan, SwapInfo},
     };
 
     use super::*;
@@ -284,7 +285,10 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -377,7 +381,10 @@ mod tests {
                 symbol: Some("SOL".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -470,7 +477,10 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -522,6 +532,24 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -578,7 +606,10 @@ mod tests {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(1_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         });
@@ -662,6 +693,24 @@ mod tests {
                         out_amount: 100_000,
                         price_impact_pct: 0.1,
                         other_amount_threshold: 0,
+                        slippage_bps: 1,
+                        swap_mode: "ExactIn".to_string(),
+                        route_plan: vec![RoutePlan {
+                            swap_info: SwapInfo {
+                                amm_key: "63mqrcydH89L7RhuMC3jLBojrRc2u3QWmjP4UrXsnotS".to_string(),
+                                label: "Stabble Stable Swap".to_string(),
+                                input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                                    .to_string(),
+                                output_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                                in_amount: "1000000".to_string(),
+                                out_amount: "999984".to_string(),
+                                fee_amount: "10".to_string(),
+                                fee_mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+                                    .to_string(),
+                            },
+                            percent: 1,
+                        }],
                     })
                 })
             });
@@ -712,7 +761,10 @@ mod tests {
                     symbol: Some("USDC".to_string()),
                     decimals: Some(6),
                     max_allowed_fee: Some(1000),
-                    conversion_slippage_percentage: Some(1.0),
+                    swap_config: Some(SolanaAllowedTokensSwapConfig {
+                        slippage_percentage: Some(1.0),
+                        ..Default::default()
+                    }),
                 }]),
                 min_balance: 10000,
                 allowed_programs: None,
@@ -720,6 +772,7 @@ mod tests {
                 disallowed_accounts: None,
                 max_allowed_fee_lamports: None,
                 max_tx_data_size: 1000,
+                swap_config: None,
             }),
             signer_id: "test".to_string(),
             address: Keypair::new().pubkey().to_string(),

@@ -1,4 +1,5 @@
 use crate::{
+    domain::SwapResult,
     jobs::NotificationSend,
     models::{
         RelayerRepoModel, RelayerResponse, SignAndSendTransactionResult, SignTransactionResult,
@@ -39,6 +40,10 @@ pub struct RelayerDisabledPayload {
     pub relayer: RelayerResponse,
     pub disable_reason: String,
 }
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SolanaDexPayload {
+    pub swap_results: Vec<SwapResult>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -51,6 +56,8 @@ pub enum WebhookPayload {
     RelayerDisabled(RelayerDisabledPayload),
     #[serde(rename = "solana_rpc")]
     SolanaRpc(SolanaWebhookRpcPayload),
+    #[serde(rename = "solana_dex")]
+    SolanaDex(SolanaDexPayload),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -110,5 +117,16 @@ pub fn produce_solana_rpc_webhook_payload(
     NotificationSend::new(
         notification_id.to_string(),
         WebhookNotification::new(event, WebhookPayload::SolanaRpc(payload)),
+    )
+}
+
+pub fn produce_solana_dex_webhook_payload(
+    notification_id: &str,
+    event: String,
+    payload: SolanaDexPayload,
+) -> NotificationSend {
+    NotificationSend::new(
+        notification_id.to_string(),
+        WebhookNotification::new(event, WebhookPayload::SolanaDex(payload)),
     )
 }

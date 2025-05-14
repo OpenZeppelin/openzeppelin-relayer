@@ -41,6 +41,7 @@ pub enum JobType {
     TransactionSend,
     TransactionStatusCheck,
     NotificationSend,
+    SolanaTokenSwapRequest,
 }
 
 // Example message data for transaction request
@@ -167,6 +168,17 @@ impl NotificationSend {
             notification_id,
             notification,
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SolanaTokenSwapRequest {
+    pub relayer_id: String,
+}
+
+impl SolanaTokenSwapRequest {
+    pub fn new(relayer_id: String) -> Self {
+        Self { relayer_id }
     }
 }
 

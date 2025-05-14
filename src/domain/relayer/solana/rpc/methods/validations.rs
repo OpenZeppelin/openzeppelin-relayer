@@ -9,7 +9,11 @@ use std::collections::HashMap;
 /// * Meet size and signature requirements
 /// * Have correct fee payer configuration
 /// * Comply with relayer policies
-use crate::{models::RelayerSolanaPolicy, services::SolanaProviderTrait};
+use crate::{
+    domain::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction},
+    models::RelayerSolanaPolicy,
+    services::SolanaProviderTrait,
+};
 use log::info;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
@@ -17,8 +21,6 @@ use solana_sdk::{
     system_program, transaction::Transaction,
 };
 use thiserror::Error;
-
-use super::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction};
 
 #[derive(Debug, Error)]
 #[allow(dead_code)]
@@ -554,7 +556,7 @@ impl SolanaTransactionValidator {
 #[cfg(test)]
 mod tests {
     use crate::{
-        models::SolanaAllowedTokensPolicy,
+        models::{SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig},
         services::{MockSolanaProviderTrait, SolanaProviderError},
     };
 
@@ -616,7 +618,9 @@ mod tests {
                 decimals: Some(9),
                 symbol: Some("USDC".to_string()),
                 max_allowed_fee: Some(100),
-                conversion_slippage_percentage: None,
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    ..Default::default()
+                }),
             }]),
             ..Default::default()
         };
@@ -1231,7 +1235,9 @@ mod tests {
             decimals: Some(9),
             symbol: Some("USDT".to_string()),
             max_allowed_fee: None,
-            conversion_slippage_percentage: None,
+            swap_config: Some(SolanaAllowedTokensSwapConfig {
+                ..Default::default()
+            }),
         }]);
 
         let result = SolanaTransactionValidator::validate_token_transfers(
