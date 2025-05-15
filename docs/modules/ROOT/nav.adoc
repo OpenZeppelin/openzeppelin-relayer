@@ -3,4 +3,4 @@
 * xref:api_reference.adoc[API Reference]
 * xref:structure.adoc[Project Structure]
 * xref:roadmap.adoc[Project Roadmap]
-* link:https://openzeppelin-relayer.netlify.app/openzeppelin_relayer/[Technical Rust Documentation]
+* link:https://release-v0-2-0%2D%2Dopenzeppelin-relayer.netlify.app/openzeppelin_relayer/[Technical Rust Documentation]

@@ -108,7 +108,9 @@ jobs:
         if: always()
 
   # Cargo lock update
-  update-cargo-lockfile:
+  # Cargo lock update
+  update-cargo-lockfile-antora-version:
+    name: Update Cargo.lock and Antora version
     runs-on: ubuntu-latest
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'false' }}
@@ -143,19 +145,35 @@ jobs:
           cargo update
           git add Cargo.lock
           if ! git diff --cached --quiet Cargo.lock; then
-            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "cargo_changed=true" >> $GITHUB_OUTPUT
           else
-            echo "Cargo.lock has no changes, skipping commit and push."
+            echo "cargo_changed=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Update Antora version
+        id: update-antora
+        run: |-
+          MANIFEST=".github/release-please/manifest.json"
+          ANTORA="docs/antora.yml"
+          RAW_VERSION=$(jq -r '.["."]' "$MANIFEST")
+          NEW_VERSION=${RAW_VERSION%.*}.x
+          echo "Bumping Antora version to $NEW_VERSION in $ANTORA"
+          sed -i -E "s/^version:.*/version: $NEW_VERSION/" "$ANTORA"
+          git add "$ANTORA"
+          if ! git diff --cached --quiet "$ANTORA"; then
+            echo "antora_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "antora_changed=false" >> $GITHUB_OUTPUT
           fi
       - name: Commit cargo update
-        if: ${{ steps.lock-file-commit.outputs.changes == 'true' }}
+        if: ${{ steps.lock-file-commit.outputs.cargo_changed == 'true' || steps.update-antora.outputs.antora_changed == 'true' }}
         uses: iarekylew00t/verified-bot-commit@849c406ce58dfd17ed6a8b981448968d4d0f2012  # v1.3.2
         with:
-          message: 'chore: Updating lock file'
+          message: 'chore: Updating lock file and bumping version in antora file'
           token: ${{ steps.gh-app-token.outputs.token }}
           ref: ${{ needs.release-please.outputs.release_branch }}
           files: |-
             Cargo.lock
+            docs/antora.yml
 
   # Update rust docs link in nav.adoc
   update-rust-docs-link:
@@ -163,7 +181,7 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created == 'false' }}
     uses: ./.github/workflows/rust-docs-url.yml
     with:
-      branch: ${{ needs.release-please.outputs.release_branch }}
+      branch: ${{ github.ref_name }}
     secrets: inherit
 
   # Trigger workflow to generate sbom

@@ -34,10 +34,18 @@ jobs:
       - name: Use branch input
         id: get_branch
         run: |
-          echo "branch=${{ inputs.branch }}" >> $GITHUB_OUTPUT
+          if [ -n "${{ inputs.branch }}" ]; then
+            echo "Using provided branch input: ${{ inputs.branch }}"
+            echo "branch=${{ inputs.branch }}" >> $GITHUB_OUTPUT
+          else
+            echo "No branch input provided, deriving from GITHUB_REF"
+            branch="${GITHUB_REF#refs/heads/}"
+            echo "Derived branch from ref: $branch"
+            echo "branch=$branch" >> $GITHUB_OUTPUT
+          fi
       - name: Update the technical docs link in nav.adoc
         run: |
-          branch="${{ inputs.branch }}"
+          branch="${{ steps.get_branch.outputs.branch }}"
           # Netlify uses `-` instead of `.` in branch names for constructing the URL
           slug="${branch//./-}"
           target="https://${slug}%2D%2Dopenzeppelin-relayer.netlify.app"
