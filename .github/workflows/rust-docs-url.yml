@@ -44,6 +44,7 @@ jobs:
             echo "branch=$branch" >> $GITHUB_OUTPUT
           fi
       - name: Update the technical docs link in nav.adoc
+        id: update-docs
         run: |
           branch="${{ steps.get_branch.outputs.branch }}"
           # Netlify uses `-` instead of `.` in branch names for constructing the URL
@@ -52,13 +53,15 @@ jobs:
           file="docs/modules/ROOT/nav.adoc"
           if grep -q "${target}" "${file}"; then
             echo "nav.adoc is already using ${target}"
+            echo "changed=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           echo "Updating to branch URL: ${target}"
           sed -i -E "s|(https://)[^/]*openzeppelin-relayer.netlify.app|${target}|g" "${file}"
           echo "Updated nav.adoc to use ${target}"
+          echo "changed=true" >> $GITHUB_OUTPUT
       - name: Create Pull Request to update the technical docs version
-        if: ${{ steps.get_branch.outputs.branch != '' }}
+        if: ${{ steps.get_branch.outputs.branch != '' && steps.update-docs.outputs.changed == 'true' }}
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e  # v7.0.8
         with:
           token: ${{ steps.gh-app-token.outputs.token }}
