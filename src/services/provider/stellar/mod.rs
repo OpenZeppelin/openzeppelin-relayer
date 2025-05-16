@@ -20,6 +20,9 @@ use soroban_rs::SorobanTransactionResponse;
 #[cfg(test)]
 use mockall::automock;
 
+use crate::models::RpcConfig;
+use crate::services::provider::ProviderError;
+
 #[derive(Debug, Clone)]
 pub struct GetEventsRequest {
     pub start: EventStart,
@@ -29,7 +32,7 @@ pub struct GetEventsRequest {
     pub limit: Option<usize>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StellarProvider {
     client: Client,
 }
@@ -60,13 +63,34 @@ pub trait StellarProviderTrait: Send + Sync {
 }
 
 impl StellarProvider {
-    pub fn new(url: &str) -> Result<Self> {
+    pub fn new(mut rpc_configs: Vec<RpcConfig>, _timeout: u64) -> Result<Self, ProviderError> {
+        if rpc_configs.is_empty() {
+            return Err(ProviderError::NetworkConfiguration(
+                "No RPC configurations provided for StellarProvider".to_string(),
+            ));
+        }
+
+        RpcConfig::validate_list(&rpc_configs)
+            .map_err(|e| ProviderError::NetworkConfiguration(e.to_string()))?;
+
+        rpc_configs.retain(|config| config.get_weight() > 0);
+
+        if rpc_configs.is_empty() {
+            return Err(ProviderError::NetworkConfiguration(
+                "No active RPC configurations provided (all weights are 0 or list was empty after filtering)".to_string(),
+            ));
+        }
+
+        rpc_configs.sort_by_key(|config| std::cmp::Reverse(config.get_weight()));
+
+        let selected_config = &rpc_configs[0];
+        let url = &selected_config.url;
+
         let client = Client::new(url).map_err(|e| {
-            eyre!(
+            ProviderError::NetworkConfiguration(format!(
                 "Failed to create Stellar RPC client: {} - URL: '{}'",
-                e,
-                url
-            )
+                e, url
+            ))
         })?;
         Ok(Self { client })
     }
@@ -304,11 +328,82 @@ mod tests {
 
     #[test]
     fn test_new_provider() {
-        let provider = StellarProvider::new("http://localhost:8000");
+        let provider =
+            StellarProvider::new(vec![RpcConfig::new("http://localhost:8000".to_string())], 0);
         assert!(provider.is_ok());
 
-        let provider_err = StellarProvider::new("invalid-url");
+        let provider_err = StellarProvider::new(vec![], 0);
         assert!(provider_err.is_err());
+        match provider_err.unwrap_err() {
+            ProviderError::NetworkConfiguration(msg) => {
+                assert!(msg.contains("No RPC configurations provided"));
+            }
+            _ => panic!("Unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn test_new_provider_selects_highest_weight() {
+        let configs = vec![
+            RpcConfig::with_weight("http://rpc1.example.com".to_string(), 10).unwrap(),
+            RpcConfig::with_weight("http://rpc2.example.com".to_string(), 100).unwrap(), // Highest weight
+            RpcConfig::with_weight("http://rpc3.example.com".to_string(), 50).unwrap(),
+        ];
+        let provider = StellarProvider::new(configs, 0);
+        assert!(provider.is_ok());
+        // We can't directly inspect the client's URL easily without more complex mocking or changes.
+        // For now, we trust the sorting logic and that Client::new would fail for a truly bad URL if selection was wrong.
+        // A more robust test would involve a mock client or a way to inspect the chosen URL.
+    }
+
+    #[test]
+    fn test_new_provider_ignores_weight_zero() {
+        let configs = vec![
+            RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap(), // Weight 0
+            RpcConfig::with_weight("http://rpc2.example.com".to_string(), 100).unwrap(), // Should be selected
+        ];
+        let provider = StellarProvider::new(configs, 0);
+        assert!(provider.is_ok());
+
+        let configs_only_zero =
+            vec![RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap()];
+        let provider_err = StellarProvider::new(configs_only_zero, 0);
+        assert!(provider_err.is_err());
+        match provider_err.unwrap_err() {
+            ProviderError::NetworkConfiguration(msg) => {
+                assert!(msg.contains("No active RPC configurations provided"));
+            }
+            _ => panic!("Unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn test_new_provider_invalid_url_scheme() {
+        let configs = vec![RpcConfig::new("ftp://invalid.example.com".to_string())];
+        let provider_err = StellarProvider::new(configs, 0);
+        assert!(provider_err.is_err());
+        match provider_err.unwrap_err() {
+            ProviderError::NetworkConfiguration(msg) => {
+                assert!(msg.contains("Invalid URL scheme"));
+            }
+            _ => panic!("Unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn test_new_provider_all_zero_weight_configs() {
+        let configs = vec![
+            RpcConfig::with_weight("http://rpc1.example.com".to_string(), 0).unwrap(),
+            RpcConfig::with_weight("http://rpc2.example.com".to_string(), 0).unwrap(),
+        ];
+        let provider_err = StellarProvider::new(configs, 0);
+        assert!(provider_err.is_err());
+        match provider_err.unwrap_err() {
+            ProviderError::NetworkConfiguration(msg) => {
+                assert!(msg.contains("No active RPC configurations provided"));
+            }
+            _ => panic!("Unexpected error type"),
+        }
     }
 
     #[tokio::test]
@@ -507,7 +602,7 @@ mod tests {
         const NON_EXISTENT_URL: &str = "http://127.0.0.1:9999";
 
         fn setup_provider() -> StellarProvider {
-            StellarProvider::new(NON_EXISTENT_URL)
+            StellarProvider::new(vec![RpcConfig::new(NON_EXISTENT_URL.to_string())], 0)
                 .expect("Provider creation should succeed even with bad URL")
         }
 

@@ -23,7 +23,7 @@ use crate::{
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
-        EvmSignerFactory, StellarProvider, StellarSignerFactory,
+        EvmSignerFactory, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -438,8 +438,9 @@ impl RelayerTransactionFactory {
                     Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
                 };
 
-                let stellar_provider = StellarProvider::new(network.public_rpc_urls()[0])
-                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
+                let stellar_provider =
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
+                        .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,
