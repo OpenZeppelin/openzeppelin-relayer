@@ -387,6 +387,26 @@ This table lists the environment variables and their default values.
 | `<timeout in milliseconds>`
 | Sets the maximum time to wait for RPC connections before timing out.
 
+| `PROVIDER_MAX_RETRIES`
+| `3`
+| `<number of retries>`
+| Maximum number of retry attempts for provider operations.
+
+| `PROVIDER_RETRY_BASE_DELAY_MS`
+| `100`
+| `<delay in milliseconds>`
+| Base delay between retry attempts in milliseconds.
+
+| `PROVIDER_RETRY_MAX_DELAY_MS`
+| `2000`
+| `<delay in milliseconds>`
+| Maximum delay between retry attempts in milliseconds.
+
+| `PROVIDER_MAX_FAILOVERS`
+| `3`
+| `<number of failovers>`
+| Maximum number of failovers (switching to different providers).
+
 | `ENABLE_SWAGGER`
 | `false`
 | `true, false`
@@ -417,6 +437,10 @@ METRICS_PORT=8081
 REDIS_URL=redis://localhost:6379
 REDIS_CONNECTION_TIMEOUT_MS=10000
 RPC_TIMEOUT_MS=10000
+PROVIDER_MAX_RETRIES=3
+PROVIDER_RETRY_BASE_DELAY_MS=100
+PROVIDER_RETRY_MAX_DELAY_MS=2000
+PROVIDER_MAX_FAILOVERS=3
 ENABLE_SWAGGER=false
 KEYSTORE_PASSPHRASE=your_keystore_passphrase
 ```
@@ -1019,7 +1043,6 @@ When using custom RPC URLs:
 * The weight must be an integer between 0 and 100 (inclusive).
 * A weight of 0 disables the endpoint.
 * If a weight is not specified for an endpoint, it defaults to 100.
-
 ====
 
 == Important Considerations

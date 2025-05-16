@@ -319,6 +319,12 @@ impl RelayerFileConfig {
                 reqwest::Url::parse(&config.url).map_err(|_| {
                     ConfigFileError::InvalidFormat(format!("Invalid RPC URL: {}", config.url))
                 })?;
+
+                if config.weight > 100 {
+                    return Err(ConfigFileError::InvalidFormat(
+                        "RPC URL weight must be in range 0-100".to_string(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -607,6 +613,25 @@ mod tests {
         } else {
             panic!("Expected ConfigFileError::InvalidFormat");
         }
+    }
+
+    #[test]
+    fn test_invalid_custom_rpc_urls_weight() {
+        let config = json!({
+            "id": "test-relayer",
+            "name": "Test Relayer",
+            "network": "mainnet",
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "paused": false,
+            "custom_rpc_urls": [
+                { "url": "https://api.example.com/rpc", "weight": 200 }
+            ]
+        });
+
+        let relayer: RelayerFileConfig = serde_json::from_value(config).unwrap();
+        let result = relayer.validate();
+        assert!(result.is_err());
     }
 
     #[test]

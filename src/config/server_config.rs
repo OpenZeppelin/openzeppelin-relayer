@@ -27,6 +27,14 @@ pub struct ServerConfig {
     pub redis_connection_timeout_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
+    /// Maximum number of retry attempts for provider operations.
+    pub provider_max_retries: u8,
+    /// Base delay between retry attempts (milliseconds).
+    pub provider_retry_base_delay_ms: u64,
+    /// Maximum delay between retry attempts (milliseconds).
+    pub provider_retry_max_delay_ms: u64,
+    /// Maximum number of failovers (switching to different providers).
+    pub provider_max_failovers: u8,
 }
 
 impl ServerConfig {
@@ -45,6 +53,10 @@ impl ServerConfig {
     /// - `RATE_LIMIT_REQUESTS_PER_SECOND` defaults to `100`.
     /// - `RATE_LIMIT_BURST_SIZE` defaults to `300`.
     /// - `METRICS_PORT` defaults to `8081`.
+    /// - `PROVIDER_MAX_RETRIES` defaults to `3`.
+    /// - `PROVIDER_RETRY_BASE_DELAY_MS` defaults to `100`.
+    /// - `PROVIDER_RETRY_MAX_DELAY_MS` defaults to `2000`.
+    /// - `PROVIDER_MAX_FAILOVERS` defaults to `3`.
     pub fn from_env() -> Self {
         let conf_dir = if env::var("IN_DOCKER")
             .map(|val| val == "true")
@@ -105,6 +117,22 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse()
                 .unwrap_or(10000),
+            provider_max_retries: env::var("PROVIDER_MAX_RETRIES")
+                .unwrap_or_else(|_| "3".to_string())
+                .parse()
+                .unwrap_or(3),
+            provider_retry_base_delay_ms: env::var("PROVIDER_RETRY_BASE_DELAY_MS")
+                .unwrap_or_else(|_| "100".to_string())
+                .parse()
+                .unwrap_or(100),
+            provider_retry_max_delay_ms: env::var("PROVIDER_RETRY_MAX_DELAY_MS")
+                .unwrap_or_else(|_| "2000".to_string())
+                .parse()
+                .unwrap_or(2000),
+            provider_max_failovers: env::var("PROVIDER_MAX_FAILOVERS")
+                .unwrap_or_else(|_| "3".to_string())
+                .parse()
+                .unwrap_or(3),
         }
     }
 }
@@ -135,6 +163,10 @@ mod tests {
         env::remove_var("METRICS_PORT");
         env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
         env::remove_var("RPC_TIMEOUT_MS");
+        env::remove_var("PROVIDER_MAX_RETRIES");
+        env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
+        env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
+        env::remove_var("PROVIDER_MAX_FAILOVERS");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -164,6 +196,10 @@ mod tests {
         assert_eq!(config.metrics_port, 8081);
         assert_eq!(config.redis_connection_timeout_ms, 5000);
         assert_eq!(config.rpc_timeout_ms, 10000);
+        assert_eq!(config.provider_max_retries, 3);
+        assert_eq!(config.provider_retry_base_delay_ms, 100);
+        assert_eq!(config.provider_retry_max_delay_ms, 2000);
+        assert_eq!(config.provider_max_failovers, 3);
     }
 
     #[test]
@@ -181,6 +217,10 @@ mod tests {
         env::set_var("RATE_LIMIT_BURST_SIZE", "invalid");
         env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "invalid");
         env::set_var("RPC_TIMEOUT_MS", "invalid");
+        env::set_var("PROVIDER_MAX_RETRIES", "invalid");
+        env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "invalid");
+        env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "invalid");
+        env::set_var("PROVIDER_MAX_FAILOVERS", "invalid");
         let config = ServerConfig::from_env();
 
         // Should fall back to defaults when parsing fails
@@ -190,6 +230,10 @@ mod tests {
         assert_eq!(config.rate_limit_burst_size, 300);
         assert_eq!(config.redis_connection_timeout_ms, 10000);
         assert_eq!(config.rpc_timeout_ms, 10000);
+        assert_eq!(config.provider_max_retries, 3);
+        assert_eq!(config.provider_retry_base_delay_ms, 100);
+        assert_eq!(config.provider_retry_max_delay_ms, 2000);
+        assert_eq!(config.provider_max_failovers, 3);
     }
 
     #[test]
@@ -211,6 +255,10 @@ mod tests {
         env::set_var("METRICS_PORT", "9091");
         env::set_var("REDIS_CONNECTION_TIMEOUT_MS", "10000");
         env::set_var("RPC_TIMEOUT_MS", "33333");
+        env::set_var("PROVIDER_MAX_RETRIES", "5");
+        env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
+        env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "3000");
+        env::set_var("PROVIDER_MAX_FAILOVERS", "4");
         let config = ServerConfig::from_env();
 
         assert_eq!(config.host, "127.0.0.1");
@@ -226,6 +274,10 @@ mod tests {
         assert_eq!(config.metrics_port, 9091);
         assert_eq!(config.redis_connection_timeout_ms, 10000);
         assert_eq!(config.rpc_timeout_ms, 33333);
+        assert_eq!(config.provider_max_retries, 5);
+        assert_eq!(config.provider_retry_base_delay_ms, 200);
+        assert_eq!(config.provider_retry_max_delay_ms, 3000);
+        assert_eq!(config.provider_max_failovers, 4);
     }
 
     #[test]
