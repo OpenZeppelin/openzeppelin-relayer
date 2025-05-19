@@ -1,19 +1,15 @@
-//! This module defines the configuration structures and validation logic for notifications.
+//! Configuration file definitions for notification systems.
 //!
-//! It includes:
-//! - `NotificationFileConfigType`: An enum representing the type of notification configuration.
-//! - `SigningKeyConfig`: An enum for specifying signing key configurations, either from an
-//!   environment variable or a plain value.
-//! - `NotificationFileConfig`: A struct representing a single notification configuration, with
-//!   methods for validation and signing key retrieval.
-//! - `NotificationsFileConfig`: A struct for managing a collection of notification configurations,
-//!   with validation to ensure uniqueness and completeness.
+//! Provides configuration structures and validation for notification providers:
+//! - SMTP (Email)
+//! - Slack
+//! - Custom webhook
 use crate::{
     constants::MINIMUM_SECRET_VALUE_LENGTH,
     models::{PlainOrEnvValue, SecretString},
 };
 
-use super::ConfigFileError;
+use crate::config::ConfigFileError;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -150,6 +146,9 @@ impl NotificationsFileConfig {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_valid_webhook_notification() {
@@ -281,6 +280,8 @@ mod tests {
     fn test_webhook_signing_key_from_env() {
         use std::env;
 
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
         let valid_key = "C6D72367-EB3A-4D34-8900-DFF794A633F9"; // noboost
         env::set_var(env_var_name, valid_key);
@@ -308,6 +309,8 @@ mod tests {
     #[test]
     fn test_webhook_signing_key_from_env_insufficient_length() {
         use std::env;
+
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
         let valid_key = "insufficient_length";

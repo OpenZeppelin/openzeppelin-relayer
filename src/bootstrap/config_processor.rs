@@ -272,8 +272,8 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            AwsKmsSignerFileConfig, ConfigFileNetworkType, NotificationFileConfig,
-            RelayerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            AwsKmsSignerFileConfig, ConfigFileNetworkType, NetworksFileConfig,
+            NotificationFileConfig, RelayerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
             VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
@@ -547,6 +547,7 @@ mod tests {
             signers,
             relayers: vec![],
             notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create app state
@@ -586,6 +587,7 @@ mod tests {
         let config = Config {
             signers: vec![],
             relayers: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
             notifications,
         };
 
@@ -634,6 +636,7 @@ mod tests {
             signers: signers.clone(),
             relayers,
             notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create app state
@@ -687,6 +690,7 @@ mod tests {
             signers,
             relayers,
             notifications,
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create shared repositories
