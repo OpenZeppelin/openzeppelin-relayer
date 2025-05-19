@@ -20,9 +20,11 @@ pub fn calculate_retry_delay(attempt: u8, base_delay_ms: u64, max_delay_ms: u64)
         return Duration::from_millis(0);
     }
 
-    let exp_backoff = if attempt >= 63 {
+    // Limit the max delay to 2^63 to avoid overflow. (u64::MAX is 2^64 - 1)
+    let exp_backoff = if attempt > 63 {
         max_delay_ms
     } else {
+        // 1u64 << attempt 
         let multiplier = 1u64.checked_shl(attempt as u32).unwrap_or(u64::MAX);
         base_delay_ms.saturating_mul(multiplier)
     };
