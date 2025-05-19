@@ -1,3 +1,14 @@
+//! # RPC Provider Selector
+//!
+//! This module provides functionality for dynamically selecting RPC endpoints based on configured priorities,
+//! health status, and selection strategies.
+//!
+//! ## Features
+//!
+//! - **Weighted selection**: Providers can be assigned different weights to control selection probability
+//! - **Round-robin fallback**: If weighted selection fails or weights are equal, round-robin is used
+//! - **Health tracking**: Failed providers are temporarily excluded from selection
+//! - **Automatic recovery**: Failed providers are automatically recovered after a configurable period
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -205,7 +216,10 @@ impl RpcSelector {
         let first_non_zero_weight = weights.iter().find(|&&w| w > 0).copied();
         if let Some(first_weight) = first_non_zero_weight {
             // First check for the original equal weights case
-            let all_equal = weights.iter().filter(|&&w| w > 0).all(|&w| w == first_weight);
+            let all_equal = weights
+                .iter()
+                .filter(|&&w| w > 0)
+                .all(|&w| w == first_weight);
 
             if all_equal {
                 return None;

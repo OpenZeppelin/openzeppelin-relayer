@@ -27,11 +27,9 @@ use spl_token::state::Mint;
 use std::{str::FromStr, time::Duration};
 use thiserror::Error;
 
-use crate::{
-    models::RpcConfig,
-    utils::rpc_selector::{RpcSelector, RpcSelectorError},
-};
+use crate::models::RpcConfig;
 
+use super::rpc_selector::{RpcSelector, RpcSelectorError};
 use super::ProviderError;
 
 #[derive(Error, Debug, Serialize)]

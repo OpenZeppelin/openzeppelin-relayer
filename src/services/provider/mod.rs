@@ -16,6 +16,11 @@ pub use solana::*;
 mod stellar;
 pub use stellar::*;
 
+mod retry;
+pub use retry::*;
+
+pub mod rpc_selector;
+
 #[derive(Error, Debug, Serialize)]
 pub enum ProviderError {
     #[error("RPC client error: {0}")]
@@ -143,8 +148,8 @@ where
 }
 
 // Implement From for RpcSelectorError
-impl From<crate::utils::rpc_selector::RpcSelectorError> for ProviderError {
-    fn from(err: crate::utils::rpc_selector::RpcSelectorError) -> Self {
+impl From<super::rpc_selector::RpcSelectorError> for ProviderError {
+    fn from(err: super::rpc_selector::RpcSelectorError) -> Self {
         ProviderError::NetworkConfiguration(format!("RPC selector error: {}", err))
     }
 }

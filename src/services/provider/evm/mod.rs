@@ -22,11 +22,9 @@ use async_trait::async_trait;
 use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
 
-use crate::utils::rpc_selector::RpcSelector;
-use crate::{
-    models::{EvmTransactionData, RpcConfig, TransactionError, U256},
-    utils::{retry_rpc_call, RetryConfig},
-};
+use super::rpc_selector::RpcSelector;
+use super::{retry_rpc_call, RetryConfig};
+use crate::models::{EvmTransactionData, RpcConfig, TransactionError, U256};
 
 #[cfg(test)]
 use mockall::automock;

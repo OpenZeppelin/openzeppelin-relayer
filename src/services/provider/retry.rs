@@ -1,10 +1,32 @@
+//! # RPC Provider Retry Module
+//!
+//! This module implements retry mechanisms for RPC calls with exponential backoff,
+//! jitter, and provider failover capabilities.
+//!
+//! ## Key Features
+//!
+//! - **Exponential Backoff**: Gradually increases retry delays to avoid overwhelming services
+//! - **Randomized Jitter**: Prevents retry storms by randomizing delay times
+//! - **Provider Failover**: Automatically switches to alternative providers when one fails
+//! - **Configurable Behavior**: Customizable retry counts, delays, and failover strategies
+//!
+//! ## Main Components
+//!
+//! - [`RetryConfig`]: Configuration parameters for retry behavior
+//! - [`retry_rpc_call`]: Core function that handles retry logic with provider failover
+//! - [`calculate_retry_delay`]: Function that calculates delay with exponential backoff and jitter
+//!
+//! ## Usage
+//!
+//! The retry mechanism works with any RPC provider type and automatically handles
+//! errors, maximizing the chances of successful operations.
 use rand::Rng;
 use std::future::Future;
 use std::time::Duration;
 
+use super::rpc_selector::RpcSelector;
 use crate::config::ServerConfig;
 use crate::constants::RETRY_JITTER_PERCENT;
-use crate::utils::rpc_selector::RpcSelector;
 
 /// Calculate the retry delay using exponential backoff with jitter
 ///
@@ -24,7 +46,7 @@ pub fn calculate_retry_delay(attempt: u8, base_delay_ms: u64, max_delay_ms: u64)
     let exp_backoff = if attempt > 63 {
         max_delay_ms
     } else {
-        // 1u64 << attempt 
+        // 1u64 << attempt
         let multiplier = 1u64.checked_shl(attempt as u32).unwrap_or(u64::MAX);
         base_delay_ms.saturating_mul(multiplier)
     };
