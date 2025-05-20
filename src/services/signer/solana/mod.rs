@@ -11,6 +11,7 @@
 //!   ├── Vault (HashiCorp Vault backend)
 //!   ├── VaultCloud (HashiCorp Cloud Vault backend)
 //!   ├── VaultTransit (HashiCorp Vault Transit signer)
+//!   |── GoogleCloudKms (Google Cloud KMS backend)
 //!   └── Turnkey (Turnkey backend)
 
 //! ```
@@ -24,6 +25,9 @@ use vault_transit_signer::*;
 mod turnkey_signer;
 use turnkey_signer::*;
 
+mod google_cloud_kms_signer;
+use google_cloud_kms_signer::*;
+
 use solana_sdk::signature::Signature;
 
 use crate::{
@@ -35,7 +39,7 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
-    services::{TurnkeyService, VaultConfig, VaultService},
+    services::{GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
 };
 use eyre::Result;
 
@@ -49,6 +53,7 @@ pub enum SolanaSigner {
     VaultCloud(LocalSigner),
     VaultTransit(VaultTransitSigner),
     Turnkey(TurnkeySigner),
+    GoogleCloudKms(GoogleCloudKmsSigner),
 }
 
 #[async_trait]
@@ -60,6 +65,7 @@ impl Signer for SolanaSigner {
             }
             Self::VaultTransit(signer) => signer.address().await,
             Self::Turnkey(signer) => signer.address().await,
+            Self::GoogleCloudKms(signer) => signer.address().await,
         }
     }
 
@@ -73,6 +79,7 @@ impl Signer for SolanaSigner {
             }
             Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
+            Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -85,7 +92,7 @@ impl Signer for SolanaSigner {
 /// to the Solana blockchain, including public key retrieval and message signing.
 pub trait SolanaSignTrait: Sync + Send {
     /// Returns the public key of the Solana signer as an Address
-    fn pubkey(&self) -> Result<Address, SignerError>;
+    async fn pubkey(&self) -> Result<Address, SignerError>;
 
     /// Signs a message using the Solana signing scheme
     ///
@@ -101,11 +108,14 @@ pub trait SolanaSignTrait: Sync + Send {
 
 #[async_trait]
 impl SolanaSignTrait for SolanaSigner {
-    fn pubkey(&self) -> Result<Address, SignerError> {
+    async fn pubkey(&self) -> Result<Address, SignerError> {
         match self {
-            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => signer.pubkey(),
-            Self::VaultTransit(signer) => signer.pubkey(),
-            Self::Turnkey(signer) => signer.pubkey(),
+            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
+                signer.pubkey().await
+            }
+            Self::VaultTransit(signer) => signer.pubkey().await,
+            Self::Turnkey(signer) => signer.pubkey().await,
+            Self::GoogleCloudKms(signer) => signer.pubkey().await,
         }
     }
 
@@ -116,6 +126,7 @@ impl SolanaSignTrait for SolanaSigner {
             }
             Self::VaultTransit(signer) => Ok(signer.sign(message).await?),
             Self::Turnkey(signer) => Ok(signer.sign(message).await?),
+            Self::GoogleCloudKms(signer) => Ok(signer.sign(message).await?),
         }
     }
 }
@@ -159,6 +170,18 @@ impl SolanaSignerFactory {
                     })?;
 
                 return Ok(SolanaSigner::Turnkey(TurnkeySigner::new(turnkey_service)));
+            }
+            SignerConfig::GoogleCloudKms(google_cloud_kms_signer_config) => {
+                let google_cloud_kms_service =
+                    GoogleCloudKmsService::new(&google_cloud_kms_signer_config).map_err(|e| {
+                        SignerFactoryError::InvalidConfig(format!(
+                            "Failed to create Google Cloud KMS service: {}",
+                            e
+                        ))
+                    })?;
+                return Ok(SolanaSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(
+                    google_cloud_kms_service,
+                )));
             }
         };
 
@@ -312,7 +335,7 @@ mod solana_signer_factory_tests {
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().unwrap();
+        let signer_pubkey = signer.pubkey().await.unwrap();
 
         assert_eq!(test_key_bytes_pubkey(), signer_address);
         assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
@@ -329,7 +352,7 @@ mod solana_signer_factory_tests {
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().unwrap();
+        let signer_pubkey = signer.pubkey().await.unwrap();
 
         assert_eq!(test_key_bytes_pubkey(), signer_address);
         assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
@@ -346,7 +369,7 @@ mod solana_signer_factory_tests {
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().unwrap();
+        let signer_pubkey = signer.pubkey().await.unwrap();
 
         assert_eq!(test_key_bytes_pubkey(), signer_address);
         assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
@@ -363,7 +386,7 @@ mod solana_signer_factory_tests {
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().unwrap();
+        let signer_pubkey = signer.pubkey().await.unwrap();
 
         assert_eq!(test_key_bytes_pubkey(), signer_address);
         assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
@@ -388,7 +411,7 @@ mod solana_signer_factory_tests {
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().unwrap();
+        let signer_pubkey = signer.pubkey().await.unwrap();
 
         assert_eq!(expected_pubkey, signer_address);
         assert_eq!(expected_pubkey, signer_pubkey);
@@ -412,7 +435,7 @@ mod solana_signer_factory_tests {
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().unwrap();
+        let signer_pubkey = signer.pubkey().await.unwrap();
 
         assert_eq!(expected_pubkey, signer_address);
         assert_eq!(expected_pubkey, signer_pubkey);

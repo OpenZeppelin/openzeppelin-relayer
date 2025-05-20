@@ -56,6 +56,33 @@ pub struct TurnkeySignerConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GoogleCloudKmsSignerServiceAccountConfig {
+    pub private_key: SecretString,
+    pub private_key_id: SecretString,
+    pub project_id: String,
+    pub client_email: SecretString,
+    pub client_id: String,
+    pub auth_uri: String,
+    pub token_uri: String,
+    pub auth_provider_x509_cert_url: String,
+    pub client_x509_cert_url: String,
+    pub universe_domain: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GoogleCloudKmsSignerKeyConfig {
+    pub key_ring_id: String,
+    pub key_id: String,
+    pub key_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GoogleCloudKmsSignerConfig {
+    pub service_account: GoogleCloudKmsSignerServiceAccountConfig,
+    pub key: GoogleCloudKmsSignerKeyConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum SignerConfig {
     Test(LocalSignerConfig),
     Local(LocalSignerConfig),
@@ -64,6 +91,7 @@ pub enum SignerConfig {
     VaultTransit(VaultTransitSignerConfig),
     AwsKms(AwsKmsSignerConfig),
     Turnkey(TurnkeySignerConfig),
+    GoogleCloudKms(GoogleCloudKmsSignerConfig),
 }
 
 impl SignerConfig {
@@ -74,6 +102,7 @@ impl SignerConfig {
             | Self::Vault(config)
             | Self::VaultCloud(config) => Some(config),
             Self::VaultTransit(_) | Self::AwsKms(_) | Self::Turnkey(_) => None,
+            Self::GoogleCloudKms(_) => None,
         }
     }
 
@@ -95,6 +124,14 @@ impl SignerConfig {
 
     pub fn get_turnkey(&self) -> Option<&TurnkeySignerConfig> {
         let SignerConfig::Turnkey(config) = self else {
+            return None;
+        };
+
+        Some(config)
+    }
+
+    pub fn get_google_cloud_kms(&self) -> Option<&GoogleCloudKmsSignerConfig> {
+        let SignerConfig::GoogleCloudKms(config) = self else {
             return None;
         };
 

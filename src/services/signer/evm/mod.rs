@@ -13,12 +13,16 @@
 //!   ├── AwsKmsSigner (AWS KMS backend) [NOT IMPLEMENTED]
 //!   ├── Vault (HashiCorp Vault backend)
 //!   ├── VaultCould (HashiCorp Vault backend)
-//!   └── Turnkey (Turnkey backend)
+//!   |── Turnkey (Turnkey backend)
+//!   └── Google Cloud KMS (Google Cloud backend)
 //! ```
+mod google_cloud_kms_signer;
 mod local_signer;
 mod turnkey_signer;
 
 use async_trait::async_trait;
+use color_eyre::config;
+use google_cloud_kms_signer::GoogleCloudKmsSigner;
 use local_signer::*;
 use turnkey_signer::*;
 
@@ -31,7 +35,7 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
-    services::{turnkey::TurnkeyService, TurnkeyServiceTrait},
+    services::{turnkey::TurnkeyService, GoogleCloudKmsService, TurnkeyServiceTrait},
 };
 use eyre::Result;
 
@@ -54,6 +58,7 @@ pub enum EvmSigner {
     Vault(LocalSigner),
     VaultCloud(LocalSigner),
     Turnkey(TurnkeySigner),
+    GoogleCloudKms(GoogleCloudKmsSigner),
 }
 
 #[async_trait]
@@ -64,6 +69,7 @@ impl Signer for EvmSigner {
             Self::Vault(signer) => signer.address().await,
             Self::VaultCloud(signer) => signer.address().await,
             Self::Turnkey(signer) => signer.address().await,
+            Self::GoogleCloudKms(signer) => signer.address().await,
         }
     }
 
@@ -76,6 +82,7 @@ impl Signer for EvmSigner {
             Self::Vault(signer) => signer.sign_transaction(transaction).await,
             Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
+            Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -88,6 +95,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Vault(signer) => signer.sign_data(request).await,
             Self::VaultCloud(signer) => signer.sign_data(request).await,
             Self::Turnkey(signer) => signer.sign_data(request).await,
+            Self::GoogleCloudKms(signer) => signer.sign_data(request).await,
         }
     }
 
@@ -100,6 +108,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Vault(signer) => signer.sign_typed_data(request).await,
             Self::VaultCloud(signer) => signer.sign_typed_data(request).await,
             Self::Turnkey(signer) => signer.sign_typed_data(request).await,
+            Self::GoogleCloudKms(signer) => signer.sign_typed_data(request).await,
         }
     }
 }
@@ -126,6 +135,18 @@ impl EvmSignerFactory {
                     SignerFactoryError::CreationFailed(format!("Turnkey service error: {}", e))
                 })?;
                 EvmSigner::Turnkey(TurnkeySigner::new(turnkey_service))
+            }
+            SignerConfig::GoogleCloudKms(ref google_cloud_kms_signer_config) => {
+                let google_cloud_kms_service =
+                    GoogleCloudKmsService::new(&google_cloud_kms_signer_config).map_err(|e| {
+                        SignerFactoryError::InvalidConfig(format!(
+                            "Failed to create Google Cloud KMS service: {}",
+                            e
+                        ))
+                    })?;
+                return Ok(EvmSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(
+                    google_cloud_kms_service,
+                )));
             }
         };
 

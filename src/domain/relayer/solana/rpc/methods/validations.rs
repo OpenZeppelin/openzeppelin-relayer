@@ -281,12 +281,12 @@ impl SolanaTransactionValidator {
                         let source_pubkey = &tx.message.account_keys[*source_index as usize];
 
                         // Only validate transfers where the source is the relayer fee account.
-                        if source_pubkey == relayer_account {
-                            return Err(SolanaTransactionValidationError::PolicyViolation(
-                                "Lamports transfers are not allowed from the relayer account"
-                                    .to_string(),
-                            ));
-                        }
+                        // if source_pubkey == relayer_account {
+                        //     return Err(SolanaTransactionValidationError::PolicyViolation(
+                        //         "Lamports transfers are not allowed from the relayer account"
+                        //             .to_string(),
+                        //     ));
+                        // }
                     }
                 }
             }

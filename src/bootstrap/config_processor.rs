@@ -6,8 +6,10 @@ use crate::{
     config::{Config, SignerFileConfig, SignerFileConfigEnum},
     jobs::JobProducerTrait,
     models::{
-        AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
-        SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
+        AppState, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, NotificationRepoModel,
+        RelayerRepoModel, SignerConfig, SignerRepoModel, TurnkeySignerConfig,
+        VaultTransitSignerConfig,
     },
     repositories::Repository,
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
@@ -143,6 +145,46 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 public_key: turnkey_config.public_key.clone(),
                 api_private_key: turnkey_config.api_private_key.get_value()?,
                 api_public_key: turnkey_config.api_public_key.clone(),
+            }),
+        },
+        SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms_config) => SignerRepoModel {
+            id: signer.id.clone(),
+            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                    private_key: google_cloud_kms_config
+                        .service_account
+                        .private_key
+                        .get_value()?,
+                    client_email: google_cloud_kms_config
+                        .service_account
+                        .client_email
+                        .get_value()?,
+                    private_key_id: google_cloud_kms_config
+                        .service_account
+                        .private_key_id
+                        .get_value()?,
+                    client_id: google_cloud_kms_config.service_account.client_id.clone(),
+                    project_id: google_cloud_kms_config.service_account.project_id.clone(),
+                    auth_uri: google_cloud_kms_config.service_account.auth_uri.clone(),
+                    token_uri: google_cloud_kms_config.service_account.token_uri.clone(),
+                    client_x509_cert_url: google_cloud_kms_config
+                        .service_account
+                        .client_x509_cert_url
+                        .clone(),
+                    auth_provider_x509_cert_url: google_cloud_kms_config
+                        .service_account
+                        .auth_provider_x509_cert_url
+                        .clone(),
+                    universe_domain: google_cloud_kms_config
+                        .service_account
+                        .universe_domain
+                        .clone(),
+                },
+                key: GoogleCloudKmsSignerKeyConfig {
+                    key_id: google_cloud_kms_config.key.key_id.clone(),
+                    key_ring_id: google_cloud_kms_config.key.key_ring_id.clone(),
+                    key_version: google_cloud_kms_config.key.key_version.clone(),
+                },
             }),
         },
     };

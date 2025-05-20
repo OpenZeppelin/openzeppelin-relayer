@@ -25,8 +25,34 @@ pub use vault_transit::*;
 mod turnkey;
 pub use turnkey::*;
 
+mod google_cloud_kms;
+pub use google_cloud_kms::*;
+
 pub trait SignerConfigValidate {
     fn validate(&self) -> Result<(), ConfigFileError>;
+}
+
+fn collect_validation_errors(errors: &validator::ValidationErrors) -> Vec<String> {
+    let mut messages = Vec::new();
+
+    for (field, field_errors) in errors.field_errors().iter() {
+        let field_msgs: Vec<String> = field_errors
+            .iter()
+            .map(|error| error.message.clone().unwrap_or_default().to_string())
+            .collect();
+        messages.push(format!("{}: {}", field, field_msgs.join(", ")));
+    }
+
+    for (struct_field, kind) in errors.errors().iter() {
+        if let validator::ValidationErrorsKind::Struct(nested) = kind {
+            let nested_msgs = collect_validation_errors(nested);
+            for msg in nested_msgs {
+                messages.push(format!("{}.{}", struct_field, msg));
+            }
+        }
+    }
+
+    messages
 }
 
 /// Validates a signer config using validator::Validate
@@ -36,23 +62,9 @@ where
 {
     match Validate::validate(config) {
         Ok(_) => Ok(()),
-        Err(errors) => {
-            // Convert validator::ValidationErrors to your ConfigFileError
-            let error_message = errors
-                .field_errors()
-                .iter()
-                .map(|(field, errors)| {
-                    let messages: Vec<String> = errors
-                        .iter()
-                        .map(|error| error.message.clone().unwrap_or_default().to_string())
-                        .collect();
-                    format!("{}: {}", field, messages.join(", "))
-                })
-                .collect::<Vec<String>>()
-                .join("; ");
-
-            Err(ConfigFileError::InvalidFormat(error_message))
-        }
+        Err(errors) => Err(ConfigFileError::InvalidFormat(
+            collect_validation_errors(&errors).join("; "),
+        )),
     }
 }
 
@@ -76,6 +88,8 @@ pub enum SignerFileConfigEnum {
     #[serde(rename = "vault_transit")]
     VaultTransit(VaultTransitSignerFileConfig),
     Turnkey(TurnkeySignerFileConfig),
+    #[serde(rename = "google_cloud_kms")]
+    GoogleCloudKms(GoogleCloudKmsSignerFileConfig),
 }
 
 impl SignerFileConfigEnum {
@@ -127,6 +141,13 @@ impl SignerFileConfigEnum {
             _ => None,
         }
     }
+
+    pub fn get_google_cloud_kms(&self) -> Option<&GoogleCloudKmsSignerFileConfig> {
+        match self {
+            SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms) => Some(google_cloud_kms),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -169,6 +190,9 @@ impl SignerFileConfig {
             }
             SignerFileConfigEnum::Turnkey(turnkey_config) => {
                 SignerConfigValidate::validate(turnkey_config)
+            }
+            SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms_config) => {
+                SignerConfigValidate::validate(google_cloud_kms_config)
             }
         }
     }
