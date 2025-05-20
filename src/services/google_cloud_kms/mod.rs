@@ -21,6 +21,7 @@
 use alloy::primitives::Keccak256;
 use async_trait::async_trait;
 use google_cloud_auth::credentials::{service_account::Builder as GcpCredBuilder, Credentials};
+#[cfg_attr(test, allow(unused_imports))]
 use http::{Extensions, HeaderMap};
 use log::debug;
 use reqwest::Client;
@@ -95,10 +96,38 @@ impl GoogleCloudKmsService {
     }
 
     async fn get_auth_headers(&self) -> GoogleCloudKmsResult<HeaderMap> {
-        self.credentials
-            .headers(Extensions::new())
-            .await
-            .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))
+        // makes writing tests easier
+        #[cfg(test)]
+        {
+            // In test mode, return empty headers or mock headers
+            let mut headers = HeaderMap::new();
+            headers.insert("Authorization", "Bearer test-token".parse().unwrap());
+            return Ok(headers);
+        }
+
+        #[cfg(not(test))]
+        {
+            self.credentials
+                .headers(Extensions::new())
+                .await
+                .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))
+        }
+    }
+
+    fn get_base_url(&self) -> String {
+        if self
+            .config
+            .service_account
+            .universe_domain
+            .starts_with("http")
+        {
+            return self.config.service_account.universe_domain.clone();
+        } else {
+            return format!(
+                "https://cloudkms.{}",
+                self.config.service_account.universe_domain
+            );
+        }
     }
 
     async fn kms_get(&self, url: &str) -> GoogleCloudKmsResult<Value> {
@@ -162,11 +191,9 @@ impl GoogleCloudKmsService {
 
     /// Fetches the PEM-encoded public key from KMS.
     async fn get_pem(&self) -> GoogleCloudKmsResult<String> {
+        let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!(
-            "https://cloudkms.{}/v1/{}/publicKey",
-            self.config.service_account.universe_domain, key_path,
-        );
+        let url = format!("{}/v1/{}/publicKey", base_url, key_path,);
         debug!("KMS publicKey URL: {}", url);
 
         let body = self.kms_get(&url).await?;
@@ -241,21 +268,24 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn get_solana_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
+        println!("PEM solana: {}", pem_str);
+
         Self::derive_solana_address(&pem_str)
     }
 
     async fn get_evm_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
+        println!("PEM evm: {}", pem_str);
+
         Self::derive_ethereum_address(&pem_str)
     }
 
     async fn sign_solana(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
+        let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!(
-            "https://cloudkms.{}/v1/{}:asymmetricSign",
-            self.config.service_account.universe_domain, key_path,
-        );
+
+        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
         debug!("KMS asymmetricSign URL: {}", url);
 
         let body = serde_json::json!({
@@ -280,11 +310,9 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     }
 
     async fn sign_evm(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
+        let base_url = self.get_base_url();
         let key_path = self.get_key_path();
-        let url = format!(
-            "https://cloudkms.{}/v1/{}:asymmetricSign",
-            self.config.service_account.universe_domain, key_path,
-        );
+        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
         debug!("KMS asymmetricSign URL: {}", url);
 
         let hash = Sha256::digest(message);
@@ -312,45 +340,268 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         Ok(signature_b64)
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use crate::models::{
-        GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, SecretString,
-    };
-
     use super::*;
+    use crate::models::{
+        GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+        GoogleCloudKmsSignerServiceAccountConfig, SecretString,
+    };
+    use serde_json::json;
+    use wiremock::matchers::{header_exists, method, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn create_test_config(uri: &str) -> GoogleCloudKmsSignerConfig {
+        GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                project_id: "test-project".to_string(),
+                private_key_id: SecretString::new("test-private-key-id"),
+                private_key: SecretString::new("-----BEGIN PRIVATE KEY-----\nFAKEKEYDATA\n-----END PRIVATE KEY-----\n"),
+                client_email: SecretString::new("test-service-account@example.com"),
+                client_id: "test-client-id".to_string(),
+                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com".to_string(),
+                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
+                universe_domain: uri.to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                key_id: "test-key-id".to_string(),
+                key_ring_id: "test-key-ring-id".to_string(),
+                key_version: 1,
+            },
+        }
+    }
 
     #[tokio::test]
-    async fn test_get_address_error() {
-        let service = GoogleCloudKmsService::new({
-            &GoogleCloudKmsSignerConfig {
-                service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                    project_id: "forward-emitter-459820-r7".to_string(),
-                    private_key_id: SecretString::new("fa20d3a09900acf096dfa321af6bfcd9099fe0f3"),
-                    private_key: SecretString::new("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCmygTJMdF0I0op\n7FUn0RXaopMj4RuA9oMBMhO/ZQpubg9Yue9EV8NJrYRVk51SGi7QUiQ2mCUk/Wwi\nimepN+EY2GVBDtKhIhmJtwaOlPD3oydswPmaBqsHtBolwe7kVzP4gcWckV0e5RTJ\nP2AXfxeKobjA2rnOJEv8qaSlVMx5bPiE7II1Ppg/B35yXMjdEkzHy6Ckbo/j2/VX\nnKVFy9SSfwXbPx2O+AO+OcDX/hR9FYnOlB0SUlvw3vAwix1XS6INFzoWCYFmiNyF\nUxtQ0dddFkRM68IfSPNctA2oITXrUigGecnMxSkwoJpe43pUHh0Kackv1brVwZ0C\n3x86YzyTAgMBAAECggEAJ+daWMZt/bK5uij8QJ/x8hKGUIW5XlPcCOuxtM9YPQ5g\n5pHpkDjNFLIKYK0F7RAtlhKo7lTdQinNdsAVR/OCC78uDnAc7Ycqg/vBelhhBGZI\n9uh+bx7cSWYKAXGSFZhVa0WlAS34EP2uyO08MLLr73N8r8tEu/CMK4Fszk9o8j3A\neMT4kH3FTGaEjDdLxERXH1UjeA6/PlZam49Vdirum3vatvLZAilsyxJYds3Hgd8c\noqjDLj0rnfAHzrYLgmOoOeWfbIZQlFFwetOT/+UHmecwycqEyVX5WIh7UIvY4vsL\nq1vgVbDuKbk3mRcIDJy1RJ3LgpVCVYocZy+SoegcpQKBgQDatTM+CueIRxMg42Zc\nHhSKCbKuQRYg+GTng9LL6v1V35ssynrJssOwCCH5p/hJhCHhQBKqos7rmicSlw9M\nJdP453W9fNPv5XP/gorDT+cTEpxyUcOd7CbT0otRf7s1fRuIorWqStWAZDswS5Q3\nPvmU3YNRuePZJH8E5YMzhNICtQKBgQDDOoUWdVt/pI8ZB63gNb6LTzVAxWLHm2EY\nU7Y9aj7emNtvrXb6l4SAcHbCls48KEQA9H6G7ycQDm2EMmOPSkglqhQMY26lY25n\nd9SNEzo0wssVw1y83CvRiX4WTqI9zoUDtnyCbITXjnxlyNkVpnUZh6MGk9XVRVTA\nNYYDzNZnJwKBgQCGy3cxnfblfyjC9GR6EfAGw8Nksqi42V8XcZ/SHprU+mPhT0ou\nVgdVzy1hea0FYnKfKaZXlNCDVRcP1hqPjCEBH2bpyq21BW5g5Ewx5GU+1BGoQ8yU\n4J9tni5PpLH1XY5CwEXHFyhPYXc5ZNuM0TtyDLSLAk7z3hKLKgmbDxmAoQKBgFOO\nK0HGbqe9tWUADWHlfqy+9MrI8BMAJFk2EsxMOaYpg9lTQ5XS3WnfOGTmCFRk414J\nRlHX7z8G/cZTjprYLvK3zSbUM5njaXAtMDJE5WeJa0PgPkOyc6qVjvpbI0MSrYk+\nRCHJ8j0ThZhGkuqaOIn5rEN3aFCEANbW0Ym01JqHAoGAL+9s4OWvniibf6enP0h3\nr+ugnQrEz5Pgxot5hY7fRNl87hL6LUNRWkWhluBvzwKM/QVvKuBr2GxLuUziiZms\nqDV0h+oSQGSuYXEp8zqSaFq0J38AKg0Ug4JwG+geqTMnEp6H8h9uRDsnweQzadPR\njwNmjvi4t3+xOgvVotK4gbQ=\n-----END PRIVATE KEY-----\n"),
-                    client_email: SecretString::new("solana-signer@forward-emitter-459820-r7.iam.gserviceaccount.com"),
-                    client_id: "102715424486165246122".to_string(),
-                    auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-                    token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
-                    client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/solana-signer%40forward-emitter-459820-r7.iam.gserviceaccount.com".to_string(),
-                    universe_domain: "googleapis.com".to_string(),
-                },
-                key: GoogleCloudKmsSignerKeyConfig {
-                    key_ring_id: "solana-test".to_string(),
-                    key_id: "eth".to_string(),
-                    key_version: 1,
-                },
-            }
-        })
-        .unwrap();
+    async fn test_new_google_cloud_kms_service() {
+        let config = create_test_config("server_uri");
+        let service = GoogleCloudKmsService::new(&config);
+        assert!(service.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_key_path() {
+        let config = create_test_config("server_uri");
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+
+        let key_path = service.get_key_path();
+        let expected_path = "projects/test-project/locations/global/keyRings/test-key-ring-id/cryptoKeys/test-key-id/cryptoKeyVersions/1";
+
+        assert_eq!(key_path, expected_path);
+    }
+
+    #[test]
+    fn test_derive_ethereum_address() {
+        let pem = "not-a-valid-pem";
+        let result = GoogleCloudKmsService::derive_ethereum_address(pem);
+        assert!(result.is_err());
+
+        static VALID_SECP256K1_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh
+kFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n";
+
+        let result = GoogleCloudKmsService::derive_ethereum_address(VALID_SECP256K1_PEM);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            "0xeeb8861f51b3f3f2204d64bbf7a7eb25e1b4d6cd"
+        );
+    }
+
+    #[test]
+    fn test_derive_solana_address() {
+        let pem = "not-a-valid-pem";
+        let result = GoogleCloudKmsService::derive_solana_address(pem);
+        assert!(result.is_err());
+
+        static VALID_ED25519_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnUV+ReQWxMZ3Z2pC/5aOPPjcc8jzOo0ZgSl7+j4AMLo=\n-----END PUBLIC KEY-----\n";
+        let result = GoogleCloudKmsService::derive_solana_address(VALID_ED25519_PEM);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            "BavUBpkD77FABnevMkBVqV8BDHv7gX8sSoYYJY9WU9L5"
+        );
+    }
+
+    // Setup mock for getting public key
+    async fn setup_mock_get_public_key(mock_server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAVyC+iqnSu0vo6R8x0sRMhintQtoZgcLOur1VyvCrdrs=\n-----END PUBLIC KEY-----\n",
+                "algorithm": "ECDSA_P256_SHA256"
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    // Setup mock for signing Solana transactions
+    async fn setup_mock_sign_solana(mock_server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "signature": "ZHVtbXlzaWduYXR1cmU="  // Base64 encoded "dummysignature"
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    // Setup mock for signing EVM transactions
+    async fn setup_mock_sign_evm(mock_server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "signature": "ZHVtbXlzaWduYXR1cmU="  // Base64 encoded "dummysignature"
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    async fn setup_mock_error_response(mock_server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": {
+                    "code": 400,
+                    "message": "Invalid request",
+                    "status": "INVALID_ARGUMENT"
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_get_solana_address_with_mock() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_get_public_key(&mock_server).await;
+
+        let config = create_test_config(&mock_server.uri());
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+
+        let result = service.get_solana_address().await;
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            "6s7RsvzcdXFJi1tXeDoGfSKZWjCDNJLiu74rd72zLy6J"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_evm_address_with_mock() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_get_public_key(&mock_server).await;
+
+        let config = create_test_config(&mock_server.uri());
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+
         let result = service.get_evm_address().await;
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            "0xcb9955746ac0d84666e8ed2f1e72ecc9f8e1e87d"
+        );
+    }
 
-        let test = result.unwrap();
+    #[tokio::test]
+    async fn test_sign_solana_with_mock() {
+        let mock_server = MockServer::start().await;
 
-        println!("Public Key: {}", test);
+        setup_mock_sign_solana(&mock_server).await;
 
-        // assert!(result.is_err());
+        let config = create_test_config(&mock_server.uri());
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+
+        let result = service.sign_solana(b"test message").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "dummysignature".as_bytes().to_vec());
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_with_mock() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_sign_evm(&mock_server).await;
+
+        let config = create_test_config(&mock_server.uri());
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+
+        let result = service.sign_evm(b"test message").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "dummysignature".as_bytes().to_vec());
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_with_mock_err() {
+        let mock_server = MockServer::start().await;
+
+        setup_mock_error_response(&mock_server).await;
+
+        let config = create_test_config(&mock_server.uri());
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+
+        let result = service.sign_evm(b"test message").await;
+        assert!(result.is_err());
+        match result {
+            Err(GoogleCloudKmsError::ApiError(_)) => {}
+            Err(e) => {
+                panic!("Unexpected error type: {:?}", e);
+            }
+            _ => panic!("Expected error for invalid request"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_error() {
+        let config = create_test_config("server_uri");
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+        // This will fail because the credentials are not valid and no mock server is used
+        let result = service.sign_evm(b"test").await;
+        assert!(result.is_err());
+        match result {
+            Err(GoogleCloudKmsError::HttpError(_)) | Err(GoogleCloudKmsError::ConfigError(_)) => {}
+            Err(e) => {
+                panic!("Unexpected error type: {:?}", e);
+            }
+            _ => panic!("Expected error for invalid credentials"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_error() {
+        let config = create_test_config("server_uri");
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+        // This will fail because the credentials are not valid and no mock server is used
+        let result = service.sign_solana(b"test").await;
+        assert!(result.is_err());
+        match result {
+            Err(GoogleCloudKmsError::HttpError(_)) | Err(GoogleCloudKmsError::ConfigError(_)) => {}
+            Err(e) => {
+                panic!("Unexpected error type: {:?}", e);
+            }
+            _ => panic!("Expected error for invalid credentials"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_solana_address_error() {
+        let config = create_test_config("server_uri");
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+        let result = service.get_solana_address().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_evm_address_error() {
+        let config = create_test_config("server_uri");
+        let service = GoogleCloudKmsService::new(&config).unwrap();
+        let result = service.get_evm_address().await;
+        assert!(result.is_err());
     }
 }

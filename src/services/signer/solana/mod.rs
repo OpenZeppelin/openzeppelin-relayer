@@ -193,8 +193,9 @@ impl SolanaSignerFactory {
 mod solana_signer_factory_tests {
     use super::*;
     use crate::models::{
-        AwsKmsSignerConfig, LocalSignerConfig, SecretString, SignerConfig, SignerRepoModel,
-        SolanaTransactionData, TurnkeySignerConfig, VaultTransitSignerConfig,
+        AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, SecretString, SignerConfig,
+        SignerRepoModel, SolanaTransactionData, TurnkeySignerConfig, VaultTransitSignerConfig,
     };
     use mockall::predicate::*;
     use secrets::SecretVec;
@@ -325,6 +326,39 @@ mod solana_signer_factory_tests {
     }
 
     #[tokio::test]
+    async fn test_create_solana_signer_google_cloud_kms() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                    project_id: "project_id".to_string(),
+                    private_key_id: SecretString::new("private_key_id"),
+                    private_key: SecretString::new("private_key"),
+                    client_email: SecretString::new("client_email"),
+                    client_id: "client_id".to_string(),
+                    auth_uri: "auth_uri".to_string(),
+                    token_uri: "token_uri".to_string(),
+                    auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
+                    client_x509_cert_url: "client_x509_cert_url".to_string(),
+                    universe_domain: "universe_domain".to_string(),
+                },
+                key: GoogleCloudKmsSignerKeyConfig {
+                    key_id: "id".to_string(),
+                    key_ring_id: "key_ring".to_string(),
+                    key_version: 1,
+                },
+            }),
+        };
+
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+
+        match signer {
+            SolanaSigner::GoogleCloudKms(_) => {}
+            _ => panic!("Expected Google Cloud KMS signer"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_address_solana_signer_local() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
@@ -439,6 +473,42 @@ mod solana_signer_factory_tests {
 
         assert_eq!(expected_pubkey, signer_address);
         assert_eq!(expected_pubkey, signer_pubkey);
+    }
+
+    #[tokio::test]
+    async fn test_address_solana_signer_google_cloud_kms() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                    project_id: "project_id".to_string(),
+                    private_key_id: SecretString::new("private_key_id"),
+                    private_key: SecretString::new("private_key"),
+                    client_email: SecretString::new("client_email"),
+                    client_id: "client_id".to_string(),
+                    auth_uri: "auth_uri".to_string(),
+                    token_uri: "token_uri".to_string(),
+                    auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
+                    client_x509_cert_url: "client_x509_cert_url".to_string(),
+                    universe_domain: "universe_domain".to_string(),
+                },
+                key: GoogleCloudKmsSignerKeyConfig {
+                    key_id: "id".to_string(),
+                    key_ring_id: "key_ring".to_string(),
+                    key_version: 1,
+                },
+            }),
+        };
+        let expected_pubkey =
+            Address::Solana("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string());
+
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer_address = signer.address().await;
+        let signer_pubkey = signer.pubkey().await;
+
+        // should fail due to call to google cloud
+        assert!(signer_address.is_err());
+        assert!(signer_pubkey.is_err());
     }
 
     #[tokio::test]

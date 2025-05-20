@@ -1,6 +1,6 @@
-//! # Solana Turnkey Signer Implementation
+//! # Solana Google Cloud KMS Signer Implementation
 //!
-//! This module provides a Solana signer implementation that uses the Turnkey API
+//! This module provides a Solana signer implementation that uses the Google Cloud KMS API
 //! for secure wallet management and cryptographic operations.
 use std::str::FromStr;
 
@@ -116,166 +116,180 @@ impl<T: GoogleCloudKmsServiceTrait> Signer for GoogleCloudKmsSigner<T> {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::{
-//         models::{GoogleCloudKmsSignerConfig, SecretString, SignerConfig, SolanaTransactionData},
-//         services::{MockGoogleCloudKmsServiceTrait, TurnkeyError},
-//     };
-//     use mockall::predicate::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        models::{GoogleCloudKmsSignerConfig, SecretString, SignerConfig, SolanaTransactionData},
+        services::{GoogleCloudKmsError, MockGoogleCloudKmsServiceTrait},
+    };
+    use mockall::predicate::*;
 
-//     #[tokio::test]
-//     async fn test_address() {
-//         let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
+    #[tokio::test]
+    async fn test_address() {
+        let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
 
-//         mock_service.expect_address_solana().times(1).returning(|| {
-//             Ok(Address::Solana(
-//                 "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-//             ))
-//         });
+        mock_service
+            .expect_get_solana_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async { Ok("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string()) })
+            });
 
-//         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-//         let result = signer.address().await.unwrap();
+        let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+        let result = signer.address().await.unwrap();
 
-//         match result {
-//             Address::Solana(addr) => {
-//                 assert_eq!(addr, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
-//             }
-//             _ => panic!("Expected Solana address"),
-//         }
-//     }
+        match result {
+            Address::Solana(addr) => {
+                assert_eq!(addr, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
+            }
+            _ => panic!("Expected Solana address"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_pubkey() {
-//         let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
+    #[tokio::test]
+    async fn test_pubkey() {
+        let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
 
-//         mock_service.expect_address_solana().times(1).returning(|| {
-//             Ok(Address::Solana(
-//                 "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-//             ))
-//         });
+        mock_service
+            .expect_get_solana_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async { Ok("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string()) })
+            });
 
-//         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-//         let result = signer.pubkey().unwrap();
+        let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+        let result = signer.pubkey().await.unwrap();
 
-//         match result {
-//             Address::Solana(addr) => {
-//                 assert_eq!(addr, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
-//             }
-//             _ => panic!("Expected Solana address"),
-//         }
-//     }
+        match result {
+            Address::Solana(addr) => {
+                assert_eq!(addr, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
+            }
+            _ => panic!("Expected Solana address"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_sign() {
-//         let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
-//         let test_message = b"Test message";
+    #[tokio::test]
+    async fn test_sign() {
+        let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
+        let test_message = b"Test message";
 
-//         // Create a valid mock signature (must be exactly 64 bytes for Solana)
-//         let mock_sig_bytes = vec![1u8; 64];
+        let mock_sig_bytes = vec![1u8; 64];
 
-//         mock_service
-//             .expect_sign_solana()
-//             .times(1)
-//             .returning(move |message| {
-//                 assert_eq!(message, test_message);
-//                 let sig_clone = mock_sig_bytes.clone();
-//                 Box::pin(async { Ok(sig_clone) })
-//             });
+        mock_service
+            .expect_sign_solana()
+            .times(1)
+            .returning(move |_| {
+                let sig_clone = mock_sig_bytes.clone();
+                Box::pin(async move { Ok(sig_clone) })
+            });
 
-//         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-//         let result = signer.sign(test_message).await.unwrap();
+        let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+        let result = signer.sign(test_message).await.unwrap();
 
-//         let expected_sig = Signature::from([1u8; 64]);
-//         assert_eq!(result, expected_sig);
-//     }
+        let expected_sig = Signature::from([1u8; 64]);
+        assert_eq!(result, expected_sig);
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_error_handling() {
-//         let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
-//         let test_message = b"Test message";
+    #[tokio::test]
+    async fn test_sign_error_handling() {
+        let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
+        let test_message = b"Test message";
 
-//         mock_service
-//             .expect_sign_solana()
-//             .times(1)
-//             .returning(move |_| {
-//                 Box::pin(async { Err(TurnkeyError::SigningError("Mock signing error".into())) })
-//             });
+        mock_service
+            .expect_sign_solana()
+            .times(1)
+            .returning(move |_| {
+                Box::pin(async { Err(GoogleCloudKmsError::ApiError("Mock signing error".into())) })
+            });
 
-//         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+        let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
 
-//         let result = signer.sign(test_message).await;
+        let result = signer.sign(test_message).await;
 
-//         assert!(result.is_err());
-//         match result {
-//             Err(SignerError::TurnkeyError(err)) => {
-//                 assert_eq!(err.to_string(), "Signing error: Mock signing error");
-//             }
-//             _ => panic!("Expected SigningError error variant"),
-//         }
-//     }
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Mock signing error"));
+            }
+            _ => panic!("Expected SigningError error variant"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_invalid_signature_length() {
-//         let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
-//         let test_message = b"Test message";
+    #[tokio::test]
+    async fn test_sign_invalid_signature_length() {
+        let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
+        let test_message = b"Test message";
 
-//         // Return invalid signature length (not 64 bytes)
-//         mock_service
-//             .expect_sign_solana()
-//             .times(1)
-//             .returning(move |_| {
-//                 let invalid_sig = vec![1u8; 32]; // Only 32 bytes instead of 64
-//                 Box::pin(async { Ok(invalid_sig) })
-//             });
+        mock_service
+            .expect_sign_solana()
+            .times(1)
+            .returning(move |_| {
+                let invalid_sig = vec![1u8; 32];
+                Box::pin(async move { Ok(invalid_sig) })
+            });
 
-//         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+        let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
 
-//         let result = signer.sign(test_message).await;
-//         assert!(result.is_err());
-//         match result {
-//             Err(SignerError::SigningError(msg)) => {
-//                 assert!(msg.contains("Failed to create signature from bytes"));
-//             }
-//             _ => panic!("Expected SigningError error variant"),
-//         }
-//     }
+        let result = signer.sign(test_message).await;
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to create signature from bytes"));
+            }
+            _ => panic!("Expected SigningError error variant"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_sign_transaction_not_implemented() {
-//         let mock_service = MockGoogleCloudKmsServiceTrait::new();
-//         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+    #[tokio::test]
+    async fn test_address_error_handling() {
+        let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
 
-//         let tx_data = SolanaTransactionData {
-//             recent_blockhash: Some("hash".to_string()),
-//             fee_payer: "payer".to_string(),
-//             instructions: vec![],
-//             hash: None,
-//         };
+        mock_service
+            .expect_get_solana_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Err(GoogleCloudKmsError::ConfigError(
+                        "Invalid public key".to_string(),
+                    ))
+                })
+            });
 
-//         let result = signer
-//             .sign_transaction(NetworkTransactionData::Solana(tx_data))
-//             .await;
-//         assert!(result.is_err());
-//         match result {
-//             Err(SignerError::NotImplemented(_)) => {}
-//             _ => panic!("Expected NotImplemented error variant"),
-//         }
-//     }
+        let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+        let result = signer.address().await;
 
-//     #[tokio::test]
-//     async fn test_address_error_handling() {
-//         let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("Invalid public key"));
+            }
+            _ => panic!("Expected SigningError error variant"),
+        }
+    }
 
-//         mock_service
-//             .expect_address_solana()
-//             .times(1)
-//             .returning(|| Err(TurnkeyError::ConfigError("Invalid public key".to_string())));
+    #[tokio::test]
+    async fn test_pubkey_error_propagation() {
+        let mut mock_service = MockGoogleCloudKmsServiceTrait::new();
 
-//         let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
-//         let result = signer.address().await;
+        mock_service
+            .expect_get_solana_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Err(GoogleCloudKmsError::ApiError("API call failed".to_string()))
+                })
+            });
 
-//         assert!(result.is_err());
-//     }
-// }
+        let signer = GoogleCloudKmsSigner::new_for_testing(mock_service);
+        let result = signer.pubkey().await;
+
+        assert!(result.is_err());
+        match result {
+            Err(SignerError::SigningError(msg)) => {
+                assert!(msg.contains("API call failed"));
+            }
+            _ => panic!("Expected SigningError error variant"),
+        }
+    }
+}

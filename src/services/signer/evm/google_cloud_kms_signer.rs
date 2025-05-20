@@ -137,57 +137,57 @@ impl<T: GoogleCloudKmsServiceTrait> Signer for GoogleCloudKmsSigner<T> {
         let expected_addr_bytes = hex::decode(expected_address.trim_start_matches("0x"))
             .map_err(|e| SignerError::SigningError(format!("Invalid address hex: {e}")))?;
 
-        // Find the correct v (recovery id)
-        let v = [0u8, 1u8]
-            .into_iter()
-            .find_map(|v_try| {
-                let mut sig_bytes = [0u8; 65];
-                sig_bytes[..32].copy_from_slice(&r);
-                sig_bytes[32..64].copy_from_slice(&s);
-                sig_bytes[64] = v_try;
-                let primitive_sig = PrimitiveSignature::from(sig_bytes);
-                // Try to recover the address
-                primitive_sig
-                    .recover_address_from_prehash(&B256::from_slice(&message_hash))
-                    .ok()
-                    .filter(|addr| addr.as_slice() == expected_addr_bytes.as_slice())
-                    .map(|_| v_try)
-            })
-            .ok_or_else(|| {
-                SignerError::SigningError("Could not determine recovery id".to_string())
-            })?;
+        // // Find the correct v (recovery id)
+        // let v = [0u8, 1u8]
+        //     .into_iter()
+        //     .find_map(|v_try| {
+        //         let mut sig_bytes = [0u8; 65];
+        //         sig_bytes[..32].copy_from_slice(&r);
+        //         sig_bytes[32..64].copy_from_slice(&s);
+        //         sig_bytes[64] = v_try;
+        //         let primitive_sig = PrimitiveSignature::from(sig_bytes);
+        //         // Try to recover the address
+        //         primitive_sig
+        //             .recover_address_from_prehash(&B256::from_slice(&message_hash))
+        //             .ok()
+        //             .filter(|addr| addr.as_slice() == expected_addr_bytes.as_slice())
+        //             .map(|_| v_try)
+        //     })
+        //     .ok_or_else(|| {
+        //         SignerError::SigningError("Could not determine recovery id".to_string())
+        //     })?;
 
-        // Assemble the final signature
-        let mut signature_bytes = [0u8; 65];
-        signature_bytes[..32].copy_from_slice(&r);
-        signature_bytes[32..64].copy_from_slice(&s);
-        signature_bytes[64] = v;
+        // // Assemble the final signature
+        // let mut signature_bytes = [0u8; 65];
+        // signature_bytes[..32].copy_from_slice(&r);
+        // signature_bytes[32..64].copy_from_slice(&s);
+        // signature_bytes[64] = v;
 
-        // Now use this signature to sign the transaction
-        let primitive_sig = PrimitiveSignature::from(signature_bytes);
+        // // Now use this signature to sign the transaction
+        // let primitive_sig = PrimitiveSignature::from(signature_bytes);
 
-        // For EIP-1559:
-        if is_eip1559 {
-            let mut tx = TxEip1559::try_from(transaction)?;
-            tx.signature = Some(primitive_sig);
-            let raw = tx.encoded();
-            let hash = tx.hash().to_string();
-            return Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
-                hash,
-                signature: EvmTransactionDataSignature::from(&signature_bytes),
-                raw,
-            }));
-        } else {
-            let mut tx = TxLegacy::try_from(transaction)?;
-            tx.signature = Some(primitive_sig);
-            let raw = tx.encoded();
-            let hash = tx.hash().to_string();
-            return Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
-                hash,
-                signature: EvmTransactionDataSignature::from(&signature_bytes),
-                raw,
-            }));
-        }
+        // // For EIP-1559:
+        // if is_eip1559 {
+        //     let mut tx = TxEip1559::try_from(transaction)?;
+        //     tx.signature = Some(primitive_sig);
+        //     let raw = tx.encoded();
+        //     let hash = tx.hash().to_string();
+        //     return Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
+        //         hash,
+        //         signature: EvmTransactionDataSignature::from(&signature_bytes),
+        //         raw,
+        //     }));
+        // } else {
+        //     let mut tx = TxLegacy::try_from(transaction)?;
+        //     tx.signature = Some(primitive_sig);
+        //     let raw = tx.encoded();
+        //     let hash = tx.hash().to_string();
+        //     return Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
+        //         hash,
+        //         signature: EvmTransactionDataSignature::from(&signature_bytes),
+        //         raw,
+        //     }));
+        // }
 
         let sig_bytes = normalized_sig.to_vec();
         let mut signed_bytes_slice = &mut signed_bytes.as_slice();
