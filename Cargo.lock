@@ -4698,7 +4698,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "rand 0.9.1",
- "redis 0.29.5",
+ "redis 0.31.0",
  "regex",
  "reqwest 0.12.15",
  "secrets",
@@ -5427,11 +5427,10 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "0.29.5"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bc42f3a12fd4408ce64d8efef67048a924e543bd35c6591c0447fda9054695f"
+checksum = "0bc1ea653e0b2e097db3ebb5b7f678be339620b8041f66b30a308c1d45d36a7f"
 dependencies = [
- "arc-swap",
  "combine",
  "itoa",
  "num-bigint 0.4.6",
