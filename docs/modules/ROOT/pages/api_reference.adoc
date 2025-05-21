@@ -292,14 +292,12 @@ Result:
     "result": {
         "tokens": [
             {
-                "conversion_slippage_percentage": null,
                 "decimals": 6,
                 "max_allowed_fee": 100000000,
                 "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                 "symbol": "USDC"
             },
             {
-                "conversion_slippage_percentage": null,
                 "decimals": 9,
                 "max_allowed_fee": null,
                 "mint": "So11111111111111111111111111111111111111112",

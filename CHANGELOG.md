@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.1.1...v0.2.0) (2025-05-14)
+
+
+### 🚀 Features
+
+* add optimism extra cost calculation ([#146](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/146)) ([b85e070](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b85e070074ecc0aa4fbd7d5dc3af6ca0d600220b))
+* add timeout_seconds to EVM relayer configuration ([#169](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/169)) ([6fd59bc](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/6fd59bc0e5993d63608d47e7ba7825a027e26b99))
+* implement balance validation in EVM ([#168](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/168)) ([27fe333](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/27fe333806c28c268af981f5377e188160c845b9))
+* Local signing for stellar ([#178](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/178)) ([f69270a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f69270ade4c9a9239bba874ac74858c8e7375298))
+* plat-6471 add Solana Token 2022 extensions support ([#166](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/166)) ([d35c506](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d35c506ea298a86897ede5702481403f839f2451))
+* Plat-6521 add turnkey hosted signer support (evm, solana) ([#174](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/174)) ([b24688e](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b24688ead4fe3015ca3b7c74e56f1906085a5aa3))
+* Stellar RPC service ([#183](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/183)) ([9943ffd](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/9943ffd67a709df487264f50eccd03b06cc817d4))
+* Stellar transaction submission ([#199](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/199)) ([c6b72bf](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/c6b72bfba82c7fb9288c07e49bef04cf527d1245))
+* support for multiple custom RPCs with weighted configuration ([#182](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/182)) ([92ea5ad](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/92ea5ad324323b957fcbdce85c37517ec6f963ba))
+
+
+### 🐛 Bug Fixes
+
+* CLA assistant ([#171](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/171)) ([b326a56](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b326a5680722e812263aab949003c214795fd2c0))
+* CLA labels ([#173](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/173)) ([e31405b](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/e31405b8cba9ffd2ff991d56444320ff3d069ad0))
+* Docker Compose ([#156](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/156)) ([6ca012f](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/6ca012fb9b50d5c2159c498679673cb27530fc3c))
+* Missing libssl and workflow ([#155](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/155)) ([9de7133](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/9de7133c2ba1768f4d989158f19c27444e522f9e))
+* Release merge conflicts ([#163](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/163)) ([4cac422](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/4cac4221817373a1ae7eff92db187dbae2f1665b))
+* Skip releases ([ccafcbe](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/ccafcbe11bc6ea46dacb9c59be578abd45112ad3))
+
 ## [0.1.1](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.1.0...v0.1.1) (2025-04-08)
 
 

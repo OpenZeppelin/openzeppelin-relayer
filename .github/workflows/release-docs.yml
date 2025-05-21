@@ -1,6 +1,12 @@
 ---
 name: Publish Docs
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        type: string
+        description: The tag to use for creating docs branch or merging to docs branch.
+        required: true
   workflow_call:
     inputs:
       tag:
@@ -20,6 +26,7 @@ jobs:
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_CHANNEL: '#oss-releases'
+      TAG: ${{ inputs.tag || github.event.inputs.tag }}
     steps:
       - name: Get github app token
         uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5  # v2.0.2
@@ -30,7 +37,7 @@ jobs:
       - name: Checkout tag
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ env.TAG }}
           token: ${{ steps.gh-app-token.outputs.token }}
       - name: Slack notification
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
@@ -38,12 +45,12 @@ jobs:
           status: starting
           steps: ${{ toJson(steps) }}
           channel: ${{ env.SLACK_CHANNEL }}
-          message: Starting creating docs for ${{ github.repository }} with tag inputs.tag }}......
+          message: Starting creating docs for ${{ github.repository }} with tag ${{ env.TAG }}......
         if: always()
       - name: Validate Tag
         id: validate_tag
         run: |-
-          TAG="${{ inputs.tag }}"
+          TAG="${{ env.TAG }}"
           echo "Validating tag: $TAG"
 
           # Check if the tag matches the semantic versioning pattern

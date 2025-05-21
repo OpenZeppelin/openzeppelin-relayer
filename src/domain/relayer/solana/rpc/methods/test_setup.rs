@@ -10,7 +10,8 @@ use crate::{
     jobs::MockJobProducerTrait,
     models::{
         EncodedSerializedTransaction, NetworkType, RelayerNetworkPolicy, RelayerRepoModel,
-        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
+        SolanaFeePaymentStrategy,
     },
     services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
 };
@@ -51,6 +52,7 @@ pub fn setup_test_context() -> (
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: payer.pubkey().to_string(),
@@ -149,6 +151,7 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: relayer_keypair.pubkey().to_string(),
@@ -267,7 +270,10 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             min_balance: 10000,
             allowed_programs: None,
@@ -275,6 +281,7 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: relayer_keypair.pubkey().to_string(),
@@ -381,7 +388,10 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
                 max_allowed_fee: Some(10_000_000),
-                conversion_slippage_percentage: Some(1.0),
+                swap_config: Some(SolanaAllowedTokensSwapConfig {
+                    slippage_percentage: Some(1.0),
+                    ..Default::default()
+                }),
             }]),
             min_balance: 10000,
             allowed_programs: None,
@@ -389,6 +399,7 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
             max_tx_data_size: 1000,
+            swap_config: None,
         }),
         signer_id: "test".to_string(),
         address: relayer_keypair.pubkey().to_string(),

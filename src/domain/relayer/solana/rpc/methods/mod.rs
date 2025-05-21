@@ -10,11 +10,9 @@ mod get_supported_tokens;
 mod prepare_transaction;
 mod sign_and_send_transaction;
 mod sign_transaction;
-mod token;
 mod transfer_transaction;
 mod utils;
 mod validations;
-pub use token::*;
 
 #[cfg(test)]
 mod test_setup;
@@ -118,12 +116,13 @@ impl
     }
 }
 
-pub struct SolanaRpcMethodsImpl<
-    P = DefaultProvider,
-    S = DefaultSigner,
-    J = DefaultJupiterService,
-    JP = DefaultJobProducer,
-> {
+pub struct SolanaRpcMethodsImpl<P, S, J, JP>
+where
+    P: SolanaProviderTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Send + Sync + 'static,
+    J: JupiterServiceTrait + Send + Sync + 'static,
+    JP: JobProducerTrait + Send + Sync + 'static,
+{
     pub(crate) relayer: RelayerRepoModel,
     pub(crate) provider: Arc<P>,
     pub(crate) signer: Arc<S>,
@@ -131,14 +130,22 @@ pub struct SolanaRpcMethodsImpl<
     pub(crate) job_producer: Arc<JP>,
 }
 
-// Default implementation
-impl SolanaRpcMethodsImpl<DefaultProvider, DefaultSigner, DefaultJupiterService> {
+pub type DefaultSolanaRpcMethodsImpl =
+    SolanaRpcMethodsImpl<DefaultProvider, DefaultSigner, DefaultJupiterService, DefaultJobProducer>;
+
+impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+where
+    P: SolanaProviderTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Send + Sync + 'static,
+    J: JupiterServiceTrait + Send + Sync + 'static,
+    JP: JobProducerTrait + Send + Sync + 'static,
+{
     pub fn new(
         relayer: RelayerRepoModel,
-        provider: Arc<DefaultProvider>,
-        signer: Arc<DefaultSigner>,
-        jupiter_service: Arc<DefaultJupiterService>,
-        job_producer: Arc<DefaultJobProducer>,
+        provider: Arc<P>,
+        signer: Arc<S>,
+        jupiter_service: Arc<J>,
+        job_producer: Arc<JP>,
     ) -> Self {
         Self {
             relayer,

@@ -387,6 +387,26 @@ This table lists the environment variables and their default values.
 | `<timeout in milliseconds>`
 | Sets the maximum time to wait for RPC connections before timing out.
 
+| `PROVIDER_MAX_RETRIES`
+| `3`
+| `<number of retries>`
+| Maximum number of retry attempts for provider operations.
+
+| `PROVIDER_RETRY_BASE_DELAY_MS`
+| `100`
+| `<delay in milliseconds>`
+| Base delay between retry attempts in milliseconds.
+
+| `PROVIDER_RETRY_MAX_DELAY_MS`
+| `2000`
+| `<delay in milliseconds>`
+| Maximum delay between retry attempts in milliseconds.
+
+| `PROVIDER_MAX_FAILOVERS`
+| `3`
+| `<number of failovers>`
+| Maximum number of failovers (switching to different providers).
+
 | `ENABLE_SWAGGER`
 | `false`
 | `true, false`
@@ -417,6 +437,10 @@ METRICS_PORT=8081
 REDIS_URL=redis://localhost:6379
 REDIS_CONNECTION_TIMEOUT_MS=10000
 RPC_TIMEOUT_MS=10000
+PROVIDER_MAX_RETRIES=3
+PROVIDER_RETRY_BASE_DELAY_MS=100
+PROVIDER_RETRY_MAX_DELAY_MS=2000
+PROVIDER_MAX_FAILOVERS=3
 ENABLE_SWAGGER=false
 KEYSTORE_PASSPHRASE=your_keystore_passphrase
 ```
@@ -866,6 +890,11 @@ Policies
 |Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL.
 
 |solana
+|swap_config
+|SwapConfig
+|Optional object configuring automated token‐swaps on Solana.
+
+|solana
 |fee_margin_percentage
 |f32
 |Additional margin percentage added to estimated transaction fees to account for price fluctuations. For example, a value of 10 will add 10% to estimated fees. Optional.
@@ -978,6 +1007,39 @@ Full `config/config.json` example with evm and solana relayers definitions using
           }
         ]
       }
+    },
+    {
+      "id": "solana-mainnet-example",
+      "name": "Solana Mainnet Example",
+      "network": "mainnet-beta",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "solana",
+      "custom_rpc_urls": ["https://your-private-solana-rpc.example.com"],
+      "policies": {
+        "fee_payment_strategy": "user",
+        "min_balance": 0,
+        "swap_config": {
+          "cron_schedule": "0 0 * * * *",
+          "min_balance_threshold": 0,
+          "strategy": "jupiter-ultra"
+        },
+        "allowed_tokens": [
+          {
+            "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "max_allowed_fee": 100000000,
+            "swap_config": {
+              "min_amount": 0,
+              "max_amount": 0,
+              "retain_min_amount": 0
+            }
+          },
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
     }
   ],
   "notifications": [
@@ -1066,7 +1128,6 @@ When using custom RPC URLs:
 * The weight must be an integer between 0 and 100 (inclusive).
 * A weight of 0 disables the endpoint.
 * If a weight is not specified for an endpoint, it defaults to 100.
-
 ====
 
 == Important Considerations
