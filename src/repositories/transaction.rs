@@ -73,6 +73,20 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         tx_id: String,
         confirmed_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Find the first transaction for a given relayer ID that has the status 'Submitted',
+    /// optionally excluding a specific transaction ID.
+    async fn find_submitted_for_relayer(
+        &self,
+        relayer_id: &str,
+        exclude_tx_id: Option<String>,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+
+    /// Find the oldest 'Pending' transaction for a given relayer ID.
+    async fn find_oldest_pending_for_relayer(
+        &self,
+        relayer_id: &str,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
 }
 
 #[cfg(test)]
@@ -100,6 +114,8 @@ mockall::mock! {
         async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
         async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
         async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
+        async fn find_submitted_for_relayer(&self, relayer_id: &str, exclude_tx_id: Option<String>) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+        async fn find_oldest_pending_for_relayer(&self, relayer_id: &str) -> Result<Option<TransactionRepoModel>, RepositoryError>;
     }
 }
 
@@ -363,6 +379,42 @@ impl TransactionRepository for InMemoryTransactionRepository {
         let mut tx = self.get_by_id(tx_id.clone()).await?;
         tx.confirmed_at = Some(confirmed_at);
         self.update(tx_id, tx).await
+    }
+
+    /// Find the first transaction for a given relayer ID that has the status 'Submitted',
+    /// optionally excluding a specific transaction ID.
+    /// This is useful for checking if a relayer already has a transaction in flight.
+    async fn find_submitted_for_relayer(
+        &self,
+        relayer_id: &str,
+        exclude_tx_id: Option<String>,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(store
+            .values()
+            .filter(|tx| {
+                tx.relayer_id == relayer_id
+                    && tx.status == TransactionStatus::Submitted
+                    && exclude_tx_id.as_ref().is_none_or(|ex_id_ref| tx.id.as_str() != ex_id_ref.as_str())
+            })
+            .cloned()
+            .sorted_by_key(|tx| tx.sent_at.clone()) // oldest submitted first
+            .next())
+    }
+
+    /// Find the oldest 'Pending' transaction for a given relayer ID.
+    /// This is used to pick the next transaction to submit for sequential processing.
+    async fn find_oldest_pending_for_relayer(
+        &self,
+        relayer_id: &str,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(store
+            .values()
+            .filter(|tx| tx.relayer_id == relayer_id && tx.status == TransactionStatus::Pending)
+            .cloned()
+            .sorted_by_key(|tx| tx.created_at.clone()) // oldest pending first
+            .next())
     }
 }
 
@@ -888,47 +940,142 @@ mod tests {
     #[tokio::test]
     async fn test_find_by_status() {
         let repo = InMemoryTransactionRepository::new();
-        let tx1 = create_test_transaction("test-1");
+        let tx1 = create_test_transaction_pending_state("tx1");
+        let mut tx2 = create_test_transaction_pending_state("tx2");
+        tx2.status = TransactionStatus::Submitted;
 
-        // Create a transaction with a different status
-        let mut tx2 = create_test_transaction("test-2");
-        tx2.status = TransactionStatus::Confirmed;
+        repo.create(tx1.clone()).await.unwrap();
+        repo.create(tx2.clone()).await.unwrap();
 
-        let mut tx3 = create_test_transaction("test-3");
-        tx3.status = TransactionStatus::Failed;
-
-        repo.create(tx1).await.unwrap();
-        repo.create(tx2).await.unwrap();
-        repo.create(tx3).await.unwrap();
-
-        // Test finding transactions with Pending status
-        let result = repo
+        let pending_txs = repo
             .find_by_status(TransactionStatus::Pending)
             .await
             .unwrap();
-        assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Pending));
+        assert_eq!(pending_txs.len(), 1);
+        assert_eq!(pending_txs[0].id, "tx1");
 
-        // Test finding transactions with Confirmed status
-        let result = repo
-            .find_by_status(TransactionStatus::Confirmed)
+        let submitted_txs = repo
+            .find_by_status(TransactionStatus::Submitted)
             .await
             .unwrap();
-        assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Confirmed));
+        assert_eq!(submitted_txs.len(), 1);
+        assert_eq!(submitted_txs[0].id, "tx2");
+    }
 
-        // Test finding transactions with Failed status
-        let result = repo
-            .find_by_status(TransactionStatus::Failed)
+    #[tokio::test]
+    async fn test_find_submitted_for_relayer() {
+        let repo = InMemoryTransactionRepository::new();
+        let relayer1_id = "relayer-1";
+        let relayer2_id = "relayer-2";
+
+        // Relayer 1 transactions
+        let mut tx1_r1 = create_test_transaction_pending_state("tx1_r1");
+        tx1_r1.relayer_id = relayer1_id.to_string();
+        tx1_r1.status = TransactionStatus::Submitted;
+        tx1_r1.sent_at = Some("2023-01-01T10:00:00Z".to_string());
+
+        let mut tx2_r1 = create_test_transaction_pending_state("tx2_r1");
+        tx2_r1.relayer_id = relayer1_id.to_string();
+        tx2_r1.status = TransactionStatus::Submitted;
+        tx2_r1.sent_at = Some("2023-01-01T12:00:00Z".to_string()); // newer
+
+        let mut tx3_r1_pending = create_test_transaction_pending_state("tx3_r1_pending");
+        tx3_r1_pending.relayer_id = relayer1_id.to_string();
+        tx3_r1_pending.status = TransactionStatus::Pending;
+
+        // Relayer 2 transaction
+        let mut tx1_r2 = create_test_transaction_pending_state("tx1_r2");
+        tx1_r2.relayer_id = relayer2_id.to_string();
+        tx1_r2.status = TransactionStatus::Submitted;
+        tx1_r2.sent_at = Some("2023-01-01T11:00:00Z".to_string());
+
+        repo.create(tx1_r1.clone()).await.unwrap();
+        repo.create(tx2_r1.clone()).await.unwrap();
+        repo.create(tx3_r1_pending.clone()).await.unwrap();
+        repo.create(tx1_r2.clone()).await.unwrap();
+
+        // Find for relayer-1, should get tx1_r1 (older sent_at)
+        let found = repo
+            .find_submitted_for_relayer(relayer1_id, None)
             .await
             .unwrap();
-        assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Failed));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "tx1_r1");
+
+        // Find for relayer-1, excluding tx1_r1, should get tx2_r1
+        let found_excluded = repo
+            .find_submitted_for_relayer(relayer1_id, Some("tx1_r1".to_string()))
+            .await
+            .unwrap();
+        assert!(found_excluded.is_some());
+        assert_eq!(found_excluded.unwrap().id, "tx2_r1");
+
+        // Find for relayer-2
+        let found_r2 = repo
+            .find_submitted_for_relayer(relayer2_id, None)
+            .await
+            .unwrap();
+        assert!(found_r2.is_some());
+        assert_eq!(found_r2.unwrap().id, "tx1_r2");
+
+        // No submitted for a non-existent relayer
+        let not_found = repo
+            .find_submitted_for_relayer("relayer-nonexistent", None)
+            .await
+            .unwrap();
+        assert!(not_found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_oldest_pending_for_relayer() {
+        let repo = InMemoryTransactionRepository::new();
+        let relayer1_id = "relayer-1";
+        let relayer2_id = "relayer-2";
+
+        // Relayer 1 transactions
+        let mut tx1_r1_pending = create_test_transaction_pending_state("tx1_r1_pending");
+        tx1_r1_pending.relayer_id = relayer1_id.to_string();
+        tx1_r1_pending.created_at = "2023-01-01T10:00:00Z".to_string();
+
+        let mut tx2_r1_pending = create_test_transaction_pending_state("tx2_r1_pending");
+        tx2_r1_pending.relayer_id = relayer1_id.to_string();
+        tx2_r1_pending.created_at = "2023-01-01T09:00:00Z".to_string(); // older
+
+        let mut tx3_r1_submitted = create_test_transaction_pending_state("tx3_r1_submitted");
+        tx3_r1_submitted.relayer_id = relayer1_id.to_string();
+        tx3_r1_submitted.status = TransactionStatus::Submitted;
+
+        // Relayer 2 transaction
+        let mut tx1_r2_pending = create_test_transaction_pending_state("tx1_r2_pending");
+        tx1_r2_pending.relayer_id = relayer2_id.to_string();
+        tx1_r2_pending.created_at = "2023-01-01T11:00:00Z".to_string();
+
+        repo.create(tx1_r1_pending.clone()).await.unwrap();
+        repo.create(tx2_r1_pending.clone()).await.unwrap();
+        repo.create(tx3_r1_submitted.clone()).await.unwrap();
+        repo.create(tx1_r2_pending.clone()).await.unwrap();
+
+        // Find for relayer-1, should get tx2_r1_pending (older created_at)
+        let found = repo
+            .find_oldest_pending_for_relayer(relayer1_id)
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "tx2_r1_pending");
+
+        // Find for relayer-2
+        let found_r2 = repo
+            .find_oldest_pending_for_relayer(relayer2_id)
+            .await
+            .unwrap();
+        assert!(found_r2.is_some());
+        assert_eq!(found_r2.unwrap().id, "tx1_r2_pending");
+
+        // No pending for a non-existent relayer
+        let not_found = repo
+            .find_oldest_pending_for_relayer("relayer-nonexistent")
+            .await
+            .unwrap();
+        assert!(not_found.is_none());
     }
 }
