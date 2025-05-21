@@ -183,7 +183,7 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 key: GoogleCloudKmsSignerKeyConfig {
                     key_id: google_cloud_kms_config.key.key_id.clone(),
                     key_ring_id: google_cloud_kms_config.key.key_ring_id.clone(),
-                    key_version: google_cloud_kms_config.key.key_version.clone(),
+                    key_version: google_cloud_kms_config.key.key_version,
                 },
             }),
         },

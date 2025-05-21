@@ -173,7 +173,7 @@ impl SolanaSignerFactory {
             }
             SignerConfig::GoogleCloudKms(google_cloud_kms_signer_config) => {
                 let google_cloud_kms_service =
-                    GoogleCloudKmsService::new(&google_cloud_kms_signer_config).map_err(|e| {
+                    GoogleCloudKmsService::new(google_cloud_kms_signer_config).map_err(|e| {
                         SignerFactoryError::InvalidConfig(format!(
                             "Failed to create Google Cloud KMS service: {}",
                             e
@@ -499,8 +499,6 @@ mod solana_signer_factory_tests {
                 },
             }),
         };
-        let expected_pubkey =
-            Address::Solana("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string());
 
         let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
         let signer_address = signer.address().await;

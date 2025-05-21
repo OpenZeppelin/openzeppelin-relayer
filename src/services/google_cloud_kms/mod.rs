@@ -63,6 +63,7 @@ pub trait GoogleCloudKmsServiceTrait: Send + Sync {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct GoogleCloudKmsService {
     pub config: GoogleCloudKmsSignerConfig,
     credentials: Arc<Credentials>,
@@ -102,7 +103,7 @@ impl GoogleCloudKmsService {
             // In test mode, return empty headers or mock headers
             let mut headers = HeaderMap::new();
             headers.insert("Authorization", "Bearer test-token".parse().unwrap());
-            return Ok(headers);
+            Ok(headers)
         }
 
         #[cfg(not(test))]
@@ -121,12 +122,12 @@ impl GoogleCloudKmsService {
             .universe_domain
             .starts_with("http")
         {
-            return self.config.service_account.universe_domain.clone();
+            self.config.service_account.universe_domain.clone()
         } else {
-            return format!(
+            format!(
                 "https://cloudkms.{}",
                 self.config.service_account.universe_domain
-            );
+            )
         }
     }
 
@@ -236,7 +237,7 @@ impl GoogleCloudKmsService {
         // Parse ASN.1 to extract the public key (as SEC1 bytes)
         let spki = simple_asn1::from_der(der)
             .map_err(|e| GoogleCloudKmsError::ParseError(format!("ASN.1 parse error: {e}")))?;
-        let pubkey_bytes = if let Some(simple_asn1::ASN1Block::Sequence(_, blocks)) = spki.get(0) {
+        let pubkey_bytes = if let Some(simple_asn1::ASN1Block::Sequence(_, blocks)) = spki.first() {
             if let Some(simple_asn1::ASN1Block::BitString(_, _, ref bytes)) = blocks.get(1) {
                 bytes
             } else {
