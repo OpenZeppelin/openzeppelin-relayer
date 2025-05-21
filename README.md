@@ -4,6 +4,7 @@
 [![CLA Assistant](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/cla.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/cla.yml)
 [![CI](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml)
 [![Release Workflow](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml)
+[![Scorecard](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/scorecard.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/scorecard.yml)
 
 > :warning: This software is in alpha. Use in production environments at your own risk.
 
