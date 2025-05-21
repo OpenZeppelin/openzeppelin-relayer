@@ -41,7 +41,7 @@ cd openzeppelin-relayer
 Create an environment file by copying the example:
 
 ```bash
-cp examples/solana_google_cloud_kms_signer/.env.example examples/solana_google_cloud_kms_signer/.env
+cp examples/solana-google-cloud-kms-signer/.env.example examples/solana-google-cloud-kms-signer/.env
 ```
 
 #### Populate Google Cloud KMS config
@@ -105,7 +105,7 @@ API_KEY=generated_api_key
 
 #### Configure Webhook URL
 
-Update the `examples/solana_google_cloud_kms_signer/config/config.json` file with your webhook configuration:
+Update the `examples/solana-google-cloud-kms-signer/config/config.json` file with your webhook configuration:
 
 1. For testing, get a webhook URL from [Webhook.site](https://webhook.site)
 2. Update the config file:
@@ -125,7 +125,7 @@ Update the `examples/solana_google_cloud_kms_signer/config/config.json` file wit
 Start the service with Docker Compose:
 
 ```bash
-docker compose -f examples/solana_google_cloud_kms_signer/docker-compose.yaml up
+docker compose -f examples/solana-google-cloud-kms-signer/docker-compose.yaml up
 ```
 
 ### Step 8: Test the Service
