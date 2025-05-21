@@ -343,12 +343,17 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_err());
-        if let Err(RelayerError::DexError(error_message)) = result {
-            assert!(error_message.contains("Failed to get Jupiter quote"));
-            assert!(error_message.contains("insufficient liquidity"));
-        } else {
-            panic!("Expected DexError but got different error: {:?}", result);
+        match result {
+            Err(RelayerError::DexError(error_message)) => {
+                assert!(
+                    error_message.contains("Failed to get Jupiter quote")
+                        && error_message.contains("insufficient liquidity"),
+                    "Error message did not contain expected substrings: {}",
+                    error_message
+                );
+            }
+            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Ok(_) => panic!("Expected error but got Ok"),
         }
     }
 
@@ -403,12 +408,17 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_err());
-        if let Err(RelayerError::DexError(error_message)) = result {
-            assert!(error_message.contains("Failed to get swap transaction"));
-            assert!(error_message.contains("rate limit exceeded"));
-        } else {
-            panic!("Expected DexError but got different error: {:?}", result);
+        match result {
+            Err(RelayerError::DexError(error_message)) => {
+                assert!(
+                    error_message.contains("Failed to get swap transaction")
+                        && error_message.contains("rate limit exceeded"),
+                    "Error message did not contain expected substrings: {}",
+                    error_message
+                );
+            }
+            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Ok(_) => panic!("Expected error but got Ok"),
         }
     }
 
@@ -462,11 +472,16 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_err());
-        if let Err(RelayerError::DexError(error_message)) = result {
-            assert!(error_message.contains("Failed to decode swap transaction"));
-        } else {
-            panic!("Expected DexError but got different error: {:?}", result);
+        match result {
+            Err(RelayerError::DexError(error_message)) => {
+                assert!(
+                    error_message.contains("Failed to decode swap transaction"),
+                    "Error message did not contain expected substrings: {}",
+                    error_message
+                );
+            }
+            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Ok(_) => panic!("Expected error but got Ok"),
         }
     }
 
@@ -532,15 +547,17 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_err());
-        if let Err(RelayerError::DexError(error_message)) = result {
-            assert!(error_message.contains("Failed to sign Dex transaction"));
-            assert!(error_message.contains("Failed to sign: invalid key"));
-        } else {
-            panic!(
-                "Expected ProviderError but got different error: {:?}",
-                result
-            );
+        match result {
+            Err(RelayerError::DexError(error_message)) => {
+                assert!(
+                    error_message.contains("Failed to sign Dex transaction")
+                        && error_message.contains("Failed to sign: invalid key"),
+                    "Error message did not contain expected substrings: {}",
+                    error_message
+                );
+            }
+            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Ok(_) => panic!("Expected error but got Ok"),
         }
     }
 
@@ -612,15 +629,17 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_err());
-        if let Err(RelayerError::ProviderError(error_message)) = result {
-            assert!(error_message.contains("Failed to send transaction"));
-            assert!(error_message.contains("Insufficient balance"));
-        } else {
-            panic!(
-                "Expected ProviderError but got different error: {:?}",
-                result
-            );
+        match result {
+            Err(RelayerError::ProviderError(error_message)) => {
+                assert!(
+                    error_message.contains("Failed to send transaction")
+                        && error_message.contains("Insufficient balance"),
+                    "Error message did not contain expected substrings: {}",
+                    error_message
+                );
+            }
+            Err(e) => panic!("Expected ProviderError but got different error: {:?}", e),
+            Ok(_) => panic!("Expected error but got Ok"),
         }
     }
 
@@ -697,15 +716,17 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_err());
-        if let Err(RelayerError::ProviderError(error_message)) = result {
-            assert!(error_message.contains("Transaction failed to confirm"));
-            assert!(error_message.contains("Transaction timed out"));
-        } else {
-            panic!(
-                "Expected ProviderError but got different error: {:?}",
-                result
-            );
+        match result {
+            Err(RelayerError::ProviderError(error_message)) => {
+                assert!(
+                    error_message.contains("Transaction failed to confirm")
+                        && error_message.contains("Transaction timed out"),
+                    "Error message did not contain expected substrings: {}",
+                    error_message
+                );
+            }
+            Err(e) => panic!("Expected ProviderError but got different error: {:?}", e),
+            Ok(_) => panic!("Expected error but got Ok"),
         }
     }
 }

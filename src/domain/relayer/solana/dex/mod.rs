@@ -198,10 +198,10 @@ mod tests {
         let result =
             create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            DefaultNetworkDex::JupiterSwap { .. } => {}
-            _ => panic!("Expected JupiterSwap strategy"),
+        match result {
+            Ok(NetworkDex::JupiterSwap { .. }) => {}
+            Ok(_) => panic!("Expected JupiterSwap strategy"),
+            Err(e) => panic!("Expected Ok with JupiterSwap, but got error: {:?}", e),
         }
     }
 
@@ -238,10 +238,10 @@ mod tests {
         let result =
             create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            DefaultNetworkDex::JupiterUltra { .. } => { /* Success case */ }
-            _ => panic!("Expected JupiterUltra strategy"),
+        match result {
+            Ok(NetworkDex::JupiterUltra { .. }) => {}
+            Ok(_) => panic!("Expected JupiterUltra strategy"),
+            Err(e) => panic!("Expected Ok with JupiterUltra, but got error: {:?}", e),
         }
     }
 
@@ -278,10 +278,10 @@ mod tests {
         let result =
             create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            DefaultNetworkDex::Noop { .. } => {}
-            _ => panic!("Expected default JupiterUltra strategy"),
+        match result {
+            Ok(NetworkDex::Noop { .. }) => {}
+            Ok(_) => panic!("Expected Noop strategy"),
+            Err(e) => panic!("Expected Ok with Noop, but got error: {:?}", e),
         }
     }
 
@@ -313,10 +313,10 @@ mod tests {
         let result =
             create_network_dex_generic(&relayer, provider, signer_service, jupiter_service);
 
-        assert!(result.is_ok());
-        match result.unwrap() {
-            DefaultNetworkDex::Noop { .. } => {}
-            _ => panic!("Expected default JupiterUltra strategy"),
+        match result {
+            Ok(NetworkDex::Noop { .. }) => {}
+            Ok(_) => panic!("Expected Noop strategy"),
+            Err(e) => panic!("Expected Ok with Noop, but got error: {:?}", e),
         }
     }
 }
