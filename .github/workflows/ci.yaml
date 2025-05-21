@@ -148,7 +148,6 @@ jobs:
       contents: read
     needs:
       - changed_files
-      - ci
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
