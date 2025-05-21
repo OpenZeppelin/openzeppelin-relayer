@@ -78,6 +78,7 @@ mod tests {
 
     use super::*;
     use crate::services::provider::evm::MockEvmProviderTrait;
+    use crate::services::ProviderError;
     use mockall::predicate::*;
 
     fn create_test_policy(min_balance: u128) -> RelayerEvmPolicy {
@@ -178,7 +179,11 @@ mod tests {
         mock_provider
             .expect_get_balance()
             .with(eq("0xSender"))
-            .returning(|_| Box::pin(ready(Err(eyre::eyre!("Provider error")))));
+            .returning(|_| {
+                Box::pin(ready(Err(ProviderError::Other(
+                    "Provider error".to_string(),
+                ))))
+            });
 
         let result = EvmTransactionValidator::validate_sufficient_relayer_balance(
             U256::ZERO,
@@ -280,7 +285,11 @@ mod tests {
         mock_provider
             .expect_get_balance()
             .with(eq("0xSender"))
-            .returning(|_| Box::pin(ready(Err(eyre::eyre!("Provider error")))));
+            .returning(|_| {
+                Box::pin(ready(Err(ProviderError::Other(
+                    "Provider error".to_string(),
+                ))))
+            });
 
         let result = EvmTransactionValidator::init_balance_validation(
             "0xSender",

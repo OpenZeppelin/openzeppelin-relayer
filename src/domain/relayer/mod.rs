@@ -27,7 +27,12 @@ use crate::{
         RelayerRepositoryStorage,
     },
     services::{
+<<<<<<< HEAD
         get_network_provider, EvmSignerFactory, StellarProvider, TransactionCounterService,
+=======
+        get_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
+        TransactionCounterService,
+>>>>>>> main
     },
 };
 
@@ -360,8 +365,9 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
                 };
 
-                let stellar_provider = StellarProvider::new(network.public_rpc_urls()[0])
-                    .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
+                let stellar_provider =
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
+                        .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
 
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),

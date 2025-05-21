@@ -1,7 +1,11 @@
+use std::num::ParseIntError;
+
 use crate::config::ServerConfig;
-use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork};
+use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use serde::Serialize;
 use thiserror::Error;
+
+use alloy::transports::RpcError;
 
 pub mod evm;
 pub use evm::*;
@@ -12,6 +16,11 @@ pub use solana::*;
 mod stellar;
 pub use stellar::*;
 
+mod retry;
+pub use retry::*;
+
+pub mod rpc_selector;
+
 #[derive(Error, Debug, Serialize)]
 pub enum ProviderError {
     #[error("RPC client error: {0}")]
@@ -20,6 +29,129 @@ pub enum ProviderError {
     InvalidAddress(String),
     #[error("Network configuration error: {0}")]
     NetworkConfiguration(String),
+    #[error("Request timeout")]
+    Timeout,
+    #[error("Rate limited (HTTP 429)")]
+    RateLimited,
+    #[error("Bad gateway (HTTP 502)")]
+    BadGateway,
+    #[error("Other provider error: {0}")]
+    Other(String),
+}
+
+impl From<hex::FromHexError> for ProviderError {
+    fn from(err: hex::FromHexError) -> Self {
+        ProviderError::InvalidAddress(err.to_string())
+    }
+}
+
+impl From<std::net::AddrParseError> for ProviderError {
+    fn from(err: std::net::AddrParseError) -> Self {
+        ProviderError::NetworkConfiguration(format!("Invalid network address: {}", err))
+    }
+}
+
+impl From<ParseIntError> for ProviderError {
+    fn from(err: ParseIntError) -> Self {
+        ProviderError::Other(format!("Number parsing error: {}", err))
+    }
+}
+
+/// Categorizes a reqwest error into an appropriate `ProviderError` variant.
+///
+/// This function analyzes the given reqwest error and maps it to a specific
+/// `ProviderError` variant based on the error's properties:
+/// - Timeout errors become `ProviderError::Timeout`
+/// - HTTP 429 responses become `ProviderError::RateLimited`
+/// - HTTP 502 responses become `ProviderError::BadGateway`
+/// - All other errors become `ProviderError::Other` with the error message
+///
+/// # Arguments
+///
+/// * `err` - A reference to the reqwest error to categorize
+///
+/// # Returns
+///
+/// The appropriate `ProviderError` variant based on the error type
+fn categorize_reqwest_error(err: &reqwest::Error) -> ProviderError {
+    if err.is_timeout() {
+        return ProviderError::Timeout;
+    }
+
+    if let Some(status) = err.status() {
+        match status.as_u16() {
+            429 => return ProviderError::RateLimited,
+            502 => return ProviderError::BadGateway,
+            _ => {}
+        }
+    }
+
+    ProviderError::Other(err.to_string())
+}
+
+impl From<reqwest::Error> for ProviderError {
+    fn from(err: reqwest::Error) -> Self {
+        categorize_reqwest_error(&err)
+    }
+}
+
+impl From<&reqwest::Error> for ProviderError {
+    fn from(err: &reqwest::Error) -> Self {
+        categorize_reqwest_error(err)
+    }
+}
+
+impl From<eyre::Report> for ProviderError {
+    fn from(err: eyre::Report) -> Self {
+        // Downcast to known error types first
+        if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>() {
+            return ProviderError::from(reqwest_err);
+        }
+
+        // Default to Other for unknown error types
+        ProviderError::Other(err.to_string())
+    }
+}
+
+// Add conversion from String to ProviderError
+impl From<String> for ProviderError {
+    fn from(error: String) -> Self {
+        ProviderError::Other(error)
+    }
+}
+
+// Generic implementation for all RpcError types
+impl<E> From<RpcError<E>> for ProviderError
+where
+    E: std::fmt::Display + std::any::Any + 'static,
+{
+    fn from(err: RpcError<E>) -> Self {
+        match err {
+            RpcError::Transport(transport_err) => {
+                // First check if it's a reqwest::Error using downcasting
+                if let Some(reqwest_err) =
+                    (&transport_err as &dyn std::any::Any).downcast_ref::<reqwest::Error>()
+                {
+                    return categorize_reqwest_error(reqwest_err);
+                }
+
+                // Fallback for other transport error types
+                ProviderError::Other(format!("Transport error: {}", transport_err))
+            }
+            RpcError::ErrorResp(json_rpc_err) => ProviderError::Other(format!(
+                "JSON-RPC error ({}): {}",
+                json_rpc_err.code, json_rpc_err.message
+            )),
+            _ => ProviderError::Other(format!("Other RPC error: {}", err)),
+        }
+    }
+}
+
+// Implement From for RpcSelectorError
+impl From<super::rpc_selector::RpcSelectorError> for ProviderError {
+    fn from(err: super::rpc_selector::RpcSelectorError) -> Self {
+        ProviderError::NetworkConfiguration(format!("RPC selector error: {}", err))
+    }
 }
 
 pub trait NetworkConfiguration: Sized {
@@ -67,6 +199,25 @@ impl NetworkConfiguration for SolanaNetwork {
         timeout_seconds: u64,
     ) -> Result<Self::Provider, ProviderError> {
         SolanaProvider::new(rpc_urls, timeout_seconds)
+    }
+}
+
+impl NetworkConfiguration for StellarNetwork {
+    type Provider = StellarProvider;
+
+    fn public_rpc_urls(&self) -> Vec<String> {
+        (*self)
+            .public_rpc_urls()
+            .iter()
+            .map(|&url| url.to_string())
+            .collect()
+    }
+
+    fn new_provider(
+        rpc_urls: Vec<RpcConfig>,
+        timeout_seconds: u64,
+    ) -> Result<Self::Provider, ProviderError> {
+        StellarProvider::new(rpc_urls, timeout_seconds)
     }
 }
 
@@ -122,6 +273,9 @@ mod tests {
     use std::env;
     use std::str::FromStr;
     use std::sync::Mutex;
+    use std::time::Duration;
+    use wiremock::matchers::any;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // Use a mutex to ensure tests don't run in parallel when modifying env vars
     lazy_static! {
@@ -138,6 +292,125 @@ mod tests {
         env::remove_var("API_KEY");
         env::remove_var("REDIS_URL");
         env::remove_var("RPC_TIMEOUT_MS");
+    }
+
+    #[test]
+    fn test_from_hex_error() {
+        let hex_error = hex::FromHexError::OddLength;
+        let provider_error: ProviderError = hex_error.into();
+        assert!(matches!(provider_error, ProviderError::InvalidAddress(_)));
+    }
+
+    #[test]
+    fn test_from_addr_parse_error() {
+        let addr_error = "invalid:address"
+            .parse::<std::net::SocketAddr>()
+            .unwrap_err();
+        let provider_error: ProviderError = addr_error.into();
+        assert!(matches!(
+            provider_error,
+            ProviderError::NetworkConfiguration(_)
+        ));
+    }
+
+    #[test]
+    fn test_from_parse_int_error() {
+        let parse_error = "not_a_number".parse::<u64>().unwrap_err();
+        let provider_error: ProviderError = parse_error.into();
+        assert!(matches!(provider_error, ProviderError::Other(_)));
+    }
+
+    #[actix_rt::test]
+    async fn test_categorize_reqwest_error_timeout() {
+        let client = reqwest::Client::new();
+        let timeout_err = client
+            .get("http://example.com")
+            .timeout(Duration::from_nanos(1))
+            .send()
+            .await
+            .unwrap_err();
+
+        assert!(timeout_err.is_timeout());
+
+        let provider_error = categorize_reqwest_error(&timeout_err);
+        assert!(matches!(provider_error, ProviderError::Timeout));
+    }
+
+    #[actix_rt::test]
+    async fn test_categorize_reqwest_error_rate_limited() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(mock_server.uri())
+            .send()
+            .await
+            .expect("Failed to get response");
+
+        let err = response
+            .error_for_status()
+            .expect_err("Expected error for status 429");
+
+        assert!(err.status().is_some());
+        assert_eq!(err.status().unwrap().as_u16(), 429);
+
+        let provider_error = categorize_reqwest_error(&err);
+        assert!(matches!(provider_error, ProviderError::RateLimited));
+    }
+
+    #[actix_rt::test]
+    async fn test_categorize_reqwest_error_bad_gateway() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(502))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(mock_server.uri())
+            .send()
+            .await
+            .expect("Failed to get response");
+
+        let err = response
+            .error_for_status()
+            .expect_err("Expected error for status 502");
+
+        assert!(err.status().is_some());
+        assert_eq!(err.status().unwrap().as_u16(), 502);
+
+        let provider_error = categorize_reqwest_error(&err);
+        assert!(matches!(provider_error, ProviderError::BadGateway));
+    }
+
+    #[actix_rt::test]
+    async fn test_categorize_reqwest_error_other() {
+        let client = reqwest::Client::new();
+        let err = client
+            .get("http://non-existent-host-12345.local")
+            .send()
+            .await
+            .unwrap_err();
+
+        assert!(!err.is_timeout());
+        assert!(err.status().is_none()); // No status code
+
+        let provider_error = categorize_reqwest_error(&err);
+        assert!(matches!(provider_error, ProviderError::Other(_)));
+    }
+
+    #[test]
+    fn test_from_eyre_report_other_error() {
+        let eyre_error: eyre::Report = eyre::eyre!("Generic error");
+        let provider_error: ProviderError = eyre_error.into();
+        assert!(matches!(provider_error, ProviderError::Other(_)));
     }
 
     #[test]
@@ -256,5 +529,110 @@ mod tests {
 
         cleanup_test_env();
         assert!(network_result.is_err());
+    }
+
+    // Tests for Stellar Network Provider
+    #[test]
+    fn test_get_stellar_network_provider_valid_network_fallback_public() {
+        let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        setup_test_env();
+
+        let network = StellarNetwork::from_str("testnet").unwrap();
+        let result = get_network_provider(&network, None); // No custom URLs
+
+        cleanup_test_env();
+        assert!(result.is_ok()); // Should fall back to public URLs for testnet
+                                 // StellarProvider::new will use the first public URL: https://soroban-testnet.stellar.org
+    }
+
+    #[test]
+    fn test_get_stellar_network_provider_with_custom_urls() {
+        let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        setup_test_env();
+
+        let network = StellarNetwork::from_str("testnet").unwrap();
+        let custom_urls = vec![
+            RpcConfig::new("https://custom-stellar-rpc1.example.com".to_string()),
+            RpcConfig::with_weight("http://custom-stellar-rpc2.example.com".to_string(), 50)
+                .unwrap(),
+        ];
+        let result = get_network_provider(&network, Some(custom_urls));
+
+        cleanup_test_env();
+        assert!(result.is_ok());
+        // StellarProvider::new will pick custom-stellar-rpc1 (default weight 100) over custom-stellar-rpc2 (weight 50)
+    }
+
+    #[test]
+    fn test_get_stellar_network_provider_with_empty_custom_urls_fallback() {
+        let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        setup_test_env();
+
+        let network = StellarNetwork::from_str("mainnet").unwrap();
+        let custom_urls: Vec<RpcConfig> = vec![]; // Empty custom URLs
+        let result = get_network_provider(&network, Some(custom_urls));
+
+        cleanup_test_env();
+        assert!(result.is_ok()); // Should fall back to public URLs for mainnet
+                                 // StellarProvider::new will use the first public URL: https://horizon.stellar.org
+    }
+
+    #[test]
+    fn test_get_stellar_network_provider_custom_urls_with_zero_weight() {
+        let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        setup_test_env();
+
+        let network = StellarNetwork::from_str("testnet").unwrap();
+        let custom_urls = vec![
+            RpcConfig::with_weight("http://zero-weight-rpc.example.com".to_string(), 0).unwrap(),
+            RpcConfig::new("http://active-rpc.example.com".to_string()), // Default weight 100
+        ];
+        let result = get_network_provider(&network, Some(custom_urls));
+        cleanup_test_env();
+        assert!(result.is_ok()); // active-rpc should be chosen
+    }
+
+    #[test]
+    fn test_get_stellar_network_provider_all_custom_urls_zero_weight_fallback() {
+        let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        setup_test_env();
+
+        let network = StellarNetwork::from_str("testnet").unwrap();
+        let custom_urls = vec![
+            RpcConfig::with_weight("http://zero1.example.com".to_string(), 0).unwrap(),
+            RpcConfig::with_weight("http://zero2.example.com".to_string(), 0).unwrap(),
+        ];
+        // Since StellarProvider::new filters out zero-weight URLs, and if the list becomes empty,
+        // get_network_provider does NOT re-trigger fallback to public. Instead, StellarProvider::new itself will error.
+        // The current get_network_provider logic passes the custom_urls to N::new_provider if Some and not empty.
+        // If custom_urls becomes effectively empty *inside* N::new_provider (like StellarProvider::new after filtering weights),
+        // then N::new_provider is responsible for erroring or handling.
+        let result = get_network_provider(&network, Some(custom_urls));
+        cleanup_test_env();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ProviderError::NetworkConfiguration(msg) => {
+                assert!(msg.contains("No active RPC configurations provided"));
+            }
+            _ => panic!("Unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn test_get_stellar_network_provider_invalid_custom_url_scheme() {
+        let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        setup_test_env();
+        let network = StellarNetwork::from_str("testnet").unwrap();
+        let custom_urls = vec![RpcConfig::new("ftp://custom-ftp.example.com".to_string())];
+        let result = get_network_provider(&network, Some(custom_urls));
+        cleanup_test_env();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ProviderError::NetworkConfiguration(msg) => {
+                // This error comes from RpcConfig::validate_list inside StellarProvider::new
+                assert!(msg.contains("Invalid URL scheme"));
+            }
+            _ => panic!("Unexpected error type"),
+        }
     }
 }
