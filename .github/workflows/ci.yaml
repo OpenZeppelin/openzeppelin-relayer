@@ -9,9 +9,17 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+    paths-ignore:
+      - docs/**
+      - '**.md'
+      - .github/**
   push:
     branches:
       - main
+    paths-ignore:
+      - docs/**
+      - '**.md'
+      - .github/**
 # run concurrency group for the workflow
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
