@@ -26,14 +26,7 @@ use crate::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
-    services::{
-<<<<<<< HEAD
-        get_network_provider, EvmSignerFactory, StellarProvider, TransactionCounterService,
-=======
-        get_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
-        TransactionCounterService,
->>>>>>> main
-    },
+    services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
 };
 
 use async_trait::async_trait;
