@@ -14,6 +14,7 @@ use eyre::Result;
 #[cfg(test)]
 use mockall::automock;
 use mpl_token_metadata::accounts::Metadata;
+use reqwest::Url;
 use serde::Serialize;
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
@@ -30,13 +31,16 @@ use solana_sdk::{
     transaction::{Transaction, VersionedTransaction},
 };
 use spl_token::state::Mint;
-use std::{str::FromStr, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
-use crate::models::RpcConfig;
+use crate::{models::RpcConfig, services::retry_rpc_call};
 
-use super::rpc_selector::{RpcSelector, RpcSelectorError};
 use super::ProviderError;
+use super::{
+    rpc_selector::{RpcSelector, RpcSelectorError},
+    RetryConfig,
+};
 
 #[derive(Error, Debug, Serialize)]
 pub enum SolanaProviderError {
@@ -46,6 +50,8 @@ pub enum SolanaProviderError {
     InvalidAddress(String),
     #[error("RPC selector error: {0}")]
     SelectorError(RpcSelectorError),
+    #[error("Network configuration error: {0}")]
+    NetworkConfiguration(String),
 }
 
 /// A trait that abstracts common Solana provider operations.
@@ -136,6 +142,14 @@ pub struct SolanaProvider {
     timeout_seconds: Duration,
     // Default commitment level
     commitment: CommitmentConfig,
+    // Retry configuration for network requests
+    retry_config: RetryConfig,
+}
+
+impl From<String> for SolanaProviderError {
+    fn from(s: String) -> Self {
+        SolanaProviderError::RpcError(s)
+    }
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -191,10 +205,13 @@ impl SolanaProvider {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
         })?;
 
+        let retry_config = RetryConfig::from_env();
+
         Ok(Self {
             selector,
             timeout_seconds: Duration::from_secs(timeout_seconds),
             commitment,
+            retry_config,
         })
     }
 
@@ -217,6 +234,61 @@ impl SolanaProvider {
             })
             .map_err(SolanaProviderError::SelectorError)
     }
+
+    /// Initialize a provider for a given URL
+    fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
+        let rpc_url: Url = url.parse().map_err(|e| {
+            SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
+        })?;
+
+        let client = RpcClient::new_with_timeout_and_commitment(
+            rpc_url.to_string(),
+            self.timeout_seconds,
+            self.commitment,
+        );
+
+        Ok(Arc::new(client))
+    }
+
+    /// Retry helper for Solana RPC calls
+    async fn retry_rpc_call<T, F, Fut>(
+        &self,
+        operation_name: &str,
+        operation: F,
+    ) -> Result<T, SolanaProviderError>
+    where
+        F: Fn(Arc<RpcClient>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, SolanaProviderError>>,
+    {
+        let is_retriable = |e: &SolanaProviderError| match e {
+            SolanaProviderError::RpcError(msg) => {
+                msg.contains("timeout")
+                    || msg.contains("connection")
+                    || msg.contains("reset")
+                    || msg.contains("temporarily unavailable")
+            }
+            _ => false,
+        };
+
+        log::debug!(
+            "Starting RPC operation '{}' with timeout: {}s",
+            operation_name,
+            self.timeout_seconds.as_secs()
+        );
+
+        retry_rpc_call(
+            &self.selector,
+            operation_name,
+            is_retriable,
+            |url| match self.initialize_provider(url) {
+                Ok(provider) => Ok(provider),
+                Err(e) => Err(e),
+            },
+            operation,
+            Some(self.retry_config.clone()),
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -231,10 +303,13 @@ impl SolanaProviderTrait for SolanaProvider {
         let pubkey = Pubkey::from_str(address)
             .map_err(|e| SolanaProviderError::InvalidAddress(e.to_string()))?;
 
-        self.get_client()?
-            .get_balance(&pubkey)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_balance", |client| async move {
+            client
+                .get_balance(&pubkey)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Check if a blockhash is valid
@@ -243,28 +318,40 @@ impl SolanaProviderTrait for SolanaProvider {
         hash: &Hash,
         commitment: CommitmentConfig,
     ) -> Result<bool, SolanaProviderError> {
-        self.get_client()?
-            .is_blockhash_valid(hash, commitment)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("is_blockhash_valid", |client| async move {
+            client
+                .is_blockhash_valid(hash, commitment)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Gets the latest blockhash.
     async fn get_latest_blockhash(&self) -> Result<Hash, SolanaProviderError> {
-        self.get_client()?
-            .get_latest_blockhash()
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_latest_blockhash", |client| async move {
+            client
+                .get_latest_blockhash()
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     async fn get_latest_blockhash_with_commitment(
         &self,
         commitment: CommitmentConfig,
     ) -> Result<(Hash, u64), SolanaProviderError> {
-        self.get_client()?
-            .get_latest_blockhash_with_commitment(commitment)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call(
+            "get_latest_blockhash_with_commitment",
+            |client| async move {
+                client
+                    .get_latest_blockhash_with_commitment(commitment)
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            },
+        )
+        .await
     }
 
     /// Sends a transaction to the network.
@@ -272,10 +359,13 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         transaction: &Transaction,
     ) -> Result<Signature, SolanaProviderError> {
-        self.get_client()?
-            .send_transaction(transaction)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("send_transaction", |client| async move {
+            client
+                .send_transaction(transaction)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Sends a transaction to the network.
@@ -283,10 +373,13 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         transaction: &VersionedTransaction,
     ) -> Result<Signature, SolanaProviderError> {
-        self.get_client()?
-            .send_transaction(transaction)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("send_transaction", |client| async move {
+            client
+                .send_transaction(transaction)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Confirms the given transaction signature.
@@ -294,10 +387,13 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         signature: &Signature,
     ) -> Result<bool, SolanaProviderError> {
-        self.get_client()?
-            .confirm_transaction(signature)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("confirm_transaction", |client| async move {
+            client
+                .confirm_transaction(signature)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Retrieves the minimum balance for rent exemption for the given data size.
@@ -305,10 +401,16 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         data_size: usize,
     ) -> Result<u64, SolanaProviderError> {
-        self.get_client()?
-            .get_minimum_balance_for_rent_exemption(data_size)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call(
+            "get_minimum_balance_for_rent_exemption",
+            |client| async move {
+                client
+                    .get_minimum_balance_for_rent_exemption(data_size)
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            },
+        )
+        .await
     }
 
     /// Simulate transaction.
@@ -316,11 +418,14 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         transaction: &Transaction,
     ) -> Result<RpcSimulateTransactionResult, SolanaProviderError> {
-        self.get_client()?
-            .simulate_transaction(transaction)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
-            .map(|response| response.value)
+        self.retry_rpc_call("simulate_transaction", |client| async move {
+            client
+                .simulate_transaction(transaction)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map(|response| response.value)
+        })
+        .await
     }
 
     /// Retrieves account data for the given account string.
@@ -328,10 +433,14 @@ impl SolanaProviderTrait for SolanaProvider {
         let address = Pubkey::from_str(account).map_err(|e| {
             SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", account, e))
         })?;
-        self.get_client()?
-            .get_account(&address)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        println!("Address: {} {}", account, address);
+        self.retry_rpc_call("get_account", |client| async move {
+            client
+                .get_account(&address)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Retrieves account data for the given pubkey.
@@ -339,10 +448,15 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         pubkey: &Pubkey,
     ) -> Result<Account, SolanaProviderError> {
-        self.get_client()?
-            .get_account(pubkey)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                println!("Address2: {}", pubkey);
+
+        self.retry_rpc_call("get_account_from_pubkey", |client| async move {
+            client
+                .get_account(pubkey)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Retrieves token metadata from a provided mint address.
@@ -386,20 +500,26 @@ impl SolanaProviderTrait for SolanaProvider {
 
     /// Get the fee for a message
     async fn get_fee_for_message(&self, message: &Message) -> Result<u64, SolanaProviderError> {
-        self.get_client()?
-            .get_fee_for_message(message)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_fee_for_message", |client| async move {
+            client
+                .get_fee_for_message(message)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     async fn get_recent_prioritization_fees(
         &self,
         addresses: &[Pubkey],
     ) -> Result<Vec<RpcPrioritizationFee>, SolanaProviderError> {
-        self.get_client()?
-            .get_recent_prioritization_fees(addresses)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_recent_prioritization_fees", |client| async move {
+            client
+                .get_recent_prioritization_fees(addresses)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     async fn calculate_total_fee(&self, message: &Message) -> Result<u64, SolanaProviderError> {
