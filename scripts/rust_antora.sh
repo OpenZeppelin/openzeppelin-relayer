@@ -37,7 +37,7 @@ if [ -f "$API_DOCS_FILE" ]; then
   cp "$API_DOCS_FILE" "$BUILD_DIR/"
   echo "API docs successfully copied to '$BUILD_DIR'."
   # Remove the original API docs file
-  echo "Removing original API docs directory '$API_DOCS_FILE'..."
+  echo "Removing original API docs file '$API_DOCS_FILE'..."
   rm "$API_DOCS_FILE"
   echo "Original API docs file '$API_DOCS_FILE' removed."
 fi
