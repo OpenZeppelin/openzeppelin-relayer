@@ -35,13 +35,13 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
-        TransactionRepoModel,
+        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, EvmStatusData,
+        NetworkRpcRequest, NetworkRpcResult, NetworkSpecificData, NetworkTransactionRequest,
+        RelayerRepoModel, RelayerStatus, RepositoryError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepository, RelayerRepositoryStorage, Repository,
+        RelayerRepository, RelayerRepositoryStorage, Repository, TransactionRepository,
     },
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
@@ -59,7 +59,7 @@ pub struct EvmRelayer<P, R, T, J, S, C>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: DataSignerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
@@ -79,7 +79,7 @@ impl<P, R, T, J, S, C> EvmRelayer<P, R, T, J, S, C>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: DataSignerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
@@ -174,7 +174,7 @@ impl<P, R, T, J, S, C> Relayer for EvmRelayer<P, R, T, J, S, C>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: DataSignerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
@@ -236,9 +236,51 @@ where
     /// # Returns
     ///
     /// A `Result` containing a boolean indicating the status or a `RelayerError`.
-    async fn get_status(&self) -> Result<bool, RelayerError> {
-        println!("EVM get_status...");
-        Ok(true)
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
+        let relayer_model = &self.relayer;
+
+        let nonce_u256 = self
+            .provider
+            .get_transaction_count(&relayer_model.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to get nonce: {}", e)))?;
+        let nonce_str = nonce_u256.to_string();
+
+        let balance_response = self.get_balance().await?;
+
+        let pending_statuses = [
+            TransactionStatus::Pending,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+        ];
+        let pending_transactions = self
+            .transaction_repository
+            .find_by_status(&relayer_model.id, &pending_statuses[..])
+            .await
+            .map_err(RelayerError::from)?;
+        let pending_transactions_count = pending_transactions.len() as u64;
+
+        let confirmed_statuses = [TransactionStatus::Confirmed];
+        let confirmed_transactions = self
+            .transaction_repository
+            .find_by_status(&relayer_model.id, &confirmed_statuses[..])
+            .await
+            .map_err(RelayerError::from)?;
+
+        let last_confirmed_transaction_timestamp = confirmed_transactions
+            .iter()
+            .filter_map(|tx| tx.confirmed_at.as_ref())
+            .max()
+            .cloned();
+
+        Ok(RelayerStatus {
+            balance: balance_response.balance.to_string(),
+            pending_transactions_count,
+            last_confirmed_transaction_timestamp,
+            system_disabled: relayer_model.system_disabled,
+            paused: relayer_model.paused,
+            network_specific: NetworkSpecificData::Evm(EvmStatusData { nonce: nonce_str }),
+        })
     }
 
     /// Deletes pending transactions.
@@ -385,9 +427,12 @@ mod tests {
     use super::*;
     use crate::{
         jobs::MockJobProducerTrait,
-        models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, SignerError, U256},
+        models::{
+            NetworkSpecificData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
+            RepositoryError, SignerError, TransactionStatus, U256,
+        },
         repositories::{MockRelayerRepository, MockTransactionRepository},
-        services::{MockEvmProviderTrait, MockTransactionCounterServiceTrait},
+        services::{MockEvmProviderTrait, MockTransactionCounterServiceTrait, ProviderError},
     };
     use mockall::predicate::*;
     use std::future::ready;
@@ -614,5 +659,238 @@ mod tests {
 
         let result = relayer.validate_rpc().await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_status_success() {
+        let (mut provider, relayer_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(10u64))))
+            .once();
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))))
+            .once();
+
+        let pending_txs_clone = vec![];
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Submitted,
+                            TransactionStatus::Mined,
+                        ]
+            })
+            .returning(move |_, _| {
+                Ok(pending_txs_clone.clone()) as Result<Vec<TransactionRepoModel>, RepositoryError>
+            })
+            .once();
+
+        let confirmed_txs_clone = vec![
+            TransactionRepoModel {
+                id: "tx1".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Confirmed,
+                confirmed_at: Some("2023-01-01T12:00:00Z".to_string()),
+                ..TransactionRepoModel::default()
+            },
+            TransactionRepoModel {
+                id: "tx2".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Confirmed,
+                confirmed_at: Some("2023-01-01T10:00:00Z".to_string()),
+                ..TransactionRepoModel::default()
+            },
+        ];
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
+            })
+            .returning(move |_, _| {
+                Ok(confirmed_txs_clone.clone())
+                    as Result<Vec<TransactionRepoModel>, RepositoryError>
+            })
+            .once();
+
+        let relayer = EvmRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            EvmNetwork::from_id(1),
+            Arc::new(relayer_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let status = relayer.get_status().await.unwrap();
+
+        assert_eq!(status.balance, "1000000000000000000");
+        assert_eq!(status.pending_transactions_count, 0);
+        assert_eq!(
+            status.last_confirmed_transaction_timestamp,
+            Some("2023-01-01T12:00:00Z".to_string())
+        );
+        assert_eq!(status.system_disabled, relayer_model.system_disabled);
+        assert_eq!(status.paused, relayer_model.paused);
+        match status.network_specific {
+            NetworkSpecificData::Evm(evm_data) => {
+                assert_eq!(evm_data.nonce, "10");
+            }
+            _ => panic!("Expected EVM specific data"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_provider_nonce_error() {
+        let (mut provider, relayer_repo, tx_repo, job_producer, signer, counter) = setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider.expect_get_transaction_count().returning(|_| {
+            Box::pin(ready(Err(ProviderError::Other(
+                "Nonce fetch failed".to_string(),
+            ))))
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            EvmNetwork::from_id(1),
+            Arc::new(relayer_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.get_status().await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            RelayerError::ProviderError(msg) => assert!(msg.contains("Failed to get nonce")),
+            _ => panic!("Expected ProviderError for nonce failure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_repository_pending_error() {
+        let (mut provider, relayer_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(10u64))));
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
+
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Submitted,
+                            TransactionStatus::Mined,
+                        ]
+            })
+            .returning(|_, _| {
+                Err(RepositoryError::Unknown("DB down".to_string()))
+                    as Result<Vec<TransactionRepoModel>, RepositoryError>
+            })
+            .once();
+
+        let relayer = EvmRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            EvmNetwork::from_id(1),
+            Arc::new(relayer_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.get_status().await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            // Remember our From<RepositoryError> for RelayerError maps to NetworkConfiguration
+            RelayerError::NetworkConfiguration(msg) => assert!(msg.contains("DB down")),
+            _ => panic!("Expected NetworkConfiguration error for repo failure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_no_confirmed_transactions() {
+        let (mut provider, relayer_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(10u64))));
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(1000000000000000000u64)))));
+        provider
+            .expect_health_check()
+            .returning(|| Box::pin(ready(Ok(true))));
+
+        let pending_txs_empty_clone = vec![];
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Submitted,
+                            TransactionStatus::Mined,
+                        ]
+            })
+            .returning(move |_, _| {
+                Ok(pending_txs_empty_clone.clone())
+                    as Result<Vec<TransactionRepoModel>, RepositoryError>
+            })
+            .once();
+
+        let confirmed_txs_empty_clone = vec![];
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id" && statuses == [TransactionStatus::Confirmed]
+            })
+            .returning(move |_, _| {
+                Ok(confirmed_txs_empty_clone.clone())
+                    as Result<Vec<TransactionRepoModel>, RepositoryError>
+            })
+            .once();
+
+        let relayer = EvmRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            EvmNetwork::from_id(1),
+            Arc::new(relayer_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let status = relayer.get_status().await.unwrap();
+        assert_eq!(status.last_confirmed_transaction_timestamp, None);
     }
 }
