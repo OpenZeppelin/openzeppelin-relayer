@@ -1,6 +1,0 @@
-= API Reference
-:description: API reference document, including usage examples
-
-This link provides information on the implemented API, along with usage examples.
-
-link:https://deploy-preview-224%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[Api Documentation]
