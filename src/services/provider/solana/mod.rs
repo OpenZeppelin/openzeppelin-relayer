@@ -266,6 +266,14 @@ impl SolanaProvider {
                     || msg.contains("connection")
                     || msg.contains("reset")
                     || msg.contains("temporarily unavailable")
+                    || msg.contains("rate limit")
+                    || msg.contains("too many requests")
+                    || msg.contains("503")
+                    || msg.contains("502")
+                    || msg.contains("504")
+                    || msg.contains("blockhash not found")
+                    || msg.contains("node is behind")
+                    || msg.contains("unhealthy")
             }
             _ => false,
         };
@@ -448,7 +456,7 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         pubkey: &Pubkey,
     ) -> Result<Account, SolanaProviderError> {
-                println!("Address2: {}", pubkey);
+        println!("Address2: {}", pubkey);
 
         self.retry_rpc_call("get_account_from_pubkey", |client| async move {
             client
@@ -539,12 +547,49 @@ impl SolanaProviderTrait for SolanaProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lazy_static::lazy_static;
     use solana_sdk::{
         hash::Hash,
         message::Message,
         signer::{keypair::Keypair, Signer},
         transaction::Transaction,
     };
+    use std::sync::Mutex;
+
+    lazy_static! {
+        static ref EVM_TEST_ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    struct EvmTestEnvGuard {
+        _mutex_guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EvmTestEnvGuard {
+        fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
+            std::env::set_var(
+                "API_KEY",
+                "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
+            );
+            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+
+            Self {
+                _mutex_guard: mutex_guard,
+            }
+        }
+    }
+
+    impl Drop for EvmTestEnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("API_KEY");
+            std::env::remove_var("REDIS_URL");
+        }
+    }
+
+    // Helper function to set up the test environment
+    fn setup_test_env() -> EvmTestEnvGuard {
+        let guard = EVM_TEST_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        EvmTestEnvGuard::new(guard)
+    }
 
     fn get_funded_keypair() -> Keypair {
         // address HCKHoE2jyk1qfAwpHQghvYH3cEfT8euCygBzF9AV6bhY
@@ -574,6 +619,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_valid_config() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
 
@@ -587,6 +633,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_commitment_valid_config() {
+        let _env_guard = setup_test_env();
+
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
@@ -601,6 +649,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_empty_configs() {
+        let _env_guard = setup_test_env();
         let configs: Vec<RpcConfig> = vec![];
         let timeout = 30;
 
@@ -615,6 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_commitment_empty_configs() {
+        let _env_guard = setup_test_env();
         let configs: Vec<RpcConfig> = vec![];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
@@ -630,6 +680,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_invalid_url() {
+        let _env_guard = setup_test_env();
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
             weight: 1,
@@ -647,6 +698,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_commitment_invalid_url() {
+        let _env_guard = setup_test_env();
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
             weight: 1,
@@ -665,6 +717,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_multiple_configs() {
+        let _env_guard = setup_test_env();
         let configs = vec![
             create_test_rpc_config(),
             RpcConfig {
@@ -681,6 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_creation() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout);
@@ -689,6 +743,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_balance() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -700,6 +755,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_balance_funded_account() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -711,6 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_latest_blockhash() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -720,6 +777,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_simulate_transaction() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).expect("Failed to create provider");
@@ -756,6 +814,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_metadata_from_pubkey() {
+        let _env_guard = setup_test_env();
         let configs = vec![RpcConfig {
             url: "https://api.mainnet-beta.solana.com".to_string(),
             weight: 1,
@@ -793,6 +852,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_client_success() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -807,6 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_client_with_custom_commitment() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
@@ -823,6 +884,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_client_with_multiple_rpcs() {
+        let _env_guard = setup_test_env();
         let configs = vec![
             create_test_rpc_config(),
             RpcConfig {
