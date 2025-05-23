@@ -33,6 +33,7 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
   * Ethereum (Mainnet, Sepolia, Holesky)
   * Optimism (Mainnet, Sepolia)
   * Worldchain (Sepolia)
+- Stellar (Partial support)
 
 [NOTE]
 ====
@@ -824,6 +825,14 @@ Supported networks
 |evm
 |holesky
 |Ethereum testnet
+
+|stellar
+|mainnet
+|Stellar Public Network (Partial support)
+
+|stellar
+|testnet
+|Stellar Test Network (Partial support)
 |===
 
 [#network_policies]
@@ -1060,7 +1069,7 @@ This is useful when you want to:
    * Configure primary and backup endpoints with different weights
 
 When both are available, the relayer will:
-1. First attempt to use the `custom_rpc_urls` if configured. 
+1. First attempt to use the `custom_rpc_urls` if configured.
 2. Fall back to the public RPC URLs if no custom URL is configured.
 
 For backward compatibility, string arrays are still supported:

@@ -33,9 +33,9 @@ This relayer service enables interaction with blockchain networks through transa
 
 - Solana
 - EVM (🚧 Partial support)
+- Stellar (🚧 Partial support)
 
 > For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/roadmap).
-
 
 ## For users
 
@@ -51,13 +51,13 @@ View the [Usage](https://docs.openzeppelin.com/relayer#running_the_relayer) docu
 
 The repository includes several ready-to-use examples to help you get started with different configurations:
 
-| Example | Description |
-|---------|-------------|
-| [`basic-example`](./examples/basic-example/) | Simple setup with Redis |
-| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging |
+| Example                                                      | Description                               |
+| ------------------------------------------------------------ | ----------------------------------------- |
+| [`basic-example`](./examples/basic-example/)                 | Simple setup with Redis                   |
+| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging     |
 | [`basic-example-metrics`](./examples/basic-example-metrics/) | Setup with Prometheus and Grafana metrics |
-| [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management |
-| [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing |
+| [`vault-secret-signer`](./examples/vault-secret-signer/)     | Using HashiCorp Vault for key management  |
+| [`vault-transit-signer`](./examples/vault-transit-signer/)   | Using Vault Transit for secure signing    |
 
 Each example includes:
 
@@ -260,7 +260,6 @@ cp config/config.example.json config/config.json
 
 Refer to the [Configuration References](https://docs.openzeppelin.com/relayer#configuration_references) section for a complete list of configuration options.
 
-
 Create `.env` with correct values according to your needs from `.env.example` file as a starting point:
 
 ```sh
@@ -308,7 +307,6 @@ cargo run --example create_key -- \
 
 For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `config/config.json` with this value.
 
-
 ### Configure Webhook Signing Key
 
 To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
@@ -322,7 +320,6 @@ cargo run --example generate_uuid
 > Note: Alternatively, you can use any online UUID generator.
 
 Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
-
 
 ### Configure API Key
 
