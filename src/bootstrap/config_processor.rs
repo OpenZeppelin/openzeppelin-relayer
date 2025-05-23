@@ -6,8 +6,10 @@ use crate::{
     config::{Config, SignerFileConfig, SignerFileConfigEnum},
     jobs::JobProducerTrait,
     models::{
-        AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
-        SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
+        AppState, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, NotificationRepoModel,
+        RelayerRepoModel, SignerConfig, SignerRepoModel, TurnkeySignerConfig,
+        VaultTransitSignerConfig,
     },
     repositories::Repository,
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
@@ -145,6 +147,46 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 api_public_key: turnkey_config.api_public_key.clone(),
             }),
         },
+        SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms_config) => SignerRepoModel {
+            id: signer.id.clone(),
+            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                    private_key: google_cloud_kms_config
+                        .service_account
+                        .private_key
+                        .get_value()?,
+                    client_email: google_cloud_kms_config
+                        .service_account
+                        .client_email
+                        .get_value()?,
+                    private_key_id: google_cloud_kms_config
+                        .service_account
+                        .private_key_id
+                        .get_value()?,
+                    client_id: google_cloud_kms_config.service_account.client_id.clone(),
+                    project_id: google_cloud_kms_config.service_account.project_id.clone(),
+                    auth_uri: google_cloud_kms_config.service_account.auth_uri.clone(),
+                    token_uri: google_cloud_kms_config.service_account.token_uri.clone(),
+                    client_x509_cert_url: google_cloud_kms_config
+                        .service_account
+                        .client_x509_cert_url
+                        .clone(),
+                    auth_provider_x509_cert_url: google_cloud_kms_config
+                        .service_account
+                        .auth_provider_x509_cert_url
+                        .clone(),
+                    universe_domain: google_cloud_kms_config
+                        .service_account
+                        .universe_domain
+                        .clone(),
+                },
+                key: GoogleCloudKmsSignerKeyConfig {
+                    key_id: google_cloud_kms_config.key.key_id.clone(),
+                    key_ring_id: google_cloud_kms_config.key.key_ring_id.clone(),
+                    key_version: google_cloud_kms_config.key.key_version,
+                },
+            }),
+        },
     };
 
     Ok(signer_repo_model)
@@ -272,9 +314,9 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            AwsKmsSignerFileConfig, ConfigFileNetworkType, NotificationFileConfig,
-            RelayerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
-            VaultTransitSignerFileConfig,
+            AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
+            KmsKeyConfig, NotificationFileConfig, RelayerFileConfig, ServiceAccountConfig,
+            TestSignerFileConfig, VaultSignerFileConfig, VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
         models::{PlainOrEnvValue, SecretString},
@@ -742,5 +784,50 @@ mod tests {
         assert_eq!(stored_notifications[0].id, "test-notification-1");
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_signer_google_cloud_kms() {
+        use crate::models::SecretString;
+
+        let signer = SignerFileConfig {
+            id: "gcp-kms-signer".to_string(),
+            config: SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
+            service_account: ServiceAccountConfig {
+                private_key: PlainOrEnvValue::Plain {
+                    value: SecretString::new("-----BEGIN PRIVATE KEY-----\nFAKEKEYDATA\n-----END PRIVATE KEY-----\n"),
+                },
+                client_email: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-service-account@example.com"),
+                },
+                private_key_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("fake-private-key-id"),
+                },
+                client_id: "fake-client-id".to_string(),
+                project_id: "fake-project-id".to_string(),
+                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com".to_string(),
+                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
+                universe_domain: "googleapis.com".to_string(),
+            },
+            key: KmsKeyConfig {
+                key_id: "fake-key-id".to_string(),
+                key_ring_id: "fake-key-ring-id".to_string(),
+                key_version: 1,
+            },
+        }),
+    };
+
+        let result = process_signer(&signer).await;
+
+        assert!(
+            result.is_ok(),
+            "Failed to process Google Cloud KMS signer: {:?}",
+            result.err()
+        );
+        let model = result.unwrap();
+
+        assert_eq!(model.id, "gcp-kms-signer");
     }
 }

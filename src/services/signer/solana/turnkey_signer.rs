@@ -32,7 +32,6 @@ use crate::{
 use super::SolanaSignTrait;
 
 pub type DefaultTurnkeyService = TurnkeyService;
-
 pub struct TurnkeySigner<T = DefaultTurnkeyService>
 where
     T: TurnkeyServiceTrait,
@@ -62,7 +61,7 @@ impl<T: TurnkeyServiceTrait> TurnkeySigner<T> {
 
 #[async_trait]
 impl<T: TurnkeyServiceTrait> SolanaSignTrait for TurnkeySigner<T> {
-    fn pubkey(&self) -> Result<Address, SignerError> {
+    async fn pubkey(&self) -> Result<Address, SignerError> {
         let pubkey = self.turnkey_service.address_solana()?;
 
         Ok(pubkey)
@@ -136,7 +135,7 @@ mod tests {
         });
 
         let signer = TurnkeySigner::new_for_testing(mock_service);
-        let result = signer.pubkey().unwrap();
+        let result = signer.pubkey().await.unwrap();
 
         match result {
             Address::Solana(addr) => {

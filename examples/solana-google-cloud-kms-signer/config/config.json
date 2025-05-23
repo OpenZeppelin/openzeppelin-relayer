@@ -1,0 +1,60 @@
+{
+  "relayers": [
+    {
+      "id": "solana-example",
+      "name": "Solana Example",
+      "network": "devnet",
+      "paused": false,
+      "signer_id": "google-cloud-kms-signer-solana",
+      "network_type": "solana",
+      "policies": {
+        "fee_payment_strategy": "user",
+        "min_balance": 0,
+        "allowed_tokens": [
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "google-cloud-kms-signer-solana",
+      "type": "google_cloud_kms",
+      "config": {
+        "service_account": {
+          "project_id": "",
+          "private_key_id": {
+            "type": "env",
+            "value": "GOOGLE_CLOUD_KMS_PRIVATE_KEY_ID"
+          },
+            "private_key": {
+            "type": "env",
+            "value": "GOOGLE_CLOUD_KMS_PRIVATE_KEY"
+          },
+          "client_email": {
+            "type": "env",
+            "value": "GOOGLE_CLOUD_KMS_CLIENT_EMAIL"
+          },
+          "client_id": ""
+        },
+        "key": {
+          "key_ring_id": "",
+          "key_id": ""
+        }
+      }
+    }
+  ]
+}

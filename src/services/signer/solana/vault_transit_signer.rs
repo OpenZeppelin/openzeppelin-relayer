@@ -84,7 +84,7 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
 
 #[async_trait]
 impl<T: VaultServiceTrait> SolanaSignTrait for VaultTransitSigner<T> {
-    fn pubkey(&self) -> Result<Address, SignerError> {
+    async fn pubkey(&self) -> Result<Address, SignerError> {
         let raw_pubkey =
             base64_decode(&self.pubkey).map_err(|e| SignerError::KeyError(e.to_string()))?;
         let pubkey = bs58::encode(&raw_pubkey).into_string();
@@ -253,7 +253,7 @@ mod tests {
             mock_vault_service,
         );
 
-        let result = signer.pubkey();
+        let result = signer.pubkey().await;
         let result_address = signer.address().await;
 
         // Assert

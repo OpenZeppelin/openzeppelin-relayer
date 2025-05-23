@@ -25,3 +25,6 @@ pub use vault::*;
 
 mod turnkey;
 pub use turnkey::*;
+
+mod google_cloud_kms;
+pub use google_cloud_kms::*;

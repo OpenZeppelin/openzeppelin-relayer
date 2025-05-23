@@ -17,10 +17,11 @@
 //! ```
 mod local_signer;
 mod turnkey_signer;
-
-use async_trait::async_trait;
 use local_signer::*;
 use turnkey_signer::*;
+
+use async_trait::async_trait;
+use color_eyre::config;
 
 use crate::{
     domain::{
@@ -31,7 +32,7 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
-    services::{turnkey::TurnkeyService, TurnkeyServiceTrait},
+    services::{turnkey::TurnkeyService, GoogleCloudKmsService, TurnkeyServiceTrait},
 };
 use eyre::Result;
 
@@ -127,6 +128,11 @@ impl EvmSignerFactory {
                 })?;
                 EvmSigner::Turnkey(TurnkeySigner::new(turnkey_service))
             }
+            SignerConfig::GoogleCloudKms(_) => {
+                return Err(SignerFactoryError::UnsupportedType(
+                    "Google Cloud KMS".into(),
+                ));
+            }
         };
 
         Ok(signer)
@@ -137,8 +143,10 @@ impl EvmSignerFactory {
 mod tests {
     use super::*;
     use crate::models::{
-        AwsKmsSignerConfig, EvmTransactionData, LocalSignerConfig, SecretString, SignerConfig,
-        SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig, U256,
+        AwsKmsSignerConfig, EvmTransactionData, GoogleCloudKmsSignerConfig,
+        GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
+        SecretString, SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
+        U256,
     };
     use mockall::predicate::*;
     use secrets::SecretVec;
@@ -285,6 +293,41 @@ mod tests {
 
         match result {
             EvmSigner::Turnkey(_) => {}
+            _ => panic!("Expected UnsupportedType error"),
+        }
+    }
+
+    #[test]
+    fn test_create_evm_signer_google_cloud_kms() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                    project_id: "project_id".to_string(),
+                    private_key_id: SecretString::new("private_key_id"),
+                    private_key: SecretString::new("private_key"),
+                    client_email: SecretString::new("client_email"),
+                    client_id: "client_id".to_string(),
+                    auth_uri: "auth_uri".to_string(),
+                    token_uri: "token_uri".to_string(),
+                    auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
+                    client_x509_cert_url: "client_x509_cert_url".to_string(),
+                    universe_domain: "universe_domain".to_string(),
+                },
+                key: GoogleCloudKmsSignerKeyConfig {
+                    key_id: "id".to_string(),
+                    key_ring_id: "key_ring".to_string(),
+                    key_version: 1,
+                },
+            }),
+        };
+
+        let result = EvmSignerFactory::create_evm_signer(&signer_model);
+
+        match result {
+            Err(SignerFactoryError::UnsupportedType(msg)) => {
+                assert_eq!(msg, "Google Cloud KMS");
+            }
             _ => panic!("Expected UnsupportedType error"),
         }
     }

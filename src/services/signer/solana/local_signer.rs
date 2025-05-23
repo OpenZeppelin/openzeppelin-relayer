@@ -56,7 +56,7 @@ impl LocalSigner {
 
 #[async_trait]
 impl SolanaSignTrait for LocalSigner {
-    fn pubkey(&self) -> Result<Address, SignerError> {
+    async fn pubkey(&self) -> Result<Address, SignerError> {
         let address: Address = Address::Solana(self.local_signer_client.pubkey().to_string());
         Ok(address)
     }
@@ -110,8 +110,8 @@ mod tests {
         LocalSigner::new(&model).unwrap()
     }
 
-    #[test]
-    fn test_new_local_signer_success() {
+    #[tokio::test]
+    async fn test_new_local_signer_success() {
         let local_signer = create_testing_signer();
         // Check that the keypair's public key is not the default (all zeros)
         let public_key = local_signer.local_signer_client.pubkey();
@@ -159,11 +159,11 @@ mod tests {
         assert_ne!(sig1, sig2);
     }
 
-    #[test]
-    fn test_pubkey_returns_correct_address() {
+    #[tokio::test]
+    async fn test_pubkey_returns_correct_address() {
         let local_signer = create_testing_signer();
 
-        let result = local_signer.pubkey();
+        let result = local_signer.pubkey().await;
 
         assert!(result.is_ok());
 
@@ -177,8 +177,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_pubkey_matches_keypair_pubkey() {
+    #[tokio::test]
+    async fn test_pubkey_matches_keypair_pubkey() {
         let seed = valid_seed();
         let model = SignerRepoModel {
             id: "test".to_string(),
@@ -189,7 +189,7 @@ mod tests {
 
         let local_signer = LocalSigner::new(&model).unwrap();
 
-        let pubkey_result = local_signer.pubkey();
+        let pubkey_result = local_signer.pubkey().await;
         assert!(pubkey_result.is_ok());
 
         let direct_keypair = Keypair::from_seed(&seed.borrow()).expect("invalid keypair");
