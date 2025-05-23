@@ -441,7 +441,6 @@ impl SolanaProviderTrait for SolanaProvider {
         let address = Pubkey::from_str(account).map_err(|e| {
             SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", account, e))
         })?;
-        println!("Address: {} {}", account, address);
         self.retry_rpc_call("get_account", |client| async move {
             client
                 .get_account(&address)
