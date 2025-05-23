@@ -56,7 +56,6 @@ impl ProviderHealth {
 
     // Mark a provider as failed
     fn mark_failed(&mut self, index: usize) {
-        println!("Marking provider {} as failed", index);
         let reset_time = Instant::now() + self.reset_duration;
         self.failed_provider_reset_times.insert(index, reset_time);
     }

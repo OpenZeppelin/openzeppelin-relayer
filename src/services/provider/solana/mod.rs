@@ -456,8 +456,6 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         pubkey: &Pubkey,
     ) -> Result<Account, SolanaProviderError> {
-        println!("Address2: {}", pubkey);
-
         self.retry_rpc_call("get_account_from_pubkey", |client| async move {
             client
                 .get_account(pubkey)
