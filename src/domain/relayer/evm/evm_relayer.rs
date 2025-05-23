@@ -248,11 +248,7 @@ where
 
         let balance_response = self.get_balance().await?;
 
-        let pending_statuses = [
-            TransactionStatus::Pending,
-            TransactionStatus::Submitted,
-            TransactionStatus::Mined,
-        ];
+        let pending_statuses = [TransactionStatus::Pending, TransactionStatus::Submitted];
         let pending_transactions = self
             .transaction_repository
             .find_by_status(&relayer_model.id, &pending_statuses[..])
