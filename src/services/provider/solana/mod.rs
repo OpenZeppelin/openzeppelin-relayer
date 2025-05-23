@@ -152,6 +152,27 @@ impl From<String> for SolanaProviderError {
     }
 }
 
+const RETRIABLE_ERROR_SUBSTRINGS: &[&str] = &[
+    "timeout",
+    "connection",
+    "reset",
+    "temporarily unavailable",
+    "rate limit",
+    "too many requests",
+    "503",
+    "502",
+    "504",
+    "blockhash not found",
+    "node is behind",
+    "unhealthy",
+];
+
+fn is_retriable_error(msg: &str) -> bool {
+    RETRIABLE_ERROR_SUBSTRINGS
+        .iter()
+        .any(|substr| msg.contains(substr))
+}
+
 #[derive(Error, Debug, PartialEq)]
 pub struct TokenMetadata {
     pub decimals: u8,
@@ -261,20 +282,7 @@ impl SolanaProvider {
         Fut: std::future::Future<Output = Result<T, SolanaProviderError>>,
     {
         let is_retriable = |e: &SolanaProviderError| match e {
-            SolanaProviderError::RpcError(msg) => {
-                msg.contains("timeout")
-                    || msg.contains("connection")
-                    || msg.contains("reset")
-                    || msg.contains("temporarily unavailable")
-                    || msg.contains("rate limit")
-                    || msg.contains("too many requests")
-                    || msg.contains("503")
-                    || msg.contains("502")
-                    || msg.contains("504")
-                    || msg.contains("blockhash not found")
-                    || msg.contains("node is behind")
-                    || msg.contains("unhealthy")
-            }
+            SolanaProviderError::RpcError(msg) => is_retriable_error(msg),
             _ => false,
         };
 
@@ -900,6 +908,71 @@ mod tests {
         for _ in 0..5 {
             let client = provider.get_client();
             assert!(client.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_initialize_provider_valid_url() {
+        let _env_guard = setup_test_env();
+
+        let configs = vec![RpcConfig {
+            url: "https://api.devnet.solana.com".to_string(),
+            weight: 1,
+        }];
+        let provider = SolanaProvider::new(configs, 10).unwrap();
+        let result = provider.initialize_provider("https://api.devnet.solana.com");
+        assert!(result.is_ok());
+        let arc_client = result.unwrap();
+        // Arc pointer should not be null and should point to RpcClient
+        let _client: &RpcClient = Arc::as_ref(&arc_client);
+    }
+
+    #[test]
+    fn test_initialize_provider_invalid_url() {
+        let _env_guard = setup_test_env();
+
+        let configs = vec![RpcConfig {
+            url: "https://api.devnet.solana.com".to_string(),
+            weight: 1,
+        }];
+        let provider = SolanaProvider::new(configs, 10).unwrap();
+        let result = provider.initialize_provider("not-a-valid-url");
+        assert!(result.is_err());
+        match result {
+            Err(SolanaProviderError::NetworkConfiguration(msg)) => {
+                assert!(msg.contains("Invalid URL format"))
+            }
+            _ => panic!("Expected NetworkConfiguration error"),
+        }
+    }
+
+    #[test]
+    fn test_from_string_for_solana_provider_error() {
+        let msg = "some rpc error".to_string();
+        let err: SolanaProviderError = msg.clone().into();
+        match err {
+            SolanaProviderError::RpcError(inner) => assert_eq!(inner, msg),
+            _ => panic!("Expected RpcError variant"),
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_true() {
+        for msg in RETRIABLE_ERROR_SUBSTRINGS {
+            assert!(is_retriable_error(msg), "Should be retriable: {}", msg);
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_false() {
+        let non_retriable_cases = [
+            "account not found",
+            "invalid signature",
+            "insufficient funds",
+            "unknown error",
+        ];
+        for msg in non_retriable_cases {
+            assert!(!is_retriable_error(msg), "Should NOT be retriable: {}", msg);
         }
     }
 }
