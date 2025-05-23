@@ -262,11 +262,19 @@ impl TransactionRepository for InMemoryTransactionRepository {
         statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
-        Ok(store
+        let filtered: Vec<TransactionRepoModel> = store
             .values()
             .filter(|tx| tx.relayer_id == relayer_id && statuses.contains(&tx.status))
             .cloned()
-            .collect())
+            .collect();
+
+        // Sort by created_at (oldest first)
+        let sorted = filtered
+            .into_iter()
+            .sorted_by_key(|tx| tx.created_at.clone())
+            .collect();
+
+        Ok(sorted)
     }
 
     async fn find_by_nonce(
@@ -941,5 +949,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(no_txs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_by_status_sorted_by_created_at() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Helper function to create transaction with custom created_at timestamp
+        let create_tx_with_timestamp = |id: &str, timestamp: &str| -> TransactionRepoModel {
+            let mut tx = create_test_transaction_pending_state(id);
+            tx.created_at = timestamp.to_string();
+            tx.status = TransactionStatus::Pending;
+            tx
+        };
+
+        // Create transactions with different timestamps (out of chronological order)
+        let tx3 = create_tx_with_timestamp("tx3", "2025-01-27T17:00:00.000000+00:00"); // Latest
+        let tx1 = create_tx_with_timestamp("tx1", "2025-01-27T15:00:00.000000+00:00"); // Earliest
+        let tx2 = create_tx_with_timestamp("tx2", "2025-01-27T16:00:00.000000+00:00"); // Middle
+
+        // Create them in reverse chronological order to test sorting
+        repo.create(tx3.clone()).await.unwrap();
+        repo.create(tx1.clone()).await.unwrap();
+        repo.create(tx2.clone()).await.unwrap();
+
+        // Find by status
+        let result = repo
+            .find_by_status("relayer-1", &[TransactionStatus::Pending])
+            .await
+            .unwrap();
+
+        // Verify they are sorted by created_at (oldest first)
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].id, "tx1"); // Earliest
+        assert_eq!(result[1].id, "tx2"); // Middle
+        assert_eq!(result[2].id, "tx3"); // Latest
+
+        // Verify the timestamps are in ascending order
+        assert_eq!(result[0].created_at, "2025-01-27T15:00:00.000000+00:00");
+        assert_eq!(result[1].created_at, "2025-01-27T16:00:00.000000+00:00");
+        assert_eq!(result[2].created_at, "2025-01-27T17:00:00.000000+00:00");
     }
 }

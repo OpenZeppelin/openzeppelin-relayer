@@ -26,7 +26,6 @@ use crate::{
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use itertools::Itertools;
 use log::{info, warn};
 use soroban_rs::xdr::{Error, Hash, TransactionEnvelope};
 use std::sync::Arc;
@@ -353,12 +352,7 @@ where
             .await
             .map_err(TransactionError::from)?;
 
-        let oldest_pending = pending_txs
-            .into_iter()
-            .sorted_by_key(|tx| tx.created_at.clone()) // oldest pending first
-            .next();
-
-        Ok(oldest_pending)
+        Ok(pending_txs.into_iter().next())
     }
 }
 
