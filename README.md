@@ -308,7 +308,6 @@ cargo run --example create_key -- \
 
 For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `config/config.json` with this value.
 
-
 ### Configure Webhook Signing Key
 
 To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
@@ -340,13 +339,35 @@ Copy the generated UUID and update the `API_KEY` entry in the `.env` file.
 
 ### Starting Redis manually (without docker compose)
 
-Run Redis container:
+You can start Redis in one of two ways:
+
+A. _Expose to Host Only_
+
+Use this if only your host machine needs direct access to Redis (e.g., for local testing with redis-cli).
+
+```bash
+docker run -d \
+  --name redis \
+  -p 6379:6379 \
+  redis:latest
+```
+
+`-p 6379:6379` binds the container port to your localhost on the same port.
+
+B. _Connect with Other Containers via Custom Network_
+
+Use this if relayer container need to talk to Redis.
 
 ```sh
-docker run --name openzeppelin-redis \
-  -p 6379:6379 \
-  -d redis:latest
+docker run -d \
+  --name redis \
+  --network relayer-net \
+  redis:latest
 ```
+
+`--network relayer-net` attaches Redis to the network you created in step 1.
+
+> Note: Make sure to create a dedicated network for the relayer and Redis containers to communicate. You can create a network using the following command `docker network create relayer-net`.
 
 ## Running the relayer locally
 
@@ -447,9 +468,9 @@ docker compose logs -f
   cargo make rust-antora
   ```
 
-- Site will be generated in `docs/build/site/openzeppelin-relayer/<version>/` directory.
+- Site will be generated in `docs/build/site/openzeppelin_relayer/<version>/` directory.
 
-- To view the documentation, open the `docs/build/site/openzeppelin-relayer/<version>/index.html` in your browser.
+- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
 
 ## Observability
 
