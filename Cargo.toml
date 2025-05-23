@@ -55,7 +55,7 @@ hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 dashmap = { version = "6.1" }
 actix-governor = "0.8"
-governor = "0.8.0"
+governor = "0.10.0"
 solana-sdk = { version = "2.2" }
 solana-client = { version = "2.2" }
 spl-token = { version = "8" }
