@@ -26,10 +26,11 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
 
-    /// Find transactions by status
+    /// Find transactions by relayer ID and status(es)
     async fn find_by_status(
         &self,
-        status: TransactionStatus,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
 
     /// Find a transaction by relayer ID and nonce
@@ -93,7 +94,7 @@ mockall::mock! {
     #[async_trait]
     impl TransactionRepository for TransactionRepository {
         async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
-        async fn find_by_status(&self, status: TransactionStatus) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
+        async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
         async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
         async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
         async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
@@ -256,12 +257,13 @@ impl TransactionRepository for InMemoryTransactionRepository {
 
     async fn find_by_status(
         &self,
-        status: TransactionStatus,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
         Ok(store
             .values()
-            .filter(|tx| tx.status == status)
+            .filter(|tx| tx.relayer_id == relayer_id && statuses.contains(&tx.status))
             .cloned()
             .collect())
     }
@@ -889,46 +891,53 @@ mod tests {
     async fn test_find_by_status() {
         let repo = InMemoryTransactionRepository::new();
         let tx1 = create_test_transaction("test-1");
-
-        // Create a transaction with a different status
         let mut tx2 = create_test_transaction("test-2");
         tx2.status = TransactionStatus::Confirmed;
-
         let mut tx3 = create_test_transaction("test-3");
-        tx3.status = TransactionStatus::Failed;
+        tx3.relayer_id = "relayer-2".to_string();
 
         repo.create(tx1).await.unwrap();
         repo.create(tx2).await.unwrap();
-        repo.create(tx3).await.unwrap();
+        repo.create(tx3.clone()).await.unwrap();
 
-        // Test finding transactions with Pending status
         let result = repo
-            .find_by_status(TransactionStatus::Pending)
+            .find_by_status("relayer-1", &[TransactionStatus::Pending])
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Pending));
+        assert_eq!(result[0].id, "test-1");
 
-        // Test finding transactions with Confirmed status
         let result = repo
-            .find_by_status(TransactionStatus::Confirmed)
+            .find_by_status("relayer-1", &[TransactionStatus::Confirmed])
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Confirmed));
+        assert_eq!(result[0].id, "test-2");
 
-        // Test finding transactions with Failed status
         let result = repo
-            .find_by_status(TransactionStatus::Failed)
+            .find_by_status("relayer-2", &[TransactionStatus::Pending])
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
-        assert!(result
-            .iter()
-            .all(|tx| tx.status == TransactionStatus::Failed));
+        assert_eq!(result[0].id, "test-3");
+
+        let result = repo
+            .find_by_status("relayer-1", &[TransactionStatus::Failed])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 0);
+
+        // Test finding transactions with multiple statuses
+        let result = repo
+            .find_by_status(
+                "relayer-1",
+                &[TransactionStatus::Pending, TransactionStatus::Confirmed],
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        let ids: Vec<&str> = result.iter().map(|tx| tx.id.as_str()).collect();
+        assert!(ids.contains(&"test-1"));
+        assert!(ids.contains(&"test-2"));
     }
 }

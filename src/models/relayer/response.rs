@@ -20,6 +20,35 @@ pub struct RelayerResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct EvmStatusData {
+    pub nonce: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct StellarStatusData {
+    pub sequence_number: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(untagged)]
+pub enum NetworkSpecificData {
+    Evm(EvmStatusData),
+    Stellar(StellarStatusData),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct RelayerStatus {
+    pub balance: String,
+    pub pending_transactions_count: u64,
+    pub last_confirmed_transaction_timestamp: Option<String>,
+    pub system_disabled: bool,
+    pub paused: bool,
+
+    #[serde(flatten)]
+    pub network_specific: NetworkSpecificData,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(untagged)]
 pub enum NetworkPolicyResponse {
     Evm(EvmPolicyResponse),
