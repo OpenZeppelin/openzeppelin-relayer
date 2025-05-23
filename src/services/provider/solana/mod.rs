@@ -975,4 +975,63 @@ mod tests {
             assert!(!is_retriable_error(msg), "Should NOT be retriable: {}", msg);
         }
     }
+
+    #[tokio::test]
+    async fn test_get_minimum_balance_for_rent_exemption() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        // 0 bytes is always valid, should return a value >= 0
+        let result = provider.get_minimum_balance_for_rent_exemption(0).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_is_blockhash_valid_for_recent_blockhash() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        // Get a recent blockhash (should be valid)
+        let blockhash = provider.get_latest_blockhash().await.unwrap();
+        let is_valid = provider
+            .is_blockhash_valid(&blockhash, CommitmentConfig::confirmed())
+            .await;
+        assert!(is_valid.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_is_blockhash_valid_for_invalid_blockhash() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        let invalid_blockhash = solana_sdk::hash::Hash::new_from_array([0u8; 32]);
+        let is_valid = provider
+            .is_blockhash_valid(&invalid_blockhash, CommitmentConfig::confirmed())
+            .await;
+        assert!(is_valid.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_blockhash_with_commitment() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        let commitment = CommitmentConfig::confirmed();
+        let result = provider
+            .get_latest_blockhash_with_commitment(commitment)
+            .await;
+        assert!(result.is_ok());
+        let (blockhash, last_valid_block_height) = result.unwrap();
+        // Blockhash should not be all zeros and block height should be > 0
+        assert_ne!(blockhash, solana_sdk::hash::Hash::new_from_array([0u8; 32]));
+        assert!(last_valid_block_height > 0);
+    }
 }
