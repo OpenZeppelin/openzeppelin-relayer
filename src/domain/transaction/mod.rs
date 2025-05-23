@@ -33,11 +33,13 @@ use mockall::automock;
 use std::sync::Arc;
 
 mod evm;
+mod lane_gate;
 mod solana;
 mod stellar;
 mod util;
 
 pub use evm::*;
+pub use lane_gate::*;
 pub use solana::*;
 pub use stellar::*;
 pub use util::*;

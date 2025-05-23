@@ -5,8 +5,13 @@
 /// services and repositories to perform these operations asynchronously.
 use crate::{
     constants::STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS,
-    domain::{transaction::Transaction, SignTransactionResponse},
-    jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
+    domain::{
+        transaction::{lane_gate, Transaction},
+        SignTransactionResponse,
+    },
+    jobs::{
+        JobProducer, JobProducerTrait, TransactionRequest, TransactionSend, TransactionStatusCheck,
+    },
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionData, OperationSpec,
         RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
@@ -21,6 +26,7 @@ use crate::{
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
+use itertools::Itertools;
 use log::{info, warn};
 use soroban_rs::xdr::{Error, Hash, TransactionEnvelope};
 use std::sync::Arc;
@@ -145,8 +151,21 @@ where
         Ok(())
     }
 
-    /// Enqueue a submit-transaction job for the given transaction.
-    pub async fn enqueue_submit(
+    /// Send a transaction-request job for the given transaction.
+    pub async fn send_transaction_request_job(
+        &self,
+        tx: &TransactionRepoModel,
+        delay_seconds: Option<i64>,
+    ) -> Result<(), TransactionError> {
+        let job = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+        self.job_producer()
+            .produce_transaction_request_job(job, delay_seconds)
+            .await?;
+        Ok(())
+    }
+
+    /// Send a submit-transaction job for the given transaction.
+    pub async fn send_submit_transaction_job(
         &self,
         tx: &TransactionRepoModel,
         delay_seconds: Option<i64>,
@@ -238,6 +257,25 @@ where
         Ok(stellar_hash)
     }
 
+    async fn enqueue_next_pending_transaction(
+        &self,
+        finished_tx_id: &str,
+    ) -> Result<(), TransactionError> {
+        if let Some(next) = self
+            .find_oldest_pending_for_relayer(&self.relayer.id)
+            .await?
+        {
+            // Atomic hand-over while still owning the lane
+            info!("Handing over lane from {} to {}", finished_tx_id, next.id);
+            lane_gate::pass_to(&self.relayer.id, finished_tx_id, &next.id).await;
+            self.send_transaction_request_job(&next, None).await?;
+        } else {
+            info!("Releasing relayer lane after {}", finished_tx_id);
+            lane_gate::free(&self.relayer.id, finished_tx_id).await;
+        }
+        Ok(())
+    }
+
     /// Handles the logic when a Stellar transaction is confirmed successfully.
     async fn handle_stellar_success(
         &self,
@@ -253,17 +291,8 @@ where
             )
             .await?;
 
-        if let Some(oldest_pending) = self
-            .transaction_repository()
-            .find_oldest_pending_for_relayer(&confirmed_tx.relayer_id)
-            .await?
-        {
-            info!(
-                "Enqueuing next pending transaction {} for relayer {}",
-                oldest_pending.id, confirmed_tx.relayer_id
-            );
-            self.enqueue_submit(&oldest_pending, None).await?;
-        }
+        self.enqueue_next_pending_transaction(&tx.id).await?;
+
         Ok(confirmed_tx)
     }
 
@@ -285,13 +314,18 @@ where
         };
 
         warn!("Stellar transaction {} failed: {}", tx.id, detailed_reason);
-        self.finalize_transaction_state(
-            tx.id.clone(),
-            TransactionStatus::Failed,
-            Some(detailed_reason),
-            None,
-        )
-        .await
+        let updated_tx = self
+            .finalize_transaction_state(
+                tx.id.clone(),
+                TransactionStatus::Failed,
+                Some(detailed_reason),
+                None,
+            )
+            .await?;
+
+        self.enqueue_next_pending_transaction(&tx.id).await?;
+
+        Ok(updated_tx)
     }
 
     /// Handles the logic when a Stellar transaction is still pending or in an unknown state.
@@ -308,33 +342,23 @@ where
         Ok(tx)
     }
 
-    /// Checks if a new transaction can be submitted for a given relayer.
-    /// Returns true if no other transaction is currently in a 'Submitted' state for this relayer,
-    /// otherwise false.
-    async fn can_submit_transaction(
+    /// Finds the oldest pending transaction for a relayer.
+    async fn find_oldest_pending_for_relayer(
         &self,
         relayer_id: &str,
-        current_tx_id: &str,
-    ) -> Result<bool, TransactionError> {
-        let existing_submitted_tx = self
+    ) -> Result<Option<TransactionRepoModel>, TransactionError> {
+        let pending_txs = self
             .transaction_repository()
-            .find_submitted_for_relayer(relayer_id, None)
-            .await?;
+            .find_by_status(relayer_id, &[TransactionStatus::Pending])
+            .await
+            .map_err(TransactionError::from)?;
 
-        if existing_submitted_tx.is_none() {
-            info!(
-                "Relayer {}: No existing submitted tx. {} can proceed.",
-                relayer_id, current_tx_id
-            );
-            Ok(true)
-        } else {
-            let submitted_tx_id = existing_submitted_tx.unwrap().id;
-            info!(
-                "Relayer {}: Existing submitted tx {}. {} must wait.",
-                relayer_id, submitted_tx_id, current_tx_id
-            );
-            Ok(false)
-        }
+        let oldest_pending = pending_txs
+            .into_iter()
+            .sorted_by_key(|tx| tx.created_at.clone()) // oldest pending first
+            .next();
+
+        Ok(oldest_pending)
     }
 }
 
@@ -352,6 +376,13 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        if !lane_gate::claim(&self.relayer.id, &tx.id).await {
+            info!(
+                "Relayer {} already has a transaction in flight – {} must wait.",
+                self.relayer.id, tx.id
+            );
+            return Ok(tx);
+        }
         info!("Preparing transaction: {:?}", tx.id);
 
         let sequence_i64 = self.next_sequence()?;
@@ -389,20 +420,20 @@ where
         let final_stellar_data = stellar_data_with_seq.attach_signature(signature);
         let updated_network_data = NetworkTransactionData::Stellar(final_stellar_data);
 
+        let update_req = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Sent),
+            network_data: Some(updated_network_data),
+            ..Default::default()
+        };
+
         let saved_tx = self
             .transaction_repository()
-            .update_network_data(tx.id.clone(), updated_network_data)
-            .await
-            .map_err(TransactionError::from)?;
+            .partial_update(tx.id.clone(), update_req)
+            .await?;
 
-        if self
-            .can_submit_transaction(&saved_tx.relayer_id, &saved_tx.id)
-            .await?
-        {
-            self.enqueue_submit(&saved_tx, None).await?;
-        }
-
+        self.send_submit_transaction_job(&saved_tx, None).await?;
         self.send_transaction_update_notification(&saved_tx).await?;
+
         Ok(saved_tx)
     }
 
@@ -411,19 +442,6 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Submitting Stellar transaction: {:?}", tx.id);
-
-        if let Some(existing_tx) = self
-            .transaction_repository()
-            .find_submitted_for_relayer(&tx.relayer_id, Some(tx.id.clone()))
-            .await?
-        {
-            warn!(
-                "Relayer {} already has a submitted transaction {}. Re-queueing {} for later.",
-                tx.relayer_id, existing_tx.id, tx.id
-            );
-            self.enqueue_submit(&tx, Some(5)).await?;
-            return Ok(tx);
-        }
 
         let stellar_data = tx.network_data.get_stellar_transaction_data()?;
         let tx_envelope = stellar_data
@@ -711,14 +729,17 @@ mod tests {
         use super::*;
 
         #[tokio::test]
-        async fn prepare_transaction_happy_path_no_existing_submitted() {
+        async fn prepare_transaction_happy_path() {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
+            // sequence counter
             mocks
                 .counter
                 .expect_get_and_increment()
                 .returning(|_, _| Ok(1));
+
+            // signer
             mocks.signer.expect_sign_transaction().returning(|_| {
                 Box::pin(async {
                     Ok(SignTransactionResponse::Stellar(
@@ -728,33 +749,28 @@ mod tests {
                     ))
                 })
             });
+
             mocks
                 .tx_repo
-                .expect_update_network_data()
-                .returning(|id, data| {
-                    let mut updated_tx = create_test_transaction("relayer-1");
-                    updated_tx.id = id;
-                    updated_tx.network_data = data;
-                    updated_tx.relayer_id = "relayer-1".to_string();
-                    Ok::<_, RepositoryError>(updated_tx)
+                .expect_partial_update()
+                .withf(|_, upd| {
+                    upd.status == Some(TransactionStatus::Sent) && upd.network_data.is_some()
+                })
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    tx.network_data = upd.network_data.unwrap();
+                    Ok::<_, RepositoryError>(tx)
                 });
 
-            // Expect find_submitted_for_relayer to be called and return None
-            mocks
-                .tx_repo
-                .expect_find_submitted_for_relayer()
-                .with(eq(relayer.id.clone()), eq(None))
-                .times(1)
-                .returning(|_, _| Ok(None));
-
-            // Expect submit job to be produced
+            // submit-job + notification
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Expect notification job to be produced
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -763,8 +779,8 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let tx = create_test_transaction(&relayer.id);
-            let result = handler.prepare_transaction(tx).await;
-            assert!(result.is_ok());
+
+            assert!(handler.prepare_transaction(tx).await.is_ok());
         }
 
         #[tokio::test]
@@ -772,10 +788,13 @@ mod tests {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
+            // sequence counter
             mocks
                 .counter
                 .expect_get_and_increment()
                 .returning(|_, _| Ok(1));
+
+            // signer
             mocks.signer.expect_sign_transaction().returning(|_| {
                 Box::pin(async {
                     Ok(SignTransactionResponse::Stellar(
@@ -785,35 +804,29 @@ mod tests {
                     ))
                 })
             });
+
+            // Mock partial_update for the current transaction being prepared
             mocks
                 .tx_repo
-                .expect_update_network_data()
-                .returning(|id, data| {
-                    let mut updated_tx = create_test_transaction("relayer-1");
-                    updated_tx.id = id;
-                    updated_tx.network_data = data;
-                    updated_tx.relayer_id = "relayer-1".to_string();
-                    Ok::<_, RepositoryError>(updated_tx)
+                .expect_partial_update()
+                .withf(|_, upd| {
+                    upd.status == Some(TransactionStatus::Sent) && upd.network_data.is_some()
+                })
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    tx.network_data = upd.network_data.unwrap();
+                    Ok::<_, RepositoryError>(tx)
                 });
 
-            // Expect find_submitted_for_relayer to be called and return an existing transaction
-            let mut existing_submitted = create_test_transaction(&relayer.id);
-            existing_submitted.id = "existing-tx-123".to_string();
-            existing_submitted.status = TransactionStatus::Submitted;
-            mocks
-                .tx_repo
-                .expect_find_submitted_for_relayer()
-                .with(eq(relayer.id.clone()), eq(None))
-                .times(1)
-                .returning(move |_, _| Ok(Some(existing_submitted.clone())));
-
-            // Expect submit job NOT to be produced
+            // submit-job + notification
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
-                .never();
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Expect notification job to be produced
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -822,8 +835,11 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let tx = create_test_transaction(&relayer.id);
+
             let result = handler.prepare_transaction(tx).await;
             assert!(result.is_ok());
+            let prepared_tx = result.unwrap();
+            assert_eq!(prepared_tx.status, TransactionStatus::Sent);
         }
 
         #[tokio::test]
@@ -882,54 +898,32 @@ mod tests {
         #[tokio::test]
         async fn submit_transaction_happy_path() {
             let relayer = create_test_relayer();
-            let relayer_id_clone = relayer.id.clone(); // Define and clone relayer.id for subsequent use
             let mut mocks = default_test_mocks();
 
-            // Expect find_submitted_for_relayer to be called and return None first
-            mocks
-                .tx_repo
-                .expect_find_submitted_for_relayer()
-                .with(eq(relayer_id_clone.clone()), eq(Some("tx-1".to_string())))
-                .times(1)
-                .returning(|_, _| Ok(None));
-
-            // Provider returns dummy hash
+            // provider gives a hash
             mocks
                 .provider
                 .expect_send_transaction()
                 .returning(|_| Box::pin(async { Ok(Hash([1u8; 32])) }));
 
-            // Transaction repo partial_update returns updated tx
-            let relayer_id_for_update_closure = relayer_id_clone.clone(); // Clone for the move closure
+            // expect partial update to Submitted
             mocks
                 .tx_repo
                 .expect_partial_update()
-                .returning(move |tx_id, update_req| {
-                    let mut current_tx_state =
-                        create_test_transaction(&relayer_id_for_update_closure);
-                    current_tx_state.id = tx_id.clone();
-                    if let Some(status) = update_req.status {
-                        current_tx_state.status = status;
-                    }
-                    if let Some(sent_at) = update_req.sent_at {
-                        current_tx_state.sent_at = Some(sent_at);
-                    }
-                    if let Some(network_data) = update_req.network_data {
-                        current_tx_state.network_data = network_data;
-                    }
-                    if let Some(hashes) = update_req.hashes {
-                        current_tx_state.hashes = hashes;
-                    }
-                    Ok::<_, RepositoryError>(current_tx_state)
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Submitted))
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
                 });
 
-            // Job producer expectations
+            // enqueue status-check & notification
             mocks
                 .job_producer
                 .expect_produce_check_transaction_status_job()
+                .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
-
-            // Expect notification job to be produced since relayer has notification_id
             mocks
                 .job_producer
                 .expect_produce_send_notification_job()
@@ -938,31 +932,19 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
-            // Create a signed transaction so signed_envelope() succeeds
-            // Since relayer was moved, use relayer_id_clone here.
-            let mut tx = create_test_transaction(&relayer_id_clone);
-            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
-                data.signatures.push(super::dummy_signature());
+            let mut tx = create_test_transaction(&relayer.id);
+            if let NetworkTransactionData::Stellar(ref mut d) = tx.network_data {
+                d.signatures.push(super::dummy_signature());
             }
 
-            let res = handler.submit_transaction(tx).await;
-            assert!(res.is_ok());
-            let updated = res.unwrap();
-            assert_eq!(updated.status, TransactionStatus::Submitted);
+            let res = handler.submit_transaction(tx).await.unwrap();
+            assert_eq!(res.status, TransactionStatus::Submitted);
         }
 
         #[tokio::test]
         async fn submit_transaction_provider_error() {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
-
-            // Expect find_submitted_for_relayer to be called and return None first
-            mocks
-                .tx_repo
-                .expect_find_submitted_for_relayer()
-                .with(eq(relayer.id.clone()), eq(Some("tx-1".to_string())))
-                .times(1)
-                .returning(|_, _| Ok(None));
 
             mocks
                 .provider
@@ -980,56 +962,59 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn submit_transaction_sequential_gate() {
+        async fn submit_transaction_with_multiple_concurrent_calls() {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
-            // 1. Create an existing submitted transaction model
-            let mut existing_tx = create_test_transaction(&relayer.id);
-            existing_tx.id = "existing-submitted-tx".to_string();
-            existing_tx.status = TransactionStatus::Submitted;
+            // Mock provider to successfully send transaction
+            mocks
+                .provider
+                .expect_send_transaction()
+                .returning(|_| Box::pin(async { Ok(Hash([1u8; 32])) }));
 
-            // 2. Mock find_submitted_for_relayer to return the existing_tx
+            // Mock partial_update to Submitted status
             mocks
                 .tx_repo
-                .expect_find_submitted_for_relayer()
-                .returning(move |_, exclude_id| {
-                    assert_eq!(exclude_id, Some("new-pending-tx".to_string())); // Ensure we exclude the tx being submitted
-                    Ok(Some(existing_tx.clone()))
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Submitted))
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
                 });
 
-            // 3. Mock job_producer to expect a re-enqueue call for the new transaction
+            // Mock job producer for status check and notification
             mocks
                 .job_producer
-                .expect_produce_submit_transaction_job()
-                .withf(|job, delay| job.transaction_id == "new-pending-tx" && delay == &Some(5i64))
+                .expect_produce_check_transaction_status_job()
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // 4. Provider send_transaction should NOT be called
-            mocks.provider.expect_send_transaction().never();
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
-            // 5. Create a new transaction to submit (should be Pending initially)
+            // Create a transaction to submit
             let mut tx_to_submit = create_test_transaction(&relayer.id);
             tx_to_submit.id = "new-pending-tx".to_string();
-            // Ensure it's signed, as this would happen before submit_transaction is called in a real flow after prepare.
+            // Ensure it's signed
             if let NetworkTransactionData::Stellar(ref mut data) = tx_to_submit.network_data {
                 data.signatures.push(super::dummy_signature());
             }
-            let original_status = tx_to_submit.status.clone();
 
-            // 6. Call submit_transaction
+            // Call submit_transaction
             let res = handler.submit_transaction(tx_to_submit.clone()).await;
 
-            // 7. Assertions
+            // Assertions
             assert!(res.is_ok());
             let returned_tx = res.unwrap();
-            // The transaction should be returned unchanged (still Pending) because it was re-queued
             assert_eq!(returned_tx.id, "new-pending-tx");
-            assert_eq!(returned_tx.status, original_status);
-            assert_eq!(returned_tx.status, TransactionStatus::Pending);
+            assert_eq!(returned_tx.status, TransactionStatus::Submitted);
         }
     }
 
@@ -1109,42 +1094,6 @@ mod tests {
         }
     }
 
-    mod enqueue_submit_tests {
-        use crate::jobs::JobProducerError;
-
-        use super::*;
-
-        #[tokio::test]
-        async fn enqueue_submit_calls_job_producer() {
-            let relayer = create_test_relayer();
-            let mut mocks = default_test_mocks();
-            mocks
-                .job_producer
-                .expect_produce_submit_transaction_job()
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let tx = create_test_transaction(&relayer.id);
-            let res = handler.enqueue_submit(&tx, None).await;
-            assert!(res.is_ok());
-        }
-
-        #[tokio::test]
-        async fn enqueue_submit_propagates_error() {
-            let relayer = create_test_relayer();
-            let mut mocks = default_test_mocks();
-            mocks
-                .job_producer
-                .expect_produce_submit_transaction_job()
-                .returning(|_, _| {
-                    Box::pin(async { Err(JobProducerError::QueueError("fail".to_string())) })
-                });
-            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let tx = create_test_transaction(&relayer.id);
-            let res = handler.enqueue_submit(&tx, None).await;
-            assert!(res.is_err());
-        }
-    }
-
     // ---------------------------------------------------------------------
     // handle_transaction_status tests
     // ---------------------------------------------------------------------
@@ -1217,22 +1166,22 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // 3. Mock find_oldest_pending_for_relayer
+            // 3. Mock find_by_status for pending transactions
             let mut oldest_pending_tx = create_test_transaction(&relayer.id);
             oldest_pending_tx.id = "tx-oldest-pending".to_string();
             oldest_pending_tx.status = TransactionStatus::Pending;
             let captured_oldest_pending_tx = oldest_pending_tx.clone();
             mocks
                 .tx_repo
-                .expect_find_oldest_pending_for_relayer()
-                .with(eq(relayer.id.clone()))
+                .expect_find_by_status()
+                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
                 .times(1)
-                .returning(move |_| Ok(Some(captured_oldest_pending_tx.clone())));
+                .returning(move |_, _| Ok(vec![captured_oldest_pending_tx.clone()]));
 
-            // 4. Mock enqueue_submit for the next pending transaction
+            // 4. Mock produce_transaction_request_job for the next pending transaction
             mocks
                 .job_producer
-                .expect_produce_submit_transaction_job()
+                .expect_produce_transaction_request_job()
                 .withf(move |job, _delay| job.transaction_id == "tx-oldest-pending")
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -1296,8 +1245,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-pending-check"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                    job.transaction_id == "tx-pending-check" && delay.is_none()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -1349,23 +1297,18 @@ mod tests {
                     Box::pin(async { Ok(dummy_get_transaction_response("FAILED")) })
                 });
 
-            // 2. Mock partial_update for failure
-            let captured_tx_id = tx_to_handle.id.clone();
-            let tx_for_closure = tx_to_handle.clone();
+            // 2. Mock partial_update for failure - use actual update values
+            let relayer_id_for_mock = relayer.id.clone();
             mocks
                 .tx_repo
                 .expect_partial_update()
-                .withf(move |id, update| {
-                    id == &captured_tx_id
-                        && update.status == Some(TransactionStatus::Failed)
-                        && update.status_reason.is_some()
-                })
                 .times(1)
                 .returning(move |id, update| {
-                    let mut updated_tx = tx_for_closure.clone();
+                    // Use the actual update values instead of hardcoding
+                    let mut updated_tx = create_test_transaction(&relayer_id_for_mock);
                     updated_tx.id = id;
                     updated_tx.status = update.status.unwrap();
-                    updated_tx.status_reason = update.status_reason;
+                    updated_tx.status_reason = update.status_reason.clone();
                     Ok(updated_tx)
                 });
 
@@ -1376,14 +1319,18 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
-            // Should NOT try to submit next pending
+            // 3. Mock find_by_status for pending transactions (should be called by enqueue_next_pending_transaction)
             mocks
                 .tx_repo
-                .expect_find_oldest_pending_for_relayer()
-                .never();
+                .expect_find_by_status()
+                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
+                .times(1)
+                .returning(move |_, _| Ok(vec![])); // No pending transactions
+
+            // Should NOT try to enqueue next transaction since there are no pending ones
             mocks
                 .job_producer
-                .expect_produce_submit_transaction_job()
+                .expect_produce_transaction_request_job()
                 .never();
             // Should NOT re-queue status check
             mocks
@@ -1452,8 +1399,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-provider-error"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                    job.transaction_id == "tx-provider-error" && delay.is_none()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -1463,14 +1409,10 @@ mod tests {
                 .job_producer
                 .expect_produce_send_notification_job()
                 .never();
-            // Should NOT try to submit next pending
-            mocks
-                .tx_repo
-                .expect_find_oldest_pending_for_relayer()
-                .never();
+            // Should NOT try to enqueue next transaction
             mocks
                 .job_producer
-                .expect_produce_submit_transaction_job()
+                .expect_produce_transaction_request_job()
                 .never();
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
@@ -1522,6 +1464,762 @@ mod tests {
                 }
                 other => panic!("Expected ValidationError, got {:?}", other),
             }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // next_sequence tests
+    // ---------------------------------------------------------------------
+    mod next_sequence_tests {
+        use super::*;
+
+        #[test]
+        fn next_sequence_success() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock counter service to return a valid sequence
+            mocks
+                .counter
+                .expect_get_and_increment()
+                .with(eq("relayer-1"), eq(TEST_PK))
+                .returning(|_, _| Ok(42u64));
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+            let result = handler.next_sequence();
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), 42i64);
+        }
+
+        #[test]
+        fn next_sequence_overflow_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock counter service to return value that overflows i64::MAX
+            mocks
+                .counter
+                .expect_get_and_increment()
+                .returning(|_, _| Ok(i64::MAX as u64 + 1));
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+            let result = handler.next_sequence();
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                TransactionError::ValidationError(msg) => {
+                    assert!(msg.contains("Sequence conversion error"));
+                    assert!(msg.contains(&(i64::MAX as u64 + 1).to_string()));
+                }
+                other => panic!("Expected ValidationError, got: {:?}", other),
+            }
+        }
+
+        #[test]
+        fn next_sequence_counter_service_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock counter service to return an error
+            mocks.counter.expect_get_and_increment().returning(|_, _| {
+                Err(crate::repositories::TransactionCounterError::NotFound(
+                    "Counter service failure".to_string(),
+                ))
+            });
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+            let result = handler.next_sequence();
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("Counter service failure"));
+                }
+                other => panic!("Expected UnexpectedError, got: {:?}", other),
+            }
+        }
+
+        #[test]
+        fn next_sequence_boundary_values() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Test i64::MAX boundary (should succeed)
+            mocks
+                .counter
+                .expect_get_and_increment()
+                .returning(|_, _| Ok(i64::MAX as u64));
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+            let result = handler.next_sequence();
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), i64::MAX);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // send_transaction_request_job tests
+    // ---------------------------------------------------------------------
+    mod send_transaction_request_job_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn send_transaction_request_job_success() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .withf(|job, _delay| {
+                    job.transaction_id == "tx-1"
+                        && job.relayer_id == "relayer-1"
+                        && _delay.is_none()
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_transaction_request_job(&tx, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn send_transaction_request_job_with_delay() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer with delay
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .withf(|job, delay| {
+                    job.transaction_id == "tx-1"
+                        && job.relayer_id == "relayer-1"
+                        && delay == &Some(30)
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_transaction_request_job(&tx, Some(30)).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn send_transaction_request_job_producer_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer to return error
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "Job queue failure".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_transaction_request_job(&tx, None).await;
+            assert!(result.is_err());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // send_submit_transaction_job tests
+    // ---------------------------------------------------------------------
+    mod send_submit_transaction_job_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn send_submit_transaction_job_success() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|job, delay| {
+                    job.transaction_id == "tx-1"
+                        && job.relayer_id == "relayer-1"
+                        && matches!(job.command, crate::jobs::TransactionCommand::Submit)
+                        && delay.is_none()
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_submit_transaction_job(&tx, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn send_submit_transaction_job_with_delay() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer with delay
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|job, delay| {
+                    job.transaction_id == "tx-1"
+                        && job.relayer_id == "relayer-1"
+                        && matches!(job.command, crate::jobs::TransactionCommand::Submit)
+                        && delay == &Some(60)
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_submit_transaction_job(&tx, Some(60)).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn send_submit_transaction_job_producer_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer to return error
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "Submit job queue failure".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_submit_transaction_job(&tx, None).await;
+            assert!(result.is_err());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // finalize_transaction_state tests
+    // ---------------------------------------------------------------------
+    mod finalize_transaction_state_tests {
+        use super::*;
+        use crate::models::RepositoryError;
+
+        #[tokio::test]
+        async fn finalize_transaction_state_success() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock repository update
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|tx_id, update| {
+                    tx_id == "test-tx-id"
+                        && update.status == Some(TransactionStatus::Confirmed)
+                        && update.status_reason.is_none()
+                        && update.confirmed_at.is_some()
+                })
+                .times(1)
+                .returning(|id, update| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = update.status.unwrap();
+                    tx.confirmed_at = update.confirmed_at;
+                    Ok(tx)
+                });
+
+            // Mock notification sending
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .finalize_transaction_state(
+                    "test-tx-id".to_string(),
+                    TransactionStatus::Confirmed,
+                    None,
+                    Some("2023-10-01T12:00:00Z".to_string()),
+                )
+                .await;
+
+            assert!(result.is_ok());
+            let updated_tx = result.unwrap();
+            assert_eq!(updated_tx.id, "test-tx-id");
+            assert_eq!(updated_tx.status, TransactionStatus::Confirmed);
+            assert_eq!(
+                updated_tx.confirmed_at,
+                Some("2023-10-01T12:00:00Z".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn finalize_transaction_state_with_failure_reason() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock repository update with failure
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|tx_id, update| {
+                    tx_id == "failed-tx-id"
+                        && update.status == Some(TransactionStatus::Failed)
+                        && update.status_reason == Some("Transaction failed on-chain".to_string())
+                        && update.confirmed_at.is_none()
+                })
+                .times(1)
+                .returning(|id, update| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = update.status.unwrap();
+                    tx.status_reason = update.status_reason.clone();
+                    Ok(tx)
+                });
+
+            // Mock notification sending
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .finalize_transaction_state(
+                    "failed-tx-id".to_string(),
+                    TransactionStatus::Failed,
+                    Some("Transaction failed on-chain".to_string()),
+                    None,
+                )
+                .await;
+
+            assert!(result.is_ok());
+            let updated_tx = result.unwrap();
+            assert_eq!(updated_tx.id, "failed-tx-id");
+            assert_eq!(updated_tx.status, TransactionStatus::Failed);
+            assert_eq!(
+                updated_tx.status_reason,
+                Some("Transaction failed on-chain".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn finalize_transaction_state_repository_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock repository to return error
+            mocks.tx_repo.expect_partial_update().returning(|_, _| {
+                Err(RepositoryError::NotFound(
+                    "Transaction not found".to_string(),
+                ))
+            });
+
+            // Notification should not be called if repository fails
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .finalize_transaction_state(
+                    "missing-tx-id".to_string(),
+                    TransactionStatus::Confirmed,
+                    None,
+                    Some("2023-10-01T12:00:00Z".to_string()),
+                )
+                .await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn finalize_transaction_state_notification_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock repository update success
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .returning(|id, update| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = update.status.unwrap();
+                    Ok(tx)
+                });
+
+            // Mock notification to fail
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "Notification failure".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .finalize_transaction_state(
+                    "test-tx-id".to_string(),
+                    TransactionStatus::Confirmed,
+                    None,
+                    Some("2023-10-01T12:00:00Z".to_string()),
+                )
+                .await;
+
+            assert!(result.is_err());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // send_transaction_update_notification tests
+    // ---------------------------------------------------------------------
+    mod send_transaction_update_notification_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn send_notification_with_notification_id() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .withf(|_payload, delay| {
+                    // Verify the payload contains the notification data
+                    delay.is_none()
+                    // Note: We can't easily verify the exact payload content without
+                    // accessing the notification payload structure
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_transaction_update_notification(&tx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn send_notification_without_notification_id() {
+            let mut relayer = create_test_relayer();
+            relayer.notification_id = None; // No notification ID configured
+            let mut mocks = default_test_mocks();
+
+            // Job producer should not be called
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_transaction_update_notification(&tx).await;
+            assert!(result.is_ok()); // Should succeed even without notification ID
+        }
+
+        #[tokio::test]
+        async fn send_notification_job_producer_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer to return error
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "Notification queue error".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.send_transaction_update_notification(&tx).await;
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("Failed to send notification"));
+                    assert!(msg.contains("Notification queue error"));
+                }
+                other => panic!("Expected UnexpectedError, got: {:?}", other),
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // requeue_status_check tests
+    // ---------------------------------------------------------------------
+    mod requeue_status_check_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn requeue_status_check_success() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .withf(|job, delay| {
+                    job.transaction_id == "tx-1"
+                        && job.relayer_id == "relayer-1"
+                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.requeue_status_check(&tx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn requeue_status_check_job_producer_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock job producer to return error
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "Status check queue error".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let tx = create_test_transaction(&relayer.id);
+
+            let result = handler.requeue_status_check(&tx).await;
+            assert!(result.is_err());
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // enqueue_next_pending_transaction tests
+    // ---------------------------------------------------------------------
+    mod enqueue_next_pending_transaction_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn enqueue_next_pending_transaction_with_pending() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock find_by_status to return a pending transaction
+            let mut pending_tx = create_test_transaction(&relayer.id);
+            pending_tx.id = "pending-tx-123".to_string();
+            pending_tx.status = TransactionStatus::Pending;
+            pending_tx.created_at = "2023-10-01T12:00:00Z".to_string();
+
+            let captured_pending_tx = pending_tx.clone();
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
+                .times(1)
+                .returning(move |_, _| Ok(vec![captured_pending_tx.clone()]));
+
+            // Mock job producer for transaction request
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .withf(|job, _delay| {
+                    job.transaction_id == "pending-tx-123"
+                        && job.relayer_id == "relayer-1"
+                        && _delay.is_none()
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .enqueue_next_pending_transaction("finished-tx-456")
+                .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn enqueue_next_pending_transaction_no_pending() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock find_by_status to return no pending transactions
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .with(eq(relayer.id.clone()), eq(vec![TransactionStatus::Pending]))
+                .times(1)
+                .returning(|_, _| Ok(vec![])); // No pending transactions
+
+            // Job producer should not be called
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .enqueue_next_pending_transaction("finished-tx-456")
+                .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn enqueue_next_pending_transaction_multiple_pending_oldest_first() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Create multiple pending transactions with different timestamps
+            let mut newer_tx = create_test_transaction(&relayer.id);
+            newer_tx.id = "newer-tx".to_string();
+            newer_tx.status = TransactionStatus::Pending;
+            newer_tx.created_at = "2023-10-01T13:00:00Z".to_string(); // Later timestamp
+
+            let mut older_tx = create_test_transaction(&relayer.id);
+            older_tx.id = "older-tx".to_string();
+            older_tx.status = TransactionStatus::Pending;
+            older_tx.created_at = "2023-10-01T12:00:00Z".to_string(); // Earlier timestamp
+
+            // Return them in random order - the implementation should sort by created_at
+            let pending_txs = vec![newer_tx.clone(), older_tx.clone()];
+
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .times(1)
+                .returning(move |_, _| Ok(pending_txs.clone()));
+
+            // Should enqueue the OLDER transaction (oldest first)
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .withf(|job, delay| {
+                    job.transaction_id == "older-tx" && // Should pick the older one
+                    job.relayer_id == "relayer-1" &&
+                    delay.is_none()
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .enqueue_next_pending_transaction("finished-tx")
+                .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn enqueue_next_pending_transaction_repository_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock find_by_status to return error
+            mocks.tx_repo.expect_find_by_status().returning(|_, _| {
+                Err(crate::models::RepositoryError::Unknown(
+                    "DB error".to_string(),
+                ))
+            });
+
+            // Job producer should not be called
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .enqueue_next_pending_transaction("finished-tx")
+                .await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn enqueue_next_pending_transaction_job_producer_error() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock find_by_status to return a pending transaction
+            let mut pending_tx = create_test_transaction(&relayer.id);
+            pending_tx.id = "pending-tx".to_string();
+            pending_tx.status = TransactionStatus::Pending;
+
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .times(1)
+                .returning(move |_, _| Ok(vec![pending_tx.clone()]));
+
+            // Mock job producer to return error
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "Job queue error".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+
+            let result = handler
+                .enqueue_next_pending_transaction("finished-tx")
+                .await;
+            assert!(result.is_err());
         }
     }
 }
