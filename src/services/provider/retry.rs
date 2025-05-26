@@ -113,13 +113,13 @@ pub struct RetryConfig {
 
 impl RetryConfig {
     /// Create a new RetryConfig with specified values
-    /// 
+    ///
     /// # Arguments
     /// * `max_retries` - Maximum number of retry attempts per provider (0-255)
     /// * `max_failovers` - Maximum number of provider failovers (0-255)  
     /// * `base_delay_ms` - Base delay in milliseconds for exponential backoff
     /// * `max_delay_ms` - Maximum delay in milliseconds (should be >= base_delay_ms)
-    /// 
+    ///
     /// # Panics
     /// * If `max_delay_ms` < `base_delay_ms` when both are non-zero
     /// * If only one of the delay values is zero (both should be zero or both non-zero)
@@ -131,7 +131,7 @@ impl RetryConfig {
                 base_delay_ms, max_delay_ms
             );
         }
-        
+
         // Validate delay ordering when both are non-zero
         if base_delay_ms > 0 && max_delay_ms > 0 && max_delay_ms < base_delay_ms {
             panic!(
@@ -139,7 +139,7 @@ impl RetryConfig {
                 max_delay_ms, base_delay_ms
             );
         }
-        
+
         Self {
             max_retries,
             max_failovers,
@@ -182,6 +182,7 @@ impl RetryConfig {
 /// * `selector` - RPC selector for managing and selecting providers
 /// * `operation_name` - Name of the operation for logging
 /// * `is_retriable_error` - Function that determines if an error is retriable
+/// * `should_mark_provider_failed` - Function that determines if an error should mark the provider as failed
 /// * `provider_initializer` - Function that initializes a provider from a URL
 /// * `operation` - A future-returning closure that makes the RPC call
 /// * `config` - Optional configuration parameters for retry behavior
@@ -192,6 +193,7 @@ pub async fn retry_rpc_call<P, T, E, F, Fut, I>(
     selector: &RpcSelector,
     operation_name: &str,
     is_retriable_error: impl Fn(&E) -> bool,
+    should_mark_provider_failed: impl Fn(&E) -> bool,
     provider_initializer: I,
     operation: F,
     config: Option<RetryConfig>,
@@ -251,6 +253,7 @@ where
             operation_name,
             &operation,
             &is_retriable_error,
+            &should_mark_provider_failed,
             &config,
             &mut total_attempts,
         )
@@ -268,16 +271,28 @@ where
             Err(internal_err) => {
                 match internal_err {
                     InternalRetryError::NonRetriable(original_err) => {
+                        // Check if this non-retriable error should mark the provider as failed
+                        if should_mark_provider_failed(&original_err)
+                            && selector.available_provider_count() > 1
+                        {
+                            log::warn!(
+                                "Non-retriable error '{}' for provider '{}' on operation '{}' should mark provider as failed. Marking as failed and switching to next provider...",
+                                original_err,
+                                provider_url,
+                                operation_name
+                            );
+                            selector.mark_current_as_failed();
+                        }
                         return Err(original_err);
                     }
                     InternalRetryError::RetriesExhausted(original_err) => {
                         last_error = Some(original_err);
-                        
-                        // Only mark provider as failed if we have other providers to try
-                        // Never mark the last available provider as failed
+
+                        // If retries are exhausted, we always intend to mark the provider as failed,
+                        // unless it's the last available one.
                         if selector.available_provider_count() > 1 {
                             log::warn!(
-                                "All {} retry attempts failed for provider '{}' on operation '{}'. Error: {}. Switching to next provider (failover {}/{})...",
+                                "All {} retry attempts failed for provider '{}' on operation '{}'. Error: {}. Marking as failed and switching to next provider (failover {}/{})...",
                                 config.max_retries,
                                 provider_url,
                                 operation_name,
@@ -365,6 +380,7 @@ async fn try_with_retries<P, T, E, F, Fut>(
     operation_name: &str,
     operation: &F,
     is_retriable_error: &impl Fn(&E) -> bool,
+    _should_mark_provider_failed: &impl Fn(&E) -> bool,
     config: &RetryConfig,
     total_attempts: &mut usize,
 ) -> Result<T, InternalRetryError<E>>
@@ -377,7 +393,8 @@ where
     // For max_retries of 0 or 1, we don't retry - just attempt once
     if config.max_retries <= 1 {
         *total_attempts += 1;
-        return operation(provider.clone()).await
+        return operation(provider.clone())
+            .await
             .map_err(InternalRetryError::NonRetriable);
     }
 
@@ -407,7 +424,11 @@ where
                     current_attempt_idx + 1,
                     config.max_retries,
                     e,
-                    if is_retriable { "retriable" } else { "non-retriable" }
+                    if is_retriable {
+                        "retriable"
+                    } else {
+                        "non-retriable"
+                    }
                 );
 
                 if !is_retriable {
@@ -441,19 +462,27 @@ where
             }
         }
     }
-    
-    unreachable!("Loop should have returned if max_retries > 1; max_retries=0 or 1 case is handled above.");
+
+    unreachable!(
+        "Loop should have returned if max_retries > 1; max_retries=0 or 1 case is handled above."
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::RpcConfig;
+    use lazy_static::lazy_static;
     use std::cmp::Ordering;
     use std::env;
     use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
     use std::sync::Arc;
     use std::sync::Mutex;
+
+    // Use a mutex to ensure tests don't run in parallel when modifying env vars
+    lazy_static! {
+        static ref RETRY_TEST_ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
 
     // Define a simple error type for testing
     #[derive(Debug, Clone)]
@@ -513,7 +542,10 @@ mod tests {
         guard.set("PROVIDER_RETRY_BASE_DELAY_MS", "1");
         guard.set("PROVIDER_RETRY_MAX_DELAY_MS", "5");
         guard.set("REDIS_URL", "redis://localhost:6379");
-        guard.set("RELAYER_PRIVATE_KEY", "0x1234567890123456789012345678901234567890123456789012345678901234");
+        guard.set(
+            "RELAYER_PRIVATE_KEY",
+            "0x1234567890123456789012345678901234567890123456789012345678901234",
+        );
         guard
     }
 
@@ -651,11 +683,17 @@ mod tests {
 
     #[test]
     fn test_retry_config_from_env() {
+        let _lock = RETRY_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut guard = setup_test_env();
         // Add missing environment variables that ServerConfig requires
         guard.set("REDIS_URL", "redis://localhost:6379");
-        guard.set("RELAYER_PRIVATE_KEY", "0x1234567890123456789012345678901234567890123456789012345678901234");
-        
+        guard.set(
+            "RELAYER_PRIVATE_KEY",
+            "0x1234567890123456789012345678901234567890123456789012345678901234",
+        );
+
         let config = RetryConfig::from_env();
         assert_eq!(config.max_retries, 2);
         assert_eq!(config.max_failovers, 1);
@@ -692,7 +730,7 @@ mod tests {
         // Test very large delays (near overflow protection)
         let delay = calculate_retry_delay(60, 1000, u64::MAX);
         assert!(delay.as_millis() > 0);
-        
+
         // Test minimum values
         let delay = calculate_retry_delay(1, 1, 1);
         assert_eq!(delay.as_millis(), 1);
@@ -709,21 +747,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "max_delay_ms (50) must be >= base_delay_ms (100) when both are non-zero")]
+    #[should_panic(
+        expected = "max_delay_ms (50) must be >= base_delay_ms (100) when both are non-zero"
+    )]
     fn test_retry_config_validation_panic_delay_ordering() {
         // This should panic because max_delay_ms < base_delay_ms
         let _config = RetryConfig::new(3, 1, 100, 50);
     }
 
     #[test]
-    #[should_panic(expected = "Delay values must be consistent: both zero (no delays) or both non-zero")]
+    #[should_panic(
+        expected = "Delay values must be consistent: both zero (no delays) or both non-zero"
+    )]
     fn test_retry_config_validation_panic_inconsistent_delays_base_zero() {
         // This should panic because only base_delay_ms is zero
         let _config = RetryConfig::new(3, 1, 0, 1000);
     }
 
     #[test]
-    #[should_panic(expected = "Delay values must be consistent: both zero (no delays) or both non-zero")]
+    #[should_panic(
+        expected = "Delay values must be consistent: both zero (no delays) or both non-zero"
+    )]
     fn test_retry_config_validation_panic_inconsistent_delays_max_zero() {
         // This should panic because only max_delay_ms is zero
         let _config = RetryConfig::new(3, 1, 100, 0);
@@ -776,6 +820,7 @@ mod tests {
             "test_operation",
             &operation,
             &|_| false,
+            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -805,7 +850,8 @@ mod tests {
             provider_url,
             "test_operation",
             &operation,
-            &|_| true, // All errors are retriable
+            &|_| true,
+            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -824,7 +870,8 @@ mod tests {
             provider_url,
             "test_operation",
             &operation,
-            &|_| false, // No errors are retriable
+            &|_| false,
+            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -844,7 +891,8 @@ mod tests {
             provider_url,
             "test_operation",
             &operation,
-            &|_| true, // All errors are retriable
+            &|_| true,
+            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -864,15 +912,14 @@ mod tests {
         let config = RetryConfig::new(0, 1, 5, 10);
 
         // Test successful operation with max_retries = 0
-        let operation = |_p: String| async move {
-            Ok::<_, TestError>(42)
-        };
+        let operation = |_p: String| async move { Ok::<_, TestError>(42) };
 
         let result = try_with_retries(
             &provider,
             provider_url,
             "test_operation",
             &operation,
+            &|_| false,
             &|_| false,
             &config,
             &mut total_attempts,
@@ -891,7 +938,8 @@ mod tests {
             provider_url,
             "test_operation",
             &operation,
-            &|_| true, // Error is retriable, but max_retries = 0
+            &|_| true,
+            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -921,6 +969,7 @@ mod tests {
             "test_operation",
             &operation,
             &|_| false,
+            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -938,7 +987,8 @@ mod tests {
             provider_url,
             "test_operation",
             &operation,
-            &|_| true, // Error is retriable, but max_retries = 1
+            &|_| true,
+            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -959,14 +1009,11 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> {
-            Ok(url.to_string())
-        };
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
         // Operation that always fails with a non-retriable error
-        let operation = |_provider: String| async move {
-            Err(TestError("Non-retriable error".to_string()))
-        };
+        let operation =
+            |_provider: String| async move { Err(TestError("Non-retriable error".to_string())) };
 
         let config = RetryConfig::new(3, 1, 0, 0);
 
@@ -977,6 +1024,7 @@ mod tests {
             &selector,
             "test_operation",
             |_| false, // Error is NOT retriable
+            |_| false, // Error is NOT retriable
             provider_initializer,
             operation,
             Some(config),
@@ -984,11 +1032,13 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        
+
         // Provider should NOT be marked as failed for non-retriable errors
         let final_available_count = selector.available_provider_count();
-        assert_eq!(initial_available_count, final_available_count, 
-            "Provider count should remain the same for non-retriable errors");
+        assert_eq!(
+            initial_available_count, final_available_count,
+            "Provider count should remain the same for non-retriable errors"
+        );
     }
 
     #[tokio::test]
@@ -1001,14 +1051,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> {
-            Ok(url.to_string())
-        };
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
         // Operation that always fails with a retriable error
-        let operation = |_provider: String| async {
-            Err(TestError("Retriable error".to_string()))
-        };
+        let operation = |_provider: String| async { Err(TestError("Retriable error".to_string())) };
 
         let config = RetryConfig::new(2, 1, 0, 0); // 2 retries, 1 failover
 
@@ -1019,6 +1065,7 @@ mod tests {
             &selector,
             "test_operation",
             |_| true, // Error IS retriable
+            |_| true, // Error SHOULD mark provider as failed
             provider_initializer,
             operation,
             Some(config),
@@ -1026,10 +1073,10 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        
+
         // At least one provider should be marked as failed after retries are exhausted
         let final_available_count = selector.available_provider_count();
-        assert!(final_available_count < initial_available_count, 
+        assert!(final_available_count < initial_available_count,
             "At least one provider should be marked as failed after retriable errors exhaust retries");
     }
 
@@ -1062,6 +1109,7 @@ mod tests {
         let result = retry_rpc_call(
             &selector,
             "test_operation",
+            |_| false, // No errors are retriable
             |_| false, // No errors are retriable
             provider_initializer,
             operation,
@@ -1107,6 +1155,7 @@ mod tests {
             &selector,
             "test_operation",
             |_| true, // Errors are retriable to trigger RetriesExhausted and failover
+            |_| true, // Errors SHOULD mark provider as failed to enable failover
             provider_initializer,
             operation,
             Some(config),
@@ -1145,7 +1194,8 @@ mod tests {
         let result: Result<i32, TestError> = retry_rpc_call(
             &selector,
             "test_operation",
-            |_| true, // Errors are retriable to trigger RetriesExhausted and failover
+            |_| true,  // Errors are retriable to trigger RetriesExhausted and failover
+            |_| false, // Errors are NOT retriable to prevent marking
             provider_initializer,
             operation,
             Some(config),
@@ -1157,24 +1207,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_rpc_call_with_default_config() {
+        let _lock = RETRY_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _guard = setup_test_env();
 
-        let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-        ];
+        let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
         let provider_initializer =
             |_url: &str| -> Result<String, TestError> { Ok("mock_provider".to_string()) };
 
-        let operation = |_provider: String| async move {
-            Ok::<_, TestError>(42)
-        };
+        let operation = |_provider: String| async move { Ok::<_, TestError>(42) };
 
         // Test with None config (should use default from env)
         let result = retry_rpc_call(
             &selector,
             "test_operation",
+            |_| false,
             |_| false,
             provider_initializer,
             operation,
@@ -1208,9 +1258,7 @@ mod tests {
             }
         };
 
-        let operation = |_provider: String| async move {
-            Ok::<_, TestError>(42)
-        };
+        let operation = |_provider: String| async move { Ok::<_, TestError>(42) };
 
         let config = RetryConfig::new(2, 1, 0, 0);
 
@@ -1218,6 +1266,7 @@ mod tests {
             &selector,
             "test_operation",
             |_| true,
+            |_| false,
             provider_initializer,
             operation,
             Some(config),
@@ -1234,11 +1283,9 @@ mod tests {
         let _guard = setup_test_env();
 
         // Create selector with a single provider, select it, then mark it as failed
-        let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-        ];
+        let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
-        
+
         // First select the provider to make it current, then mark it as failed
         let _ = selector.get_current_url().unwrap(); // This selects the provider
         selector.mark_current_as_failed(); // Now mark it as failed
@@ -1256,19 +1303,13 @@ mod tests {
         let _guard = setup_test_env();
 
         // Test with a single provider
-        let configs = vec![
-            RpcConfig::new("http://localhost:8545".to_string()),
-        ];
+        let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> {
-            Ok(url.to_string())
-        };
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
         // Operation that always fails with a retriable error
-        let operation = |_provider: String| async {
-            Err(TestError("Always fails".to_string()))
-        };
+        let operation = |_provider: String| async { Err(TestError("Always fails".to_string())) };
 
         let config = RetryConfig::new(2, 1, 0, 0); // 2 retries, 1 failover
 
@@ -1280,6 +1321,7 @@ mod tests {
             &selector,
             "test_operation",
             |_| true, // Error IS retriable
+            |_| true, // Error SHOULD mark provider as failed, but last provider should be preserved
             provider_initializer,
             operation,
             Some(config),
@@ -1287,13 +1329,17 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        
+
         // The last provider should NOT be marked as failed
         let final_available_count = selector.available_provider_count();
-        assert_eq!(final_available_count, initial_available_count, 
-            "Last provider should never be marked as failed");
-        assert_eq!(final_available_count, 1, 
-            "Should still have 1 provider available");
+        assert_eq!(
+            final_available_count, initial_available_count,
+            "Last provider should never be marked as failed"
+        );
+        assert_eq!(
+            final_available_count, 1,
+            "Should still have 1 provider available"
+        );
     }
 
     #[tokio::test]
@@ -1308,14 +1354,10 @@ mod tests {
         ];
         let selector = RpcSelector::new(configs).expect("Failed to create selector");
 
-        let provider_initializer = |url: &str| -> Result<String, TestError> {
-            Ok(url.to_string())
-        };
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
 
         // Operation that always fails with a retriable error
-        let operation = |_provider: String| async {
-            Err(TestError("Always fails".to_string()))
-        };
+        let operation = |_provider: String| async { Err(TestError("Always fails".to_string())) };
 
         let config = RetryConfig::new(2, 2, 0, 0); // 2 retries, 2 failovers
 
@@ -1327,6 +1369,7 @@ mod tests {
             &selector,
             "test_operation",
             |_| true, // Error IS retriable
+            |_| true, // Error SHOULD mark provider as failed, but last provider should be preserved
             provider_initializer,
             operation,
             Some(config),
@@ -1334,10 +1377,294 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        
+
         // Should have marked 2 providers as failed, but kept the last one
         let final_available_count = selector.available_provider_count();
-        assert_eq!(final_available_count, 1, 
-            "Should have exactly 1 provider left (the last one should not be marked as failed)");
+        assert_eq!(
+            final_available_count, 1,
+            "Should have exactly 1 provider left (the last one should not be marked as failed)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_non_retriable_error_should_mark_provider_failed() {
+        let _guard = setup_test_env();
+
+        let configs = vec![
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("http://localhost:8546".to_string()),
+        ];
+        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Operation that fails with a non-retriable error that SHOULD mark provider as failed
+        let operation = |_provider: String| async move {
+            Err(TestError("Critical non-retriable error".to_string()))
+        };
+
+        let config = RetryConfig::new(3, 1, 0, 0);
+
+        // Get initial provider count
+        let initial_available_count = selector.available_provider_count();
+        assert_eq!(initial_available_count, 2);
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| false,                    // Error is NOT retriable
+            |e| e.0.contains("Critical"), // Error SHOULD mark provider as failed if it contains "Critical"
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        // Provider should be marked as failed because should_mark_provider_failed returned true
+        let final_available_count = selector.available_provider_count();
+        assert_eq!(final_available_count, 1,
+            "Provider should be marked as failed when should_mark_provider_failed returns true for non-retriable error");
+    }
+
+    #[tokio::test]
+    async fn test_non_retriable_error_should_not_mark_provider_failed() {
+        let _guard = setup_test_env();
+
+        let configs = vec![
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("http://localhost:8546".to_string()),
+        ];
+        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Operation that fails with a non-retriable error that should NOT mark provider as failed
+        let operation = |_provider: String| async move {
+            Err(TestError("Minor non-retriable error".to_string()))
+        };
+
+        let config = RetryConfig::new(3, 1, 0, 0);
+
+        // Get initial provider count
+        let initial_available_count = selector.available_provider_count();
+        assert_eq!(initial_available_count, 2);
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| false,                    // Error is NOT retriable
+            |e| e.0.contains("Critical"), // Error should NOT mark provider as failed (doesn't contain "Critical")
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        // Provider should NOT be marked as failed because should_mark_provider_failed returned false
+        let final_available_count = selector.available_provider_count();
+        assert_eq!(final_available_count, initial_available_count,
+            "Provider should NOT be marked as failed when should_mark_provider_failed returns false for non-retriable error");
+    }
+
+    #[tokio::test]
+    async fn test_retriable_error_ignores_should_mark_provider_failed() {
+        let _guard = setup_test_env();
+
+        let configs = vec![
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("http://localhost:8546".to_string()),
+        ];
+        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Operation that always fails with a retriable error
+        let operation =
+            |_provider: String| async { Err(TestError("Retriable network error".to_string())) };
+
+        let config = RetryConfig::new(2, 1, 0, 0); // 2 retries, 1 failover
+
+        // Get initial provider count
+        let initial_available_count = selector.available_provider_count();
+        assert_eq!(initial_available_count, 2);
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| true,  // Error IS retriable
+            |_| false, // should_mark_provider_failed returns false, but should be IGNORED for retriable errors
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        // Provider should be marked as failed despite should_mark_provider_failed returning false,
+        // because retriable errors that exhaust retries always mark the provider as failed
+        let final_available_count = selector.available_provider_count();
+        assert!(final_available_count < initial_available_count,
+            "Provider should be marked as failed when retriable errors exhaust retries, regardless of should_mark_provider_failed");
+    }
+
+    #[tokio::test]
+    async fn test_mixed_error_scenarios_with_different_marking_behavior() {
+        let _guard = setup_test_env();
+
+        // Test scenario 1: Non-retriable error that should mark provider as failed
+        let configs = vec![
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("http://localhost:8546".to_string()),
+        ];
+        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        let operation =
+            |_provider: String| async move { Err(TestError("Critical network error".to_string())) };
+
+        let config = RetryConfig::new(1, 1, 0, 0);
+        let initial_count = selector.available_provider_count();
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| false,                    // Non-retriable
+            |e| e.0.contains("Critical"), // Should mark as failed
+            provider_initializer,
+            operation,
+            Some(config.clone()),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let after_critical_count = selector.available_provider_count();
+        assert_eq!(
+            after_critical_count,
+            initial_count - 1,
+            "Critical error should mark provider as failed"
+        );
+
+        // Test scenario 2: Non-retriable error that should NOT mark provider as failed
+        let operation =
+            |_provider: String| async move { Err(TestError("Minor validation error".to_string())) };
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| false,                    // Non-retriable
+            |e| e.0.contains("Critical"), // Should NOT mark as failed (doesn't contain "Critical")
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let final_count = selector.available_provider_count();
+        assert_eq!(
+            final_count, after_critical_count,
+            "Minor error should NOT mark provider as failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_mark_provider_failed_respects_last_provider_protection() {
+        let _guard = setup_test_env();
+
+        // Test with a single provider (last provider protection)
+        let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
+        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Operation that fails with a non-retriable error that SHOULD mark provider as failed
+        let operation =
+            |_provider: String| async move { Err(TestError("Critical network error".to_string())) };
+
+        let config = RetryConfig::new(1, 1, 0, 0);
+
+        // Get initial provider count
+        let initial_available_count = selector.available_provider_count();
+        assert_eq!(initial_available_count, 1);
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| false,                    // Error is NOT retriable
+            |e| e.0.contains("Critical"), // Error SHOULD mark provider as failed
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        // Last provider should NEVER be marked as failed, even if should_mark_provider_failed returns true
+        let final_available_count = selector.available_provider_count();
+        assert_eq!(final_available_count, initial_available_count,
+            "Last provider should never be marked as failed, regardless of should_mark_provider_failed");
+        assert_eq!(
+            final_available_count, 1,
+            "Should still have 1 provider available"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_mark_provider_failed_with_multiple_providers_last_protection() {
+        let _guard = setup_test_env();
+
+        // Test with multiple providers, but ensure last one is protected
+        let configs = vec![
+            RpcConfig::new("http://localhost:8545".to_string()),
+            RpcConfig::new("http://localhost:8546".to_string()),
+        ];
+        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+
+        let attempt_count = Arc::new(AtomicU8::new(0));
+        let attempt_count_clone = attempt_count.clone();
+
+        let provider_initializer = |url: &str| -> Result<String, TestError> { Ok(url.to_string()) };
+
+        // Operation that always fails with errors that should mark provider as failed
+        let operation = move |_provider: String| {
+            let attempt_count = attempt_count_clone.clone();
+            async move {
+                let count = attempt_count.fetch_add(1, AtomicOrdering::SeqCst);
+                Err(TestError(format!("Critical error #{}", count)))
+            }
+        };
+
+        let config = RetryConfig::new(1, 1, 0, 0); // 1 retry, 1 failover
+
+        // Get initial provider count
+        let initial_available_count = selector.available_provider_count();
+        assert_eq!(initial_available_count, 2);
+
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| false,                    // All errors are non-retriable
+            |e| e.0.contains("Critical"), // All errors should mark provider as failed
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        // First provider should be marked as failed, but last provider should be protected
+        let final_available_count = selector.available_provider_count();
+        assert_eq!(
+            final_available_count, 1,
+            "First provider should be marked as failed, but last provider should be protected"
+        );
     }
 }
