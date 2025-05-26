@@ -253,7 +253,6 @@ where
             operation_name,
             &operation,
             &is_retriable_error,
-            &should_mark_provider_failed,
             &config,
             &mut total_attempts,
         )
@@ -380,7 +379,6 @@ async fn try_with_retries<P, T, E, F, Fut>(
     operation_name: &str,
     operation: &F,
     is_retriable_error: &impl Fn(&E) -> bool,
-    _should_mark_provider_failed: &impl Fn(&E) -> bool,
     config: &RetryConfig,
     total_attempts: &mut usize,
 ) -> Result<T, InternalRetryError<E>>
@@ -820,7 +818,6 @@ mod tests {
             "test_operation",
             &operation,
             &|_| false,
-            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -851,7 +848,6 @@ mod tests {
             "test_operation",
             &operation,
             &|_| true,
-            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -870,7 +866,6 @@ mod tests {
             provider_url,
             "test_operation",
             &operation,
-            &|_| false,
             &|_| false,
             &config,
             &mut total_attempts,
@@ -892,7 +887,6 @@ mod tests {
             "test_operation",
             &operation,
             &|_| true,
-            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -920,7 +914,6 @@ mod tests {
             "test_operation",
             &operation,
             &|_| false,
-            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -939,7 +932,6 @@ mod tests {
             "test_operation",
             &operation,
             &|_| true,
-            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -969,7 +961,6 @@ mod tests {
             "test_operation",
             &operation,
             &|_| false,
-            &|_| false,
             &config,
             &mut total_attempts,
         )
@@ -988,7 +979,6 @@ mod tests {
             "test_operation",
             &operation,
             &|_| true,
-            &|_| false,
             &config,
             &mut total_attempts,
         )
