@@ -19,9 +19,10 @@ This relayer service enables interaction with blockchain networks through transa
 
 > :warning: Redis is automatically started when using docker compose. If you are not using docker compose, you need to create a dedicated network and start redis manually.
 
-## How to use images pushed to Docker Hub
+## How to use images pushed to DockerHub
 
 - These images are automatically pulled when you use docker compose. See [using docker compose](https://github.com/OpenZeppelin/openzeppelin-relayer?tab=readme-ov-file#running-services-with-docker-compose) for more information.
+- If you are not using docker compose and you want to use these images, follow the steps below.
 
 ### 1. Pull the image
 
@@ -47,6 +48,8 @@ docker run --env-file .env -d \
 ### 3. Access the service
 
 Once the container is running, you can access the service at `http://localhost:8080`.
+
+You can test the relayer by sending a request using a curl call. See [testing relayer section](https://github.com/OpenZeppelin/openzeppelin-relayer?tab=readme-ov-file#test-the-relayer) for more information.
 
 ### 4. Stop the container
 
@@ -82,8 +85,8 @@ See the [observability section](https://github.com/OpenZeppelin/openzeppelin-rel
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU Affero General Public License v3.0 - see the [LICENSE](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE) file for details.
 
 ## Security
 
-For security concerns, please refer to our [Security Policy](SECURITY.md).
+For security concerns, please refer to our [Security Policy](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/SECURITY.md).
