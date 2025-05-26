@@ -445,7 +445,7 @@ where
 
                 // Calculate and apply delay before next retry
                 let delay = calculate_retry_delay(
-                    (current_attempt_idx + 1) as u8,
+                    current_attempt_idx + 1,
                     config.base_delay_ms,
                     config.max_delay_ms,
                 );
@@ -1207,13 +1207,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_rpc_call_with_default_config() {
-        let _lock = RETRY_TEST_ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _guard = setup_test_env();
+        let (_guard, selector) = {
+            let _lock = RETRY_TEST_ENV_MUTEX
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let guard = setup_test_env();
 
-        let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
-        let selector = RpcSelector::new(configs).expect("Failed to create selector");
+            let configs = vec![RpcConfig::new("http://localhost:8545".to_string())];
+            let selector = RpcSelector::new(configs).expect("Failed to create selector");
+            (guard, selector)
+        };
 
         let provider_initializer =
             |_url: &str| -> Result<String, TestError> { Ok("mock_provider".to_string()) };
