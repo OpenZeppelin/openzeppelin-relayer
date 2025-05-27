@@ -24,7 +24,7 @@ impl Modify for SecurityAddon {
 #[openapi(
     modifiers(&SecurityAddon),
     tags((name = "OpenZeppelin Relayer API")),
-    info(description = "OpenZeppelin Relayer API", version = "0.1.0", title = "OpenZeppelin Relayer API",  license(
+    info(description = "The OpenZeppelin Relayer API provides endpoints for managing, monitoring, and interacting with relayers. It enables developers to relay and manage blockchain transactions across EVM and non-EVM networks, making it ideal for dApps and backend services that require secure and scalable transaction infrastructure.", version = "0.1.0", title = "OpenZeppelin Relayer API",  license(
         name = "AGPL-3.0 license",
         url = "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     ),

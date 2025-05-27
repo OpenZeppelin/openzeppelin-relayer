@@ -1,9 +1,12 @@
 # OpenZeppelin Relayer
 
 [![codecov](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer/graph/badge.svg?token=HKHIQNSJ6H)](https://codecov.io/gh/OpenZeppelin/openzeppelin-relayer)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/OpenZeppelin/openzeppelin-relayer/badge)](https://api.securityscorecards.dev/projects/github.com/OpenZeppelin/openzeppelin-relayer)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![CLA Assistant](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/cla.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/cla.yml)
 [![CI](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml)
 [![Release Workflow](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml)
+
 
 > :warning: This software is in alpha. Use in production environments at your own risk.
 
@@ -30,9 +33,9 @@ This relayer service enables interaction with blockchain networks through transa
 
 - Solana
 - EVM (🚧 Partial support)
+- Stellar (🚧 Partial support)
 
 > For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/roadmap).
-
 
 ## For users
 
@@ -48,16 +51,17 @@ View the [Usage](https://docs.openzeppelin.com/relayer#running_the_relayer) docu
 
 The repository includes several ready-to-use examples to help you get started with different configurations:
 
-| Example | Description |
-|---------|-------------|
-| [`basic-example`](./examples/basic-example/) | Simple setup with Redis |
-| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging |
+| Example                                                      | Description                               |
+| ------------------------------------------------------------ | ----------------------------------------- |
+| [`basic-example`](./examples/basic-example/)                 | Simple setup with Redis                   |
+| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging     |
 | [`basic-example-metrics`](./examples/basic-example-metrics/) | Setup with Prometheus and Grafana metrics |
 | [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management |
 | [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing |
 | [`evm-turnkey-signer`](./examples/evm-turnkey-signer/) | Using Turnkey Signer for EVM secure signing |
 | [`solana-turnkey-signer`](./examples/solana-turnkey-signer/) | Using Turnkey Signer for Solana secure signing |
 | [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/) | Using Google Cloud KMS Signer for Solana secure signing |
+
 
 Each example includes:
 
@@ -260,7 +264,6 @@ cp config/config.example.json config/config.json
 
 Refer to the [Configuration References](https://docs.openzeppelin.com/relayer#configuration_references) section for a complete list of configuration options.
 
-
 Create `.env` with correct values according to your needs from `.env.example` file as a starting point:
 
 ```sh
@@ -308,7 +311,6 @@ cargo run --example create_key -- \
 
 For simplicity, visit [Webhook.site](https://webhook.site), copy your unique URL, and then update the notifications[0].url field in `config/config.json` with this value.
 
-
 ### Configure Webhook Signing Key
 
 To sign webhook notification payloads, populate the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
@@ -322,7 +324,6 @@ cargo run --example generate_uuid
 > Note: Alternatively, you can use any online UUID generator.
 
 Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` entry in the `.env` file.
-
 
 ### Configure API Key
 
@@ -340,13 +341,35 @@ Copy the generated UUID and update the `API_KEY` entry in the `.env` file.
 
 ### Starting Redis manually (without docker compose)
 
-Run Redis container:
+You can start Redis in one of two ways:
+
+A. _Expose to Host Only_
+
+Use this if only your host machine needs direct access to Redis (e.g., for local testing with redis-cli).
+
+```bash
+docker run -d \
+  --name redis \
+  -p 6379:6379 \
+  redis:latest
+```
+
+`-p 6379:6379` binds the container port to your localhost on the same port.
+
+B. _Connect with Other Containers via Custom Network_
+
+Use this if relayer container need to talk to Redis.
 
 ```sh
-docker run --name openzeppelin-redis \
-  -p 6379:6379 \
-  -d redis:latest
+docker run -d \
+  --name redis \
+  --network relayer-net \
+  redis:latest
 ```
+
+`--network relayer-net` attaches Redis to the network you created in step 1.
+
+> Note: Make sure to create a dedicated network for the relayer and Redis containers to communicate. You can create a network using the following command `docker network create relayer-net`.
 
 ## Running the relayer locally
 
@@ -447,9 +470,9 @@ docker compose logs -f
   cargo make rust-antora
   ```
 
-- Site will be generated in `docs/build/site/openzeppelin-relayer/<version>/` directory.
+- Site will be generated in `docs/build/site/openzeppelin_relayer/<version>/` directory.
 
-- To view the documentation, open the `docs/build/site/openzeppelin-relayer/<version>/index.html` in your browser.
+- To view the documentation, open the `docs/build/site/openzeppelin_relayer/<version>/index.html` in your browser.
 
 ## Observability
 
