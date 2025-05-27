@@ -296,6 +296,7 @@ impl SolanaProvider {
             &self.selector,
             operation_name,
             is_retriable,
+            |_| false, // TODO: implement fn to mark provider failed based on error
             |url| match self.initialize_provider(url) {
                 Ok(provider) => Ok(provider),
                 Err(e) => Err(e),
