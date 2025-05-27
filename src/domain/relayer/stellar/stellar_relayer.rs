@@ -21,6 +21,7 @@
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
+    constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
         next_sequence_u64, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest,
         SignDataResponse, SignTypedDataRequest,
@@ -183,10 +184,17 @@ where
     }
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
-        println!("Stellar get_balance...");
+        let account_entry = self
+            .provider
+            .get_account(&self.relayer.address)
+            .await
+            .map_err(|e| {
+                RelayerError::ProviderError(format!("Failed to fetch account for balance: {}", e))
+            })?;
+
         Ok(BalanceResponse {
-            balance: 0,
-            unit: "".to_string(),
+            balance: account_entry.balance as u128,
+            unit: STELLAR_SMALLEST_UNIT_NAME.to_string(),
         })
     }
 
@@ -262,6 +270,7 @@ mod tests {
     use super::*;
     use crate::models::NetworkType;
     use crate::{
+        constants::STELLAR_SMALLEST_UNIT_NAME,
         jobs::MockJobProducerTrait,
         models::{RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy},
         repositories::{MockRelayerRepository, MockTransactionRepository},
@@ -395,5 +404,88 @@ mod tests {
         let reasons = vec!["reason1".to_string(), "reason2".to_string()];
         let result = relayer.disable_relayer(&reasons).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_balance_success() {
+        let relayer_model = create_test_relayer_model();
+        let mut provider = MockStellarProviderTrait::new();
+        let expected_balance = 100_000_000i64; // 10 XLM in stroops
+
+        provider
+            .expect_get_account()
+            .with(eq(relayer_model.address.clone()))
+            .returning(move |_| {
+                Box::pin(async move {
+                    Ok(AccountEntry {
+                        account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                        balance: expected_balance,
+                        ext: AccountEntryExt::V0,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        inflation_dest: None,
+                        seq_num: SequenceNumber(5),
+                        num_sub_entries: 0,
+                        signers: VecM::default(),
+                        thresholds: Thresholds([0, 0, 0, 0]),
+                    })
+                })
+            });
+
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+
+        let relayer = StellarRelayer::new(
+            relayer_model,
+            provider,
+            relayer_repo,
+            tx_repo,
+            counter,
+            job_producer,
+        )
+        .unwrap();
+
+        let result = relayer.get_balance().await;
+        assert!(result.is_ok());
+        let balance_response = result.unwrap();
+        assert_eq!(balance_response.balance, expected_balance as u128);
+        assert_eq!(balance_response.unit, STELLAR_SMALLEST_UNIT_NAME);
+    }
+
+    #[tokio::test]
+    async fn test_get_balance_provider_error() {
+        let relayer_model = create_test_relayer_model();
+        let mut provider = MockStellarProviderTrait::new();
+
+        provider
+            .expect_get_account()
+            .with(eq(relayer_model.address.clone()))
+            .returning(|_| Box::pin(async { Err(eyre!("provider failed")) }));
+
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+
+        let relayer = StellarRelayer::new(
+            relayer_model,
+            provider,
+            relayer_repo,
+            tx_repo,
+            counter,
+            job_producer,
+        )
+        .unwrap();
+
+        let result = relayer.get_balance().await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            RelayerError::ProviderError(msg) => {
+                assert!(msg.contains("Failed to fetch account for balance: provider failed"));
+            }
+            _ => panic!("Unexpected error type"),
+        }
     }
 }

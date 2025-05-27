@@ -70,11 +70,18 @@ This roadmap represents our current plans and is subject to change. We will upda
 ** Improved Transaction Status Checks
 
 
-=== Stellar ( 🔄 In planning)
+=== Stellar (🚧 Partial support)
 
 ==== Current Status
-* Initial research phase
-* Architecture design
+* Transaction submission for classic transactions
+
+==== Upcoming Features
+** Advanced transaction status logic
+** More transaction operation types
+** Smart contract transactions
+** Stellar-specific endpoints
+** Expanded signer support
+** Transaction lifecycle management logic
 
 == Community and Documentation
 
