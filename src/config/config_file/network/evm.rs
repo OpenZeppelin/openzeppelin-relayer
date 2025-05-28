@@ -204,6 +204,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
                 tags: Some(vec!["parent-tag".to_string()]),
@@ -219,6 +220,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(15000),
                 is_testnet: Some(false),
                 tags: Some(vec!["child-tag".to_string()]),
@@ -237,6 +239,10 @@ mod tests {
         assert_eq!(
             result.common.rpc_urls,
             Some(vec!["https://child-rpc.example.com".to_string()])
+        );
+        assert_eq!(
+            result.common.explorer_urls,
+            Some(vec!["https://child-explorer.example.com".to_string()])
         );
         assert_eq!(result.common.average_blocktime_ms, Some(15000));
         assert_eq!(result.common.is_testnet, Some(false));
@@ -260,6 +266,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
                 tags: Some(vec!["parent-tag".to_string()]),
@@ -281,6 +288,10 @@ mod tests {
             result.common.rpc_urls,
             Some(vec!["https://parent-rpc.example.com".to_string()])
         );
+        assert_eq!(
+            result.common.explorer_urls,
+            Some(vec!["https://parent-explorer.example.com".to_string()])
+        );
         assert_eq!(result.common.average_blocktime_ms, Some(10000));
         assert_eq!(result.common.is_testnet, Some(true));
         assert_eq!(result.common.tags, Some(vec!["parent-tag".to_string()]));
@@ -297,6 +308,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
                 tags: Some(vec!["parent-tag1".to_string(), "parent-tag2".to_string()]),
@@ -312,6 +324,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
+                explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
                 average_blocktime_ms: None,                                        // Inherit
                 is_testnet: Some(false),                                           // Override
                 tags: Some(vec!["child-tag".to_string()]),                         // Merge
@@ -328,6 +341,10 @@ mod tests {
         assert_eq!(
             result.common.rpc_urls,
             Some(vec!["https://child-rpc.example.com".to_string()])
+        ); // Overridden
+        assert_eq!(
+            result.common.explorer_urls,
+            Some(vec!["https://child-explorer.example.com".to_string()])
         ); // Overridden
         assert_eq!(result.common.average_blocktime_ms, Some(10000)); // Inherited
         assert_eq!(result.common.is_testnet, Some(false)); // Overridden
@@ -359,6 +376,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: None,
                 tags: None,
@@ -374,6 +392,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: None,
                 tags: None,
@@ -405,6 +424,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
                 tags: None,
@@ -424,6 +444,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: None,
                 tags: None,
@@ -471,6 +492,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: Some("grandparent".to_string()),
                 rpc_urls: Some(vec!["https://parent.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
                 is_testnet: Some(true),
                 tags: None,
@@ -486,6 +508,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: None,
                 tags: None,
@@ -527,6 +550,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: None,
                 rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
                 tags: None,
@@ -542,6 +566,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: None,
                 tags: None,

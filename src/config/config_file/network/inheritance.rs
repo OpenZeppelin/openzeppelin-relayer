@@ -130,6 +130,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,                    // Will inherit from parent
+                explorer_urls: None,               // Will inherit from parent
                 average_blocktime_ms: Some(15000), // Override parent value
                 is_testnet: Some(false),           // Override parent value
                 tags: None,
@@ -146,6 +147,7 @@ mod tests {
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
         assert_eq!(resolved.common.rpc_urls, parent_config.common.rpc_urls); // Inherited
+        assert_eq!(resolved.common.explorer_urls, parent_config.common.explorer_urls); // Inherited
         assert_eq!(resolved.common.average_blocktime_ms, Some(15000)); // Overridden
         assert_eq!(resolved.common.is_testnet, Some(false)); // Overridden
         assert_eq!(resolved.chain_id, parent_config.chain_id); // Inherited
@@ -170,6 +172,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: Some("grandparent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: Some(10000), // Override grandparent
                 is_testnet: None,
                 tags: None,
@@ -193,6 +196,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: Some(false), // Override
                 tags: None,
@@ -209,6 +213,7 @@ mod tests {
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
         assert_eq!(resolved.common.rpc_urls, grandparent_config.common.rpc_urls); // From grandparent
+        assert_eq!(resolved.common.explorer_urls, grandparent_config.common.explorer_urls); // From grandparent
         assert_eq!(resolved.common.average_blocktime_ms, Some(10000)); // From parent
         assert_eq!(resolved.common.is_testnet, Some(false)); // From child
         assert_eq!(resolved.chain_id, Some(42)); // From child
@@ -305,6 +310,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,                  // Will inherit
+                explorer_urls: None,             // Will inherit
                 average_blocktime_ms: Some(500), // Override
                 is_testnet: None,
                 tags: None,
@@ -317,6 +323,7 @@ mod tests {
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
         assert_eq!(resolved.common.rpc_urls, parent_config.common.rpc_urls); // Inherited
+        assert_eq!(resolved.common.explorer_urls, parent_config.common.explorer_urls); // Inherited
         assert_eq!(resolved.common.average_blocktime_ms, Some(500)); // Overridden
     }
 
@@ -377,10 +384,12 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: None,                   // Will inherit
+                explorer_urls: None,              // Will inherit
                 average_blocktime_ms: Some(6000), // Override
                 is_testnet: None,
                 tags: None,
             },
+            passphrase: None, // Will inherit from parent
         };
 
         let result = resolver.resolve_stellar_inheritance(&child_config, "child", "parent");
@@ -390,6 +399,7 @@ mod tests {
         assert_eq!(resolved.common.network, "child");
         assert_eq!(resolved.common.rpc_urls, parent_config.common.rpc_urls); // Inherited
         assert_eq!(resolved.common.average_blocktime_ms, Some(6000)); // Overridden
+        assert_eq!(resolved.passphrase, parent_config.passphrase); // Inherited
     }
 
     #[test]
@@ -450,6 +460,7 @@ mod tests {
                 network: "grandparent".to_string(),
                 from: Some("great-grandparent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: Some(11000),
                 is_testnet: None,
                 tags: None,
@@ -469,6 +480,7 @@ mod tests {
                 network: "parent".to_string(),
                 from: Some("grandparent".to_string()),
                 rpc_urls: None,
+                explorer_urls: None,
                 average_blocktime_ms: None,
                 is_testnet: Some(false),
                 tags: Some(vec!["production".to_string()]),
@@ -488,6 +500,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://custom-rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://custom-explorer.example.com".to_string()]),
                 average_blocktime_ms: None,
                 is_testnet: None,
                 tags: None,
@@ -506,6 +519,10 @@ mod tests {
         assert_eq!(
             resolved.common.rpc_urls,
             Some(vec!["https://custom-rpc.example.com".to_string()])
+        ); // From child
+        assert_eq!(
+            resolved.common.explorer_urls,
+            Some(vec!["https://custom-explorer.example.com".to_string()])
         ); // From child
         assert_eq!(resolved.common.average_blocktime_ms, Some(11000)); // From grandparent
         assert_eq!(resolved.common.is_testnet, Some(false)); // From parent
@@ -613,6 +630,10 @@ mod tests {
                     "https://parent-rpc1.example.com".to_string(),
                     "https://parent-rpc2.example.com".to_string(),
                 ]),
+                explorer_urls: Some(vec![
+                    "https://parent-explorer1.example.com".to_string(),
+                    "https://parent-explorer2.example.com".to_string(),
+                ]),
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(true),
                 tags: Some(vec!["parent-tag1".to_string(), "parent-tag2".to_string()]),
@@ -633,6 +654,7 @@ mod tests {
                 network: "child".to_string(),
                 from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
+                explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
                 average_blocktime_ms: None,                                        // Inherit
                 is_testnet: Some(false),                                           // Override
                 tags: Some(vec!["child-tag".to_string()]), // Override (merge behavior depends on implementation)
@@ -651,6 +673,10 @@ mod tests {
         assert_eq!(
             resolved.common.rpc_urls,
             Some(vec!["https://child-rpc.example.com".to_string()])
+        ); // Child override
+        assert_eq!(
+            resolved.common.explorer_urls,
+            Some(vec!["https://child-explorer.example.com".to_string()])
         ); // Child override
         assert_eq!(resolved.common.average_blocktime_ms, Some(12000)); // Inherited from parent
         assert_eq!(resolved.common.is_testnet, Some(false)); // Child override

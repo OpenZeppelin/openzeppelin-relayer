@@ -21,6 +21,7 @@ pub fn create_network_common(network: &str) -> NetworkConfigCommon {
         network: network.to_string(),
         from: None,
         rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+        explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
         average_blocktime_ms: Some(12000),
         is_testnet: Some(true),
         tags: Some(vec!["test".to_string()]),
@@ -32,7 +33,8 @@ pub fn create_network_common_with_parent(network: &str, parent: &str) -> Network
     NetworkConfigCommon {
         network: network.to_string(),
         from: Some(parent.to_string()),
-        rpc_urls: None, // Will inherit from parent
+        rpc_urls: None,
+        explorer_urls: None,
         average_blocktime_ms: None,
         is_testnet: None,
         tags: None,
@@ -79,6 +81,7 @@ pub fn create_invalid_evm_network(network: &str) -> EvmNetworkConfig {
             network: network.to_string(),
             from: None,
             rpc_urls: None, // Missing required field
+            explorer_urls: None,
             average_blocktime_ms: None,
             is_testnet: None,
             tags: None,
@@ -97,6 +100,7 @@ pub fn create_solana_network(network: &str) -> SolanaNetworkConfig {
             network: network.to_string(),
             from: None,
             rpc_urls: Some(vec![format!("https://api.{}.solana.com", network)]),
+            explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(400),
             is_testnet: Some(true),
             tags: Some(vec!["solana".to_string()]),
@@ -111,6 +115,7 @@ pub fn create_solana_network_with_parent(network: &str, parent: &str) -> SolanaN
             network: network.to_string(),
             from: Some(parent.to_string()),
             rpc_urls: Some(vec![format!("https://api.{}.solana.com", network)]), // Override parent's RPC URLs
+            explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(500), // Override parent's blocktime
             is_testnet: None,                // Will inherit from parent
             tags: None,                      // Will inherit from parent
@@ -125,10 +130,12 @@ pub fn create_stellar_network(network: &str) -> StellarNetworkConfig {
             network: network.to_string(),
             from: None,
             rpc_urls: Some(vec![format!("https://horizon.{}.stellar.org", network)]),
+            explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(5000),
             is_testnet: Some(true),
             tags: Some(vec!["stellar".to_string()]),
         },
+        passphrase: Some("Test Network ; September 2015".to_string()),
     }
 }
 
@@ -139,10 +146,12 @@ pub fn create_stellar_network_with_parent(network: &str, parent: &str) -> Stella
             network: network.to_string(),
             from: Some(parent.to_string()),
             rpc_urls: Some(vec![format!("https://horizon.{}.stellar.org", network)]), // Override parent's RPC URLs
+            explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(6000), // Override parent's blocktime
             is_testnet: None,                 // Will inherit from parent
             tags: None,                       // Will inherit from parent
         },
+        passphrase: None, // Will inherit from parent
     }
 }
 
