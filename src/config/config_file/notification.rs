@@ -1,15 +1,19 @@
-//! Configuration file definitions for notification systems.
+//! This module defines the configuration structures and validation logic for notifications.
 //!
-//! Provides configuration structures and validation for notification providers:
-//! - SMTP (Email)
-//! - Slack
-//! - Custom webhook
+//! It includes:
+//! - `NotificationFileConfigType`: An enum representing the type of notification configuration.
+//! - `SigningKeyConfig`: An enum for specifying signing key configurations, either from an
+//!   environment variable or a plain value.
+//! - `NotificationFileConfig`: A struct representing a single notification configuration, with
+//!   methods for validation and signing key retrieval.
+//! - `NotificationsFileConfig`: A struct for managing a collection of notification configurations,
+//!   with validation to ensure uniqueness and completeness.
 use crate::{
     constants::MINIMUM_SECRET_VALUE_LENGTH,
     models::{PlainOrEnvValue, SecretString},
 };
 
-use crate::config::ConfigFileError;
+use super::ConfigFileError;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
