@@ -1,0 +1,28 @@
+{
+  "networks": [
+    {
+      "type": "solana",
+      "network": "mainnet-beta",
+      "rpc_urls": ["https://api.mainnet-beta.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com"],
+      "average_blocktime_ms": 400,
+      "is_testnet": false
+    },
+    {
+      "type": "solana",
+      "network": "testnet",
+      "rpc_urls": ["https://api.testnet.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com?cluster=testnet"],
+      "average_blocktime_ms": 400,
+      "is_testnet": true
+    },
+    {
+      "type": "solana",
+      "network": "devnet",
+      "rpc_urls": ["https://api.devnet.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
+      "average_blocktime_ms": 400,
+      "is_testnet": true
+    }
+  ]
+} 

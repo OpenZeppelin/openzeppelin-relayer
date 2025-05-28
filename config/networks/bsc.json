@@ -1,0 +1,53 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 3000,
+      "chain_id": 56,
+      "explorer_urls": [
+        "https://api.bscscan.com/api",
+        "https://bscscan.com"
+      ],
+      "is_testnet": false,
+      "network": "binance-smart-chain",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://bsc-dataseed.bnbchain.org",
+        "https://bsc-dataseed.nariox.org",
+        "https://bsc-dataseed.defibit.io",
+        "https://bsc-dataseed.ninicoin.io",
+        "https://bsc.nodereal.io",
+        "https://bsc-dataseed-public.bnbchain.org",
+        "https://bnb.rpc.subquery.network/public",
+        "https://bsc.drpc.org",
+        "https://1rpc.io/bnb",
+        "https://bsc-rpc.publicnode.com",
+        "https://binance-smart-chain-public.nodies.app"
+      ],
+      "symbol": "BNB",
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 3000,
+      "chain_id": 97,
+      "explorer_urls": [
+        "https://api-testnet.bscscan.com/api",
+        "https://testnet.bscscan.com"
+      ],
+      "is_testnet": true,
+      "network": "binance-smart-chain-testnet",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://bsc-testnet-dataseed.bnbchain.org",
+        "https://bsc-testnet.bnbchain.org",
+        "https://bsc-prebsc-dataseed.bnbchain.org",
+        "https://bsc-testnet.drpc.org",
+        "https://bsc-testnet-rpc.publicnode.com"
+      ],
+      "symbol": "BNB",
+      "tags": [
+        "deprecated"
+      ],
+      "type": "evm"
+    }
+  ]
+}
