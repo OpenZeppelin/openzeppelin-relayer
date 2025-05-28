@@ -71,6 +71,18 @@ impl Default for RelayerEvmPolicy {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+pub struct SolanaAllowedTokensSwapConfig {
+    #[schema(nullable = false)]
+    pub slippage_percentage: Option<f32>,
+    #[schema(nullable = false)]
+    pub min_amount: Option<u64>,
+    #[schema(nullable = false)]
+    pub max_amount: Option<u64>,
+    #[schema(nullable = false)]
+    pub retain_min_amount: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaAllowedTokensPolicy {
     pub mint: String,
@@ -81,7 +93,7 @@ pub struct SolanaAllowedTokensPolicy {
     #[schema(nullable = false)]
     pub max_allowed_fee: Option<u64>,
     #[schema(nullable = false)]
-    pub conversion_slippage_percentage: Option<f32>,
+    pub swap_config: Option<SolanaAllowedTokensSwapConfig>,
 }
 
 impl SolanaAllowedTokensPolicy {
@@ -90,14 +102,14 @@ impl SolanaAllowedTokensPolicy {
         decimals: Option<u8>,
         symbol: Option<String>,
         max_allowed_fee: Option<u64>,
-        conversion_slippage_percentage: Option<f32>,
+        swap_config: Option<SolanaAllowedTokensSwapConfig>,
     ) -> Self {
         Self {
             mint,
             decimals,
             symbol,
             max_allowed_fee,
-            conversion_slippage_percentage,
+            swap_config,
         }
     }
 
@@ -107,14 +119,14 @@ impl SolanaAllowedTokensPolicy {
     pub fn new_partial(
         mint: String,
         max_allowed_fee: Option<u64>,
-        conversion_slippage_percentage: Option<f32>,
+        swap_config: Option<SolanaAllowedTokensSwapConfig>,
     ) -> Self {
         Self {
             mint,
             decimals: None,
             symbol: None,
             max_allowed_fee,
-            conversion_slippage_percentage,
+            swap_config,
         }
     }
 }
@@ -124,6 +136,31 @@ impl SolanaAllowedTokensPolicy {
 pub enum SolanaFeePaymentStrategy {
     User,
     Relayer,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SolanaSwapStrategy {
+    JupiterSwap,
+    JupiterUltra,
+    Noop,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JupiterSwapOptions {
+    pub priority_fee_max_lamports: Option<u64>,
+    pub priority_level: Option<String>,
+    pub dynamic_compute_unit_limit: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RelayerSolanaSwapConfig {
+    pub strategy: Option<SolanaSwapStrategy>,
+    pub cron_schedule: Option<String>,
+    pub min_balance_threshold: Option<u64>,
+    pub jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -139,6 +176,7 @@ pub struct RelayerSolanaPolicy {
     pub max_signatures: Option<u8>,
     pub max_tx_data_size: u16,
     pub max_allowed_fee_lamports: Option<u64>,
+    pub swap_config: Option<RelayerSolanaSwapConfig>,
 }
 
 impl RelayerSolanaPolicy {
@@ -159,9 +197,17 @@ impl RelayerSolanaPolicy {
             .and_then(|entry| entry.decimals)
     }
 
+    pub fn get_swap_config(&self) -> Option<RelayerSolanaSwapConfig> {
+        self.swap_config.clone()
+    }
+
     pub fn get_allowed_token_slippage(&self, mint: &str) -> f32 {
         self.get_allowed_token_entry(mint)
-            .and_then(|entry| entry.conversion_slippage_percentage)
+            .and_then(|entry| {
+                entry
+                    .swap_config
+                    .and_then(|config| config.slippage_percentage)
+            })
             .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE)
     }
 
@@ -211,6 +257,7 @@ impl Default for RelayerSolanaPolicy {
             max_signatures: None,
             max_tx_data_size: MAX_SOLANA_TX_DATA_SIZE,
             max_allowed_fee_lamports: None,
+            swap_config: None,
         }
     }
 }

@@ -3,4 +3,5 @@
 * xref:api_reference.adoc[API Reference]
 * xref:structure.adoc[Project Structure]
 * xref:roadmap.adoc[Project Roadmap]
+* xref:solana.adoc[Solana Integration]
 * link:https://release-v0-2-0%2D%2Dopenzeppelin-relayer.netlify.app/openzeppelin_relayer/[Technical Rust Documentation]

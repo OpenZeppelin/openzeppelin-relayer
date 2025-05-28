@@ -45,7 +45,10 @@ where
                         symbol: token.symbol.as_deref().unwrap_or("").to_string(),
                         decimals: token.decimals.unwrap_or(0),
                         max_allowed_fee: token.max_allowed_fee,
-                        conversion_slippage_percentage: token.conversion_slippage_percentage,
+                        conversion_slippage_percentage: token
+                            .swap_config
+                            .as_ref()
+                            .and_then(|config| config.slippage_percentage),
                     })
                     .collect()
             })
@@ -68,7 +71,7 @@ mod tests {
         domain::{setup_test_context, SolanaRpcMethodsImpl},
         models::{
             GetSupportedTokensRequestParams, RelayerNetworkPolicy, RelayerSolanaPolicy,
-            SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
         },
     };
 
@@ -85,14 +88,18 @@ mod tests {
                     symbol: Some("TOKEN1".to_string()),
                     decimals: Some(9),
                     max_allowed_fee: Some(1000),
-                    conversion_slippage_percentage: None,
+                    swap_config: Some(SolanaAllowedTokensSwapConfig {
+                        ..Default::default()
+                    }),
                 },
                 SolanaAllowedTokensPolicy {
                     mint: "mint2".to_string(),
                     symbol: Some("TOKEN2".to_string()),
                     decimals: Some(6),
                     max_allowed_fee: None,
-                    conversion_slippage_percentage: None,
+                    swap_config: Some(SolanaAllowedTokensSwapConfig {
+                        ..Default::default()
+                    }),
                 },
             ]),
             ..Default::default()

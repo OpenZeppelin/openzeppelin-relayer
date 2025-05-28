@@ -15,7 +15,7 @@ use actix_web::web::ThinData;
 
 use crate::{
     domain::{RelayerFactory, RelayerFactoryTrait},
-    jobs::JobProducer,
+    jobs::{JobProducer, JobProducerTrait},
     models::{ApiError, AppState, RelayerError, RelayerRepoModel},
     repositories::Repository,
 };
@@ -33,10 +33,13 @@ use super::NetworkRelayer;
 ///
 /// * `Result<RelayerRepoModel, ApiError>` - Returns a `RelayerRepoModel` on success, or an
 ///   `ApiError` on failure.
-pub async fn get_relayer_by_id(
+pub async fn get_relayer_by_id<P>(
     relayer_id: String,
-    state: &ThinData<AppState<JobProducer>>,
-) -> Result<RelayerRepoModel, ApiError> {
+    state: &ThinData<AppState<P>>,
+) -> Result<RelayerRepoModel, ApiError>
+where
+    P: JobProducerTrait + 'static,
+{
     state
         .relayer_repository
         .get_by_id(relayer_id)

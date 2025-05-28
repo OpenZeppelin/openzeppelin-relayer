@@ -5,6 +5,7 @@
 //! - Transaction submissions
 //! - Transaction status checks
 //! - Notifications
+//! - Solana swap requests
 use apalis_redis::{Config, RedisStorage};
 use color_eyre::{eyre, Result};
 use log::error;
@@ -13,7 +14,10 @@ use tokio::time::{timeout, Duration};
 
 use crate::config::ServerConfig;
 
-use super::{Job, NotificationSend, TransactionRequest, TransactionSend, TransactionStatusCheck};
+use super::{
+    Job, NotificationSend, SolanaTokenSwapRequest, TransactionRequest, TransactionSend,
+    TransactionStatusCheck,
+};
 
 #[derive(Clone, Debug)]
 pub struct Queue {
@@ -21,6 +25,7 @@ pub struct Queue {
     pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
     pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
     pub notification_queue: RedisStorage<Job<NotificationSend>>,
+    pub solana_token_swap_request_queue: RedisStorage<Job<SolanaTokenSwapRequest>>,
 }
 
 impl Queue {
@@ -39,9 +44,7 @@ impl Queue {
                 return Err(eyre::eyre!("Timed out after {} milliseconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
             }
         };
-        let config = Config::default()
-            .set_namespace(namespace)
-            .set_max_retries(5);
+        let config = Config::default().set_namespace(namespace);
 
         Ok(RedisStorage::new_with_config(conn, config))
     }
@@ -52,6 +55,8 @@ impl Queue {
             transaction_submission_queue: Self::storage("transaction_submission_queue").await?,
             transaction_status_queue: Self::storage("transaction_status_queue").await?,
             notification_queue: Self::storage("notification_queue").await?,
+            solana_token_swap_request_queue: Self::storage("solana_token_swap_request_queue")
+                .await?,
         })
     }
 }
@@ -64,12 +69,9 @@ mod tests {
     async fn test_queue_storage_configuration() {
         // Test the config creation logic without actual Redis connections
         let namespace = "test_namespace";
-        let config = Config::default()
-            .set_namespace(namespace)
-            .set_max_retries(5);
+        let config = Config::default().set_namespace(namespace);
 
         assert_eq!(config.get_namespace(), namespace);
-        assert_eq!(config.get_max_retries(), 5);
     }
 
     // Mock version of Queue for testing
@@ -79,6 +81,7 @@ mod tests {
         pub namespace_transaction_submission: String,
         pub namespace_transaction_status: String,
         pub namespace_notification: String,
+        pub namespace_solana_token_swap_request_queue: String,
     }
 
     impl MockQueue {
@@ -88,6 +91,8 @@ mod tests {
                 namespace_transaction_submission: "transaction_submission_queue".to_string(),
                 namespace_transaction_status: "transaction_status_queue".to_string(),
                 namespace_notification: "notification_queue".to_string(),
+                namespace_solana_token_swap_request_queue: "solana_token_swap_request_queue"
+                    .to_string(),
             }
         }
     }
@@ -109,5 +114,9 @@ mod tests {
             "transaction_status_queue"
         );
         assert_eq!(mock_queue.namespace_notification, "notification_queue");
+        assert_eq!(
+            mock_queue.namespace_solana_token_swap_request_queue,
+            "solana_token_swap_request_queue"
+        );
     }
 }

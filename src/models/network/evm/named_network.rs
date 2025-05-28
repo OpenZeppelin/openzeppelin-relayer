@@ -33,7 +33,6 @@ pub enum EvmNamedNetwork {
 
     #[serde(alias = "arbitrum-one")]
     Arbitrum = 42161,
-    ArbitrumTestnet = 421611,
     #[serde(alias = "arbitrum-sepolia")]
     ArbitrumSepolia = 421614,
     #[serde(alias = "arbitrum-nova")]
@@ -123,17 +122,20 @@ pub enum EvmNamedNetwork {
     #[strum(to_string = "mantle")]
     #[serde(alias = "mantle")]
     Mantle = 5000,
-    #[strum(to_string = "mantle-testnet")]
-    #[serde(alias = "mantle-testnet")]
-    MantleTestnet = 5001,
     #[strum(to_string = "mantle-sepolia")]
     #[serde(alias = "mantle-sepolia")]
     MantleSepolia = 5003,
 
+    #[strum(to_string = "unichain")]
+    #[serde(alias = "unichain")]
+    Unichain = 130,
     #[strum(to_string = "unichain-sepolia")]
     #[serde(alias = "unichain-sepolia")]
     UnichainSepolia = 1301,
 
+    #[strum(to_string = "worldchain")]
+    #[serde(alias = "worldchain")]
+    WorldChain = 480,
     #[strum(to_string = "worldchain-sepolia")]
     #[serde(alias = "worldchain-sepolia", alias = "worldchain_sepolia")]
     WorldChainSepolia = 4801,
@@ -164,7 +166,14 @@ impl EvmNamedNetwork {
 
         matches!(
             self,
-            Optimism | OptimismSepolia | Base | BaseSepolia | UnichainSepolia | WorldChainSepolia
+            Optimism
+                | OptimismSepolia
+                | Base
+                | BaseSepolia
+                | Unichain
+                | UnichainSepolia
+                | WorldChain
+                | WorldChainSepolia
         )
     }
 
@@ -172,10 +181,7 @@ impl EvmNamedNetwork {
     pub const fn is_arbitrum(self) -> bool {
         use EvmNamedNetwork::*;
 
-        matches!(
-            self,
-            Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova
-        )
+        matches!(self, Arbitrum | ArbitrumSepolia | ArbitrumNova)
     }
 
     pub const fn average_blocktime(self) -> Option<Duration> {
@@ -184,10 +190,10 @@ impl EvmNamedNetwork {
         Some(Duration::from_millis(match self {
             Mainnet => 12_000,
 
-            Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova => 260,
+            Arbitrum | ArbitrumSepolia | ArbitrumNova => 260,
 
             Optimism | OptimismSepolia | Base | BaseSepolia | Mantle | MantleSepolia
-            | WorldChainSepolia => 2_000,
+            | WorldChain | WorldChainSepolia => 2_000,
 
             Polygon | PolygonAmoy => 2_100,
 
@@ -207,11 +213,9 @@ impl EvmNamedNetwork {
 
             Gnosis => 5_000,
 
-            UnichainSepolia => 1_000,
+            Unichain | UnichainSepolia => 1_000,
 
             Sepolia | Holesky | Linea | LineaSepolia => 12_000,
-
-            MantleTestnet => 2_000,
 
             Moonbase | MoonbeamDev => 10_000,
 
@@ -224,15 +228,13 @@ impl EvmNamedNetwork {
 
         match self {
             // Known legacy chains / non EIP-1559 compliant.
-            ArbitrumTestnet
-            | BinanceSmartChain
+            BinanceSmartChain
             | BinanceSmartChainTestnet
             | Celo
             | CeloAlfajores
             | CeloBaklava
             | Fantom
             | FantomTestnet
-            | MantleTestnet
             | PolygonZkEvm
             | PolygonZkEvmTestnet
             | ZkSync
@@ -242,7 +244,7 @@ impl EvmNamedNetwork {
             Mainnet | Sepolia | Holesky | Base | BaseSepolia | Optimism | OptimismSepolia
             | Polygon | PolygonAmoy | Avalanche | AvalancheFuji | Arbitrum | ArbitrumSepolia
             | ArbitrumNova | Linea | LineaSepolia | Gnosis | Mantle | MantleSepolia | Scroll
-            | ScrollSepolia | UnichainSepolia | WorldChainSepolia => false,
+            | ScrollSepolia | Unichain | UnichainSepolia | WorldChain | WorldChainSepolia => false,
 
             // Unknown / not applicable, default to false for backwards compatibility.
             Moonbeam | MoonbeamDev | Moonriver | Moonbase | Aurora | AuroraTestnet => false,
@@ -256,7 +258,6 @@ impl EvmNamedNetwork {
             Holesky
             | Sepolia
             | ArbitrumSepolia
-            | ArbitrumTestnet
             | AuroraTestnet
             | AvalancheFuji
             | BaseSepolia
@@ -265,7 +266,6 @@ impl EvmNamedNetwork {
             | CeloBaklava
             | FantomTestnet
             | LineaSepolia
-            | MantleTestnet
             | MantleSepolia
             | MoonbeamDev
             | OptimismSepolia
@@ -279,7 +279,7 @@ impl EvmNamedNetwork {
             // Mainnets.
             Mainnet | Optimism | Arbitrum | ArbitrumNova | BinanceSmartChain | Scroll | Gnosis
             | Polygon | PolygonZkEvm | Fantom | Moonbeam | Moonriver | Moonbase | Avalanche
-            | Celo | Aurora | Base | Linea | ZkSync | Mantle => false,
+            | Celo | Aurora | Base | Linea | ZkSync | Mantle | Unichain | WorldChain => false,
         }
     }
 
@@ -291,7 +291,6 @@ impl EvmNamedNetwork {
             Holesky
             | Sepolia
             | ArbitrumSepolia
-            | ArbitrumTestnet
             | AuroraTestnet
             | AvalancheFuji
             | BaseSepolia
@@ -300,7 +299,6 @@ impl EvmNamedNetwork {
             | CeloBaklava
             | FantomTestnet
             | LineaSepolia
-            | MantleTestnet
             | MantleSepolia
             | MoonbeamDev
             | OptimismSepolia
@@ -314,7 +312,7 @@ impl EvmNamedNetwork {
             // Mainnets.
             Mainnet | Optimism | Arbitrum | ArbitrumNova | BinanceSmartChain | Scroll | Gnosis
             | Polygon | PolygonZkEvm | Fantom | Moonbeam | Moonriver | Moonbase | Avalanche
-            | Celo | Aurora | Base | Linea | ZkSync | Mantle => false,
+            | Celo | Aurora | Base | Linea | ZkSync | Mantle | Unichain | WorldChain => false,
         }
     }
 
@@ -323,11 +321,11 @@ impl EvmNamedNetwork {
 
         match self {
             // Optimism-based (Bedrock) networks
-            Optimism | OptimismSepolia | Base | BaseSepolia | UnichainSepolia
-            | WorldChainSepolia => true,
+            Optimism | OptimismSepolia | Base | BaseSepolia | Unichain | UnichainSepolia
+            | WorldChain | WorldChainSepolia => true,
 
             // Arbitrum networks
-            Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova => true,
+            Arbitrum | ArbitrumSepolia | ArbitrumNova => true,
 
             // ZkSync networks
             ZkSync | ZkSyncTestnet => true,
@@ -336,7 +334,7 @@ impl EvmNamedNetwork {
             Linea | LineaSepolia => true,
 
             // Mantle networks
-            Mantle | MantleTestnet | MantleSepolia => true,
+            Mantle | MantleSepolia => true,
 
             // All other networks are not rollups
             _ => false,
@@ -400,10 +398,6 @@ impl EvmNamedNetwork {
             ],
 
             Arbitrum => &["https://api.arbiscan.io/api", "https://arbiscan.io"],
-            ArbitrumTestnet => &[
-                "https://api-testnet.arbiscan.io/api",
-                "https://testnet.arbiscan.io",
-            ],
             ArbitrumSepolia => &[
                 "https://api-sepolia.arbiscan.io/api",
                 "https://sepolia.arbiscan.io",
@@ -475,20 +469,19 @@ impl EvmNamedNetwork {
                 "https://explorer.mantle.xyz/api",
                 "https://explorer.mantle.xyz",
             ],
-            MantleTestnet => &[
-                "https://explorer.testnet.mantle.xyz/api",
-                "https://explorer.testnet.mantle.xyz",
-            ],
             MantleSepolia => &[
                 "https://explorer.sepolia.mantle.xyz/api",
                 "https://explorer.sepolia.mantle.xyz",
             ],
 
+            Unichain => &["https://uniscan.xyz", "https://api.uniscan.xyz/api"],
             UnichainSepolia => &[
                 "https://sepolia.uniscan.xyz",
                 "https://api-sepolia.uniscan.xyz/api",
             ],
+            WorldChain => &["https://worldscan.org", "https://api.worldscan.org/api"],
             WorldChainSepolia => &[
+                "https://worldchain-sepolia.g.alchemy.com/public",
                 "https://worldchain-sepolia.explorer.alchemy.com",
                 "https://worldchain-sepolia.explorer.alchemy.com/api", // Assuming API path, might need verification
             ],
@@ -498,148 +491,272 @@ impl EvmNamedNetwork {
         })
     }
 
-    // TODO use correct rpc values
     pub const fn public_rpc_urls(self) -> Option<&'static [&'static str]> {
         use EvmNamedNetwork::*;
 
+        // RPC endpoints extracted from:
+        // - Official Docs
+        // - https://drpc.org/chainlist
+        // - https://www.1rpc.io/
+        // - https://publicnode.com/
+        // - https://www.nodies.app/
+        // - https://chainlist.org/,
         Some(match self {
-            Mainnet => &["https://api.etherscan.io/api", "https://etherscan.io"],
+            Mainnet => &[
+                "https://eth.drpc.org",
+                "https://1rpc.io/eth",
+                "https://ethereum-rpc.publicnode.com",
+                "https://ethereum-public.nodies.app",
+            ],
             Sepolia => &[
-                "https://eth-sepolia.api.onfinality.io/public",
-                "https://sepolia.etherscan.io",
-                "https://api-sepolia.etherscan.io/api",
+                "https://sepolia.drpc.org",
+                "https://1rpc.io/sepolia",
+                "https://ethereum-sepolia-rpc.publicnode.com",
+                "https://ethereum-sepolia-public.nodies.app",
             ],
             Holesky => &[
-                "https://api-holesky.etherscan.io/api",
-                "https://holesky.etherscan.io",
+                "https://holesky.drpc.org",
+                "https://1rpc.io/holesky",
+                "https://ethereum-holesky-rpc.publicnode.com",
             ],
 
-            Polygon => &["https://api.polygonscan.com/api", "https://polygonscan.com"],
+            Polygon => &[
+                "https://polygon-rpc.com",
+                "https://polygon.drpc.org",
+                "https://1rpc.io/matic",
+                "https://polygon-bor-rpc.publicnode.com",
+                "https://polygon-public.nodies.app",
+                "https://polygon.meowrpc.com",
+            ],
             PolygonAmoy => &[
-                "https://api-amoy.polygonscan.com/api",
-                "https://amoy.polygonscan.com",
+                "https://rpc-amoy.polygon.technology",
+                "https://polygon-amoy.drpc.org",
+                "https://polygon-amoy-bor-rpc.publicnode.com",
             ],
 
             PolygonZkEvm => &[
-                "https://api-zkevm.polygonscan.com/api",
-                "https://zkevm.polygonscan.com",
+                "https://zkevm-rpc.com",
+                "https://polygon-zkevm.drpc.org",
+                "https://1rpc.io/polygon/zkevm",
+                "https://polygon-zkevm-public.nodies.app",
             ],
             PolygonZkEvmTestnet => &[
-                "https://api-testnet-zkevm.polygonscan.com/api",
+                "https://rpc.cardona.zkevm-rpc.com",
+                "https://polygon-zkevm-cardona.drpc.org",
                 "https://testnet-zkevm.polygonscan.com",
             ],
 
-            Avalanche => &["https://api.snowtrace.io/api", "https://snowtrace.io"],
+            Avalanche => &[
+                "https://avalanche.drpc.org",
+                "https://1rpc.io/avax/c",
+                "https://avalanche-public.nodies.app",
+            ],
             AvalancheFuji => &[
-                "https://api-testnet.snowtrace.io/api",
-                "https://testnet.snowtrace.io",
+                "https://avalanche-fuji.drpc.org",
+                "https://avalanche-fuji-c-chain-rpc.publicnode.com",
             ],
 
-            Optimism => &["https://mainnet.optimism.io"],
-            OptimismSepolia => &["https://sepolia.optimism.io"],
+            Optimism => &[
+                "https://mainnet.optimism.io",
+                "https://optimism.drpc.org",
+                "https://1rpc.io/op",
+                "https://optimism-rpc.publicnode.com",
+                "https://optimism-public.nodies.app",
+            ],
+            OptimismSepolia => &[
+                "https://sepolia.optimism.io",
+                "https://optimism-sepolia.drpc.org",
+                "https://optimism-sepolia-rpc.publicnode.com",
+                "https://optimism-sepolia-public.nodies.app",
+            ],
 
-            Fantom => &["https://api.ftmscan.com/api", "https://ftmscan.com"],
+            Fantom => &[
+                "https://rpcapi.fantom.network",
+                "https://fantom.drpc.org",
+                "https://1rpc.io/ftm",
+                "https://fantom-rpc.publicnode.com",
+                "https://fantom-public.nodies.app",
+            ],
             FantomTestnet => &[
-                "https://api-testnet.ftmscan.com/api",
-                "https://testnet.ftmscan.com",
+                "https://rpc.testnet.fantom.network/",
+                "https://fantom-testnet.drpc.org",
+                "https://fantom-testnet-rpc.publicnode.com",
             ],
 
-            BinanceSmartChain => &["https://api.bscscan.com/api", "https://bscscan.com"],
+            // Binance Smart Chain RPC extracted from https://docs.bnbchain.org/bnb-smart-chain/developers/json_rpc/json-rpc-endpoint
+            BinanceSmartChain => &[
+                "https://bsc-dataseed.bnbchain.org",
+                "https://bsc-dataseed.nariox.org",
+                "https://bsc-dataseed.defibit.io",
+                "https://bsc-dataseed.ninicoin.io",
+                "https://bsc.nodereal.io",
+                "https://bsc-dataseed-public.bnbchain.org",
+                "https://bnb.rpc.subquery.network/public",
+                "https://bsc.drpc.org",
+                "https://1rpc.io/bnb",
+                "https://bsc-rpc.publicnode.com",
+                "https://binance-smart-chain-public.nodies.app",
+            ],
             BinanceSmartChainTestnet => &[
-                "https://api-testnet.bscscan.com/api",
-                "https://testnet.bscscan.com",
+                "https://bsc-testnet-dataseed.bnbchain.org",
+                "https://bsc-testnet.bnbchain.org",
+                "https://bsc-prebsc-dataseed.bnbchain.org",
+                "https://bsc-testnet.drpc.org",
+                "https://bsc-testnet-rpc.publicnode.com",
             ],
 
-            Arbitrum => &["https://api.arbiscan.io/api", "https://arbiscan.io"],
-            ArbitrumTestnet => &[
-                "https://api-testnet.arbiscan.io/api",
-                "https://testnet.arbiscan.io",
+            Arbitrum => &[
+                "https://arb1.arbitrum.io/rpc",
+                "https://arbitrum.drpc.org",
+                "https://1rpc.io/arb",
+                "https://arbitrum-one-rpc.publicnode.com",
+                "https://arbitrum-one-public.nodies.app",
             ],
             ArbitrumSepolia => &[
-                "https://api-sepolia.arbiscan.io/api",
-                "https://sepolia.arbiscan.io",
+                "https://sepolia-rollup.arbitrum.io/rpc",
+                "https://arbitrum-sepolia.drpc.org",
+                "https://arbitrum-sepolia-rpc.publicnode.com",
             ],
             ArbitrumNova => &[
-                "https://api-nova.arbiscan.io/api",
-                "https://nova.arbiscan.io",
+                "https://nova.arbitrum.io/rpc",
+                "https://arbitrum-nova.drpc.org",
+                "https://arbitrum-nova-rpc.publicnode.com",
             ],
 
             Moonbeam => &[
                 "https://api-moonbeam.moonscan.io/api",
                 "https://moonbeam.moonscan.io",
             ],
+            // Moonbase and Moonriver RPC extracted from https://docs.moonbeam.network/learn/platform/networks/moonbase/
             Moonbase => &[
-                "https://api-moonbase.moonscan.io/api",
-                "https://moonbase.moonscan.io",
+                "https://moonbase-alpha.public.blastapi.io",
+                "https://moonbase-rpc.dwellir.com",
+                "https://moonbeam-alpha.api.onfinality.io/public",
+                "https://rpc.api.moonbase.moonbeam.network",
+                "https://moonbase.unitedbloc.com",
+                "https://moonbase.public.curie.radiumblock.co/http",
             ],
             Moonriver => &[
-                "https://api-moonriver.moonscan.io/api",
-                "https://moonriver.moonscan.io",
+                "https://moonriver.public.blastapi.io",
+                "https://moonriver-rpc.dwellir.com",
+                "https://moonriver.api.onfinality.io/public",
+                "https://moonriver.unitedbloc.com",
+                "https://moonriver.public.curie.radiumblock.co/http",
             ],
 
-            Gnosis => &["https://api.gnosisscan.io/api", "https://gnosisscan.io"],
+            // Gnosis RPC extracted from https://docs.gnosischain.com/tools/RPC%20Providers/
+            Gnosis => &[
+                "https://rpc.gnosis.gateway.fm",
+                "https://rpc.gnosischain.com/",
+                "https://rpc.ankr.com/gnosis",
+                "https://gnosis-pokt.nodies.app",
+                "https://gnosis-mainnet.public.blastapi.io",
+                "https://gnosis.api.onfinality.io/public",
+            ],
 
-            Scroll => &["https://api.scrollscan.com/api", "https://scrollscan.com"],
+            Scroll => &[
+                "https://rpc.scroll.io/",
+                "https://scroll.drpc.org",
+                "https://1rpc.io/scroll",
+                "https://scroll-rpc.publicnode.com",
+                "https://scroll-public.nodies.app",
+            ],
             ScrollSepolia => &[
-                "https://api-sepolia.scrollscan.com/api",
-                "https://sepolia.scrollscan.com",
+                "https://sepolia-rpc.scroll.io/",
+                "https://scroll-sepolia.drpc.org",
+                "https://scroll-sepolia-rpc.publicnode.com",
+                "https://scroll-sepolia-public.nodies.app",
             ],
 
-            Aurora => &["https://api.aurorascan.dev/api", "https://aurorascan.dev"],
+            Aurora => &[
+                "https://mainnet.aurora.dev",
+                "https://aurora.drpc.org",
+                "https://1rpc.io/aurora",
+            ],
             AuroraTestnet => &[
-                "https://testnet.aurorascan.dev/api",
-                "https://testnet.aurorascan.dev",
+                "https://testnet.aurora.dev",
+                "https://aurora-testnet.drpc.org",
             ],
 
-            Celo => &["https://api.celoscan.io/api", "https://celoscan.io"],
+            Celo => &[
+                "https://rpc.ankr.com/celo",
+                "https://celo.drpc.org",
+                "https://1rpc.io/celo",
+                "https://celo-rpc.publicnode.com",
+            ],
             CeloAlfajores => &[
-                "https://api-alfajores.celoscan.io/api",
-                "https://alfajores.celoscan.io",
+                "https://celo-alfajores.drpc.org",
+                "https://alfajores-forno.celo-testnet.org",
             ],
-            CeloBaklava => &[
-                "https://explorer.celo.org/baklava/api",
-                "https://explorer.celo.org/baklava",
-            ],
+            CeloBaklava => &["https://baklava-forno.celo-testnet.org"],
 
-            Base => &["https://api.basescan.org/api", "https://basescan.org"],
+            Base => &[
+                "https://mainnet.base.org",
+                "https://base.drpc.org",
+                "https://1rpc.io/base",
+                "https://base-rpc.publicnode.com",
+                "https://base-public.nodies.app",
+            ],
             BaseSepolia => &[
-                "https://api-sepolia.basescan.org/api",
-                "https://sepolia.basescan.org",
+                "https://sepolia.base.org",
+                "https://base-sepolia.drpc.org",
+                "https://base-sepolia-rpc.publicnode.com",
+                "https://base-sepolia-public.nodies.app",
             ],
 
             ZkSync => &[
-                "https://api-era.zksync.network/api",
-                "https://era.zksync.network",
+                "https://mainnet.era.zksync.io",
+                "https://zksync.drpc.org",
+                "https://1rpc.io/zksync2-era",
             ],
             ZkSyncTestnet => &[
-                "https://api-sepolia-era.zksync.network/api",
-                "https://sepolia-era.zksync.network",
+                "https://sepolia.era.zksync.dev",
+                "https://zksync-sepolia.drpc.org",
             ],
 
-            Linea => &["https://api.lineascan.build/api", "https://lineascan.build"],
+            Linea => &[
+                "https://rpc.linea.build",
+                "https://linea.drpc.org",
+                "https://1rpc.io/linea",
+                "https://linea-rpc.publicnode.com",
+            ],
             LineaSepolia => &[
-                "https://api-sepolia.lineascan.build/api",
-                "https://sepolia.lineascan.build",
+                "https://rpc.sepolia.linea.build",
+                "https://linea-sepolia.drpc.org",
+                "https://linea-sepolia-rpc.publicnode.com",
             ],
 
             Mantle => &[
-                "https://explorer.mantle.xyz/api",
-                "https://explorer.mantle.xyz",
-            ],
-            MantleTestnet => &[
-                "https://explorer.testnet.mantle.xyz/api",
-                "https://explorer.testnet.mantle.xyz",
+                "https://rpc.mantle.xyz",
+                "https://mantle.drpc.org",
+                "https://1rpc.io/mantle",
+                "https://mantle-rpc.publicnode.com",
+                "https://mantle-public.nodies.app",
             ],
             MantleSepolia => &[
-                "https://explorer.sepolia.mantle.xyz/api",
-                "https://explorer.sepolia.mantle.xyz",
+                "https://rpc.sepolia.mantle.xyz",
+                "https://mantle-sepolia.drpc.org",
             ],
 
-            UnichainSepolia => &[
-                "https://sepolia.uniscan.xyz",
-                "https://api-sepolia.uniscan.xyz/api",
+            Unichain => &[
+                "https://mainnet.unichain.org",
+                "https://unichain.drpc.org",
+                "https://1rpc.io/unichain",
+                "https://unichain-rpc.publicnode.com",
             ],
-            WorldChainSepolia => &["https://worldchain-sepolia.g.alchemy.com/public"],
+            UnichainSepolia => &[
+                "https://sepolia.unichain.org",
+                "https://unichain-sepolia.drpc.org",
+                "https://unichain-sepolia-rpc.publicnode.com",
+            ],
+            WorldChain => &[
+                "https://worldchain-mainnet.g.alchemy.com/public",
+                "https://worldchain.drpc.org",
+            ],
+            WorldChainSepolia => &[
+                "https://worldchain-sepolia.g.alchemy.com/public",
+                "https://worldchain-sepolia.drpc.org",
+            ],
             MoonbeamDev => {
                 return None;
             }
@@ -651,10 +768,10 @@ impl EvmNamedNetwork {
         match self {
             // Ethereum and L2s
             Mainnet | Sepolia | Holesky | Optimism | OptimismSepolia | Base | BaseSepolia
-            | Arbitrum | ArbitrumTestnet | ArbitrumSepolia | ArbitrumNova | Scroll
-            | ScrollSepolia | ZkSync | ZkSyncTestnet => "ETH",
+            | Arbitrum | ArbitrumSepolia | ArbitrumNova | Scroll | ScrollSepolia | ZkSync
+            | ZkSyncTestnet => "ETH",
             Celo | CeloAlfajores | CeloBaklava => "CELO",
-            Mantle | MantleTestnet | MantleSepolia => "MNT",
+            Mantle | MantleSepolia => "MNT",
             Linea | LineaSepolia => "ETH",
 
             // BSC
@@ -671,8 +788,9 @@ impl EvmNamedNetwork {
             Moonbase => "DEV",
             Avalanche | AvalancheFuji => "AVAX",
             Gnosis => "xDAI",
-            UnichainSepolia => "ETH",
-            WorldChainSepolia => "ETH",
+            Unichain | UnichainSepolia => "ETH",
+
+            WorldChain | WorldChainSepolia => "ETH",
             Aurora | AuroraTestnet => "ETH",
         }
     }
@@ -743,6 +861,7 @@ mod tests {
     fn is_testnet() {
         assert!(!EvmNamedNetwork::Mainnet.is_testnet());
         assert!(EvmNamedNetwork::Sepolia.is_testnet());
+        assert!(EvmNamedNetwork::UnichainSepolia.is_testnet());
         assert!(EvmNamedNetwork::WorldChainSepolia.is_testnet());
     }
 
@@ -788,6 +907,8 @@ mod tests {
             EvmNamedNetwork::Base,
             EvmNamedNetwork::BaseSepolia,
             EvmNamedNetwork::UnichainSepolia,
+            EvmNamedNetwork::Unichain,
+            EvmNamedNetwork::WorldChain,
             EvmNamedNetwork::WorldChainSepolia,
         ] {
             assert!(net.is_optimism());
@@ -800,7 +921,6 @@ mod tests {
     fn is_arbitrum_check() {
         for net in [
             EvmNamedNetwork::Arbitrum,
-            EvmNamedNetwork::ArbitrumTestnet,
             EvmNamedNetwork::ArbitrumSepolia,
             EvmNamedNetwork::ArbitrumNova,
         ] {
@@ -821,6 +941,10 @@ mod tests {
             Some(Duration::from_millis(2000))
         );
         assert_eq!(
+            EvmNamedNetwork::WorldChain.average_blocktime(),
+            Some(Duration::from_millis(2000))
+        );
+        assert_eq!(
             EvmNamedNetwork::WorldChainSepolia.average_blocktime(),
             Some(Duration::from_millis(2000))
         );
@@ -833,12 +957,12 @@ mod tests {
         assert!(!EvmNamedNetwork::Mainnet.is_legacy());
         assert!(!EvmNamedNetwork::Polygon.is_legacy());
         assert!(!EvmNamedNetwork::WorldChainSepolia.is_legacy());
+        assert!(!EvmNamedNetwork::WorldChain.is_legacy());
     }
 
     #[test]
     fn is_deprecated_check() {
         assert!(EvmNamedNetwork::Sepolia.is_deprecated());
-        assert!(EvmNamedNetwork::ArbitrumTestnet.is_deprecated());
         assert!(EvmNamedNetwork::WorldChainSepolia.is_deprecated());
         assert!(!EvmNamedNetwork::Mainnet.is_deprecated());
         assert!(!EvmNamedNetwork::Optimism.is_deprecated());
@@ -859,7 +983,7 @@ mod tests {
         assert!(EvmNamedNetwork::Sepolia
             .public_rpc_urls()
             .unwrap()
-            .contains(&"https://eth-sepolia.api.onfinality.io/public"));
+            .contains(&"https://sepolia.drpc.org"));
         assert!(EvmNamedNetwork::WorldChainSepolia
             .public_rpc_urls()
             .unwrap()
@@ -875,7 +999,9 @@ mod tests {
             EvmNamedNetwork::OptimismSepolia,
             EvmNamedNetwork::Base,
             EvmNamedNetwork::BaseSepolia,
+            EvmNamedNetwork::Unichain,
             EvmNamedNetwork::UnichainSepolia,
+            EvmNamedNetwork::WorldChain,
             EvmNamedNetwork::WorldChainSepolia,
         ] {
             assert!(net.is_rollup(), "{} should be a rollup", net);
@@ -884,7 +1010,6 @@ mod tests {
         // Test Arbitrum networks
         for net in [
             EvmNamedNetwork::Arbitrum,
-            EvmNamedNetwork::ArbitrumTestnet,
             EvmNamedNetwork::ArbitrumSepolia,
             EvmNamedNetwork::ArbitrumNova,
         ] {
@@ -902,11 +1027,7 @@ mod tests {
         }
 
         // Test Mantle networks
-        for net in [
-            EvmNamedNetwork::Mantle,
-            EvmNamedNetwork::MantleTestnet,
-            EvmNamedNetwork::MantleSepolia,
-        ] {
+        for net in [EvmNamedNetwork::Mantle, EvmNamedNetwork::MantleSepolia] {
             assert!(net.is_rollup(), "{} should be a rollup", net);
         }
 

@@ -16,6 +16,9 @@ pub use notification_handler::*;
 mod transaction_status_handler;
 pub use transaction_status_handler::*;
 
+mod solana_swap_request_handler;
+pub use solana_swap_request_handler::*;
+
 pub fn handle_result(
     result: Result<(), Report>,
     attempt: Attempt,

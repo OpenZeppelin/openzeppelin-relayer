@@ -20,7 +20,7 @@ use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use super::JobType;
+use super::{JobType, SolanaTokenSwapRequest};
 
 #[cfg(test)]
 use mockall::automock;
@@ -88,6 +88,12 @@ pub trait JobProducerTrait: Send + Sync {
     async fn produce_send_notification_job(
         &self,
         notification_send_job: NotificationSend,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError>;
+
+    async fn produce_solana_token_swap_request_job(
+        &self,
+        solana_swap_request_job: SolanaTokenSwapRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError>;
 }
@@ -199,6 +205,30 @@ impl JobProducerTrait for JobProducer {
         info!("Notification Send job produced successfully");
         Ok(())
     }
+
+    async fn produce_solana_token_swap_request_job(
+        &self,
+        solana_swap_request_job: SolanaTokenSwapRequest,
+        scheduled_on: Option<i64>,
+    ) -> Result<(), JobProducerError> {
+        let mut queue = self.queue.lock().await;
+        let job = Job::new(JobType::SolanaTokenSwapRequest, solana_swap_request_job);
+
+        match scheduled_on {
+            Some(on) => {
+                queue
+                    .solana_token_swap_request_queue
+                    .schedule(job, on)
+                    .await?;
+            }
+            None => {
+                queue.solana_token_swap_request_queue.push(job).await?;
+            }
+        }
+
+        info!("Solana token swap job produced successfully");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +272,7 @@ mod tests {
         pub transaction_submission_queue: TestRedisStorage<Job<TransactionSend>>,
         pub transaction_status_queue: TestRedisStorage<Job<TransactionStatusCheck>>,
         pub notification_queue: TestRedisStorage<Job<NotificationSend>>,
+        pub solana_token_swap_request_queue: TestRedisStorage<Job<SolanaTokenSwapRequest>>,
     }
 
     impl TestQueue {
@@ -251,6 +282,7 @@ mod tests {
                 transaction_submission_queue: TestRedisStorage::new(),
                 transaction_status_queue: TestRedisStorage::new(),
                 notification_queue: TestRedisStorage::new(),
+                solana_token_swap_request_queue: TestRedisStorage::new(),
             }
         }
     }
@@ -354,6 +386,32 @@ mod tests {
                 }
                 None => {
                     queue.notification_queue.push(job).await?;
+                }
+            }
+
+            Ok(())
+        }
+
+        async fn produce_solana_token_swap_request_job(
+            &self,
+            solana_token_swap_request_job: SolanaTokenSwapRequest,
+            scheduled_on: Option<i64>,
+        ) -> Result<(), JobProducerError> {
+            let mut queue = self.queue.lock().await;
+            let job = Job::new(
+                JobType::SolanaTokenSwapRequest,
+                solana_token_swap_request_job,
+            );
+
+            match scheduled_on {
+                Some(on) => {
+                    queue
+                        .solana_token_swap_request_queue
+                        .schedule(job, on)
+                        .await?;
+                }
+                None => {
+                    queue.solana_token_swap_request_queue.push(job).await?;
                 }
             }
 

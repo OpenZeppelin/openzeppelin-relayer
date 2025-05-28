@@ -33,6 +33,7 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
   * Ethereum (Mainnet, Sepolia, Holesky)
   * Optimism (Mainnet, Sepolia)
   * Worldchain (Sepolia)
+- Stellar (Partial support)
 
 [NOTE]
 ====
@@ -387,6 +388,26 @@ This table lists the environment variables and their default values.
 | `<timeout in milliseconds>`
 | Sets the maximum time to wait for RPC connections before timing out.
 
+| `PROVIDER_MAX_RETRIES`
+| `3`
+| `<number of retries>`
+| Maximum number of retry attempts for provider operations.
+
+| `PROVIDER_RETRY_BASE_DELAY_MS`
+| `100`
+| `<delay in milliseconds>`
+| Base delay between retry attempts in milliseconds.
+
+| `PROVIDER_RETRY_MAX_DELAY_MS`
+| `2000`
+| `<delay in milliseconds>`
+| Maximum delay between retry attempts in milliseconds.
+
+| `PROVIDER_MAX_FAILOVERS`
+| `3`
+| `<number of failovers>`
+| Maximum number of failovers (switching to different providers).
+
 | `ENABLE_SWAGGER`
 | `false`
 | `true, false`
@@ -417,6 +438,10 @@ METRICS_PORT=8081
 REDIS_URL=redis://localhost:6379
 REDIS_CONNECTION_TIMEOUT_MS=10000
 RPC_TIMEOUT_MS=10000
+PROVIDER_MAX_RETRIES=3
+PROVIDER_RETRY_BASE_DELAY_MS=100
+PROVIDER_RETRY_MAX_DELAY_MS=2000
+PROVIDER_MAX_FAILOVERS=3
 ENABLE_SWAGGER=false
 KEYSTORE_PASSPHRASE=your_keystore_passphrase
 ```
@@ -469,6 +494,7 @@ Supported signer types:
 - `vault_cloud`: hosted vault secret signer
 - `vault_transit`: vault transit signer
 - `turnkey`: turnkey signer
+- `google_cloud_kms`: google cloud kms signer
 
 Available configuration fields
 [cols="1,1,2"]
@@ -648,6 +674,52 @@ Available configuration fields
 | The public key corresponding to the private key identified by private_key_id. Used for address derivation and signature verification.
 |===
 
+`google_cloud_kms` type config:
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| service_account.project_id
+| String
+| The Google Cloud project ID where your KMS resources are located.
+
+| service_account.private_key_id.type
+| String
+| Type of value source for the private key ID (`env` or `plain`).
+
+| service_account.private_key_id.value
+| String
+| The private key ID value or the environment variable name containing it.
+
+| service_account.private_key.type
+| String
+| Type of value source for the private key (`env` or `plain`).
+
+| service_account.private_key.value
+| String
+| The Google Cloud service account private key (PEM format) or the environment variable name containing it.
+
+| service_account.client_email.type
+| String
+| Type of value source for the client email (`env` or `plain`).
+
+| service_account.client_email.value
+| String
+| The Google Cloud service account client email or the environment variable name containing it.
+
+| service_account.client_id
+| String
+| The Google Cloud service account client ID.
+
+| key.key_ring_id
+| String
+| The KMS key ring ID containing your cryptographic key.
+
+| key.key_id
+| String
+| The KMS key ID used for signing operations.
+|===
+
 
 ==== 2. Notifications
 
@@ -800,6 +872,14 @@ Supported networks
 |evm
 |holesky
 |Ethereum testnet
+
+|stellar
+|mainnet
+|Stellar Public Network (Partial support)
+
+|stellar
+|testnet
+|Stellar Test Network (Partial support)
 |===
 
 [#network_policies]
@@ -817,6 +897,11 @@ Policies
 |fee_payment_strategy
 |enum(user,relayer)
 |Specifies who pays the fee. "user" (default) means the sender pays; "relayer" means the relayer pays. For "user", RPC methods add an instruction to transfer SPL tokens (calculated from the current SOL price plus a configurable margin) from the user to the relayer, ensuring fees are sustainably covered in tokens rather than SOL.
+
+|solana
+|swap_config
+|SwapConfig
+|Optional object configuring automated token‐swaps on Solana.
 
 |solana
 |fee_margin_percentage
@@ -931,6 +1016,39 @@ Full `config/config.json` example with evm and solana relayers definitions using
           }
         ]
       }
+    },
+    {
+      "id": "solana-mainnet-example",
+      "name": "Solana Mainnet Example",
+      "network": "mainnet-beta",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "solana",
+      "custom_rpc_urls": ["https://your-private-solana-rpc.example.com"],
+      "policies": {
+        "fee_payment_strategy": "user",
+        "min_balance": 0,
+        "swap_config": {
+          "cron_schedule": "0 0 * * * *",
+          "min_balance_threshold": 0,
+          "strategy": "jupiter-ultra"
+        },
+        "allowed_tokens": [
+          {
+            "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "max_allowed_fee": 100000000,
+            "swap_config": {
+              "min_amount": 0,
+              "max_amount": 0,
+              "retain_min_amount": 0
+            }
+          },
+          {
+            "mint": "So11111111111111111111111111111111111111112"
+          }
+        ]
+      }
     }
   ],
   "notifications": [
@@ -998,7 +1116,7 @@ This is useful when you want to:
    * Configure primary and backup endpoints with different weights
 
 When both are available, the relayer will:
-1. First attempt to use the `custom_rpc_urls` if configured. 
+1. First attempt to use the `custom_rpc_urls` if configured.
 2. Fall back to the public RPC URLs if no custom URL is configured.
 
 For backward compatibility, string arrays are still supported:
@@ -1019,7 +1137,6 @@ When using custom RPC URLs:
 * The weight must be an integer between 0 and 100 (inclusive).
 * A weight of 0 disables the endpoint.
 * If a weight is not specified for an endpoint, it defaults to 100.
-
 ====
 
 == Important Considerations

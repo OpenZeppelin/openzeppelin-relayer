@@ -23,6 +23,10 @@ async fn test_authorization_middleware_success() {
         enable_swagger: false,
         redis_connection_timeout_ms: 5000,
         rpc_timeout_ms: 5000,
+        provider_max_retries: 3,
+        provider_retry_base_delay_ms: 100,
+        provider_retry_max_delay_ms: 2000,
+        provider_max_failovers: 3,
     });
 
     let app = test::init_service(
@@ -72,6 +76,10 @@ async fn test_authorization_middleware_failure() {
         enable_swagger: false,
         redis_connection_timeout_ms: 5000,
         rpc_timeout_ms: 5000,
+        provider_max_retries: 3,
+        provider_retry_base_delay_ms: 100,
+        provider_retry_max_delay_ms: 2000,
+        provider_max_failovers: 3,
     });
 
     let app = test::init_service(

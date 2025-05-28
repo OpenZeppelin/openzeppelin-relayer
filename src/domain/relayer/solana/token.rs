@@ -22,7 +22,7 @@ use crate::services::SolanaProviderTrait;
 ///
 /// This struct contains the essential information about a token account,
 /// including the mint address, owner, token amount, and frozen status.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct TokenAccount {
     /// The mint address of the token
     pub mint: Pubkey,
@@ -320,6 +320,49 @@ impl SolanaTokenProgram {
                 program_id
             )))
         }
+    }
+
+    /// Gets a token account for a given owner and mint, then unpacks it into a TokenAccount struct.
+    ///
+    /// This is a convenience method that combines several operations:
+    /// 1. Finds the appropriate token program for the mint
+    /// 2. Derives the associated token account address
+    /// 3. Fetches the account data
+    /// 4. Unpacks it into a structured TokenAccount
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The Solana provider to use for RPC calls
+    /// * `owner` - The public key of the token owner
+    /// * `mint` - The public key of the token mint
+    ///
+    /// # Returns
+    ///
+    /// A Result containing the unpacked TokenAccount or a TokenError
+    pub async fn get_and_unpack_token_account<P: SolanaProviderTrait>(
+        provider: &P,
+        owner: &Pubkey,
+        mint: &Pubkey,
+    ) -> Result<TokenAccount, TokenError> {
+        // Get the token program ID for this mint
+        let program_id = Self::get_token_program_for_mint(provider, mint).await?;
+
+        // Derive the associated token account address
+        let token_account_address = Self::get_associated_token_address(&program_id, owner, mint);
+
+        // Fetch the token account data
+        let account_data = provider
+            .get_account_from_pubkey(&token_account_address)
+            .await
+            .map_err(|e| {
+                TokenError::AccountError(format!(
+                    "Failed to fetch token account for owner {} and mint {}: {}",
+                    owner, mint, e
+                ))
+            })?;
+
+        // Unpack the token account data
+        Self::unpack_account(&program_id, &account_data)
     }
 }
 

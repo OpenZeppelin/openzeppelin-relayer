@@ -12,21 +12,21 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
+#[cfg(test)]
+use mockall::automock;
+
 use crate::{
     jobs::JobProducer,
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
+        SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage,
     },
-    services::{
-        get_network_provider, EvmSignerFactory, JupiterService, SolanaSignerFactory,
-        TransactionCounterService,
-    },
+    services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
 };
 
 use async_trait::async_trait;
@@ -144,10 +144,24 @@ pub trait Relayer {
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
+/// Solana Relayer Dex Trait
+/// Subset of methods for Solana relayer
+#[async_trait]
+#[allow(dead_code)]
+#[cfg_attr(test, automock)]
+pub trait SolanaRelayerDexTrait {
+    /// Handles a token swap request.
+    async fn handle_token_swap_request(
+        &self,
+        relayer_id: String,
+    ) -> Result<Vec<SwapResult>, RelayerError>;
+}
+
 /// Solana Relayer Trait
 /// Subset of methods for Solana relayer
 #[async_trait]
 #[allow(dead_code)]
+#[cfg_attr(test, automock)]
 pub trait SolanaRelayerTrait {
     /// Retrieves the current balance of the relayer.
     ///
@@ -189,7 +203,7 @@ pub trait SolanaRelayerTrait {
 
 pub enum NetworkRelayer {
     Evm(DefaultEvmRelayer),
-    Solana(SolanaRelayer),
+    Solana(DefaultSolanaRelayer),
     Stellar(DefaultStellarRelayer),
 }
 
@@ -289,6 +303,7 @@ pub trait RelayerFactoryTrait {
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
+
 pub struct RelayerFactory;
 
 impl RelayerFactoryTrait for RelayerFactory {
@@ -328,34 +343,14 @@ impl RelayerFactoryTrait for RelayerFactory {
                 Ok(NetworkRelayer::Evm(relayer))
             }
             NetworkType::Solana => {
-                let network = match SolanaNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-                };
-                let provider = Arc::new(get_network_provider(
-                    &network,
-                    relayer.custom_rpc_urls.clone(),
-                )?);
-                let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
-                let jupiter_service = JupiterService::new_from_network(relayer.network.as_str());
-                let rpc_methods = SolanaRpcMethodsImpl::new(
-                    relayer.clone(),
-                    provider.clone(),
-                    signer_service.clone(),
-                    Arc::new(jupiter_service),
-                    job_producer.clone(),
-                );
-                let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
-                let relayer = SolanaRelayer::new(
+                let solana_relayer = create_solana_relayer(
                     relayer,
-                    signer_service,
+                    signer,
                     relayer_repository,
-                    provider,
-                    rpc_handler,
                     transaction_repository,
-                    job_producer,
+                    job_producer.clone(),
                 )?;
-                Ok(NetworkRelayer::Solana(relayer))
+                Ok(NetworkRelayer::Solana(solana_relayer))
             }
             NetworkType::Stellar => {
                 let network = match StellarNetwork::from_network_str(&relayer.network) {
