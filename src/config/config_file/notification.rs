@@ -284,7 +284,9 @@ mod tests {
     fn test_webhook_signing_key_from_env() {
         use std::env;
 
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
         let valid_key = "C6D72367-EB3A-4D34-8900-DFF794A633F9"; // noboost
@@ -314,7 +316,9 @@ mod tests {
     fn test_webhook_signing_key_from_env_insufficient_length() {
         use std::env;
 
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
         let valid_key = "insufficient_length";

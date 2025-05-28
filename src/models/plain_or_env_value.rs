@@ -99,7 +99,9 @@ mod tests {
 
     #[test]
     fn test_env_value_get_value_when_env_exists() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::set_var("TEST_ENV_VAR", "env-secret-value");
 
@@ -117,7 +119,9 @@ mod tests {
 
     #[test]
     fn test_env_value_get_value_when_env_missing() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::remove_var("NONEXISTENT_VAR");
 
@@ -156,7 +160,9 @@ mod tests {
 
     #[test]
     fn test_is_empty_with_env_missing_var() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::remove_var("NONEXISTENT_VAR");
 
@@ -169,7 +175,9 @@ mod tests {
 
     #[test]
     fn test_is_empty_with_env_empty_var() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::set_var("EMPTY_ENV_VAR", "");
 
@@ -184,7 +192,9 @@ mod tests {
 
     #[test]
     fn test_is_empty_with_env_non_empty_var() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::set_var("TEST_ENV_VAR", "some-value");
 
@@ -223,7 +233,9 @@ mod tests {
 
     #[test]
     fn test_validator_with_env_missing_var() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::remove_var("NONEXISTENT_VAR");
 
@@ -239,7 +251,9 @@ mod tests {
 
     #[test]
     fn test_validator_with_env_empty_var() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::set_var("EMPTY_ENV_VAR", "");
 
@@ -257,7 +271,9 @@ mod tests {
 
     #[test]
     fn test_validator_with_env_non_empty_var() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         env::set_var("TEST_ENV_VAR", "some-value");
 

@@ -147,7 +147,10 @@ mod tests {
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
         assert_eq!(resolved.common.rpc_urls, parent_config.common.rpc_urls); // Inherited
-        assert_eq!(resolved.common.explorer_urls, parent_config.common.explorer_urls); // Inherited
+        assert_eq!(
+            resolved.common.explorer_urls,
+            parent_config.common.explorer_urls
+        ); // Inherited
         assert_eq!(resolved.common.average_blocktime_ms, Some(15000)); // Overridden
         assert_eq!(resolved.common.is_testnet, Some(false)); // Overridden
         assert_eq!(resolved.chain_id, parent_config.chain_id); // Inherited
@@ -213,7 +216,10 @@ mod tests {
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
         assert_eq!(resolved.common.rpc_urls, grandparent_config.common.rpc_urls); // From grandparent
-        assert_eq!(resolved.common.explorer_urls, grandparent_config.common.explorer_urls); // From grandparent
+        assert_eq!(
+            resolved.common.explorer_urls,
+            grandparent_config.common.explorer_urls
+        ); // From grandparent
         assert_eq!(resolved.common.average_blocktime_ms, Some(10000)); // From parent
         assert_eq!(resolved.common.is_testnet, Some(false)); // From child
         assert_eq!(resolved.chain_id, Some(42)); // From child
@@ -323,7 +329,10 @@ mod tests {
         let resolved = result.unwrap();
         assert_eq!(resolved.common.network, "child");
         assert_eq!(resolved.common.rpc_urls, parent_config.common.rpc_urls); // Inherited
-        assert_eq!(resolved.common.explorer_urls, parent_config.common.explorer_urls); // Inherited
+        assert_eq!(
+            resolved.common.explorer_urls,
+            parent_config.common.explorer_urls
+        ); // Inherited
         assert_eq!(resolved.common.average_blocktime_ms, Some(500)); // Overridden
     }
 
@@ -655,8 +664,8 @@ mod tests {
                 from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
                 explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
-                average_blocktime_ms: None,                                        // Inherit
-                is_testnet: Some(false),                                           // Override
+                average_blocktime_ms: None,                // Inherit
+                is_testnet: Some(false),                   // Override
                 tags: Some(vec!["child-tag".to_string()]), // Override (merge behavior depends on implementation)
             },
             chain_id: Some(42),                         // Override

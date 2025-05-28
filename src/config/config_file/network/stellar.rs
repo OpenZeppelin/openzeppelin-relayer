@@ -30,7 +30,10 @@ impl StellarNetworkConfig {
     pub fn merge_with_parent(&self, parent: &Self) -> Self {
         Self {
             common: self.common.merge_with_parent(&parent.common),
-            passphrase: self.passphrase.clone().or_else(|| parent.passphrase.clone()),
+            passphrase: self
+                .passphrase
+                .clone()
+                .or_else(|| parent.passphrase.clone()),
             // Add Stellar-specific field merging here as they are added to the struct
         }
     }

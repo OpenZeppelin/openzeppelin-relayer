@@ -73,7 +73,10 @@ impl NetworkConfigCommon {
             network: self.network.clone(),
             from: self.from.clone(),
             rpc_urls: self.rpc_urls.clone().or_else(|| parent.rpc_urls.clone()),
-            explorer_urls: self.explorer_urls.clone().or_else(|| parent.explorer_urls.clone()),
+            explorer_urls: self
+                .explorer_urls
+                .clone()
+                .or_else(|| parent.explorer_urls.clone()),
             average_blocktime_ms: self.average_blocktime_ms.or(parent.average_blocktime_ms),
             is_testnet: self.is_testnet.or(parent.is_testnet),
             tags: merge_tags(&self.tags, &parent.tags),

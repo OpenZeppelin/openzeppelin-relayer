@@ -45,7 +45,7 @@ pub use network::{
 
 use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum ConfigFileNetworkType {
     Evm,

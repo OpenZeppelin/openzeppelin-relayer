@@ -325,9 +325,9 @@ mod tests {
                 from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://child-rpc.example.com".to_string()]), // Override
                 explorer_urls: Some(vec!["https://child-explorer.example.com".to_string()]), // Override
-                average_blocktime_ms: None,                                        // Inherit
-                is_testnet: Some(false),                                           // Override
-                tags: Some(vec!["child-tag".to_string()]),                         // Merge
+                average_blocktime_ms: None,                // Inherit
+                is_testnet: Some(false),                   // Override
+                tags: Some(vec!["child-tag".to_string()]), // Merge
             },
             chain_id: Some(31337),                       // Override
             required_confirmations: None,                // Inherit

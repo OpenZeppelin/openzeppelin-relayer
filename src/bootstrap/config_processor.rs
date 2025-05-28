@@ -314,7 +314,10 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig, KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, RelayerFileConfig, ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig, VaultTransitSignerFileConfig
+            AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
+            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, RelayerFileConfig,
+            ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
         models::{PlainOrEnvValue, SecretString},

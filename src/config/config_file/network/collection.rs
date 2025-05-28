@@ -1,4 +1,5 @@
 use super::{InheritanceResolver, NetworkFileConfig, NetworkFileLoader, NetworksSource};
+use crate::config::config_file::ConfigFileNetworkType;
 use crate::config::ConfigFileError;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ use std::collections::HashMap;
 pub struct NetworksFileConfig {
     pub networks: Vec<NetworkFileConfig>,
     #[serde(skip)]
-    network_map: HashMap<String, usize>,
+    network_map: HashMap<(ConfigFileNetworkType, String), usize>,
 }
 
 impl Default for NetworksFileConfig {
@@ -63,17 +64,23 @@ impl NetworksFileConfig {
     /// Creates a new `NetworksFileConfig` instance from a vector of network configurations.
     ///
     /// # Returns
-    /// - `Ok(Self)` if all network names are unique and the instance is successfully created.
-    /// - `Err(ConfigFileError)` if duplicate network names are found.
+    /// - `Ok(Self)` if all network names are unique within their respective types and the instance is successfully created.
+    /// - `Err(ConfigFileError)` if duplicate network names are found within the same network type.
     pub fn new(networks: Vec<NetworkFileConfig>) -> Result<Self, ConfigFileError> {
         let mut network_map = HashMap::new();
 
         // Build the network map for efficient lookups
         for (index, network) in networks.iter().enumerate() {
             let name = network.network_name();
-            if network_map.insert(name.to_string(), index).is_some() {
-                // Return an error if we find a duplicate
-                return Err(ConfigFileError::DuplicateId(name.to_string()));
+            let network_type = network.network_type();
+            let key = (network_type, name.to_string());
+
+            if network_map.insert(key, index).is_some() {
+                // Return an error if we find a duplicate within the same network type
+                return Err(ConfigFileError::DuplicateId(format!(
+                    "{:?} network '{}'",
+                    network_type, name
+                )));
             }
         }
 
@@ -85,24 +92,30 @@ impl NetworksFileConfig {
         // Check inheritance references and types
         for network in &instance.networks {
             if network.inherits_from().is_some() {
-                instance.trace_inheritance(network.network_name())?;
+                instance.trace_inheritance(network.network_name(), network.network_type())?;
             }
         }
 
         Ok(instance)
     }
 
-    /// Retrieves a network configuration by its unique name.
+    /// Retrieves a network configuration by its network type and name.
     ///
     /// # Arguments
+    /// * `network_type` - The type of the network to retrieve.
     /// * `name` - The name of the network to retrieve.
     ///
     /// # Returns
-    /// - `Some(&NetworkFileConfig)` if a network with the given name exists.
-    /// - `None` if no network with the given name is found.
-    pub fn get_network(&self, name: &str) -> Option<&NetworkFileConfig> {
+    /// - `Some(&NetworkFileConfig)` if a network with the given type and name exists.
+    /// - `None` if no network with the given type and name is found.
+    pub fn get_network(
+        &self,
+        network_type: ConfigFileNetworkType,
+        name: &str,
+    ) -> Option<&NetworkFileConfig> {
+        let key = (network_type, name.to_string());
         self.network_map
-            .get(name)
+            .get(&key)
             .map(|&index| &self.networks[index])
     }
 
@@ -148,9 +161,10 @@ impl NetworksFileConfig {
 
         let parent_name = network.inherits_from().unwrap();
         let network_name = network.network_name();
+        let network_type = network.network_type();
 
-        // Create the inheritance resolver with a lookup function
-        let lookup_fn = |name: &str| self.get_network(name);
+        // Create the inheritance resolver with a lookup function that uses network type
+        let lookup_fn = move |name: &str| self.get_network(network_type, name);
         let resolver = InheritanceResolver::new(&lookup_fn);
 
         match network {
@@ -189,11 +203,16 @@ impl NetworksFileConfig {
     ///
     /// # Arguments
     /// - `start_network_name` - The name of the network to trace inheritance for.
+    /// - `network_type` - The type of the network to trace inheritance for.
     ///
     /// # Returns
     /// - `Ok(())` if the inheritance chain is valid.
     /// - `Err(ConfigFileError)` if a cycle or invalid reference is detected.
-    fn trace_inheritance(&self, start_network_name: &str) -> Result<(), ConfigFileError> {
+    fn trace_inheritance(
+        &self,
+        start_network_name: &str,
+        network_type: ConfigFileNetworkType,
+    ) -> Result<(), ConfigFileError> {
         let mut current_path_names = Vec::new();
         let mut current_name = start_network_name;
 
@@ -209,12 +228,14 @@ impl NetworksFileConfig {
 
             current_path_names.push(current_name);
 
-            let current_network = self.get_network(current_name).ok_or_else(|| {
-                ConfigFileError::InvalidReference(format!(
-                    "Network '{}' not found in configuration",
-                    current_name
-                ))
-            })?;
+            let current_network =
+                self.get_network(network_type, current_name)
+                    .ok_or_else(|| {
+                        ConfigFileError::InvalidReference(format!(
+                            "{:?} network '{}' not found in configuration",
+                            network_type, current_name
+                        ))
+                    })?;
 
             if let Some(source_name) = current_network.inherits_from() {
                 let derived_type = current_network.network_type();
@@ -226,12 +247,13 @@ impl NetworksFileConfig {
                     )));
                 }
 
-                let source_network = self.get_network(source_name).ok_or_else(|| {
-                    ConfigFileError::InvalidReference(format!(
-                        "Network '{}' inherits from non-existent network '{}'",
-                        current_name, source_name
-                    ))
-                })?;
+                let source_network =
+                    self.get_network(network_type, source_name).ok_or_else(|| {
+                        ConfigFileError::InvalidReference(format!(
+                            "{:?} network '{}' inherits from non-existent network '{}'",
+                            network_type, current_name, source_name
+                        ))
+                    })?;
 
                 let source_type = source_network.network_type();
 
@@ -299,7 +321,9 @@ mod tests {
         let config = config.unwrap();
         assert_eq!(config.networks.len(), 1);
         assert_eq!(config.network_map.len(), 1);
-        assert!(config.network_map.contains_key("test-evm"));
+        assert!(config
+            .network_map
+            .contains_key(&(ConfigFileNetworkType::Evm, "test-evm".to_string())));
     }
 
     #[test]
@@ -315,9 +339,15 @@ mod tests {
         let config = config.unwrap();
         assert_eq!(config.networks.len(), 3);
         assert_eq!(config.network_map.len(), 3);
-        assert!(config.network_map.contains_key("evm-1"));
-        assert!(config.network_map.contains_key("solana-1"));
-        assert!(config.network_map.contains_key("stellar-1"));
+        assert!(config
+            .network_map
+            .contains_key(&(ConfigFileNetworkType::Evm, "evm-1".to_string())));
+        assert!(config
+            .network_map
+            .contains_key(&(ConfigFileNetworkType::Solana, "solana-1".to_string())));
+        assert!(config
+            .network_map
+            .contains_key(&(ConfigFileNetworkType::Stellar, "stellar-1".to_string())));
     }
 
     #[test]
@@ -328,11 +358,17 @@ mod tests {
         ];
         let result = NetworksFileConfig::new(networks);
 
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::DuplicateId(_)
-        ));
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.networks.len(), 2);
+
+        // Verify both networks can be retrieved with their respective types
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "duplicate")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Solana, "duplicate")
+            .is_some());
     }
 
     #[test]
@@ -413,10 +449,8 @@ mod tests {
         let result = NetworksFileConfig::new(networks);
 
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::IncompatibleInheritanceType(_)
-        ));
+        let error = result.unwrap_err();
+        assert!(matches!(error, ConfigFileError::InvalidReference(_)));
     }
 
     #[test]
@@ -442,11 +476,11 @@ mod tests {
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
 
-        let network = config.get_network("test-evm");
+        let network = config.get_network(ConfigFileNetworkType::Evm, "test-evm");
         assert!(network.is_some());
         assert_eq!(network.unwrap().network_name(), "test-evm");
 
-        let network = config.get_network("test-solana");
+        let network = config.get_network(ConfigFileNetworkType::Solana, "test-solana");
         assert!(network.is_some());
         assert_eq!(network.unwrap().network_name(), "test-solana");
     }
@@ -456,7 +490,7 @@ mod tests {
         let networks = vec![create_evm_network_wrapped("test-evm")];
         let config = NetworksFileConfig::new(networks).unwrap();
 
-        let network = config.get_network("non-existent");
+        let network = config.get_network(ConfigFileNetworkType::Evm, "non-existent");
         assert!(network.is_none());
     }
 
@@ -464,7 +498,7 @@ mod tests {
     fn test_get_network_empty_config() {
         let config = NetworksFileConfig::new(vec![]).unwrap();
 
-        let network = config.get_network("any-name");
+        let network = config.get_network(ConfigFileNetworkType::Evm, "any-name");
         assert!(network.is_none());
     }
 
@@ -473,9 +507,15 @@ mod tests {
         let networks = vec![create_evm_network_wrapped("Test-Network")];
         let config = NetworksFileConfig::new(networks).unwrap();
 
-        assert!(config.get_network("Test-Network").is_some());
-        assert!(config.get_network("test-network").is_none());
-        assert!(config.get_network("TEST-NETWORK").is_none());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "Test-Network")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "test-network")
+            .is_none());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "TEST-NETWORK")
+            .is_none());
     }
 
     #[test]
@@ -542,7 +582,7 @@ mod tests {
         assert_eq!(flattened.networks.len(), 2);
 
         // Child should still exist with inheritance information preserved
-        let child = flattened.get_network("child");
+        let child = flattened.get_network(ConfigFileNetworkType::Evm, "child");
         assert!(child.is_some());
         // The from field is preserved to show inheritance source, but inheritance is resolved
         assert_eq!(child.unwrap().inherits_from(), Some("parent"));
@@ -726,7 +766,9 @@ mod tests {
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.len(), 1);
-        assert!(config.get_network("test-evm").is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "test-evm")
+            .is_some());
     }
 
     #[test]
@@ -756,8 +798,12 @@ mod tests {
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.len(), 2);
-        assert!(config.get_network("test-evm-from-file").is_some());
-        assert!(config.get_network("test-solana-from-file").is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "test-evm-from-file")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Solana, "test-solana-from-file")
+            .is_some());
     }
 
     #[test]
@@ -795,7 +841,9 @@ mod tests {
         assert_eq!(config.len(), 2);
 
         // After deserialization, inheritance should be resolved but from field preserved
-        let child = config.get_network("child").unwrap();
+        let child = config
+            .get_network(ConfigFileNetworkType::Evm, "child")
+            .unwrap();
         assert_eq!(child.inherits_from(), Some("parent")); // From field preserved
 
         // Verify that child has inherited properties from parent
@@ -838,7 +886,9 @@ mod tests {
 
         // Test that all networks are accessible
         for i in 0..100 {
-            assert!(config.get_network(&format!("network-{}", i)).is_some());
+            assert!(config
+                .get_network(ConfigFileNetworkType::Evm, &format!("network-{}", i))
+                .is_some());
         }
     }
 
@@ -854,9 +904,15 @@ mod tests {
         assert!(config.is_ok());
         let config = config.unwrap();
         assert_eq!(config.len(), 3);
-        assert!(config.get_network("测试网络").is_some());
-        assert!(config.get_network("тестовая-сеть").is_some());
-        assert!(config.get_network("réseau-test").is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "测试网络")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Solana, "тестовая-сеть")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Stellar, "réseau-test")
+            .is_some());
     }
 
     #[test]
@@ -881,7 +937,9 @@ mod tests {
         let config = NetworksFileConfig::new(networks);
         assert!(config.is_ok());
         let config = config.unwrap();
-        assert!(config.get_network(&long_name).is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, &long_name)
+            .is_some());
     }
 
     #[test]
@@ -907,5 +965,48 @@ mod tests {
         assert!(flattened.is_ok());
         let flattened = flattened.unwrap();
         assert_eq!(flattened.len(), 6);
+    }
+
+    #[test]
+    fn test_new_with_duplicate_network_names_across_types() {
+        // Should allow same name across different network types
+        let networks = vec![
+            create_evm_network_wrapped("mainnet"),
+            create_solana_network_wrapped("mainnet"),
+            create_stellar_network_wrapped("mainnet"),
+        ];
+        let result = NetworksFileConfig::new(networks);
+
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.networks.len(), 3);
+        assert_eq!(config.network_map.len(), 3);
+
+        // Verify we can retrieve each network by type and name
+        assert!(config
+            .get_network(ConfigFileNetworkType::Evm, "mainnet")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Solana, "mainnet")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Stellar, "mainnet")
+            .is_some());
+    }
+
+    #[test]
+    fn test_new_with_duplicate_network_names_within_same_type() {
+        // Should reject duplicate names within the same network type
+        let networks = vec![
+            create_evm_network_wrapped("mainnet"),
+            create_evm_network_wrapped("mainnet"), // Duplicate EVM network
+        ];
+        let result = NetworksFileConfig::new(networks);
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::DuplicateId(_)
+        ));
     }
 }
