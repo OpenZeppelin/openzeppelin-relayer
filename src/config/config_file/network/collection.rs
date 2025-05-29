@@ -1037,6 +1037,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::get_first)]
     fn test_different_access_methods() {
         let networks = vec![
             create_evm_network_wrapped("network-0"),

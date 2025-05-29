@@ -3,8 +3,6 @@
 //! This module provides simple helper functions used across
 //! the network configuration test modules to reduce code duplication.
 
-#![cfg(test)]
-
 use super::*;
 use serde_json::json;
 use std::fs::File;
