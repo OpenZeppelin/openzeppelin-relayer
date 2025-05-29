@@ -4839,7 +4839,7 @@ dependencies = [
  "spl-associated-token-account",
  "spl-token 8.0.0",
  "spl-token-2022 8.0.1",
- "stellar-strkey 0.0.12",
+ "stellar-strkey 0.0.13",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "subtle",
@@ -9261,9 +9261,9 @@ dependencies = [
 
 [[package]]
 name = "stellar-strkey"
-version = "0.0.12"
+version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e27545061c1c74d595a18bfd885f1dda489d079e6316db98b4867525510ea3e"
+checksum = "ee1832fb50c651ad10f734aaf5d31ca5acdfb197a6ecda64d93fcdb8885af913"
 dependencies = [
  "crate-git-revision",
  "data-encoding",
