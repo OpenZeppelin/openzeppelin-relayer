@@ -655,13 +655,9 @@ mod tests {
         let result: Result<Config, _> = serde_json::from_str(config_str);
         assert!(result.is_ok());
         let config = result.unwrap();
-        assert_eq!(config.networks.networks.len(), 1);
+        assert_eq!(config.networks.len(), 1);
 
-        let network_config = config
-            .networks
-            .networks
-            .get(0)
-            .expect("Should have one network");
+        let network_config = config.networks.first().expect("Should have one network");
         assert!(matches!(network_config, NetworkFileConfig::Evm(_)));
         if let NetworkFileConfig::Evm(evm_config) = network_config {
             assert_eq!(evm_config.common.network, "custom-evm");
@@ -688,13 +684,9 @@ mod tests {
         let result: Result<Config, _> = serde_json::from_str(config_str);
         assert!(result.is_ok());
         let config = result.unwrap();
-        assert_eq!(config.networks.networks.len(), 1);
+        assert_eq!(config.networks.len(), 1);
 
-        let network_config = config
-            .networks
-            .networks
-            .get(0)
-            .expect("Should have one network");
+        let network_config = config.networks.first().expect("Should have one network");
         assert!(matches!(network_config, NetworkFileConfig::Solana(_)));
         if let NetworkFileConfig::Solana(sol_config) = network_config {
             assert_eq!(sol_config.common.network, "custom-solana");
@@ -720,13 +712,9 @@ mod tests {
         let result: Result<Config, _> = serde_json::from_str(config_str);
         assert!(result.is_ok());
         let config = result.unwrap();
-        assert_eq!(config.networks.networks.len(), 1);
+        assert_eq!(config.networks.len(), 1);
 
-        let network_config = config
-            .networks
-            .networks
-            .get(0)
-            .expect("Should have one network");
+        let network_config = config.networks.first().expect("Should have one network");
         assert!(matches!(network_config, NetworkFileConfig::Stellar(_)));
         if let NetworkFileConfig::Stellar(stl_config) = network_config {
             assert_eq!(stl_config.common.network, "custom-stellar");
@@ -760,7 +748,7 @@ mod tests {
         let result: Result<Config, _> = serde_json::from_str(config_str);
         assert!(result.is_ok());
         let config = result.unwrap();
-        assert_eq!(config.networks.networks.len(), 2);
+        assert_eq!(config.networks.len(), 2);
     }
 
     #[test]
@@ -832,12 +820,12 @@ mod tests {
 
         if let Ok(config) = result {
             assert_eq!(
-                config.networks.networks.len(),
+                config.networks.len(),
                 2,
                 "Incorrect number of networks loaded"
             );
-            let has_evm = config.networks.networks.iter().any(|n| matches!(n, NetworkFileConfig::Evm(evm) if evm.common.network == "custom-evm-file"));
-            let has_solana = config.networks.networks.iter().any(|n| matches!(n, NetworkFileConfig::Solana(sol) if sol.common.network == "custom-solana-file"));
+            let has_evm = config.networks.iter().any(|n| matches!(n, NetworkFileConfig::Evm(evm) if evm.common.network == "custom-evm-file"));
+            let has_solana = config.networks.iter().any(|n| matches!(n, NetworkFileConfig::Solana(sol) if sol.common.network == "custom-solana-file"));
             assert!(has_evm, "EVM network from file not found or incorrect");
             assert!(
                 has_solana,
@@ -978,13 +966,9 @@ mod tests {
             result.err()
         );
         if let Ok(config) = result {
-            assert_eq!(config.networks.networks.len(), 1);
+            assert_eq!(config.networks.len(), 1);
 
-            let network_config = config
-                .networks
-                .networks
-                .get(0)
-                .expect("Should have one network");
+            let network_config = config.networks.first().expect("Should have one network");
             assert!(matches!(network_config, NetworkFileConfig::Evm(_)));
             if let NetworkFileConfig::Evm(evm_config) = network_config {
                 assert_eq!(evm_config.common.network, "custom-evm-array");
@@ -1011,8 +995,8 @@ mod tests {
         })];
 
         let config = NetworksFileConfig::new(networks).unwrap();
-        assert_eq!(config.networks.len(), 1);
-        assert_eq!(config.networks[0].network_name(), "test-network");
+        assert_eq!(config.len(), 1);
+        assert_eq!(config.first().unwrap().network_name(), "test-network");
     }
 
     fn setup_config_file(dir_path: &Path, file_name: &str, content: &str) {
@@ -1063,7 +1047,7 @@ mod tests {
         let config = result.unwrap();
         assert_eq!(config.relayers.len(), 1);
         assert_eq!(config.signers.len(), 1);
-        assert_eq!(config.networks.networks.len(), 1);
+        assert_eq!(config.networks.len(), 1);
     }
 
     #[test]
@@ -1441,11 +1425,15 @@ mod tests {
             passphrase: Some("Test Network ; September 2015".to_string()),
         });
 
-        let mut networks = config.networks.networks;
-        networks.push(solana_network);
-        networks.push(stellar_network);
+        // Get the existing networks and add new ones
+        let mut existing_networks = Vec::new();
+        for network in config.networks.iter() {
+            existing_networks.push(network.clone());
+        }
+        existing_networks.push(solana_network);
+        existing_networks.push(stellar_network);
 
-        config.networks = NetworksFileConfig::new(networks).unwrap();
+        config.networks = NetworksFileConfig::new(existing_networks).unwrap();
 
         let result = config.validate();
         assert!(result.is_ok());

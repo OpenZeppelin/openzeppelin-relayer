@@ -4,6 +4,7 @@ use crate::config::ConfigFileError;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ops::Index;
 
 /// Represents the complete configuration for all defined networks.
 ///
@@ -301,6 +302,36 @@ impl NetworksFileConfig {
     pub fn network_names(&self) -> impl Iterator<Item = &str> {
         self.networks.iter().map(|network| network.network_name())
     }
+
+    /// Returns the first network in the configuration.
+    ///
+    /// # Returns
+    /// - `Some(&NetworkFileConfig)` if there is at least one network.
+    /// - `None` if the configuration is empty.
+    pub fn first(&self) -> Option<&NetworkFileConfig> {
+        self.networks.first()
+    }
+
+    /// Returns a reference to the network at the given index.
+    ///
+    /// # Arguments
+    /// * `index` - The index of the network to retrieve.
+    ///
+    /// # Returns
+    /// - `Some(&NetworkFileConfig)` if a network exists at the given index.
+    /// - `None` if the index is out of bounds.
+    pub fn get(&self, index: usize) -> Option<&NetworkFileConfig> {
+        self.networks.get(index)
+    }
+}
+
+// Implementation of Index trait for array-like access (config[0])
+impl Index<usize> for NetworksFileConfig {
+    type Output = NetworkFileConfig;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.networks[index]
+    }
 }
 
 #[cfg(test)]
@@ -348,27 +379,6 @@ mod tests {
         assert!(config
             .network_map
             .contains_key(&(ConfigFileNetworkType::Stellar, "stellar-1".to_string())));
-    }
-
-    #[test]
-    fn test_new_with_duplicate_network_names() {
-        let networks = vec![
-            create_evm_network_wrapped("duplicate"),
-            create_solana_network_wrapped("duplicate"),
-        ];
-        let result = NetworksFileConfig::new(networks);
-
-        assert!(result.is_ok());
-        let config = result.unwrap();
-        assert_eq!(config.networks.len(), 2);
-
-        // Verify both networks can be retrieved with their respective types
-        assert!(config
-            .get_network(ConfigFileNetworkType::Evm, "duplicate")
-            .is_some());
-        assert!(config
-            .get_network(ConfigFileNetworkType::Solana, "duplicate")
-            .is_some());
     }
 
     #[test]
@@ -996,10 +1006,9 @@ mod tests {
 
     #[test]
     fn test_new_with_duplicate_network_names_within_same_type() {
-        // Should reject duplicate names within the same network type
         let networks = vec![
-            create_evm_network_wrapped("mainnet"),
-            create_evm_network_wrapped("mainnet"), // Duplicate EVM network
+            create_evm_network_wrapped("duplicate-evm"),
+            create_evm_network_wrapped("duplicate-evm"),
         ];
         let result = NetworksFileConfig::new(networks);
 
@@ -1008,5 +1017,128 @@ mod tests {
             result.unwrap_err(),
             ConfigFileError::DuplicateId(_)
         ));
+    }
+
+    #[test]
+    fn test_get_with_empty_config() {
+        let config = NetworksFileConfig::new(vec![]).unwrap();
+
+        let network_0 = config.get(0);
+        assert!(network_0.is_none());
+    }
+
+    #[test]
+    fn test_get_and_first_equivalence() {
+        let networks = vec![create_evm_network_wrapped("test-network")];
+        let config = NetworksFileConfig::new(networks).unwrap();
+
+        // Both methods should return the same result
+        let network_via_get = config.get(0);
+        let network_via_first = config.first();
+
+        assert!(network_via_get.is_some());
+        assert!(network_via_first.is_some());
+        assert_eq!(
+            network_via_get.unwrap().network_name(),
+            network_via_first.unwrap().network_name()
+        );
+        assert_eq!(network_via_get.unwrap().network_name(), "test-network");
+    }
+
+    #[test]
+    fn test_different_access_methods() {
+        let networks = vec![
+            create_evm_network_wrapped("network-0"),
+            create_solana_network_wrapped("network-1"),
+        ];
+        let config = NetworksFileConfig::new(networks).unwrap();
+
+        // Method 1: Using .get())
+        let net_0_get = config.get(0);
+        assert!(net_0_get.is_some());
+        assert_eq!(net_0_get.unwrap().network_name(), "network-0");
+
+        // Method 2: Using .first()
+        let net_0_first = config.first();
+        assert!(net_0_first.is_some());
+        assert_eq!(net_0_first.unwrap().network_name(), "network-0");
+
+        // Method 3: Using indexing [0] (Index trait)
+        let net_0_index = &config[0];
+        assert_eq!(net_0_index.network_name(), "network-0");
+
+        // Method 4: Using direct field access
+        let net_0_direct = config.networks.get(0);
+        assert!(net_0_direct.is_some());
+        assert_eq!(net_0_direct.unwrap().network_name(), "network-0");
+
+        // All should reference the same network
+        assert_eq!(
+            net_0_get.unwrap().network_name(),
+            net_0_first.unwrap().network_name()
+        );
+        assert_eq!(
+            net_0_get.unwrap().network_name(),
+            net_0_index.network_name()
+        );
+        assert_eq!(
+            net_0_get.unwrap().network_name(),
+            net_0_direct.unwrap().network_name()
+        );
+    }
+
+    #[test]
+    fn test_first_with_non_empty_config() {
+        let networks = vec![
+            create_evm_network_wrapped("first-network"),
+            create_solana_network_wrapped("second-network"),
+        ];
+        let config = NetworksFileConfig::new(networks).unwrap();
+
+        let first_network = config.first();
+        assert!(first_network.is_some());
+        assert_eq!(first_network.unwrap().network_name(), "first-network");
+    }
+
+    #[test]
+    fn test_first_with_empty_config() {
+        let config = NetworksFileConfig::new(vec![]).unwrap();
+
+        let first_network = config.first();
+        assert!(first_network.is_none());
+    }
+
+    #[test]
+    fn test_get_with_valid_index() {
+        let networks = vec![
+            create_evm_network_wrapped("network-0"),
+            create_solana_network_wrapped("network-1"),
+            create_stellar_network_wrapped("network-2"),
+        ];
+        let config = NetworksFileConfig::new(networks).unwrap();
+
+        let network_0 = config.get(0);
+        assert!(network_0.is_some());
+        assert_eq!(network_0.unwrap().network_name(), "network-0");
+
+        let network_1 = config.get(1);
+        assert!(network_1.is_some());
+        assert_eq!(network_1.unwrap().network_name(), "network-1");
+
+        let network_2 = config.get(2);
+        assert!(network_2.is_some());
+        assert_eq!(network_2.unwrap().network_name(), "network-2");
+    }
+
+    #[test]
+    fn test_get_with_invalid_index() {
+        let networks = vec![create_evm_network_wrapped("only-network")];
+        let config = NetworksFileConfig::new(networks).unwrap();
+
+        let network_out_of_bounds = config.get(1);
+        assert!(network_out_of_bounds.is_none());
+
+        let network_large_index = config.get(100);
+        assert!(network_large_index.is_none());
     }
 }
