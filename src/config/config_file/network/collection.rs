@@ -10,20 +10,11 @@ use std::ops::Index;
 ///
 /// This structure holds configurations loaded from a file or a directory of files
 /// and provides methods to validate and process them, including resolving inheritance.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Default, Serialize, Clone)]
 pub struct NetworksFileConfig {
     pub networks: Vec<NetworkFileConfig>,
     #[serde(skip)]
     network_map: HashMap<(ConfigFileNetworkType, String), usize>,
-}
-
-impl Default for NetworksFileConfig {
-    fn default() -> Self {
-        Self {
-            networks: Vec::new(),
-            network_map: HashMap::new(),
-        }
-    }
 }
 
 /// Custom deserialization logic for `NetworksFileConfig`.
