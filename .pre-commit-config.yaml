@@ -1,7 +1,12 @@
 ---
 minimum_pre_commit_version: 3.5.0
-default_install_hook_types: [commit-msg, pre-commit, pre-push]
-default_stages: [pre-commit, pre-push]
+default_install_hook_types:
+  - commit-msg
+  - pre-commit
+  - pre-push
+default_stages:
+  - pre-commit
+  - pre-push
 ci:
   autofix_commit_msg: 'chore(pre-commit): autofix run'
   autoupdate_commit_msg: 'chore(pre-commit): autoupdate hooks'
@@ -19,7 +24,8 @@ repos:
         entry: cargo fmt
         pass_filenames: false
         language: system
-        types: [rust]
+        types:
+          - rust
       - id: clippy
         name: clippy
         entry: cargo clippy --all-targets --all-features -- -D warnings
@@ -29,6 +35,7 @@ repos:
     rev: v5.0.0
     hooks:
       - id: check-json
+        exclude: ^plugins/tsconfig\.json$
       - id: check-toml
       - id: check-merge-conflict
       - id: check-case-conflict
@@ -39,12 +46,15 @@ repos:
     rev: 1.17.0
     hooks:
       - id: yamlfix
-        args: [-c, .yamlfix.toml]
+        args:
+          - -c
+          - .yamlfix.toml
   - repo: https://github.com/crate-ci/committed
     rev: v1.1.5
     hooks:
       - id: committed
-        stages: [commit-msg]
+        stages:
+          - commit-msg
   - repo: https://github.com/crate-ci/typos
     rev: v1.29.4
     hooks:
@@ -53,5 +63,18 @@ repos:
     rev: v3.4.0
     hooks:
       - id: conventional-pre-commit
-        stages: [commit-msg]
-        args: [--strict, build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test]
+        stages:
+          - commit-msg
+        args:
+          - --strict
+          - build
+          - chore
+          - ci
+          - docs
+          - feat
+          - fix
+          - perf
+          - refactor
+          - revert
+          - style
+          - test
