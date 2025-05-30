@@ -2,7 +2,7 @@
 //!
 //! This module contains functions and utilities for initializing various
 //! components of the relayer system, including relayers, configuration,
-//! application state, and workers.
+//! application state, workers, and network factories.
 //!
 //! # Submodules
 //!

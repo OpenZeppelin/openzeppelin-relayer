@@ -18,8 +18,8 @@ use crate::{
         TransactionError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
@@ -374,25 +374,36 @@ impl RelayerTransactionFactory {
     /// # Returns
     ///
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
-    pub fn create_transaction(
+    pub async fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+        network_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
             NetworkType::Evm => {
-                let network = match EvmNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
-                };
+                let network_repo = network_repository
+                    .get(NetworkType::Evm, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = EvmNetwork::try_from(network_repo)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let network_extra_fee_calculator =
-                    get_network_extra_fee_calculator_service(network, evm_provider.clone());
+                    get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
                 let price_calculator = PriceCalculator::new(
                     EvmGasPriceService::new(evm_provider.clone(), network),
                     network_extra_fee_calculator,
@@ -403,6 +414,7 @@ impl RelayerTransactionFactory {
                         relayer,
                         evm_provider,
                         relayer_repository,
+                        network_repository,
                         transaction_repository,
                         transaction_counter_store,
                         job_producer,
@@ -412,10 +424,21 @@ impl RelayerTransactionFactory {
                 )))
             }
             NetworkType::Solana => {
-                let network = match SolanaNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
-                };
+                let network_repo = network_repository
+                    .get(NetworkType::Solana, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = SolanaNetwork::try_from(network_repo)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
+
                 let solana_provider = Arc::new(get_network_provider(
                     &network,
                     relayer.custom_rpc_urls.clone(),
@@ -433,10 +456,20 @@ impl RelayerTransactionFactory {
                 let signer_service =
                     Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
 
-                let network = match StellarNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(TransactionError::NetworkConfiguration(e.to_string())),
-                };
+                let network_repo = network_repository
+                    .get(NetworkType::Stellar, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = StellarNetwork::try_from(network_repo)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let stellar_provider =
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())

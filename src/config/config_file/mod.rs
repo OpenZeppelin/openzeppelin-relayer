@@ -37,13 +37,11 @@ pub use signer::*;
 mod notification;
 pub use notification::*;
 
-mod network;
+pub mod network;
 pub use network::{
     EvmNetworkConfig, NetworkConfigCommon, NetworkFileConfig, NetworksFileConfig,
     SolanaNetworkConfig, StellarNetworkConfig,
 };
-
-use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -83,12 +81,12 @@ impl Config {
             ));
         }
 
-        self.validate_relayers()?;
+        self.validate_networks()?;
+        self.validate_relayers(&self.networks)?;
         self.validate_signers()?;
         self.validate_notifications()?;
-        self.validate_networks()?;
 
-        self.validate_relayer_signer_refs()?;
+        self.validate_relayer_signer_refs(&self.networks)?;
         self.validate_relayer_notification_refs()?;
 
         Ok(())
@@ -102,7 +100,10 @@ impl Config {
     /// # Errors
     /// Returns a `ConfigFileError::InvalidReference` if a relayer references a non-existent signer.
     /// Returns a `ConfigFileError::TestSigner` if a test signer is used on a production network.
-    fn validate_relayer_signer_refs(&self) -> Result<(), ConfigFileError> {
+    fn validate_relayer_signer_refs(
+        &self,
+        networks: &NetworksFileConfig,
+    ) -> Result<(), ConfigFileError> {
         let signer_ids: HashSet<_> = self.signers.iter().map(|s| &s.id).collect();
 
         for relayer in &self.relayers {
@@ -125,52 +126,16 @@ impl Config {
 
             if let SignerFileConfigEnum::Test(_) = signer_config.config {
                 // ensure that only testnets are used with test signers
-                match relayer.network_type {
-                    ConfigFileNetworkType::Evm => {
-                        let network =
-                            EvmNetwork::from_network_str(&relayer.network).map_err(|_| {
-                                ConfigFileError::InvalidNetwork {
-                                    network_type: "EVM".to_string(),
-                                    name: relayer.network.clone(),
-                                }
-                            })?;
-                        if !network.is_testnet() {
-                            return Err(ConfigFileError::TestSigner(
-                                "Test signer type cannot be used on production networks"
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                    ConfigFileNetworkType::Solana => {
-                        let network =
-                            SolanaNetwork::from_network_str(&relayer.network).map_err(|_| {
-                                ConfigFileError::InvalidNetwork {
-                                    network_type: "EVM".to_string(),
-                                    name: relayer.network.clone(),
-                                }
-                            })?;
-                        if !network.is_testnet() {
-                            return Err(ConfigFileError::TestSigner(
-                                "Test signer type cannot be used on production networks"
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                    ConfigFileNetworkType::Stellar => {
-                        let network =
-                            StellarNetwork::from_network_str(&relayer.network).map_err(|_| {
-                                ConfigFileError::InvalidNetwork {
-                                    network_type: "EVM".to_string(),
-                                    name: relayer.network.clone(),
-                                }
-                            })?;
-                        if !network.is_testnet() {
-                            return Err(ConfigFileError::TestSigner(
-                                "Test signer type cannot be used on production networks"
-                                    .to_string(),
-                            ));
-                        }
-                    }
+                let network = networks
+                    .get_network(relayer.network_type, &relayer.network)
+                    .ok_or_else(|| ConfigFileError::InvalidNetwork {
+                        network_type: format!("{:?}", relayer.network_type).to_lowercase(),
+                        name: relayer.network.clone(),
+                    })?;
+                if !network.is_testnet() {
+                    return Err(ConfigFileError::TestSigner(
+                        "Test signer type cannot be used on production networks".to_string(),
+                    ));
                 }
             }
         }
@@ -203,8 +168,8 @@ impl Config {
     }
 
     /// Validates that all relayers are valid and have unique IDs.
-    fn validate_relayers(&self) -> Result<(), ConfigFileError> {
-        RelayersFileConfig::new(self.relayers.clone()).validate()
+    fn validate_relayers(&self, networks: &NetworksFileConfig) -> Result<(), ConfigFileError> {
+        RelayersFileConfig::new(self.relayers.clone()).validate(networks)
     }
 
     /// Validates that all signers are valid and have unique IDs.
@@ -257,7 +222,7 @@ mod tests {
             relayers: vec![RelayerFileConfig {
                 id: "test-1".to_string(),
                 name: "Test Relayer".to_string(),
-                network: "sepolia".to_string(),
+                network: "test-network".to_string(),
                 paused: false,
                 network_type: ConfigFileNetworkType::Evm,
                 policies: None,
@@ -426,7 +391,7 @@ mod tests {
         config.relayers[0].network = "".to_string();
         assert!(matches!(
             config.validate(),
-            Err(ConfigFileError::MissingField(_))
+            Err(ConfigFileError::InvalidFormat(_))
         ));
     }
 
@@ -456,6 +421,28 @@ mod tests {
         config.relayers[0].network = "mainnet".to_string();
         config.relayers[0].signer_id = "test-type".to_string();
 
+        // Add mainnet network to the config
+        let mainnet_network = NetworkFileConfig::Evm(EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "mainnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://rpc.mainnet.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.mainnet.example.com".to_string()]),
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false), // This is mainnet, not testnet
+                tags: Some(vec!["mainnet".to_string()]),
+            },
+            chain_id: Some(1),
+            required_confirmations: Some(12),
+            features: None,
+            symbol: Some("ETH".to_string()),
+        });
+
+        let mut networks = config.networks.networks;
+        networks.push(mainnet_network);
+        config.networks =
+            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
+
         let result = config.validate();
         assert!(matches!(
             result,
@@ -469,6 +456,27 @@ mod tests {
         config.relayers[0].network = "sepolia".to_string();
         config.relayers[0].signer_id = "test-type".to_string();
 
+        let sepolia_network = NetworkFileConfig::Evm(EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "sepolia".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://rpc.sepolia.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.sepolia.example.com".to_string()]),
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(true),
+                tags: Some(vec!["test".to_string()]),
+            },
+            chain_id: Some(11155111),
+            required_confirmations: Some(1),
+            features: None,
+            symbol: Some("ETH".to_string()),
+        });
+
+        let mut networks = config.networks.networks;
+        networks.push(sepolia_network);
+        config.networks =
+            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
+
         let result = config.validate();
         assert!(result.is_ok());
     }
@@ -479,6 +487,23 @@ mod tests {
         config.relayers[0].network_type = ConfigFileNetworkType::Solana;
         config.relayers[0].network = "mainnet-beta".to_string();
         config.relayers[0].signer_id = "test-type".to_string();
+
+        let mainnet_beta_network = NetworkFileConfig::Solana(SolanaNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "mainnet-beta".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://api.mainnet-beta.solana.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
+                average_blocktime_ms: Some(400),
+                is_testnet: Some(false),
+                tags: Some(vec!["mainnet".to_string()]),
+            },
+        });
+
+        let mut networks = config.networks.networks;
+        networks.push(mainnet_beta_network);
+        config.networks =
+            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
 
         let result = config.validate();
         assert!(matches!(
@@ -494,6 +519,23 @@ mod tests {
         config.relayers[0].network = "devnet".to_string();
         config.relayers[0].signer_id = "test-type".to_string();
 
+        let devnet_network = NetworkFileConfig::Solana(SolanaNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "devnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://api.devnet.solana.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
+                average_blocktime_ms: Some(400),
+                is_testnet: Some(true),
+                tags: Some(vec!["test".to_string()]),
+            },
+        });
+
+        let mut networks = config.networks.networks;
+        networks.push(devnet_network);
+        config.networks =
+            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
+
         let result = config.validate();
         assert!(result.is_ok());
     }
@@ -504,6 +546,24 @@ mod tests {
         config.relayers[0].network_type = ConfigFileNetworkType::Stellar;
         config.relayers[0].network = "mainnet".to_string();
         config.relayers[0].signer_id = "test-type".to_string();
+
+        let mainnet_network = NetworkFileConfig::Stellar(StellarNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "mainnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
+                explorer_urls: Some(vec!["https://stellar.expert".to_string()]),
+                average_blocktime_ms: Some(5000),
+                is_testnet: Some(false),
+                tags: Some(vec!["mainnet".to_string()]),
+            },
+            passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
+        });
+
+        let mut networks = config.networks.networks;
+        networks.push(mainnet_network);
+        config.networks =
+            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
 
         let result = config.validate();
         assert!(matches!(
@@ -519,6 +579,24 @@ mod tests {
         config.relayers[0].network = "testnet".to_string();
         config.relayers[0].signer_id = "test-type".to_string();
 
+        let testnet_network = NetworkFileConfig::Stellar(StellarNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "testnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://soroban-testnet.stellar.org".to_string()]),
+                explorer_urls: Some(vec!["https://stellar.expert/explorer/testnet".to_string()]),
+                average_blocktime_ms: Some(5000),
+                is_testnet: Some(true),
+                tags: Some(vec!["test".to_string()]),
+            },
+            passphrase: Some("Test SDF Network ; September 2015".to_string()),
+        });
+
+        let mut networks = config.networks.networks;
+        networks.push(testnet_network);
+        config.networks =
+            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
+
         let result = config.validate();
         assert!(result.is_ok());
     }
@@ -526,6 +604,8 @@ mod tests {
     #[test]
     fn test_config_with_networks() {
         let mut config = create_valid_config();
+        config.relayers[0].network = "custom-evm".to_string();
+
         let network_items = vec![serde_json::from_value(serde_json::json!({
             "type": "evm",
             "network": "custom-evm",
@@ -1014,7 +1094,7 @@ mod tests {
             "relayers": [{
                 "id": "test-relayer",
                 "name": "Test Relayer",
-                "network": "sepolia",
+                "network": "test-network",
                 "paused": false,
                 "network_type": "evm",
                 "signer_id": "test-signer"
@@ -1035,7 +1115,8 @@ mod tests {
                 "chain_id": 31337,
                 "required_confirmations": 1,
                 "symbol": "ETH",
-                "rpc_urls": ["https://rpc.test.example.com"]
+                "rpc_urls": ["https://rpc.test.example.com"],
+                "is_testnet": true
             }]
         });
 
@@ -1142,7 +1223,7 @@ mod tests {
             "relayers": [{
                 "id": "test-relayer-unicode",
                 "name": "Test Relayer 测试",
-                "network": "sepolia",
+                "network": "test-network-unicode",
                 "paused": false,
                 "network_type": "evm",
                 "signer_id": "test-signer-unicode"
@@ -1163,7 +1244,8 @@ mod tests {
                 "chain_id": 31337,
                 "required_confirmations": 1,
                 "symbol": "ETH",
-                "rpc_urls": ["https://rpc.test.example.com"]
+                "rpc_urls": ["https://rpc.test.example.com"],
+                "is_testnet": true
             }]
         });
 
@@ -1220,14 +1302,14 @@ mod tests {
         // Check that important fields are present in serialized JSON
         assert!(serialized_str.contains("\"id\":\"test-1\""));
         assert!(serialized_str.contains("\"name\":\"Test Relayer\""));
-        assert!(serialized_str.contains("\"network\":\"sepolia\""));
+        assert!(serialized_str.contains("\"network\":\"test-network\""));
         assert!(serialized_str.contains("\"type\":\"evm\""));
     }
 
     #[test]
     fn test_validate_relayers_method() {
         let config = create_valid_config();
-        let result = config.validate_relayers();
+        let result = config.validate_relayers(&config.networks);
         assert!(result.is_ok());
     }
 
@@ -1389,6 +1471,37 @@ mod tests {
             notification_id: Some("test-1".to_string()),
             custom_rpc_urls: None,
         });
+
+        let devnet_network = NetworkFileConfig::Solana(SolanaNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "devnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://api.devnet.solana.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
+                average_blocktime_ms: Some(400),
+                is_testnet: Some(true),
+                tags: Some(vec!["test".to_string()]),
+            },
+        });
+
+        let testnet_network = NetworkFileConfig::Stellar(StellarNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "testnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://soroban-testnet.stellar.org".to_string()]),
+                explorer_urls: Some(vec!["https://stellar.expert/explorer/testnet".to_string()]),
+                average_blocktime_ms: Some(5000),
+                is_testnet: Some(true),
+                tags: Some(vec!["test".to_string()]),
+            },
+            passphrase: Some("Test SDF Network ; September 2015".to_string()),
+        });
+
+        let mut networks = config.networks.networks;
+        networks.push(devnet_network);
+        networks.push(testnet_network);
+        config.networks =
+            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
 
         let result = config.validate();
         assert!(result.is_ok());
