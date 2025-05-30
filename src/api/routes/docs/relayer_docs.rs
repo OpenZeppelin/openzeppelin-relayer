@@ -5,7 +5,7 @@ use crate::{
     },
     models::{
         ApiResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
-        RelayerResponse, TransactionResponse,
+        RelayerResponse, RelayerStatus, TransactionResponse,
     },
 };
 /// Relayer routes implementation
@@ -232,7 +232,7 @@ fn doc_update_relayer() {}
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
     responses(
-        (status = 200, description = "Relayer status retrieved successfully", body = ApiResponse<bool>),
+        (status = 200, description = "Relayer status retrieved successfully", body = ApiResponse<RelayerStatus>),
         (
             status = 400,
             description = "BadRequest",

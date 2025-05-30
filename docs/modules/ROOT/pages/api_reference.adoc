@@ -182,6 +182,91 @@ Example response:
 }
 ----
 
+==== Get relayer status
+Request: `GET http://localhost:8080/api/v1/relayers/<relayer_id>/status`
+
+Example request:
+[source,bash]
+----
+curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/status' \
+--header 'Authorization: Bearer <api_key>'
+----
+
+Example response for EVM relayer:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "balance": "1000000000000000000",
+        "pending_transactions_count": 2,
+        "last_confirmed_transaction_timestamp": "2025-02-26T13:28:55.838812+00:00",
+        "system_disabled": false,
+        "paused": false,
+        "nonce": "42"
+    },
+    "error": null
+}
+----
+
+Example response for Stellar relayer:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "balance": "100000000",
+        "pending_transactions_count": 0,
+        "last_confirmed_transaction_timestamp": null,
+        "system_disabled": false,
+        "paused": false,
+        "sequence_number": "12345678901234567890"
+    },
+    "error": null
+}
+----
+
+Response fields:
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+|`balance`
+|String
+|Current relayer balance in the smallest unit (wei for EVM, lamports for Solana, stroops for Stellar)
+
+|`pending_transactions_count`
+|Number
+|Number of transactions that are pending, submitted, or mined but not yet confirmed
+
+|`last_confirmed_transaction_timestamp`
+|String (optional)
+|ISO 8601 timestamp of the most recent confirmed transaction, or `null` if no transactions have been confirmed
+
+|`system_disabled`
+|Boolean
+|Whether the relayer has been disabled by the system due to errors or configuration issues
+
+|`paused`
+|Boolean
+|Whether the relayer has been manually paused
+
+|`nonce`
+|String (EVM only)
+|Current transaction nonce for EVM relayers
+
+|`sequence_number`
+|String (Stellar only)
+|Current sequence number for Stellar relayers
+|===
+
+[NOTE]
+====
+* For Solana relayers, this endpoint is currently not supported and will return an error
+* Network-specific fields (`nonce` for EVM, `sequence_number` for Stellar) are included directly in the response using JSON flattening
+* The `balance` field represents the raw balance value as a string to avoid precision loss with large numbers
+====
+
 
 [#solana_api]
 === Solana
