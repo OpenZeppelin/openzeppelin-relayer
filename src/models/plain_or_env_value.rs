@@ -74,8 +74,10 @@ pub fn validate_plain_or_env_value(plain_or_env: &PlainOrEnvValue) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use std::{env, sync::Mutex};
     use validator::Validate;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[derive(Validate)]
     struct TestStruct {
@@ -97,6 +99,10 @@ mod tests {
 
     #[test]
     fn test_env_value_get_value_when_env_exists() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::set_var("TEST_ENV_VAR", "env-secret-value");
 
         let env_value = PlainOrEnvValue::Env {
@@ -113,6 +119,10 @@ mod tests {
 
     #[test]
     fn test_env_value_get_value_when_env_missing() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::remove_var("NONEXISTENT_VAR");
 
         let env_value = PlainOrEnvValue::Env {
@@ -150,6 +160,10 @@ mod tests {
 
     #[test]
     fn test_is_empty_with_env_missing_var() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::remove_var("NONEXISTENT_VAR");
 
         let env_value = PlainOrEnvValue::Env {
@@ -161,6 +175,10 @@ mod tests {
 
     #[test]
     fn test_is_empty_with_env_empty_var() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::set_var("EMPTY_ENV_VAR", "");
 
         let env_value = PlainOrEnvValue::Env {
@@ -174,6 +192,10 @@ mod tests {
 
     #[test]
     fn test_is_empty_with_env_non_empty_var() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::set_var("TEST_ENV_VAR", "some-value");
 
         let env_value = PlainOrEnvValue::Env {
@@ -211,6 +233,10 @@ mod tests {
 
     #[test]
     fn test_validator_with_env_missing_var() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::remove_var("NONEXISTENT_VAR");
 
         let test_struct = TestStruct {
@@ -225,6 +251,10 @@ mod tests {
 
     #[test]
     fn test_validator_with_env_empty_var() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::set_var("EMPTY_ENV_VAR", "");
 
         let test_struct = TestStruct {
@@ -241,6 +271,10 @@ mod tests {
 
     #[test]
     fn test_validator_with_env_non_empty_var() {
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         env::set_var("TEST_ENV_VAR", "some-value");
 
         let test_struct = TestStruct {

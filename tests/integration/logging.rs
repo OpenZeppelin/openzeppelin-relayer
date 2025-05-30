@@ -12,12 +12,15 @@ use std::{
     fs::{create_dir_all, remove_dir_all},
     io::Write,
     path::Path,
+    sync::Mutex,
     thread,
     time::Duration,
 };
 use tempfile::TempDir;
 
 use lazy_static::lazy_static;
+
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 // Global lazy_static that initializes logging only once.
 lazy_static! {
@@ -36,6 +39,10 @@ pub fn compute_final_log_path(base_file_path: &str, date_str: &str, max_size: u6
 #[test]
 #[should_panic(expected = "LOG_MAX_SIZE must be a valid u64 if set")]
 fn test_invalid_log_max_size() {
+    let _guard = ENV_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     // Create a unique temporary directory.
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let temp_log_dir = temp_dir.path().to_str().unwrap();
@@ -54,6 +61,10 @@ fn test_invalid_log_max_size() {
 // Setting to file mode.
 #[test]
 fn test_setup_logging_file_mode_creates_log_file() {
+    let _guard = ENV_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     // Create a unique temporary directory.
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let temp_log_dir = temp_dir.path().to_str().unwrap();
@@ -94,6 +105,10 @@ fn test_setup_logging_file_mode_creates_log_file() {
 /// when the file size exceeds the max size.
 #[test]
 fn test_log_file_rolls_when_existing() {
+    let _guard = ENV_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     thread::sleep(Duration::from_millis(1000));
     // Create a temporary directory for logs.
     let temp_dir = TempDir::new().expect("Failed to create temp dir");

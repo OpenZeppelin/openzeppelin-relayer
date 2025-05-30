@@ -315,8 +315,9 @@ mod tests {
     use crate::{
         config::{
             AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
-            KmsKeyConfig, NotificationFileConfig, RelayerFileConfig, ServiceAccountConfig,
-            TestSignerFileConfig, VaultSignerFileConfig, VaultTransitSignerFileConfig,
+            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, RelayerFileConfig,
+            ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
         models::{PlainOrEnvValue, SecretString},
@@ -589,6 +590,7 @@ mod tests {
             signers,
             relayers: vec![],
             notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create app state
@@ -628,6 +630,7 @@ mod tests {
         let config = Config {
             signers: vec![],
             relayers: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
             notifications,
         };
 
@@ -676,6 +679,7 @@ mod tests {
             signers: signers.clone(),
             relayers,
             notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create app state
@@ -729,6 +733,7 @@ mod tests {
             signers,
             relayers,
             notifications,
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create shared repositories
