@@ -6,8 +6,9 @@ use std::sync::Arc;
 use crate::{
     jobs::{JobProducer, JobProducerTrait},
     repositories::{
-        InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
+        InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        RelayerRepositoryStorage,
     },
 };
 
@@ -23,6 +24,8 @@ pub struct AppState<J: JobProducerTrait> {
     pub signer_repository: Arc<InMemorySignerRepository>,
     /// Repository for managing notification data.
     pub notification_repository: Arc<InMemoryNotificationRepository>,
+    /// Repository for managing network data.
+    pub network_repository: Arc<InMemoryNetworkRepository>,
     /// Store for managing transaction counters.
     pub transaction_counter_store: Arc<InMemoryTransactionCounter>,
     /// Producer for managing job creation and execution.
@@ -66,6 +69,15 @@ impl<J: JobProducerTrait> AppState<J> {
     /// An `Arc` pointing to the `InMemoryNotificationRepository`.
     pub fn notification_repository(&self) -> Arc<InMemoryNotificationRepository> {
         Arc::clone(&self.notification_repository)
+    }
+
+    /// Returns a clone of the network repository.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc` pointing to the `InMemoryNetworkRepository`.
+    pub fn network_repository(&self) -> Arc<InMemoryNetworkRepository> {
+        Arc::clone(&self.network_repository)
     }
 
     /// Returns a clone of the transaction counter store.
@@ -122,6 +134,7 @@ mod tests {
             transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
+            network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
         }

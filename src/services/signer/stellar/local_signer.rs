@@ -74,10 +74,7 @@ impl Signer for LocalSigner {
             .get_stellar_transaction_data()
             .map_err(|e| SignerError::SigningError(format!("failed to get tx data: {e}")))?;
 
-        let network_id = stellar_data
-            .network
-            .network_id()
-            .map_err(|e| SignerError::SigningError(format!("failed to get network id: {e}")))?;
+        let network_id = stellar_data.network.network_id();
 
         let transaction = Transaction::try_from(stellar_data)
             .map_err(|e| SignerError::SigningError(format!("invalid XDR: {e}")))?;
@@ -97,10 +94,21 @@ impl Signer for LocalSigner {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionData, LocalSignerConfig, SignerConfig, StellarNamedNetwork,
-        StellarTransactionData,
+        EvmTransactionData, LocalSignerConfig, SignerConfig, StellarNetwork, StellarTransactionData,
     };
     use secrets::SecretVec;
+
+    fn create_test_stellar_network() -> StellarNetwork {
+        StellarNetwork {
+            network: "testnet".to_string(),
+            rpc_urls: vec!["https://horizon.stellar.org".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 5000,
+            is_testnet: true,
+            tags: vec![],
+            passphrase: "Test SDF Network ; September 2015".to_string(),
+        }
+    }
 
     fn create_test_signer_model() -> SignerRepoModel {
         let seed = vec![1u8; 32];
@@ -148,7 +156,7 @@ mod tests {
             operations: vec![],
             memo: None,
             valid_until: None,
-            network: StellarNamedNetwork::Testnet,
+            network: create_test_stellar_network(),
             signatures: Vec::new(),
             hash: None,
         };

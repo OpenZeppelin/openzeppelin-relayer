@@ -92,6 +92,19 @@ impl NetworkFileConfig {
         }
     }
 
+    /// Returns true if the network is a testnet, false otherwise.
+    ///
+    /// # Returns
+    /// - `true` if the network is a testnet.
+    /// - `false` if the network is a mainnet.
+    pub fn is_testnet(&self) -> bool {
+        match self {
+            NetworkFileConfig::Evm(network) => network.common.is_testnet.unwrap_or(false),
+            NetworkFileConfig::Solana(network) => network.common.is_testnet.unwrap_or(false),
+            NetworkFileConfig::Stellar(network) => network.common.is_testnet.unwrap_or(false),
+        }
+    }
+
     /// Returns the name of the network this configuration inherits from, if any.
     ///
     /// # Returns
