@@ -12,6 +12,7 @@ pub struct RelayerResponse {
     pub id: String,
     pub name: String,
     pub network: String,
+    #[serde(rename = "network_type")]
     pub network_type: NetworkType,
     pub paused: bool,
     pub policies: NetworkPolicyResponse,
@@ -20,32 +21,26 @@ pub struct RelayerResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-pub struct EvmStatusData {
-    pub nonce: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-pub struct StellarStatusData {
-    pub sequence_number: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-#[serde(untagged)]
-pub enum NetworkSpecificData {
-    Evm(EvmStatusData),
-    Stellar(StellarStatusData),
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-pub struct RelayerStatus {
-    pub balance: String,
-    pub pending_transactions_count: u64,
-    pub last_confirmed_transaction_timestamp: Option<String>,
-    pub system_disabled: bool,
-    pub paused: bool,
-
-    #[serde(flatten)]
-    pub network_specific: NetworkSpecificData,
+#[serde(tag = "network_type")]
+pub enum RelayerStatus {
+    #[serde(rename = "evm")]
+    Evm {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        nonce: String,
+    },
+    #[serde(rename = "stellar")]
+    Stellar {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        sequence_number: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

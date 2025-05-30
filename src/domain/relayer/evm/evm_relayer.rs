@@ -35,9 +35,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, EvmStatusData,
-        NetworkRpcRequest, NetworkRpcResult, NetworkSpecificData, NetworkTransactionRequest,
-        RelayerRepoModel, RelayerStatus, RepositoryError, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel, RelayerStatus,
+        RepositoryError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -269,13 +269,13 @@ where
             .max()
             .cloned();
 
-        Ok(RelayerStatus {
+        Ok(RelayerStatus::Evm {
             balance: balance_response.balance.to_string(),
             pending_transactions_count,
             last_confirmed_transaction_timestamp,
             system_disabled: relayer_model.system_disabled,
             paused: relayer_model.paused,
-            network_specific: NetworkSpecificData::Evm(EvmStatusData { nonce: nonce_str }),
+            nonce: nonce_str,
         })
     }
 
@@ -424,8 +424,8 @@ mod tests {
     use crate::{
         jobs::MockJobProducerTrait,
         models::{
-            NetworkSpecificData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
-            RepositoryError, SignerError, TransactionStatus, U256,
+            NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RepositoryError, SignerError,
+            TransactionStatus, U256,
         },
         repositories::{MockRelayerRepository, MockTransactionRepository},
         services::{MockEvmProviderTrait, MockTransactionCounterServiceTrait, ProviderError},
@@ -730,19 +730,26 @@ mod tests {
 
         let status = relayer.get_status().await.unwrap();
 
-        assert_eq!(status.balance, "1000000000000000000");
-        assert_eq!(status.pending_transactions_count, 0);
-        assert_eq!(
-            status.last_confirmed_transaction_timestamp,
-            Some("2023-01-01T12:00:00Z".to_string())
-        );
-        assert_eq!(status.system_disabled, relayer_model.system_disabled);
-        assert_eq!(status.paused, relayer_model.paused);
-        match status.network_specific {
-            NetworkSpecificData::Evm(evm_data) => {
-                assert_eq!(evm_data.nonce, "10");
+        match status {
+            RelayerStatus::Evm {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                system_disabled,
+                paused,
+                nonce,
+            } => {
+                assert_eq!(balance, "1000000000000000000");
+                assert_eq!(pending_transactions_count, 0);
+                assert_eq!(
+                    last_confirmed_transaction_timestamp,
+                    Some("2023-01-01T12:00:00Z".to_string())
+                );
+                assert_eq!(system_disabled, relayer_model.system_disabled);
+                assert_eq!(paused, relayer_model.paused);
+                assert_eq!(nonce, "10");
             }
-            _ => panic!("Expected EVM specific data"),
+            _ => panic!("Expected EVM RelayerStatus"),
         }
     }
 
@@ -887,6 +894,23 @@ mod tests {
         .unwrap();
 
         let status = relayer.get_status().await.unwrap();
-        assert_eq!(status.last_confirmed_transaction_timestamp, None);
+        match status {
+            RelayerStatus::Evm {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                system_disabled,
+                paused,
+                nonce,
+            } => {
+                assert_eq!(balance, "1000000000000000000");
+                assert_eq!(pending_transactions_count, 0);
+                assert_eq!(last_confirmed_transaction_timestamp, None);
+                assert_eq!(system_disabled, relayer_model.system_disabled);
+                assert_eq!(paused, relayer_model.paused);
+                assert_eq!(nonce, "10");
+            }
+            _ => panic!("Expected EVM RelayerStatus"),
+        }
     }
 }

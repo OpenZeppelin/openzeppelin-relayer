@@ -28,10 +28,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult, NetworkSpecificData,
+        produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
         NetworkTransactionRequest, RelayerRepoModel, RelayerStatus, RepositoryError,
-        StellarNetwork, StellarRpcResult, StellarStatusData, TransactionRepoModel,
-        TransactionStatus,
+        StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -235,15 +234,13 @@ where
             .max()
             .cloned();
 
-        Ok(RelayerStatus {
+        Ok(RelayerStatus::Stellar {
             balance: balance_response.balance.to_string(),
             pending_transactions_count,
             last_confirmed_transaction_timestamp,
             system_disabled: relayer_model.system_disabled,
             paused: relayer_model.paused,
-            network_specific: NetworkSpecificData::Stellar(StellarStatusData {
-                sequence_number: sequence_number_str,
-            }),
+            sequence_number: sequence_number_str,
         })
     }
 
@@ -513,19 +510,26 @@ mod tests {
 
         let status = stellar_relayer.get_status().await.unwrap();
 
-        assert_eq!(status.balance, "10000000");
-        assert_eq!(status.pending_transactions_count, 0);
-        assert_eq!(
-            status.last_confirmed_transaction_timestamp,
-            Some("2023-02-01T12:00:00Z".to_string())
-        );
-        assert_eq!(status.system_disabled, relayer_model.system_disabled);
-        assert_eq!(status.paused, relayer_model.paused);
-        match status.network_specific {
-            NetworkSpecificData::Stellar(stellar_data) => {
-                assert_eq!(stellar_data.sequence_number, "12345");
+        match status {
+            RelayerStatus::Stellar {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                system_disabled,
+                paused,
+                sequence_number,
+            } => {
+                assert_eq!(balance, "10000000");
+                assert_eq!(pending_transactions_count, 0);
+                assert_eq!(
+                    last_confirmed_transaction_timestamp,
+                    Some("2023-02-01T12:00:00Z".to_string())
+                );
+                assert_eq!(system_disabled, relayer_model.system_disabled);
+                assert_eq!(paused, relayer_model.paused);
+                assert_eq!(sequence_number, "12345");
             }
-            _ => panic!("Expected Stellar specific data"),
+            _ => panic!("Expected Stellar RelayerStatus"),
         }
     }
 
