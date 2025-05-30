@@ -1,0 +1,52 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 3000,
+      "chain_id": 534352,
+      "explorer_urls": [
+        "https://api.scrollscan.com/api",
+        "https://scrollscan.com"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "scroll",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc.scroll.io/",
+        "https://scroll.drpc.org",
+        "https://1rpc.io/scroll",
+        "https://scroll-rpc.publicnode.com",
+        "https://scroll-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 3000,
+      "chain_id": 534351,
+      "explorer_urls": [
+        "https://api-sepolia.scrollscan.com/api",
+        "https://sepolia.scrollscan.com"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "scroll-sepolia",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://sepolia-rpc.scroll.io/",
+        "https://scroll-sepolia.drpc.org",
+        "https://scroll-sepolia-rpc.publicnode.com",
+        "https://scroll-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated"
+      ],
+      "type": "evm"
+    }
+  ]
+}

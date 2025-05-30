@@ -1,0 +1,54 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 12000,
+      "chain_id": 59144,
+      "explorer_urls": [
+        "https://api.lineascan.build/api",
+        "https://lineascan.build"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "linea",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc.linea.build",
+        "https://linea.drpc.org",
+        "https://1rpc.io/linea",
+        "https://linea-rpc.publicnode.com"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 12000,
+      "chain_id": 59141,
+      "explorer_urls": [
+        "https://api-sepolia.lineascan.build/api",
+        "https://sepolia.lineascan.build"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "linea-sepolia",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc.sepolia.linea.build",
+        "https://linea-sepolia.drpc.org",
+        "https://linea-sepolia-rpc.publicnode.com"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated",
+        "rollup"
+      ],
+      "type": "evm"
+    }
+  ]
+}
