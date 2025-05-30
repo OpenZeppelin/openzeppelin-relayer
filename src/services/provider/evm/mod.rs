@@ -156,6 +156,44 @@ impl EvmProvider {
         })
     }
 
+    // Error codes that indicate we can't use a provider
+    fn should_mark_provider_failed(error: &ProviderError) -> bool {
+        match error {
+            ProviderError::RequestError { status_code, .. } => {
+                match *status_code {
+                    // 5xx Server Errors - RPC node is having issues
+                    500..=599 => true,
+
+                    // 4xx Client Errors that indicate we can't use this provider
+                    401 => true, // Unauthorized - auth required but not provided
+                    403 => true, // Forbidden - node is blocking requests or auth issues
+                    404 => true, // Not Found - endpoint doesn't exist or misconfigured
+                    410 => true, // Gone - endpoint permanently removed
+
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    // Errors that are retriable
+    fn is_retriable_error(error: &ProviderError) -> bool {
+        match error {
+            // Only retry these specific error types
+            ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => true,
+
+            // Any other errors are not automatically retriable
+            _ => {
+                // Optionally inspect error message for network-related issues
+                let err_msg = format!("{}", error);
+                err_msg.to_lowercase().contains("timeout")
+                    || err_msg.to_lowercase().contains("connection")
+                    || err_msg.to_lowercase().contains("reset")
+            }
+        }
+    }
+
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<RootProvider<Http<Client>>, ProviderError> {
         let rpc_url = url.parse().map_err(|e| {
@@ -191,23 +229,6 @@ impl EvmProvider {
         Fut: std::future::Future<Output = Result<T, ProviderError>>,
     {
         // Classify which errors should be retried
-        let is_retriable = |e: &ProviderError| {
-            match e {
-                // Only retry these specific error types
-                ProviderError::Timeout | ProviderError::RateLimited | ProviderError::BadGateway => {
-                    true
-                }
-
-                // Any other errors are not automatically retriable
-                _ => {
-                    // Optionally inspect error message for network-related issues
-                    let err_msg = format!("{}", e);
-                    err_msg.to_lowercase().contains("timeout")
-                        || err_msg.to_lowercase().contains("connection")
-                        || err_msg.to_lowercase().contains("reset")
-                }
-            }
-        };
 
         log::debug!(
             "Starting RPC operation '{}' with timeout: {}s",
@@ -218,7 +239,8 @@ impl EvmProvider {
         retry_rpc_call(
             &self.selector,
             operation_name,
-            is_retriable,
+            Self::is_retriable_error,
+            Self::should_mark_provider_failed,
             |url| match self.initialize_provider(url) {
                 Ok(provider) => Ok(provider),
                 Err(e) => Err(e),
@@ -596,6 +618,226 @@ mod tests {
             Some(Address::from_str("0x742d35Cc6634C0532925a3b844Bc454e4438f44e").unwrap())
         );
         assert_eq!(tx_request.chain_id, Some(1));
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_server_errors() {
+        // 5xx errors should mark provider as failed
+        for status_code in 500..=599 {
+            let error = ProviderError::RequestError {
+                error: format!("Server error {}", status_code),
+                status_code,
+            };
+            assert!(
+                EvmProvider::should_mark_provider_failed(&error),
+                "Status code {} should mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_auth_errors() {
+        // Authentication/authorization errors should mark provider as failed
+        let auth_errors = [401, 403];
+        for &status_code in &auth_errors {
+            let error = ProviderError::RequestError {
+                error: format!("Auth error {}", status_code),
+                status_code,
+            };
+            assert!(
+                EvmProvider::should_mark_provider_failed(&error),
+                "Status code {} should mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_not_found_errors() {
+        // 404 and 410 should mark provider as failed (endpoint issues)
+        let not_found_errors = [404, 410];
+        for &status_code in &not_found_errors {
+            let error = ProviderError::RequestError {
+                error: format!("Not found error {}", status_code),
+                status_code,
+            };
+            assert!(
+                EvmProvider::should_mark_provider_failed(&error),
+                "Status code {} should mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_client_errors_not_failed() {
+        // These 4xx errors should NOT mark provider as failed (client-side issues)
+        let client_errors = [400, 405, 413, 414, 415, 422, 429];
+        for &status_code in &client_errors {
+            let error = ProviderError::RequestError {
+                error: format!("Client error {}", status_code),
+                status_code,
+            };
+            assert!(
+                !EvmProvider::should_mark_provider_failed(&error),
+                "Status code {} should NOT mark provider as failed",
+                status_code
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_other_error_types() {
+        // Test non-RequestError types - these should NOT mark provider as failed
+        let errors = [
+            ProviderError::Timeout,
+            ProviderError::RateLimited,
+            ProviderError::BadGateway,
+            ProviderError::InvalidAddress("test".to_string()),
+            ProviderError::NetworkConfiguration("test".to_string()),
+            ProviderError::Other("test".to_string()),
+        ];
+
+        for error in errors {
+            assert!(
+                !EvmProvider::should_mark_provider_failed(&error),
+                "Error type {:?} should NOT mark provider as failed",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_should_mark_provider_failed_edge_cases() {
+        // Test some edge case status codes
+        let edge_cases = [
+            (200, false), // Success - shouldn't happen in error context but test anyway
+            (300, false), // Redirection
+            (418, false), // I'm a teapot - should not mark as failed
+            (451, false), // Unavailable for legal reasons - client issue
+            (499, false), // Client closed request - client issue
+        ];
+
+        for (status_code, should_fail) in edge_cases {
+            let error = ProviderError::RequestError {
+                error: format!("Edge case error {}", status_code),
+                status_code,
+            };
+            assert_eq!(
+                EvmProvider::should_mark_provider_failed(&error),
+                should_fail,
+                "Status code {} should {} mark provider as failed",
+                status_code,
+                if should_fail { "" } else { "NOT" }
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_retriable_types() {
+        // These error types should be retriable
+        let retriable_errors = [
+            ProviderError::Timeout,
+            ProviderError::RateLimited,
+            ProviderError::BadGateway,
+        ];
+
+        for error in retriable_errors {
+            assert!(
+                EvmProvider::is_retriable_error(&error),
+                "Error type {:?} should be retriable",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_non_retriable_types() {
+        // These error types should NOT be retriable
+        let non_retriable_errors = [
+            ProviderError::InvalidAddress("test".to_string()),
+            ProviderError::NetworkConfiguration("test".to_string()),
+            ProviderError::RequestError {
+                error: "Some error".to_string(),
+                status_code: 400,
+            },
+        ];
+
+        for error in non_retriable_errors {
+            assert!(
+                !EvmProvider::is_retriable_error(&error),
+                "Error type {:?} should NOT be retriable",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_message_based_detection() {
+        // Test errors that should be retriable based on message content
+        let retriable_messages = [
+            "Connection timeout occurred",
+            "Network connection reset",
+            "Connection refused",
+            "TIMEOUT error happened",
+            "Connection was reset by peer",
+        ];
+
+        for message in retriable_messages {
+            let error = ProviderError::Other(message.to_string());
+            assert!(
+                EvmProvider::is_retriable_error(&error),
+                "Error with message '{}' should be retriable",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_message_based_non_retriable() {
+        // Test errors that should NOT be retriable based on message content
+        let non_retriable_messages = [
+            "Invalid address format",
+            "Bad request parameters",
+            "Authentication failed",
+            "Method not found",
+            "Some other error",
+        ];
+
+        for message in non_retriable_messages {
+            let error = ProviderError::Other(message.to_string());
+            assert!(
+                !EvmProvider::is_retriable_error(&error),
+                "Error with message '{}' should NOT be retriable",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_case_insensitive() {
+        // Test that message-based detection is case insensitive
+        let case_variations = [
+            "TIMEOUT",
+            "Timeout",
+            "timeout",
+            "CONNECTION",
+            "Connection",
+            "connection",
+            "RESET",
+            "Reset",
+            "reset",
+        ];
+
+        for message in case_variations {
+            let error = ProviderError::Other(message.to_string());
+            assert!(
+                EvmProvider::is_retriable_error(&error),
+                "Error with message '{}' should be retriable (case insensitive)",
+                message
+            );
+        }
     }
 
     #[tokio::test]

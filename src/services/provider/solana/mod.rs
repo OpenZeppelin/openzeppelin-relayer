@@ -14,6 +14,7 @@ use eyre::Result;
 #[cfg(test)]
 use mockall::automock;
 use mpl_token_metadata::accounts::Metadata;
+use reqwest::Url;
 use serde::Serialize;
 use solana_client::{
     nonblocking::rpc_client::RpcClient,
@@ -30,13 +31,16 @@ use solana_sdk::{
     transaction::{Transaction, VersionedTransaction},
 };
 use spl_token::state::Mint;
-use std::{str::FromStr, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
-use crate::models::RpcConfig;
+use crate::{models::RpcConfig, services::retry_rpc_call};
 
-use super::rpc_selector::{RpcSelector, RpcSelectorError};
 use super::ProviderError;
+use super::{
+    rpc_selector::{RpcSelector, RpcSelectorError},
+    RetryConfig,
+};
 
 #[derive(Error, Debug, Serialize)]
 pub enum SolanaProviderError {
@@ -46,6 +50,8 @@ pub enum SolanaProviderError {
     InvalidAddress(String),
     #[error("RPC selector error: {0}")]
     SelectorError(RpcSelectorError),
+    #[error("Network configuration error: {0}")]
+    NetworkConfiguration(String),
 }
 
 /// A trait that abstracts common Solana provider operations.
@@ -136,6 +142,35 @@ pub struct SolanaProvider {
     timeout_seconds: Duration,
     // Default commitment level
     commitment: CommitmentConfig,
+    // Retry configuration for network requests
+    retry_config: RetryConfig,
+}
+
+impl From<String> for SolanaProviderError {
+    fn from(s: String) -> Self {
+        SolanaProviderError::RpcError(s)
+    }
+}
+
+const RETRIABLE_ERROR_SUBSTRINGS: &[&str] = &[
+    "timeout",
+    "connection",
+    "reset",
+    "temporarily unavailable",
+    "rate limit",
+    "too many requests",
+    "503",
+    "502",
+    "504",
+    "blockhash not found",
+    "node is behind",
+    "unhealthy",
+];
+
+fn is_retriable_error(msg: &str) -> bool {
+    RETRIABLE_ERROR_SUBSTRINGS
+        .iter()
+        .any(|substr| msg.contains(substr))
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -191,10 +226,13 @@ impl SolanaProvider {
             ProviderError::NetworkConfiguration(format!("Failed to create RPC selector: {}", e))
         })?;
 
+        let retry_config = RetryConfig::from_env();
+
         Ok(Self {
             selector,
             timeout_seconds: Duration::from_secs(timeout_seconds),
             commitment,
+            retry_config,
         })
     }
 
@@ -217,6 +255,57 @@ impl SolanaProvider {
             })
             .map_err(SolanaProviderError::SelectorError)
     }
+
+    /// Initialize a provider for a given URL
+    fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
+        let rpc_url: Url = url.parse().map_err(|e| {
+            SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
+        })?;
+
+        let client = RpcClient::new_with_timeout_and_commitment(
+            rpc_url.to_string(),
+            self.timeout_seconds,
+            self.commitment,
+        );
+
+        Ok(Arc::new(client))
+    }
+
+    /// Retry helper for Solana RPC calls
+    async fn retry_rpc_call<T, F, Fut>(
+        &self,
+        operation_name: &str,
+        operation: F,
+    ) -> Result<T, SolanaProviderError>
+    where
+        F: Fn(Arc<RpcClient>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, SolanaProviderError>>,
+    {
+        let is_retriable = |e: &SolanaProviderError| match e {
+            SolanaProviderError::RpcError(msg) => is_retriable_error(msg),
+            _ => false,
+        };
+
+        log::debug!(
+            "Starting RPC operation '{}' with timeout: {}s",
+            operation_name,
+            self.timeout_seconds.as_secs()
+        );
+
+        retry_rpc_call(
+            &self.selector,
+            operation_name,
+            is_retriable,
+            |_| false, // TODO: implement fn to mark provider failed based on error
+            |url| match self.initialize_provider(url) {
+                Ok(provider) => Ok(provider),
+                Err(e) => Err(e),
+            },
+            operation,
+            Some(self.retry_config.clone()),
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -231,10 +320,13 @@ impl SolanaProviderTrait for SolanaProvider {
         let pubkey = Pubkey::from_str(address)
             .map_err(|e| SolanaProviderError::InvalidAddress(e.to_string()))?;
 
-        self.get_client()?
-            .get_balance(&pubkey)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_balance", |client| async move {
+            client
+                .get_balance(&pubkey)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Check if a blockhash is valid
@@ -243,28 +335,40 @@ impl SolanaProviderTrait for SolanaProvider {
         hash: &Hash,
         commitment: CommitmentConfig,
     ) -> Result<bool, SolanaProviderError> {
-        self.get_client()?
-            .is_blockhash_valid(hash, commitment)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("is_blockhash_valid", |client| async move {
+            client
+                .is_blockhash_valid(hash, commitment)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Gets the latest blockhash.
     async fn get_latest_blockhash(&self) -> Result<Hash, SolanaProviderError> {
-        self.get_client()?
-            .get_latest_blockhash()
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_latest_blockhash", |client| async move {
+            client
+                .get_latest_blockhash()
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     async fn get_latest_blockhash_with_commitment(
         &self,
         commitment: CommitmentConfig,
     ) -> Result<(Hash, u64), SolanaProviderError> {
-        self.get_client()?
-            .get_latest_blockhash_with_commitment(commitment)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call(
+            "get_latest_blockhash_with_commitment",
+            |client| async move {
+                client
+                    .get_latest_blockhash_with_commitment(commitment)
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            },
+        )
+        .await
     }
 
     /// Sends a transaction to the network.
@@ -272,10 +376,13 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         transaction: &Transaction,
     ) -> Result<Signature, SolanaProviderError> {
-        self.get_client()?
-            .send_transaction(transaction)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("send_transaction", |client| async move {
+            client
+                .send_transaction(transaction)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Sends a transaction to the network.
@@ -283,10 +390,13 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         transaction: &VersionedTransaction,
     ) -> Result<Signature, SolanaProviderError> {
-        self.get_client()?
-            .send_transaction(transaction)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("send_transaction", |client| async move {
+            client
+                .send_transaction(transaction)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Confirms the given transaction signature.
@@ -294,10 +404,13 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         signature: &Signature,
     ) -> Result<bool, SolanaProviderError> {
-        self.get_client()?
-            .confirm_transaction(signature)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("confirm_transaction", |client| async move {
+            client
+                .confirm_transaction(signature)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Retrieves the minimum balance for rent exemption for the given data size.
@@ -305,10 +418,16 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         data_size: usize,
     ) -> Result<u64, SolanaProviderError> {
-        self.get_client()?
-            .get_minimum_balance_for_rent_exemption(data_size)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call(
+            "get_minimum_balance_for_rent_exemption",
+            |client| async move {
+                client
+                    .get_minimum_balance_for_rent_exemption(data_size)
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            },
+        )
+        .await
     }
 
     /// Simulate transaction.
@@ -316,11 +435,14 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         transaction: &Transaction,
     ) -> Result<RpcSimulateTransactionResult, SolanaProviderError> {
-        self.get_client()?
-            .simulate_transaction(transaction)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
-            .map(|response| response.value)
+        self.retry_rpc_call("simulate_transaction", |client| async move {
+            client
+                .simulate_transaction(transaction)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                .map(|response| response.value)
+        })
+        .await
     }
 
     /// Retrieves account data for the given account string.
@@ -328,10 +450,13 @@ impl SolanaProviderTrait for SolanaProvider {
         let address = Pubkey::from_str(account).map_err(|e| {
             SolanaProviderError::InvalidAddress(format!("Invalid pubkey {}: {}", account, e))
         })?;
-        self.get_client()?
-            .get_account(&address)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_account", |client| async move {
+            client
+                .get_account(&address)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Retrieves account data for the given pubkey.
@@ -339,10 +464,13 @@ impl SolanaProviderTrait for SolanaProvider {
         &self,
         pubkey: &Pubkey,
     ) -> Result<Account, SolanaProviderError> {
-        self.get_client()?
-            .get_account(pubkey)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_account_from_pubkey", |client| async move {
+            client
+                .get_account(pubkey)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     /// Retrieves token metadata from a provided mint address.
@@ -386,20 +514,26 @@ impl SolanaProviderTrait for SolanaProvider {
 
     /// Get the fee for a message
     async fn get_fee_for_message(&self, message: &Message) -> Result<u64, SolanaProviderError> {
-        self.get_client()?
-            .get_fee_for_message(message)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_fee_for_message", |client| async move {
+            client
+                .get_fee_for_message(message)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     async fn get_recent_prioritization_fees(
         &self,
         addresses: &[Pubkey],
     ) -> Result<Vec<RpcPrioritizationFee>, SolanaProviderError> {
-        self.get_client()?
-            .get_recent_prioritization_fees(addresses)
-            .await
-            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        self.retry_rpc_call("get_recent_prioritization_fees", |client| async move {
+            client
+                .get_recent_prioritization_fees(addresses)
+                .await
+                .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+        })
+        .await
     }
 
     async fn calculate_total_fee(&self, message: &Message) -> Result<u64, SolanaProviderError> {
@@ -419,12 +553,49 @@ impl SolanaProviderTrait for SolanaProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lazy_static::lazy_static;
     use solana_sdk::{
         hash::Hash,
         message::Message,
         signer::{keypair::Keypair, Signer},
         transaction::Transaction,
     };
+    use std::sync::Mutex;
+
+    lazy_static! {
+        static ref EVM_TEST_ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    struct EvmTestEnvGuard {
+        _mutex_guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EvmTestEnvGuard {
+        fn new(mutex_guard: std::sync::MutexGuard<'static, ()>) -> Self {
+            std::env::set_var(
+                "API_KEY",
+                "test_api_key_for_evm_provider_new_this_is_long_enough_32_chars",
+            );
+            std::env::set_var("REDIS_URL", "redis://test-dummy-url-for-evm-provider");
+
+            Self {
+                _mutex_guard: mutex_guard,
+            }
+        }
+    }
+
+    impl Drop for EvmTestEnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("API_KEY");
+            std::env::remove_var("REDIS_URL");
+        }
+    }
+
+    // Helper function to set up the test environment
+    fn setup_test_env() -> EvmTestEnvGuard {
+        let guard = EVM_TEST_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        EvmTestEnvGuard::new(guard)
+    }
 
     fn get_funded_keypair() -> Keypair {
         // address HCKHoE2jyk1qfAwpHQghvYH3cEfT8euCygBzF9AV6bhY
@@ -454,6 +625,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_valid_config() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
 
@@ -467,6 +639,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_commitment_valid_config() {
+        let _env_guard = setup_test_env();
+
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
@@ -481,6 +655,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_empty_configs() {
+        let _env_guard = setup_test_env();
         let configs: Vec<RpcConfig> = vec![];
         let timeout = 30;
 
@@ -495,6 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_commitment_empty_configs() {
+        let _env_guard = setup_test_env();
         let configs: Vec<RpcConfig> = vec![];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
@@ -510,6 +686,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_invalid_url() {
+        let _env_guard = setup_test_env();
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
             weight: 1,
@@ -527,6 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_commitment_invalid_url() {
+        let _env_guard = setup_test_env();
         let configs = vec![RpcConfig {
             url: "invalid-url".to_string(),
             weight: 1,
@@ -545,6 +723,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_with_multiple_configs() {
+        let _env_guard = setup_test_env();
         let configs = vec![
             create_test_rpc_config(),
             RpcConfig {
@@ -561,6 +740,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_creation() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout);
@@ -569,6 +749,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_balance() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -580,6 +761,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_balance_funded_account() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -591,6 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_latest_blockhash() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -600,6 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_simulate_transaction() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).expect("Failed to create provider");
@@ -636,6 +820,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_metadata_from_pubkey() {
+        let _env_guard = setup_test_env();
         let configs = vec![RpcConfig {
             url: "https://api.mainnet-beta.solana.com".to_string(),
             weight: 1,
@@ -673,6 +858,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_client_success() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let provider = SolanaProvider::new(configs, timeout).unwrap();
@@ -687,6 +873,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_client_with_custom_commitment() {
+        let _env_guard = setup_test_env();
         let configs = vec![create_test_rpc_config()];
         let timeout = 30;
         let commitment = CommitmentConfig::finalized();
@@ -703,6 +890,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_client_with_multiple_rpcs() {
+        let _env_guard = setup_test_env();
         let configs = vec![
             create_test_rpc_config(),
             RpcConfig {
@@ -722,5 +910,129 @@ mod tests {
             let client = provider.get_client();
             assert!(client.is_ok());
         }
+    }
+
+    #[test]
+    fn test_initialize_provider_valid_url() {
+        let _env_guard = setup_test_env();
+
+        let configs = vec![RpcConfig {
+            url: "https://api.devnet.solana.com".to_string(),
+            weight: 1,
+        }];
+        let provider = SolanaProvider::new(configs, 10).unwrap();
+        let result = provider.initialize_provider("https://api.devnet.solana.com");
+        assert!(result.is_ok());
+        let arc_client = result.unwrap();
+        // Arc pointer should not be null and should point to RpcClient
+        let _client: &RpcClient = Arc::as_ref(&arc_client);
+    }
+
+    #[test]
+    fn test_initialize_provider_invalid_url() {
+        let _env_guard = setup_test_env();
+
+        let configs = vec![RpcConfig {
+            url: "https://api.devnet.solana.com".to_string(),
+            weight: 1,
+        }];
+        let provider = SolanaProvider::new(configs, 10).unwrap();
+        let result = provider.initialize_provider("not-a-valid-url");
+        assert!(result.is_err());
+        match result {
+            Err(SolanaProviderError::NetworkConfiguration(msg)) => {
+                assert!(msg.contains("Invalid URL format"))
+            }
+            _ => panic!("Expected NetworkConfiguration error"),
+        }
+    }
+
+    #[test]
+    fn test_from_string_for_solana_provider_error() {
+        let msg = "some rpc error".to_string();
+        let err: SolanaProviderError = msg.clone().into();
+        match err {
+            SolanaProviderError::RpcError(inner) => assert_eq!(inner, msg),
+            _ => panic!("Expected RpcError variant"),
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_true() {
+        for msg in RETRIABLE_ERROR_SUBSTRINGS {
+            assert!(is_retriable_error(msg), "Should be retriable: {}", msg);
+        }
+    }
+
+    #[test]
+    fn test_is_retriable_error_false() {
+        let non_retriable_cases = [
+            "account not found",
+            "invalid signature",
+            "insufficient funds",
+            "unknown error",
+        ];
+        for msg in non_retriable_cases {
+            assert!(!is_retriable_error(msg), "Should NOT be retriable: {}", msg);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_minimum_balance_for_rent_exemption() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        // 0 bytes is always valid, should return a value >= 0
+        let result = provider.get_minimum_balance_for_rent_exemption(0).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_is_blockhash_valid_for_recent_blockhash() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        // Get a recent blockhash (should be valid)
+        let blockhash = provider.get_latest_blockhash().await.unwrap();
+        let is_valid = provider
+            .is_blockhash_valid(&blockhash, CommitmentConfig::confirmed())
+            .await;
+        assert!(is_valid.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_is_blockhash_valid_for_invalid_blockhash() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        let invalid_blockhash = solana_sdk::hash::Hash::new_from_array([0u8; 32]);
+        let is_valid = provider
+            .is_blockhash_valid(&invalid_blockhash, CommitmentConfig::confirmed())
+            .await;
+        assert!(is_valid.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_blockhash_with_commitment() {
+        let _env_guard = super::tests::setup_test_env();
+        let configs = vec![super::tests::create_test_rpc_config()];
+        let timeout = 30;
+        let provider = SolanaProvider::new(configs, timeout).unwrap();
+
+        let commitment = CommitmentConfig::confirmed();
+        let result = provider
+            .get_latest_blockhash_with_commitment(commitment)
+            .await;
+        assert!(result.is_ok());
+        let (blockhash, last_valid_block_height) = result.unwrap();
+        // Blockhash should not be all zeros and block height should be > 0
+        assert_ne!(blockhash, solana_sdk::hash::Hash::new_from_array([0u8; 32]));
+        assert!(last_valid_block_height > 0);
     }
 }

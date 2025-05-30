@@ -1,99 +1,184 @@
 = Solana Integration
 
-== Solana DEX integration
+:description: Comprehensive guide for using OpenZeppelin Relayer with Solana networks, including configuration, features, API usage, and advanced options.
 
-The Relayer can perform automated token‐swaps on Solana using one of two strategies:
+== Overview
 
-* **jupiter-swap** – uses the https://dev.jup.ag/docs/swap-api/[Jupiter Swap API,window="_blank"]  
-* **jupiter-ultra** – uses the https://dev.jup.ag/docs/ultra-api/[Jupiter Ultra API,window="_blank"]  
+OpenZeppelin Relayer provides robust support for Solana networks, enabling secure transaction relaying, automated token swaps, gasless transactions, and advanced fee management. This page covers everything you need to get started and make the most of Solana-specific features.
+
+== Features
+
+- Automated token swaps via Jupiter DEX (mainnet-beta only)
+- Gasless transactions (user or relayer pays fees)
+- Secure transaction signing with multiple signer backends
+- Transaction status monitoring and nonce management
+- Custom RPC endpoints and network policies
+- Metrics and observability
+
+== Supported Networks
+
+- `mainnet-beta`
+- `devnet`
+- `testnet`
+
+== Supported Signers
+
+- `vault_transit` (hosted)
+- `turnkey` (hosted)
+- `google_cloud_kms` (hosted)
+- `local` (local)
+- `vault` (local)
+- `vault_cloud` (local)
+
+[NOTE]
+====
+In production systems, hosted signers are recommended for the best security model.
+====
+
+
+== Quickstart
+
+For a step-by-step setup, see xref:quickstart.adoc[Quick Start Guide].  
+Key prerequisites:
+
+- Rust 2021 edition
+- Redis
+- Docker (optional)
+
+Example configuration for a Solana relayer:
+[source,json]
+----
+{
+  "id": "solana-example",
+  "name": "Solana Example",
+  "network": "devnet",
+  "paused": false,
+  "notification_id": "notification-example",
+  "signer_id": "local-signer",
+  "network_type": "solana",
+  "custom_rpc_urls": [
+    { "url": "https://primary-solana-rpc.example.com", "weight": 100 },
+    { "url": "https://backup-solana-rpc.example.com", "weight": 100 }
+  ],
+  "policies": {
+    "fee_payment_strategy": "user",
+    "min_balance": 0,
+    "allowed_tokens": [
+      { "mint": "So111...", "max_allowed_fee": 100000000 }
+    ],
+    "swap_config": {
+      "strategy": "jupiter-swap",
+      "cron_schedule": "0 0 * * * *",
+      "min_balance_threshold": 1000000,
+      "jupiter_swap_options": {
+        "dynamic_compute_unit_limit": true,
+        "priority_level": "high",
+        "priority_fee_max_lamports": 1000000000
+      }
+    }
+  }
+}
+----
+
+For more configuration examples, visit the link:https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[OpenZeppelin Relayer examples repository, window=_blank].
+
 
 == Configuration
 
-In your relayer’s `policies.swap_config`:
+=== Relayer Policies
 
-[source,json]
+In addition to standard relayer configuration and policies, Solana relayers support additional options:
+
+- `fee_payment_strategy`: `"user"` or `"relayer"` (who pays transaction fees)
+- `allowed_tokens`: List of SPL tokens supported for swaps and fee payments
+- `allowed_programs`, `allowed_accounts`, `disallowed_accounts`: Restrict relayer operations to specific programs/accounts
+- `swap_config`: Automated token swap settings (see below)
+
+
+You can check all options in xref:index.adoc#3_relayers[User Documentation - Relayers].
+
+=== Automated token swap configuration options:
+
+* `strategy`: The swap engine to use. Supported values: `"jupiter-swap"` (Jupiter Swap API), `"jupiter-ultra"` (Jupiter Ultra API).
+* `cron_schedule`: Cron expression defining how often scheduled swaps should run (e.g., `"0 0 * * * *"` for every hour).
+* `min_balance_threshold`: Minimum token balance (in lamports) that triggers a swap. If the relayer's balance drops below this, a swap is attempted.
+* `jupiter_swap_options`: Advanced options for Jupiter swaps, such as:
+** `dynamic_compute_unit_limit`: If `true`, dynamically adjusts compute units for swap transactions.
+** `priority_level`: Priority for the swap transaction. Supported values: `"medium"`, `"high"`, `"veryHigh"`.
+** `priority_fee_max_lamports`: Maximum priority fee (in lamports) to pay for a swap transaction.
+* Per-token swap limits:
+** `min_amount`: Minimum amount of a token to swap in a single operation.
+** `max_amount`: Maximum amount of a token to swap in a single operation.
+** `retain_min_amount`: Minimum amount of a token to retain in the relayer account after a swap (prevents swapping the entire balance).
+
+== Automated Token Swaps
+
+The relayer can perform automated token swaps on Solana when user fee_payment_strategy is used for relayer using:
+
+- **jupiter-swap** – via the Jupiter Swap API
+- **jupiter-ultra** – via the Jupiter Ultra API
+
+Swaps can be set to work as:
+
+- **Scheduled Swaps**: Background jobs run swaps based on your cron schedule.
+- **On-Demand Swaps**: If a transaction fails due to insufficient funds, the relayer attempts a swap before returning an error.
+
+
+== API Reference
+
+The Solana API conforms to the link:https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav[Paymaster spec, window=_blank].
+
+Common endpoints:
+- `POST /api/v1/relayers/<relayer_id>/rpc`  
+  Methods: 
+  
+- `feeEstimate`,
+- `prepareTransaction`,
+- `transferTransaction`, 
+- `signTransaction`, 
+- `signAndSendTransaction`, 
+- `getSupportedTokens`
+- `getSupportedFeatures`
+
+Example: Estimate fee for a transaction
+[source,bash]
 ----
-"swap_config": {
-  "strategy": "jupiter-swap",
-  "cron_schedule": "0 0 * * * *",      // every hour on the hour
-  "min_balance_threshold": 1_000_000   // lamports
-  "jupiter_swap_options": {
-    "dynamic_compute_unit_limit": true,
-    "priority_level": "high",
-    "priority_fee_max_lamports": 1000000000
-  }
-}
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/rpc' \
+--header 'Authorization: Bearer <api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "jsonrpc": "2.0",
+  "method": "feeEstimate",
+  "params": {
+    "transaction": "<base64-encoded-tx>",
+    "fee_token": "<mint-address>"
+  },
+  "id": 1
+}'
 ----
 
-* `strategy` (jupiter-swap | jupiter-ultra)  
-* `cron_schedule` (string, six‐field cron)  
-* `min_balance_threshold` (u64 lamports)
-* `jupiter_swap_options`: JupiterSwapOptions
+See xref:api_reference.adoc[API Reference] and link:https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/solana[SDK examples, window=_blank] for full details and examples.
 
 
-Per token configuration allows setting more granular configuration for swap amounts.
+== Security
 
-[source,json]
-----
-"allowed_tokens": [
-  {
-    "mint": "So111…",
-    "swap_config": {
-      "min_amount": 10,
-      "max_amount": 1000,
-      "retain_min_amount": 50
-    }
-  }
-]
-----
+- Do not expose the relayer directly to the public internet.
+- Deploy behind a secure backend (reverse proxy, firewall).
+- Use hosted signers in production systems.
 
-* `min_amount` (unsigned 64)  
-  If the computed swap amount would be less than this, *no* swap occurs for that token.  
-* `max_amount` (unsigned 64)  
-  The cap on how many token units may be swapped in one job.  
-* `retain_min_amount` (unsigned 64)  
-  Ensures at least this many tokens remain in the account after the swap.
+== Troubleshooting
 
-=== Jupiter Swap Options
+- Check environment variables and configuration files for errors
+- Review container logs for issues
 
-You can fine-tune how Jupiter Swap API prioritizes and executes your swap transactions via the
-`jupiter_swap_options` object under `policies.swap_config`:
+== Roadmap
 
-[source,json]
-----
-"jupiter_swap_options": {
-  "dynamic_compute_unit_limit": true,
-  "priority_level": "high",
-  "priority_fee_max_lamports": 1000000000
-}
-----
+- See xref:roadmap.adoc[Project Roadmap] for upcoming features
 
-* `dynamic_compute_unit_limit` (boolean)  
-  If `true`, the relayer will request a compute-unit limit matching Jupiter’s recommendation  
-  (otherwise uses the network default).
+== Support
 
-* `priority_level` (string)  
-  One of `"medium"`, `"high"`, or `"veryHigh"`.  
-  Determines how aggressively Jupiter will pay for extra compute units to speed up your swap.
+For help, join our link:https://t.me/openzeppelin_tg/2[Telegram] or open an issue on GitHub.
 
-* `priority_fee_max_lamports` (unsigned 64)  
-  Caps the maximum lamports you’re willing to pay as a priority fee.  
-  Jupiter will never exceed this amount when topping up compute-unit fees.
+== License
 
-Note: Refer to the link:https://dev.jup.ag/docs/swap-api/[Jupiter Swap API,window="_blank"] for more info.
-
-== How It Works
-
-
-The Solana DEX integration operates in two modes:
-
-- **Scheduled Swaps**  
-  A background job enqueues `handle_token_swap_request` according to the `cron_schedule` you’ve configured in `policies.swap_config`.  
-- **On-Demand Swaps**  
-  If any RPC call fails with an `InsufficientFunds` error (e.g. during a transfer or fee estimation), the relayer will automatically invoke the same swap logic before returning the RPC error to the client.
-
-=== Notes
-
-* Only tokens explicitly listed in `allowed_tokens` will ever be swapped.
-* Swaps are gated by your chosen fee payment strategy—you must use **user** fees for automated token-swap support.
-* Strategies `jupiter-swap` and `jupiter-ultra` are only available on `mainnet-beta`.
+This project is licensed under the GNU Affero General Public License v3.0.

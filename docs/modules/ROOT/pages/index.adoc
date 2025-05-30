@@ -33,6 +33,7 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
   * Ethereum (Mainnet, Sepolia, Holesky)
   * Optimism (Mainnet, Sepolia)
   * Worldchain (Sepolia)
+- Stellar (Partial support)
 
 [NOTE]
 ====
@@ -493,6 +494,7 @@ Supported signer types:
 - `vault_cloud`: hosted vault secret signer
 - `vault_transit`: vault transit signer
 - `turnkey`: turnkey signer
+- `google_cloud_kms`: google cloud kms signer
 
 Available configuration fields
 [cols="1,1,2"]
@@ -672,6 +674,52 @@ Available configuration fields
 | The public key corresponding to the private key identified by private_key_id. Used for address derivation and signature verification.
 |===
 
+`google_cloud_kms` type config:
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| service_account.project_id
+| String
+| The Google Cloud project ID where your KMS resources are located.
+
+| service_account.private_key_id.type
+| String
+| Type of value source for the private key ID (`env` or `plain`).
+
+| service_account.private_key_id.value
+| String
+| The private key ID value or the environment variable name containing it.
+
+| service_account.private_key.type
+| String
+| Type of value source for the private key (`env` or `plain`).
+
+| service_account.private_key.value
+| String
+| The Google Cloud service account private key (PEM format) or the environment variable name containing it.
+
+| service_account.client_email.type
+| String
+| Type of value source for the client email (`env` or `plain`).
+
+| service_account.client_email.value
+| String
+| The Google Cloud service account client email or the environment variable name containing it.
+
+| service_account.client_id
+| String
+| The Google Cloud service account client ID.
+
+| key.key_ring_id
+| String
+| The KMS key ring ID containing your cryptographic key.
+
+| key.key_id
+| String
+| The KMS key ID used for signing operations.
+|===
+
 
 ==== 2. Notifications
 
@@ -824,6 +872,14 @@ Supported networks
 |evm
 |holesky
 |Ethereum testnet
+
+|stellar
+|mainnet
+|Stellar Public Network (Partial support)
+
+|stellar
+|testnet
+|Stellar Test Network (Partial support)
 |===
 
 [#network_policies]
@@ -1060,7 +1116,7 @@ This is useful when you want to:
    * Configure primary and backup endpoints with different weights
 
 When both are available, the relayer will:
-1. First attempt to use the `custom_rpc_urls` if configured. 
+1. First attempt to use the `custom_rpc_urls` if configured.
 2. Fall back to the public RPC URLs if no custom URL is configured.
 
 For backward compatibility, string arrays are still supported:

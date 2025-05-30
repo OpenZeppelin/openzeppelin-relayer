@@ -35,6 +35,8 @@ pub enum ProviderError {
     RateLimited,
     #[error("Bad gateway (HTTP 502)")]
     BadGateway,
+    #[error("Request error (HTTP {status_code}): {error}")]
+    RequestError { error: String, status_code: u16 },
     #[error("Other provider error: {0}")]
     Other(String),
 }
@@ -82,7 +84,12 @@ fn categorize_reqwest_error(err: &reqwest::Error) -> ProviderError {
         match status.as_u16() {
             429 => return ProviderError::RateLimited,
             502 => return ProviderError::BadGateway,
-            _ => {}
+            _ => {
+                return ProviderError::RequestError {
+                    error: err.to_string(),
+                    status_code: status.as_u16(),
+                }
+            }
         }
     }
 
