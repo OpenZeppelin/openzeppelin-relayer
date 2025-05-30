@@ -1,10 +1,10 @@
 use super::evm::Speed;
 use crate::{
     domain::{PriceParams, SignTransactionResponseEvm},
-    models::transaction::stellar_types::{MemoSpec, OperationSpec},
     models::{
-        AddressError, EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerError,
-        RelayerRepoModel, SignerError, StellarNamedNetwork, TransactionError, U256,
+        transaction::stellar_types::{MemoSpec, OperationSpec},
+        AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
+        RelayerError, RelayerRepoModel, SignerError, StellarNetwork, TransactionError, U256,
     },
 };
 use alloy::{
@@ -250,7 +250,7 @@ pub struct StellarTransactionData {
     pub operations: Vec<OperationSpec>,
     pub memo: Option<MemoSpec>,
     pub valid_until: Option<String>,
-    pub network: StellarNamedNetwork,
+    pub network: StellarNetwork,
     #[serde(skip_serializing, skip_deserializing)]
     pub signatures: Vec<DecoratedSignature>,
     pub hash: Option<String>,
@@ -295,18 +295,27 @@ impl StellarTransactionData {
     }
 }
 
-impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRepoModel {
+impl
+    TryFrom<(
+        &NetworkTransactionRequest,
+        &RelayerRepoModel,
+        &NetworkRepoModel,
+    )> for TransactionRepoModel
+{
     type Error = RelayerError;
 
     fn try_from(
-        (request, relayer_model): (&NetworkTransactionRequest, &RelayerRepoModel),
+        (request, relayer_model, network_model): (
+            &NetworkTransactionRequest,
+            &RelayerRepoModel,
+            &NetworkRepoModel,
+        ),
     ) -> Result<Self, Self::Error> {
         let now = Utc::now().to_rfc3339();
 
         match request {
             NetworkTransactionRequest::Evm(evm_request) => {
-                let named_network = relayer_model.network.clone();
-                let network = EvmNetwork::from_network_str(&named_network);
+                let network = EvmNetwork::try_from(network_model.clone())?;
                 Ok(Self {
                     id: Uuid::new_v4().to_string(),
                     relayer_id: relayer_model.id.clone(),
@@ -325,7 +334,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                         data: evm_request.data.clone(),
                         from: relayer_model.address.clone(),
                         to: evm_request.to.clone(),
-                        chain_id: network.unwrap().id(),
+                        chain_id: network.id(),
                         hash: None,
                         signature: None,
                         speed: evm_request.speed.clone(),
@@ -375,7 +384,7 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     operations: stellar_request.operations.clone(),
                     memo: stellar_request.memo.clone(),
                     valid_until: stellar_request.valid_until.clone(),
-                    network: StellarNamedNetwork::from_str(&stellar_request.network)?,
+                    network: StellarNetwork::try_from(network_model.clone())?,
                     signatures: Vec::new(),
                     hash: None,
                     fee: None,
@@ -800,7 +809,15 @@ mod tests {
             }],
             memo: Some(MemoSpec::Text("Test memo".to_string())),
             valid_until: Some("2025-01-01T00:00:00Z".to_string()),
-            network: StellarNamedNetwork::Testnet,
+            network: StellarNetwork {
+                network: "testnet".to_string(),
+                rpc_urls: vec!["https://horizon.stellar.org".to_string()],
+                explorer_urls: None,
+                average_blocktime_ms: 5000,
+                is_testnet: true,
+                tags: vec![],
+                passphrase: "Test SDF Network ; September 2015".to_string(),
+            },
             signatures: Vec::new(),
             hash: Some("hash123".to_string()),
         };
@@ -916,7 +933,15 @@ mod tests {
             }],
             memo: Some(MemoSpec::None),
             valid_until: None,
-            network: StellarNamedNetwork::Testnet,
+            network: StellarNetwork {
+                network: "testnet".to_string(),
+                rpc_urls: vec!["https://horizon.stellar.org".to_string()],
+                explorer_urls: None,
+                average_blocktime_ms: 5000,
+                is_testnet: true,
+                tags: vec![],
+                passphrase: "Test SDF Network ; September 2015".to_string(),
+            },
             signatures: Vec::new(),
             hash: None,
         }

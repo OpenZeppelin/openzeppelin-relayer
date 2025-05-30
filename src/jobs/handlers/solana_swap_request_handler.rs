@@ -85,9 +85,11 @@ async fn handle_request(
         relayer_model,
         signer_model,
         context.relayer_repository(),
+        context.network_repository(),
         context.transaction_repository(),
         context.job_producer(),
-    )?;
+    )
+    .await?;
 
     relayer
         .handle_token_swap_request(request.relayer_id.clone())

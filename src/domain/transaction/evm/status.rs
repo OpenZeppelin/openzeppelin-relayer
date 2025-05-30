@@ -11,22 +11,25 @@ use super::{
     get_age_of_sent_at, has_enough_confirmations, is_noop, is_transaction_valid, make_noop,
     too_many_attempts, too_many_noop_attempts,
 };
+use crate::models::{EvmNetwork, NetworkType};
+use crate::repositories::NetworkRepository;
 use crate::{
     domain::transaction::evm::price_calculator::PriceCalculatorTrait,
     jobs::JobProducerTrait,
     models::{
-        EvmNetwork, NetworkTransactionData, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{EvmProviderTrait, Signer},
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
-impl<P, R, T, J, S, C, PC> EvmRelayerTransaction<P, R, T, J, S, C, PC>
+impl<P, R, N, T, J, S, C, PC> EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: Signer + Send + Sync,
@@ -64,7 +67,28 @@ where
                 .ok_or(TransactionError::UnexpectedError(
                     "Transaction receipt missing block number".to_string(),
                 ))?;
-            if !has_enough_confirmations(tx_block_number, last_block_number, evm_data.chain_id) {
+
+            let network_model = self
+                .network_repository()
+                .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+                .await?
+                .ok_or(TransactionError::UnexpectedError(format!(
+                    "Network with chain id {} not found",
+                    evm_data.chain_id
+                )))?;
+
+            let network = EvmNetwork::try_from(network_model).map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Error converting network model to EvmNetwork: {}",
+                    e
+                ))
+            })?;
+
+            if !has_enough_confirmations(
+                tx_block_number,
+                last_block_number,
+                network.required_confirmations,
+            ) {
                 info!("Transaction mined but not confirmed: {}", tx_hash);
                 return Ok(TransactionStatus::Mined);
             }
@@ -116,7 +140,22 @@ where
             return Ok(false);
         }
 
-        let network = EvmNetwork::from_id(evm_data.chain_id);
+        let network_model = self
+            .network_repository()
+            .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+            .await?
+            .ok_or(TransactionError::UnexpectedError(format!(
+                "Network with chain id {} not found",
+                evm_data.chain_id
+            )))?;
+
+        let network = EvmNetwork::try_from(network_model).map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Error converting network model to EvmNetwork: {}",
+                e
+            ))
+        })?;
+
         if network.is_rollup() && too_many_attempts(tx) {
             info!("Rollup transaction has too many attempts, will replace with NOOP");
             return Ok(true);
@@ -297,13 +336,18 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
+        config::{EvmNetworkConfig, NetworkConfigCommon},
         domain::{transaction::evm::EvmRelayerTransaction, MockPriceCalculatorTrait},
         jobs::MockJobProducerTrait,
         models::{
-            evm::Speed, EvmTransactionData, NetworkTransactionData, NetworkType, RelayerEvmPolicy,
-            RelayerNetworkPolicy, RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
+            evm::Speed, EvmTransactionData, NetworkConfigData, NetworkRepoModel,
+            NetworkTransactionData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
+            RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
-        repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
+        repositories::{
+            MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
+            MockTransactionRepository,
+        },
         services::{MockEvmProviderTrait, MockSigner},
     };
     use alloy::{
@@ -318,6 +362,7 @@ mod tests {
     pub struct TestMocks {
         pub provider: MockEvmProviderTrait,
         pub relayer_repo: MockRepository<RelayerRepoModel, String>,
+        pub network_repo: MockNetworkRepository,
         pub tx_repo: MockTransactionRepository,
         pub job_producer: MockJobProducerTrait,
         pub signer: MockSigner,
@@ -331,11 +376,37 @@ mod tests {
         TestMocks {
             provider: MockEvmProviderTrait::new(),
             relayer_repo: MockRepository::new(),
+            network_repo: MockNetworkRepository::new(),
             tx_repo: MockTransactionRepository::new(),
             job_producer: MockJobProducerTrait::new(),
             signer: MockSigner::new(),
             counter: MockTransactionCounterTrait::new(),
             price_calc: MockPriceCalculatorTrait::new(),
+        }
+    }
+
+    /// Creates a test NetworkRepoModel for chain_id 1 (mainnet)
+    pub fn create_test_network_model() -> NetworkRepoModel {
+        let evm_config = EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "mainnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false),
+                tags: Some(vec!["mainnet".to_string()]),
+            },
+            chain_id: Some(1),
+            required_confirmations: Some(12),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+        };
+        NetworkRepoModel {
+            id: "evm:mainnet".to_string(),
+            name: "mainnet".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(evm_config),
         }
     }
 
@@ -384,6 +455,7 @@ mod tests {
     ) -> EvmRelayerTransaction<
         MockEvmProviderTrait,
         MockRepository<RelayerRepoModel, String>,
+        MockNetworkRepository,
         MockTransactionRepository,
         MockJobProducerTrait,
         MockSigner,
@@ -394,6 +466,7 @@ mod tests {
             relayer,
             mocks.provider,
             Arc::new(mocks.relayer_repo),
+            Arc::new(mocks.network_repo),
             Arc::new(mocks.tx_repo),
             Arc::new(mocks.counter),
             Arc::new(mocks.job_producer),
@@ -503,6 +576,12 @@ mod tests {
                 .expect_get_block_number()
                 .return_once(|| Box::pin(async { Ok(100) }));
 
+            // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
 
             let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
@@ -530,6 +609,12 @@ mod tests {
                 .provider
                 .expect_get_block_number()
                 .return_once(|| Box::pin(async { Ok(113) }));
+
+            // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
 
@@ -599,12 +684,18 @@ mod tests {
 
         #[tokio::test]
         async fn test_expired_transaction_triggers_noop() {
-            let mocks = default_test_mocks();
+            let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             // Force the transaction to be "expired" by setting valid_until in the past
             tx.valid_until = Some((Utc::now() - Duration::seconds(10)).to_rfc3339());
+
+            // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let res = evm_transaction.should_noop(&tx).await.unwrap();
@@ -695,23 +786,17 @@ mod tests {
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
 
-            // Force should_noop to return false by keeping valid_until unset.
+            // Mock network repository to return a test network model for should_noop check
             mocks
-                .provider
-                .expect_get_transaction_receipt()
-                .returning(|_| Box::pin(async { Ok(None) }));
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
 
             // Expect the resubmit job to be produced
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
-
-            // The transaction repo partial update can just return the same transaction
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .returning(|_, _| Ok(make_test_transaction(TransactionStatus::Submitted)));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let updated_tx = evm_transaction.handle_submitted_state(tx).await.unwrap();
@@ -728,10 +813,16 @@ mod tests {
         #[tokio::test]
         async fn test_pending_state_no_noop() {
             // Create a pending transaction that is fresh (created now).
-            let mocks = default_test_mocks();
+            let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Pending);
             tx.created_at = Utc::now().to_rfc3339(); // less than one minute old
+
+            // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction
@@ -752,6 +843,12 @@ mod tests {
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Pending);
             tx.created_at = (Utc::now() - Duration::minutes(2)).to_rfc3339();
+
+            // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
 
             // Expect partial_update to be called and simulate a NOOP update by setting noop_count.
             let tx_clone = tx.clone();
@@ -954,6 +1051,11 @@ mod tests {
                 .provider
                 .expect_get_block_number()
                 .return_once(|| Box::pin(async { Ok(100) }));
+            // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
             // Expect a status check job to be scheduled.
             mocks
                 .job_producer

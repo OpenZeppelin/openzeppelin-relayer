@@ -351,7 +351,7 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{
             AssetSpec, DecoratedSignature, NetworkTransactionData, NetworkType, OperationSpec,
-            RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy, StellarNamedNetwork,
+            RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy, StellarNetwork,
             StellarTransactionData, TransactionRepoModel, TransactionStatus,
         },
         repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
@@ -362,6 +362,18 @@ mod tests {
     use std::sync::Arc;
 
     const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+    fn create_test_stellar_network() -> StellarNetwork {
+        StellarNetwork {
+            network: "testnet".to_string(),
+            rpc_urls: vec!["https://horizon.stellar.org".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 5000,
+            is_testnet: true,
+            tags: vec![],
+            passphrase: "Test SDF Network ; September 2015".to_string(),
+        }
+    }
 
     fn dummy_signature() -> DecoratedSignature {
         use soroban_rs::xdr::BytesM;
@@ -406,7 +418,7 @@ mod tests {
             operations: vec![payment_op(TEST_PK)],
             memo: None,
             valid_until: None,
-            network: StellarNamedNetwork::Testnet,
+            network: create_test_stellar_network(),
             signatures: Vec::new(),
             hash: None,
         };

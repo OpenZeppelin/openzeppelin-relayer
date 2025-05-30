@@ -36,12 +36,13 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, RelayerRepoModel, RepositoryError,
-        TransactionRepoModel,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
+        RepositoryError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepository, RelayerRepositoryStorage, Repository,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
+        RelayerRepositoryStorage, Repository,
     },
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
@@ -55,11 +56,12 @@ use log::{info, warn};
 use super::EvmTransactionValidator;
 
 #[allow(dead_code)]
-pub struct EvmRelayer<P, R, T, J, S, C>
+pub struct EvmRelayer<P, R, N, T, J, S, C>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: DataSignerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
@@ -69,16 +71,18 @@ where
     network: EvmNetwork,
     provider: P,
     relayer_repository: Arc<R>,
+    network_repository: Arc<N>,
     transaction_repository: Arc<T>,
     transaction_counter_service: Arc<C>,
     job_producer: Arc<J>,
 }
 
 #[allow(clippy::too_many_arguments)]
-impl<P, R, T, J, S, C> EvmRelayer<P, R, T, J, S, C>
+impl<P, R, N, T, J, S, C> EvmRelayer<P, R, N, T, J, S, C>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: DataSignerTrait + Send + Sync,
@@ -106,6 +110,7 @@ where
         provider: P,
         network: EvmNetwork,
         relayer_repository: Arc<R>,
+        network_repository: Arc<N>,
         transaction_repository: Arc<T>,
         transaction_counter_service: Arc<C>,
         job_producer: Arc<J>,
@@ -116,6 +121,7 @@ where
             network,
             provider,
             relayer_repository,
+            network_repository,
             transaction_repository,
             transaction_counter_service,
             job_producer,
@@ -163,6 +169,7 @@ where
 pub type DefaultEvmRelayer = EvmRelayer<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    InMemoryNetworkRepository,
     InMemoryTransactionRepository,
     JobProducer,
     EvmSigner,
@@ -170,10 +177,11 @@ pub type DefaultEvmRelayer = EvmRelayer<
 >;
 
 #[async_trait]
-impl<P, R, T, J, S, C> Relayer for EvmRelayer<P, R, T, J, S, C>
+impl<P, R, N, T, J, S, C> Relayer for EvmRelayer<P, R, N, T, J, S, C>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: DataSignerTrait + Send + Sync,
@@ -192,7 +200,18 @@ where
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
-        let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
+        let network_model = self
+            .network_repository
+            .get_by_name(NetworkType::Evm, &self.relayer.network)
+            .await?
+            .ok_or_else(|| {
+                RelayerError::NetworkConfiguration(format!(
+                    "Network {} not found",
+                    self.relayer.network
+                ))
+            })?;
+        let transaction =
+            TransactionRepoModel::try_from((&network_transaction, &self.relayer, &network_model))?;
 
         self.transaction_repository
             .create(transaction.clone())
@@ -385,8 +404,11 @@ mod tests {
     use super::*;
     use crate::{
         jobs::MockJobProducerTrait,
-        models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, SignerError, U256},
-        repositories::{MockRelayerRepository, MockTransactionRepository},
+        models::{
+            NetworkRepoModel, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, SignerError,
+            U256,
+        },
+        repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{MockEvmProviderTrait, MockTransactionCounterServiceTrait},
     };
     use mockall::predicate::*;
@@ -400,6 +422,45 @@ mod tests {
             async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError>;
             async fn sign_typed_data(&self, request: SignTypedDataRequest) -> Result<SignDataResponse, SignerError>;
         }
+    }
+
+    fn create_test_evm_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "mainnet".to_string(),
+            rpc_urls: vec!["https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 12000,
+            is_testnet: false,
+            tags: vec!["mainnet".to_string()],
+            chain_id: 1,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
+
+    fn create_test_network_repo_model() -> NetworkRepoModel {
+        use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+
+        let config = EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "mainnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec![
+                    "https://mainnet.infura.io/v3/YOUR_INFURA_API_KEY".to_string()
+                ]),
+                explorer_urls: None,
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false),
+                tags: Some(vec!["mainnet".to_string()]),
+            },
+            chain_id: Some(1),
+            required_confirmations: Some(1),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+        };
+
+        NetworkRepoModel::new_evm(config)
     }
 
     fn create_test_relayer() -> RelayerRepoModel {
@@ -427,6 +488,7 @@ mod tests {
     fn setup_mocks() -> (
         MockEvmProviderTrait,
         MockRelayerRepository,
+        MockNetworkRepository,
         MockTransactionRepository,
         MockJobProducerTrait,
         MockDataSigner,
@@ -435,6 +497,7 @@ mod tests {
         (
             MockEvmProviderTrait::new(),
             MockRelayerRepository::new(),
+            MockNetworkRepository::new(),
             MockTransactionRepository::new(),
             MockJobProducerTrait::new(),
             MockDataSigner::new(),
@@ -444,7 +507,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_balance() {
-        let (mut provider, relayer_repo, tx_repo, job_producer, signer, counter) = setup_mocks();
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
         let relayer_model = create_test_relayer();
 
         provider
@@ -456,8 +520,9 @@ mod tests {
             relayer_model,
             signer,
             provider,
-            EvmNetwork::from_id(1),
+            create_test_evm_network(),
             Arc::new(relayer_repo),
+            Arc::new(network_repo),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
@@ -471,8 +536,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_transaction_request() {
-        let (provider, relayer_repo, mut tx_repo, mut job_producer, signer, counter) =
-            setup_mocks();
+        let (
+            provider,
+            relayer_repo,
+            mut network_repo,
+            mut tx_repo,
+            mut job_producer,
+            signer,
+            counter,
+        ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
         let network_tx = NetworkTransactionRequest::Evm(crate::models::EvmTransactionRequest {
@@ -487,6 +559,11 @@ mod tests {
             valid_until: None,
         });
 
+        network_repo
+            .expect_get_by_name()
+            .with(eq(NetworkType::Evm), eq("mainnet"))
+            .returning(|_, _| Ok(Some(create_test_network_repo_model())));
+
         tx_repo.expect_create().returning(Ok);
         job_producer
             .expect_produce_transaction_request_job()
@@ -496,8 +573,9 @@ mod tests {
             relayer_model,
             signer,
             provider,
-            EvmNetwork::from_id(1),
+            create_test_evm_network(),
             Arc::new(relayer_repo),
+            Arc::new(network_repo),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
@@ -510,7 +588,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_min_balance_sufficient() {
-        let (mut provider, relayer_repo, tx_repo, job_producer, signer, counter) = setup_mocks();
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
         let relayer_model = create_test_relayer();
 
         provider
@@ -521,8 +600,9 @@ mod tests {
             relayer_model,
             signer,
             provider,
-            EvmNetwork::from_id(1),
+            create_test_evm_network(),
             Arc::new(relayer_repo),
+            Arc::new(network_repo),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
@@ -535,7 +615,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_min_balance_insufficient() {
-        let (mut provider, relayer_repo, tx_repo, job_producer, signer, counter) = setup_mocks();
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
         let relayer_model = create_test_relayer();
 
         provider
@@ -546,8 +627,9 @@ mod tests {
             relayer_model,
             signer,
             provider,
-            EvmNetwork::from_id(1),
+            create_test_evm_network(),
             Arc::new(relayer_repo),
+            Arc::new(network_repo),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
@@ -563,7 +645,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_nonce() {
-        let (mut provider, relayer_repo, tx_repo, job_producer, signer, mut counter) =
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
             setup_mocks();
         let relayer_model = create_test_relayer();
 
@@ -579,8 +661,9 @@ mod tests {
             relayer_model,
             signer,
             provider,
-            EvmNetwork::from_id(1),
+            create_test_evm_network(),
             Arc::new(relayer_repo),
+            Arc::new(network_repo),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
@@ -593,7 +676,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_rpc() {
-        let (mut provider, relayer_repo, tx_repo, job_producer, signer, counter) = setup_mocks();
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
         let relayer_model = create_test_relayer();
 
         provider
@@ -604,8 +688,9 @@ mod tests {
             relayer_model,
             signer,
             provider,
-            EvmNetwork::from_id(1),
+            create_test_evm_network(),
             Arc::new(relayer_repo),
+            Arc::new(network_repo),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),

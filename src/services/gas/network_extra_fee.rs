@@ -73,14 +73,29 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{EvmNamedNetwork, EvmNetwork};
+    use crate::models::EvmNetwork;
     use crate::services::MockEvmProviderTrait;
     use alloy::primitives::Bytes;
+
+    fn create_test_evm_network(name: &str, optimism: bool) -> EvmNetwork {
+        EvmNetwork {
+            network: name.to_string(),
+            rpc_urls: vec!["https://optimism-rpc.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 12000,
+            is_testnet: false,
+            tags: vec![if optimism { "optimism" } else { name }.to_string()],
+            chain_id: if optimism { 10 } else { 42161 },
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
 
     #[test]
     fn test_get_network_extra_fee_calculator_service_for_optimism() {
         let provider = MockEvmProviderTrait::new();
-        let network = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        let network = create_test_evm_network("optimism", true);
         let service = get_network_extra_fee_calculator_service(network, provider);
 
         assert!(
@@ -92,9 +107,9 @@ mod tests {
     #[test]
     fn test_get_network_extra_fee_calculator_service_for_non_optimism() {
         let networks = [
-            EvmNetwork::from_named(EvmNamedNetwork::Mainnet),
-            EvmNetwork::from_named(EvmNamedNetwork::Arbitrum),
-            EvmNetwork::from_named(EvmNamedNetwork::Polygon),
+            create_test_evm_network("mainnet", false),
+            create_test_evm_network("arbitrum", false),
+            create_test_evm_network("polygon", false),
         ];
 
         for network in networks {
@@ -120,7 +135,7 @@ mod tests {
                 Box::pin(async move { Ok(Bytes::from(value_bytes.to_vec())) })
             });
 
-        let network = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        let network = create_test_evm_network("optimism", true);
         let service = get_network_extra_fee_calculator_service(network, mock_provider);
 
         let tx_data = EvmTransactionData {

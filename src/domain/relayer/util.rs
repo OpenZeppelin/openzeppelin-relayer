@@ -72,10 +72,12 @@ pub async fn get_network_relayer(
         relayer_model,
         signer_model,
         state.relayer_repository(),
+        state.network_repository(),
         state.transaction_repository(),
         state.transaction_counter_store(),
         state.job_producer(),
     )
+    .await
     .map_err(|e| e.into())
 }
 
@@ -103,10 +105,12 @@ pub async fn get_network_relayer_by_model(
         relayer_model,
         signer_model,
         state.relayer_repository(),
+        state.network_repository(),
         state.transaction_repository(),
         state.transaction_counter_store(),
         state.job_producer(),
     )
+    .await
     .map_err(|e| e.into())
 }
 

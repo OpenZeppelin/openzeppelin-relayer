@@ -29,12 +29,13 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, RelayerRepoModel, RepositoryError, StellarNetwork,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RepositoryError, StellarNetwork,
         StellarRpcResult, TransactionRepoModel,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepository, RelayerRepositoryStorage, Repository,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
+        RelayerRepositoryStorage, Repository,
     },
     services::{
         StellarProvider, StellarProviderTrait, TransactionCounterService,
@@ -49,10 +50,11 @@ use std::sync::Arc;
 use crate::domain::relayer::{Relayer, RelayerError};
 
 #[allow(dead_code)]
-pub struct StellarRelayer<P, R, T, J, C>
+pub struct StellarRelayer<P, R, N, T, J, C>
 where
     P: StellarProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
@@ -61,6 +63,7 @@ where
     network: StellarNetwork,
     provider: P,
     relayer_repository: Arc<R>,
+    network_repository: Arc<N>,
     transaction_repository: Arc<T>,
     transaction_counter_service: Arc<C>,
     job_producer: Arc<J>,
@@ -69,38 +72,48 @@ where
 pub type DefaultStellarRelayer = StellarRelayer<
     StellarProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    InMemoryNetworkRepository,
     InMemoryTransactionRepository,
     JobProducer,
     TransactionCounterService<InMemoryTransactionCounter>,
 >;
 
-impl<P, R, T, J, C> StellarRelayer<P, R, T, J, C>
+impl<P, R, N, T, J, C> StellarRelayer<P, R, N, T, J, C>
 where
     P: StellarProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub async fn new(
         relayer: RelayerRepoModel,
         provider: P,
         relayer_repository: Arc<R>,
+        network_repository: Arc<N>,
         transaction_repository: Arc<T>,
         transaction_counter_service: Arc<C>,
         job_producer: Arc<J>,
     ) -> Result<Self, RelayerError> {
-        let network = match StellarNetwork::from_network_str(&relayer.network) {
-            Ok(network) => network,
-            Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-        };
+        let network_repo = network_repository
+            .get_by_name(NetworkType::Stellar, &relayer.network)
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(|| {
+                RelayerError::NetworkConfiguration(format!("Network {} not found", relayer.network))
+            })?;
+
+        let network = StellarNetwork::try_from(network_repo)?;
 
         Ok(Self {
             relayer,
             network,
             provider,
             relayer_repository,
+            network_repository,
             transaction_repository,
             transaction_counter_service,
             job_producer,
@@ -154,10 +167,11 @@ where
 }
 
 #[async_trait]
-impl<P, R, T, J, C> Relayer for StellarRelayer<P, R, T, J, C>
+impl<P, R, N, T, J, C> Relayer for StellarRelayer<P, R, N, T, J, C>
 where
     P: StellarProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
@@ -166,7 +180,18 @@ where
         &self,
         network_transaction: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, RelayerError> {
-        let transaction = TransactionRepoModel::try_from((&network_transaction, &self.relayer))?;
+        let network_model = self
+            .network_repository
+            .get_by_name(NetworkType::Stellar, &self.relayer.network)
+            .await?
+            .ok_or_else(|| {
+                RelayerError::NetworkConfiguration(format!(
+                    "Network {} not found",
+                    self.relayer.network
+                ))
+            })?;
+        let transaction =
+            TransactionRepoModel::try_from((&network_transaction, &self.relayer, &network_model))?;
 
         self.transaction_repository
             .create(transaction.clone())
@@ -268,11 +293,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::NetworkType;
     use crate::{
+        config::{NetworkConfigCommon, StellarNetworkConfig},
         constants::STELLAR_SMALLEST_UNIT_NAME,
         jobs::MockJobProducerTrait,
-        models::{RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy},
+        models::{
+            NetworkConfigData, NetworkRepoModel, RelayerNetworkPolicy, RelayerRepoModel,
+            RelayerStellarPolicy,
+        },
         repositories::{MockRelayerRepository, MockTransactionRepository},
         services::{MockStellarProviderTrait, MockTransactionCounterServiceTrait},
     };
@@ -284,25 +312,66 @@ mod tests {
     };
     use std::sync::Arc;
 
-    fn create_test_relayer_model() -> RelayerRepoModel {
-        RelayerRepoModel {
-            id: "test-relayer-id".to_string(),
-            name: "Test Relayer".to_string(),
-            network: "testnet".to_string(),
-            paused: false,
-            network_type: NetworkType::Stellar,
-            signer_id: "signer-id".to_string(),
-            policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default()),
-            address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
-            notification_id: Some("notification-id".to_string()),
-            system_disabled: false,
-            custom_rpc_urls: None,
+    /// Test context structure to manage test dependencies
+    struct TestCtx {
+        relayer_model: RelayerRepoModel,
+        network_repository: Arc<InMemoryNetworkRepository>,
+    }
+
+    impl Default for TestCtx {
+        fn default() -> Self {
+            let network_repository = Arc::new(InMemoryNetworkRepository::new());
+
+            let relayer_model = RelayerRepoModel {
+                id: "test-relayer-id".to_string(),
+                name: "Test Relayer".to_string(),
+                network: "testnet".to_string(),
+                paused: false,
+                network_type: NetworkType::Stellar,
+                signer_id: "signer-id".to_string(),
+                policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default()),
+                address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                notification_id: Some("notification-id".to_string()),
+                system_disabled: false,
+                custom_rpc_urls: None,
+            };
+
+            TestCtx {
+                relayer_model,
+                network_repository,
+            }
+        }
+    }
+
+    impl TestCtx {
+        async fn setup_network(&self) {
+            let test_network = NetworkRepoModel {
+                id: "stellar:testnet".to_string(),
+                name: "testnet".to_string(),
+                network_type: NetworkType::Stellar,
+                config: NetworkConfigData::Stellar(StellarNetworkConfig {
+                    common: NetworkConfigCommon {
+                        network: "testnet".to_string(),
+                        from: None,
+                        rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                        explorer_urls: None,
+                        average_blocktime_ms: Some(5000),
+                        is_testnet: Some(true),
+                        tags: None,
+                    },
+                    passphrase: Some("Test SDF Network ; September 2015".to_string()),
+                }),
+            };
+
+            self.network_repository.create(test_network).await.unwrap();
         }
     }
 
     #[tokio::test]
     async fn test_sync_sequence_success() {
-        let relayer_model = create_test_relayer_model();
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
         let mut provider = MockStellarProviderTrait::new();
         provider
             .expect_get_account()
@@ -336,10 +405,12 @@ mod tests {
             relayer_model.clone(),
             provider,
             Arc::new(relayer_repo),
+            ctx.network_repository.clone(),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
         )
+        .await
         .unwrap();
 
         let result = relayer.sync_sequence().await;
@@ -348,7 +419,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_sequence_provider_error() {
-        let relayer_model = create_test_relayer_model();
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
         let mut provider = MockStellarProviderTrait::new();
         provider
             .expect_get_account()
@@ -363,10 +436,12 @@ mod tests {
             relayer_model.clone(),
             provider,
             Arc::new(relayer_repo),
+            ctx.network_repository.clone(),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
         )
+        .await
         .unwrap();
 
         let result = relayer.sync_sequence().await;
@@ -375,7 +450,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_disable_relayer() {
-        let relayer_model = create_test_relayer_model();
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
         let provider = MockStellarProviderTrait::new();
         let mut relayer_repo = MockRelayerRepository::new();
         let mut updated_model = relayer_model.clone();
@@ -395,10 +472,12 @@ mod tests {
             relayer_model.clone(),
             provider,
             Arc::new(relayer_repo),
+            ctx.network_repository.clone(),
             Arc::new(tx_repo),
             Arc::new(counter),
             Arc::new(job_producer),
         )
+        .await
         .unwrap();
 
         let reasons = vec!["reason1".to_string(), "reason2".to_string()];
@@ -408,7 +487,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_balance_success() {
-        let relayer_model = create_test_relayer_model();
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
         let mut provider = MockStellarProviderTrait::new();
         let expected_balance = 100_000_000i64; // 10 XLM in stroops
 
@@ -441,10 +522,12 @@ mod tests {
             relayer_model,
             provider,
             relayer_repo,
+            ctx.network_repository.clone(),
             tx_repo,
             counter,
             job_producer,
         )
+        .await
         .unwrap();
 
         let result = relayer.get_balance().await;
@@ -456,7 +539,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_balance_provider_error() {
-        let relayer_model = create_test_relayer_model();
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
         let mut provider = MockStellarProviderTrait::new();
 
         provider
@@ -473,10 +558,12 @@ mod tests {
             relayer_model,
             provider,
             relayer_repo,
+            ctx.network_repository.clone(),
             tx_repo,
             counter,
             job_producer,
         )
+        .await
         .unwrap();
 
         let result = relayer.get_balance().await;
