@@ -1,3 +1,22 @@
+//! Network Configuration Inheritance Resolution
+//!
+//! This module provides inheritance resolution for network configurations, enabling
+//! hierarchical configuration management where child networks inherit and override
+//! properties from parent networks.
+//!
+//! ## Key Features
+//!
+//! - **Type safety**: Ensures inheritance only between compatible network types
+//! - **Recursive resolution**: Supports multi-level inheritance chains
+//! - **Smart merging**: Child values override parents, collections merge intelligently
+//! - **Error handling**: Detailed errors for circular references and type mismatches
+//!
+//! ## Resolution Process
+//!
+//! 1. **Validation**: Verify parent exists and types are compatible
+//! 2. **Recursive resolution**: Resolve parent's inheritance chain first
+//! 3. **Merging**: Combine child with resolved parent configuration
+
 use super::{
     ConfigFileNetworkType, EvmNetworkConfig, NetworkFileConfig, SolanaNetworkConfig,
     StellarNetworkConfig,

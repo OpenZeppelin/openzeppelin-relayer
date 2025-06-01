@@ -1,3 +1,14 @@
+//! Common Network Configuration Components
+//!
+//! This module defines shared configuration structures and utilities common across
+//! all network types (EVM, Solana, Stellar) with inheritance and merging support.
+//!
+//! ## Key Features
+//!
+//! - **Inheritance support**: Child networks inherit from parents with override capability
+//! - **Smart merging**: Collections merge preserving unique items, primitives override
+//! - **Validation**: Required field checks and URL format validation
+
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 

@@ -1,3 +1,15 @@
+//! Network Configuration Collection Management
+//!
+//! This module provides collection management for multiple network configurations with
+//! inheritance resolution, validation, and flexible loading from JSON arrays or directories.
+//!
+//! ## Core Features
+//!
+//! - **Multi-network support**: Manages EVM, Solana, and Stellar networks in a single collection
+//! - **Inheritance resolution**: Resolves complex inheritance hierarchies with type safety
+//! - **Flexible loading**: Supports JSON arrays and directory-based configuration sources
+//! - **Validation**: Comprehensive validation with detailed error reporting
+
 use super::{InheritanceResolver, NetworkFileConfig, NetworkFileLoader, NetworksSource};
 use crate::config::config_file::ConfigFileNetworkType;
 use crate::config::ConfigFileError;

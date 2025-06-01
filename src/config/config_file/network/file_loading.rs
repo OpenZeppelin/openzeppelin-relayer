@@ -1,3 +1,56 @@
+//! Network Configuration File Loading
+//!
+//! This module provides utilities for loading network configurations from JSON files
+//! and directories, supporting both single-file and directory-based configuration layouts.
+//!
+//! ## Key Features
+//!
+//! - **Flexible loading**: Single files or entire directories of JSON configuration files
+//! - **Automatic discovery**: Scans directories for `.json` files recursively
+//! - **Validation**: Pre-loading validation to ensure directory contains valid configurations
+//!
+//! ## Supported File Structure
+//!
+//! ```text
+//! networks/
+//! ├── evm.json          # {"networks": [...]}
+//! ├── solana.json       # {"networks": [...]}
+//! └── stellar.json      # {"networks": [...]}
+//! ```
+//!
+//! ## Loading Process
+//!
+//! ### Directory Loading
+//! 1. **Discovery**: Scans directory for `.json` files (non-recursive)
+//! 2. **Validation**: Checks each file for proper JSON structure
+//! 3. **Parsing**: Deserializes each file into network configurations
+//! 4. **Aggregation**: Combines all configurations into a single collection
+//! 5. **Error handling**: Provides detailed context for any failures
+//!
+//! ### File Format Requirements
+//! Each JSON file must contain a top-level `networks` array:
+//! ```json
+//! {
+//!   "networks": [
+//!     {
+//!       "type": "evm",
+//!       "network": "ethereum-mainnet",
+//!       "chain_id": 1,
+//!       "required_confirmations": 12,
+//!       "symbol": "ETH",
+//!       "rpc_urls": ["https://eth.llamarpc.com"]
+//!     }
+//!   ]
+//! }
+//! ```
+//!
+//! ### Error Handling
+//! - **File not found**: Directory or individual files don't exist
+//! - **Permission errors**: Insufficient permissions to read files
+//! - **JSON parse errors**: Malformed JSON with line/column information
+//! - **Structure validation**: Missing required fields or wrong data types
+//! - **Empty collections**: Directories with no valid configuration files
+
 use super::NetworkFileConfig;
 use crate::config::ConfigFileError;
 use serde::Deserialize;

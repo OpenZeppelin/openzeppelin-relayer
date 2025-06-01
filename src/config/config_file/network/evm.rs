@@ -1,3 +1,14 @@
+//! EVM Network Configuration
+//!
+//! This module provides configuration support for EVM-compatible blockchain networks
+//! such as Ethereum, Polygon, BSC, Avalanche, and other Ethereum-compatible chains.
+//!
+//! ## Key Features
+//!
+//! - **Full inheritance support**: EVM networks can inherit from other EVM networks
+//! - **Feature merging**: Parent and child features are merged preserving unique items
+//! - **Type safety**: Inheritance only allowed between EVM networks
+
 use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,15 @@
+//! Stellar Network Configuration
+//!
+//! This module provides configuration support for Stellar blockchain networks including
+//! Stellar mainnet (Pubnet), testnet, and custom Stellar-compatible networks.
+//!
+//! ## Key Features
+//!
+//! - **Full inheritance support**: Stellar networks can inherit from other Stellar networks
+//! - **Network passphrase**: Critical field for transaction signing and network identification
+//! - **Standard validation**: Inherits all common field validation requirements
+//! - **Type safety**: Inheritance only allowed between Stellar networks
+
 use super::common::NetworkConfigCommon;
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};

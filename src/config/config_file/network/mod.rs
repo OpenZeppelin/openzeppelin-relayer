@@ -1,3 +1,23 @@
+//! Network Configuration Module
+//!
+//! This module provides network configuration support for EVM, Solana, and Stellar networks
+//! with inheritance, validation, and flexible loading mechanisms.
+//!
+//! ## Key Features
+//!
+//! - **Multi-blockchain support**: EVM, Solana, and Stellar network configurations
+//! - **Inheritance system**: Networks can inherit from parents with type safety
+//! - **Flexible loading**: JSON arrays or directory-based configuration files
+//! - **Comprehensive validation**: URL validation, required fields, inheritance integrity
+//!
+//! ## Core Types
+//!
+//! - [`NetworkFileConfig`] - Unified enum for all network types
+//! - [`NetworksFileConfig`] - Collection managing multiple networks
+//! - [`NetworkConfigCommon`] - Shared configuration fields
+//! - [`InheritanceResolver`] - Handles inheritance resolution
+//! - [`NetworkFileLoader`] - Loads configurations from files/directories
+
 pub mod collection;
 pub mod common;
 pub mod evm;

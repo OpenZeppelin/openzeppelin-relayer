@@ -1,3 +1,14 @@
+//! Solana Network Configuration
+//!
+//! This module provides configuration support for Solana blockchain networks including
+//! mainnet-beta, testnet, devnet, and custom Solana-compatible networks.
+//!
+//! ## Key Features
+//!
+//! - **Full inheritance support**: Solana networks can inherit from other Solana networks
+//! - **Standard validation**: Inherits all common field validation requirements
+//! - **Type safety**: Inheritance only allowed between Solana networks
+
 use super::common::NetworkConfigCommon;
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
