@@ -43,9 +43,11 @@ impl<'de> Deserialize<'de> for NetworksFileConfig {
         let final_networks =
             NetworkFileLoader::load_from_source(source).map_err(de::Error::custom)?;
 
-        // Check if networks is empty and panic as requested
+        // Check if networks is empty and return error
         if final_networks.is_empty() {
-            panic!("NetworksFileConfig cannot be empty - networks must contain at least one network configuration");
+            return Err(de::Error::custom(
+                "NetworksFileConfig cannot be empty - networks must contain at least one network configuration"
+            ));
         }
 
         // First, create an instance with unflattened networks.
@@ -785,10 +787,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "NetworksFileConfig cannot be empty")]
-    fn test_deserialize_empty_array_panics() {
+    fn test_deserialize_empty_array_returns_error() {
         let json = r#"[]"#;
-        let _result: NetworksFileConfig = serde_json::from_str(json).unwrap();
+        let result: Result<NetworksFileConfig, _> = serde_json::from_str(json);
+
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        assert!(error_message.contains("NetworksFileConfig cannot be empty"));
     }
 
     #[test]
