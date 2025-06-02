@@ -213,7 +213,7 @@ mod actix_tests {
         name: &str,
         families: &'a [MetricFamily],
     ) -> Option<&'a MetricFamily> {
-        families.iter().find(|mf| mf.get_name() == name)
+        families.iter().find(|mf| mf.name() == name)
     }
 
     #[actix_rt::test]
@@ -344,10 +344,10 @@ mod actix_tests {
             let labels = m.get_label();
             if labels
                 .iter()
-                .any(|l| l.get_name() == "endpoint" && l.get_value() == "/test_success")
+                .any(|l| l.name() == "endpoint" && l.value() == "/test_success")
             {
                 found = true;
-                assert!(m.get_counter().get_value() >= 1.0);
+                assert!(m.get_counter().value() >= 1.0);
             }
         }
         assert!(
@@ -375,10 +375,10 @@ mod actix_tests {
             let labels = m.get_label();
             if labels
                 .iter()
-                .any(|l| l.get_name() == "endpoint" && l.get_value() == "/test_error")
+                .any(|l| l.name() == "endpoint" && l.value() == "/test_error")
             {
                 found = true;
-                assert!(m.get_counter().get_value() >= 1.0);
+                assert!(m.get_counter().value() >= 1.0);
             }
         }
         assert!(
