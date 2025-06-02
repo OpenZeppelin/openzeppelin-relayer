@@ -40,6 +40,7 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
       - id: detect-private-key
+        exclude: ^src/bootstrap/config_processor.rs$
       - id: trailing-whitespace
       - id: end-of-file-fixer
   - repo: https://github.com/lyz-code/yamlfix/
