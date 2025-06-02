@@ -63,13 +63,12 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     ))
                 })?;
 
-                let average_blocktime_ms =
-                    common.average_blocktime_ms.clone().ok_or_else(|| {
-                        RepositoryError::InvalidData(format!(
-                            "EVM network '{}' has no average_blocktime_ms",
-                            network_repo.name
-                        ))
-                    })?;
+                let average_blocktime_ms = common.average_blocktime_ms.ok_or_else(|| {
+                    RepositoryError::InvalidData(format!(
+                        "EVM network '{}' has no average_blocktime_ms",
+                        network_repo.name
+                    ))
+                })?;
 
                 Ok(EvmNetwork {
                     network: common.network.clone(),
