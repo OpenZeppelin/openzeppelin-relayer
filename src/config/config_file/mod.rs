@@ -37,6 +37,9 @@ pub use signer::*;
 mod notification;
 pub use notification::*;
 
+mod plugin;
+pub use plugin::*;
+
 pub mod network;
 pub use network::{
     EvmNetworkConfig, NetworkConfigCommon, NetworkFileConfig, NetworksFileConfig,
@@ -57,6 +60,7 @@ pub struct Config {
     pub signers: Vec<SignerFileConfig>,
     pub notifications: Vec<NotificationFileConfig>,
     pub networks: NetworksFileConfig,
+    pub plugins: Vec<PluginFileConfig>,
 }
 
 impl Config {
@@ -267,6 +271,10 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .expect("Failed to create NetworksFileConfig for test"),
+            plugins: vec![PluginFileConfig {
+                id: "test-1".to_string(),
+                path: "plugins/test-plugin".to_string(),
+            }],
         }
     }
 
@@ -298,6 +306,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
+            plugins: Vec::new(),
         };
         assert!(matches!(
             config.validate(),
@@ -327,6 +336,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
+            plugins: Vec::new(),
         };
         assert!(matches!(
             config.validate(),
@@ -720,6 +730,7 @@ mod tests {
             "relayers": [],
             "signers": [],
             "notifications": [],
+            "plugins": [],
             "networks": [
                 {
                     "type": "evm",
@@ -752,6 +763,7 @@ mod tests {
             "relayers": [],
             "signers": [],
             "notifications": [],
+            "plugins": [],
             "networks": [
                 {
                     "type": "solana",
@@ -780,6 +792,7 @@ mod tests {
             "relayers": [],
             "signers": [],
             "notifications": [],
+            "plugins": [],
             "networks": [
                 {
                     "type": "stellar",
@@ -808,6 +821,7 @@ mod tests {
             "relayers": [],
             "signers": [],
             "notifications": [],
+            "plugins": [],
             "networks": [
                 {
                     "type": "evm",
@@ -890,6 +904,7 @@ mod tests {
             "relayers": [],
             "signers": [],
             "notifications": [],
+            "plugins": [],
             "networks": network_dir_path.to_str().expect("Path should be valid UTF-8")
         });
         let config_str =
@@ -1027,6 +1042,7 @@ mod tests {
             "relayers": [],
             "signers": [],
             "notifications": [],
+            "plugins": [],
             "networks": [
                 {
                     "type": "evm",
@@ -1117,7 +1133,8 @@ mod tests {
                 "symbol": "ETH",
                 "rpc_urls": ["https://rpc.test.example.com"],
                 "is_testnet": true
-            }]
+            }],
+            "plugins": [],
         });
 
         setup_config_file(dir.path(), "valid_config.json", &config_content.to_string());
@@ -1189,6 +1206,7 @@ mod tests {
             "relayers": [],
             "signers": [],
             "notifications": [],
+            "plugins": [],
             "networks": [{
                 "type": "evm",
                 "network": "test-network",
@@ -1246,7 +1264,8 @@ mod tests {
                 "symbol": "ETH",
                 "rpc_urls": ["https://rpc.test.example.com"],
                 "is_testnet": true
-            }]
+            }],
+            "plugins": []
         });
 
         setup_config_file(
@@ -1392,6 +1411,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
+            plugins: Vec::new(),
         };
 
         let result = config.validate();
@@ -1431,6 +1451,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
+            plugins: Vec::new(),
         };
 
         let result = config.validate();
