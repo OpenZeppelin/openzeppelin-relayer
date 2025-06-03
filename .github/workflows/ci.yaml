@@ -269,3 +269,82 @@ jobs:
           fail-build: true
           severity-cutoff: high
           output-format: table
+  deploy-api-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Extract branch slug
+        run: |
+          BRANCH=${GITHUB_REF##*/}
+          SLUG=${BRANCH//./-}
+          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
+          echo "SLUG=$SLUG" >> $GITHUB_ENV
+
+      # 2) Validate GitBook space exists
+      - name: Ensure GitBook space for ${{ env.BRANCH }}
+        id: ensure_space
+        env:
+          GITBOOK_TOKEN: ${{ secrets.GITBOOK_TOKEN }}
+          GITBOOK_ORG: ${{ secrets.GITBOOK_ORG_ID }}
+        run: |
+          SPACES=$(curl -s -H "Authorization: Bearer $GITBOOK_TOKEN" \
+                    "https://api.gitbook.com/v1/orgs/$GITBOOK_ORG/spaces?limit=1000")
+          SPACE_ID=$(echo "$SPACES" \
+            | jq -r '.items[] | select(.title=="'"$BRANCH"'") | .id')
+          if [ -z "$SPACE_ID" ] || [ "$SPACE_ID" = "null" ]; then
+            SPACE_ID=$(curl -s -X POST \
+              -H "Authorization: Bearer $GITBOOK_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"title":"'"$BRANCH"'","visibility":"public"}' \
+              "https://api.gitbook.com/v1/orgs/${GITBOOK_ORG}/spaces" \
+              | jq -r '.id')
+          fi
+          echo "SPACE_ID=$SPACE_ID" >> $GITHUB_ENV
+      - name: Generate OpenAPI spec
+        run: |
+          cargo run --example generate_openapi
+      - name: Publish OpenAPI for ${{ env.SLUG }}
+        env:
+          GITBOOK_TOKEN: ${{ secrets.GITBOOK_TOKEN }}
+          GITBOOK_ORG: ${{ secrets.GITBOOK_ORG_ID }}
+        run: |
+          API_TEXT=$(jq -Rs . openapi.json)
+          curl -X POST "https://api.gitbook.com/v1/orgs/$GITBOOK_ORG/openapi" \
+            -H "Authorization: Bearer $GITBOOK_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"slug\": \"$SLUG\",
+              \"source\": {
+                \"text\": $API_TEXT
+              }
+            }"
+      - name: Link space into docs site as a variant
+        if: always()
+        env:
+          GITBOOK_TOKEN: ${{ secrets.GITBOOK_TOKEN }}
+          GITBOOK_ORG: ${{ secrets.GITBOOK_ORG_ID }}
+          GITBOOK_SITE: ${{ secrets.GITBOOK_SITE_ID }}
+          SPACE_ID: ${{ env.SPACE_ID }}
+        run: |-
+          SECTION_ID=$(
+            curl -s -H "Authorization: Bearer $GITBOOK_TOKEN" \
+              "https://api.gitbook.com/v1/orgs/$GITBOOK_ORG/sites/$GITBOOK_SITE/structure" | jq -r '.structure[] | select(.default==true) | .id'
+          )
+          EXISTING=$(
+            curl -s -H "Authorization: Bearer $GITBOOK_TOKEN" \
+              "https://api.gitbook.com/v1/orgs/$GITBOOK_ORG/sites/$GITBOOK_SITE/site-spaces?limit=1000" \
+            | jq -r '.items[]
+                | select(.space.id=="'"$SPACE_ID"'" and .section=="'"$SECTION_ID"'")
+                | .id'
+          )
+          if [ -z "$EXISTING" ] || [ "$EXISTING" = "null" ]; then
+            echo "Adding space $SPACE_ID as a variant in section $SECTION_ID"
+            curl -s -X POST \
+              -H "Authorization: Bearer $GITBOOK_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"spaceId":"'"$SPACE_ID"'","sectionId":"'"$SECTION_ID"'"}' \
+              "https://api.gitbook.com/v1/orgs/$GITBOOK_ORG/sites/$GITBOOK_SITE/site-spaces"
+          else
+            echo "Space $SPACE_ID is already a variant (site-space $EXISTING)"
+          fi
