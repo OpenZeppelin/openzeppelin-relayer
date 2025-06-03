@@ -245,7 +245,7 @@ jobs:
           flags: properties
           fail_ci_if_error: true
   docker-scan:
-    runs-on: ubuntu-22.04-oz-4core
+    runs-on: ubuntu-latest
     needs:
       - changed_files
       - ci
