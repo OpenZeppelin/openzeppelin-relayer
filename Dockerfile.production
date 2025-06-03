@@ -10,9 +10,7 @@ RUN apk update && apk --no-cache add \
 WORKDIR /usr/app
 
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo install --root /usr/app --path . --locked
+RUN cargo install --root /usr/app --path . --locked
 
 
 # Setting up build directories

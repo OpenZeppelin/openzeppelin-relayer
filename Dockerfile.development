@@ -14,9 +14,7 @@ WORKDIR /usr/app
 
 # Copy
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo install --root /usr/app --path . --debug --locked
+RUN cargo install --root /usr/app --path . --debug --locked
 
 # Setting up build directories
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest-dev
