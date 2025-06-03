@@ -1051,7 +1051,7 @@ mod tests {
             config: SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
             service_account: ServiceAccountConfig {
                 private_key: PlainOrEnvValue::Plain {
-                    value: SecretString::new("-----BEGIN PRIVATE KEY-----\nFAKEKEYDATA\n-----END PRIVATE KEY-----\n"),
+                    value: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                 },
                 client_email: PlainOrEnvValue::Plain {
                     value: SecretString::new("test-service-account@example.com"),
