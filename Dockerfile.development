@@ -1,5 +1,5 @@
 # Base image
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev AS base
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -14,6 +14,7 @@ WORKDIR /usr/app
 
 # Copy
 COPY . .
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo install --root /usr/app --path . --debug --locked
