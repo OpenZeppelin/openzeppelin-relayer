@@ -759,12 +759,7 @@ mod tests {
             .expect_find_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses
-                        == [
-                            TransactionStatus::Pending,
-                            TransactionStatus::Submitted,
-                            TransactionStatus::Mined,
-                        ]
+                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
             })
             .returning(move |_, _| {
                 Ok(pending_txs_clone.clone()) as Result<Vec<TransactionRepoModel>, RepositoryError>
@@ -886,12 +881,7 @@ mod tests {
             .expect_find_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses
-                        == [
-                            TransactionStatus::Pending,
-                            TransactionStatus::Submitted,
-                            TransactionStatus::Mined,
-                        ]
+                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
             })
             .returning(|_, _| {
                 Err(RepositoryError::Unknown("DB down".to_string()))
@@ -942,12 +932,7 @@ mod tests {
             .expect_find_by_status()
             .withf(|relayer_id, statuses| {
                 relayer_id == "test-relayer-id"
-                    && statuses
-                        == [
-                            TransactionStatus::Pending,
-                            TransactionStatus::Submitted,
-                            TransactionStatus::Mined,
-                        ]
+                    && statuses == [TransactionStatus::Pending, TransactionStatus::Submitted]
             })
             .returning(move |_, _| {
                 Ok(pending_txs_empty_clone.clone())
