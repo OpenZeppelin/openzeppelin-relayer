@@ -600,7 +600,7 @@ dependencies = [
  "lru",
  "parking_lot",
  "pin-project",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "schnellru",
  "serde",
  "serde_json",
@@ -667,7 +667,7 @@ dependencies = [
  "alloy-transport-ws",
  "futures",
  "pin-project",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "serde",
  "serde_json",
  "tokio",
@@ -881,7 +881,7 @@ checksum = "6e1509599021330a31c4a6816b655e34bf67acb1cc03c564e09fd8754ff6c5de"
 dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "serde_json",
  "tower 0.5.2",
  "tracing",
@@ -1822,9 +1822,9 @@ dependencies = [
 
 [[package]]
 name = "camino"
-version = "1.1.9"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b96ec4966b5813e2c0507c1f86115c8c5abaadc3980879c3424042a02fd1ad3"
+checksum = "0da45bc31171d8d6960122e222a67740df867c1dd53b4d51caa297084c185cab"
 
 [[package]]
 name = "caps"
@@ -3229,7 +3229,7 @@ dependencies = [
  "bon",
  "google-cloud-gax",
  "http 1.3.1",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "rustls 0.23.27",
  "rustls-pemfile 2.2.0",
  "serde",
@@ -4844,7 +4844,7 @@ dependencies = [
  "rand 0.9.1",
  "redis",
  "regex",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "secrets",
  "serde",
  "serde_json",
@@ -4912,7 +4912,7 @@ dependencies = [
  "eth-keystore",
  "hex",
  "rand 0.8.5",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "serde",
  "stellar-strkey 0.0.9",
  "tokio",
@@ -5679,9 +5679,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.18"
+version = "0.12.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e98ff6b0dbbe4d5a37318f433d4fc82babd21631f194d370409ceb2e40b2f0b5"
+checksum = "a2f8e5513d63f2e5b386eb5106dc67eaf3f84e95258e210489136b8b92ad6119"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -5860,7 +5860,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http 1.3.1",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "rustify_derive",
  "serde",
  "serde_json",
@@ -10217,7 +10217,7 @@ dependencies = [
  "bytes",
  "derive_builder",
  "http 1.3.1",
- "reqwest 0.12.18",
+ "reqwest 0.12.19",
  "rustify",
  "rustify_derive",
  "serde",
