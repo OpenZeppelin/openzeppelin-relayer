@@ -1109,9 +1109,9 @@ Networks can inherit from other networks of the same type, allowing you to creat
       "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"]
     },
     {
+      "from": "ethereum-base",
       "type": "evm",
       "network": "ethereum-sepolia",
-      "from": "ethereum-base",
       "chain_id": 11155111,
       "required_confirmations": 3,
       "rpc_urls": ["https://sepolia.infura.io/v3/YOUR_KEY"]
@@ -1284,9 +1284,9 @@ Currently, Solana networks use only the common fields. Additional Solana-specifi
 [source,json]
 ----
 {
+  "from": "ethereum-mainnet",
   "type": "evm",
   "network": "ethereum-sepolia", 
-  "from": "ethereum-mainnet",
   "chain_id": 11155111,
   "required_confirmations": 3,
   "rpc_urls": ["https://sepolia.infura.io/v3/YOUR_KEY"],
