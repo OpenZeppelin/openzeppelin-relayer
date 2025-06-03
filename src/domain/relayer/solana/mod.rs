@@ -16,27 +16,33 @@ pub use token::*;
 
 use crate::{
     jobs::JobProducer,
-    models::{RelayerError, RelayerRepoModel, SignerRepoModel, SolanaNetwork},
+    models::{NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel, SolanaNetwork},
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionRepository,
+        RelayerRepositoryStorage,
     },
     services::{get_network_provider, JupiterService, SolanaSignerFactory},
 };
 
 /// Function to create a Solana relayer instance
-pub fn create_solana_relayer(
+pub async fn create_solana_relayer(
     relayer: RelayerRepoModel,
     signer: SignerRepoModel,
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+    network_repository: Arc<InMemoryNetworkRepository>,
     transaction_repository: Arc<InMemoryTransactionRepository>,
     job_producer: Arc<JobProducer>,
 ) -> Result<DefaultSolanaRelayer, RelayerError> {
-    let network = SolanaNetwork::from_network_str(&relayer.network).map_err(|_| {
-        RelayerError::NetworkConfiguration(format!(
-            "Invalid network: {}, expected named network or chain ID",
-            relayer.network
-        ))
-    })?;
+    let network_repo = network_repository
+        .get(NetworkType::Solana, &relayer.network)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| {
+            RelayerError::NetworkConfiguration(format!("Network {} not found", relayer.network))
+        })?;
+
+    let network = SolanaNetwork::try_from(network_repo)?;
     let provider = Arc::new(get_network_provider(
         &network,
         relayer.custom_rpc_urls.clone(),
@@ -62,12 +68,14 @@ pub fn create_solana_relayer(
         relayer,
         signer_service,
         relayer_repository,
+        network_repository,
         provider,
         rpc_handler,
         transaction_repository,
         job_producer,
         Arc::new(dex_service),
-    )?;
+    )
+    .await?;
 
     Ok(relayer)
 }

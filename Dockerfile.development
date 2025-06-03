@@ -25,6 +25,28 @@ WORKDIR /app
 
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 
+# Install plugin dependencies
+ARG TARGETARCH
+ENV NODE_VERSION=v20.19.2
+
+# Install Node.js
+USER root
+RUN apk add --no-cache curl && \
+    curl -fsSL https://nodejs.org/download/release/${NODE_VERSION}/node-${NODE_VERSION}-linux-${TARGETARCH}.tar.xz \
+    | tar -xJ --strip-components=1 -C /usr/local
+ENV PATH="/usr/local/bin:$PATH"
+
+# Install pnpm and ts-node
+RUN npm install -g pnpm ts-node typescript
+
+# Copy plugins folder and install dependencies
+COPY ./plugins /app/plugins
+RUN chown -R nonroot:nonroot /app/plugins
+WORKDIR /app/plugins
+RUN pnpm install --frozen-lockfile
+
+# Return to app root
+WORKDIR /app
 
 ENV APP_PORT=8080
 ENV METRICS_PORT=8081
