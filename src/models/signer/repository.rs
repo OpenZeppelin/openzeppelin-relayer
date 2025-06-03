@@ -56,6 +56,33 @@ pub struct TurnkeySignerConfig {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GoogleCloudKmsSignerServiceAccountConfig {
+    pub private_key: SecretString,
+    pub private_key_id: SecretString,
+    pub project_id: String,
+    pub client_email: SecretString,
+    pub client_id: String,
+    pub auth_uri: String,
+    pub token_uri: String,
+    pub auth_provider_x509_cert_url: String,
+    pub client_x509_cert_url: String,
+    pub universe_domain: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GoogleCloudKmsSignerKeyConfig {
+    pub key_ring_id: String,
+    pub key_id: String,
+    pub key_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GoogleCloudKmsSignerConfig {
+    pub service_account: GoogleCloudKmsSignerServiceAccountConfig,
+    pub key: GoogleCloudKmsSignerKeyConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum SignerConfig {
     Test(LocalSignerConfig),
     Local(LocalSignerConfig),
@@ -64,6 +91,7 @@ pub enum SignerConfig {
     VaultTransit(VaultTransitSignerConfig),
     AwsKms(AwsKmsSignerConfig),
     Turnkey(TurnkeySignerConfig),
+    GoogleCloudKms(GoogleCloudKmsSignerConfig),
 }
 
 impl SignerConfig {
@@ -74,6 +102,7 @@ impl SignerConfig {
             | Self::Vault(config)
             | Self::VaultCloud(config) => Some(config),
             Self::VaultTransit(_) | Self::AwsKms(_) | Self::Turnkey(_) => None,
+            Self::GoogleCloudKms(_) => None,
         }
     }
 
@@ -95,6 +124,14 @@ impl SignerConfig {
 
     pub fn get_turnkey(&self) -> Option<&TurnkeySignerConfig> {
         let SignerConfig::Turnkey(config) = self else {
+            return None;
+        };
+
+        Some(config)
+    }
+
+    pub fn get_google_cloud_kms(&self) -> Option<&GoogleCloudKmsSignerConfig> {
+        let SignerConfig::GoogleCloudKms(config) = self else {
             return None;
         };
 
@@ -216,6 +253,58 @@ mod tests {
     }
 
     #[test]
+    fn test_google_cloud_kms_config() {
+        let config = GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new("private_key"),
+                private_key_id: SecretString::new("private_key_id"),
+                project_id: "project_id".to_string(),
+                client_email: SecretString::new("client_email"),
+                client_id: "client_id".to_string(),
+                auth_uri: "auth_uri".to_string(),
+                token_uri: "token_uri".to_string(),
+                auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
+                client_x509_cert_url: "client_x509_cert_url".to_string(),
+                universe_domain: "universe_domain".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                key_ring_id: "key_ring_id".to_string(),
+                key_id: "key_id".to_string(),
+                key_version: 1,
+            },
+        };
+
+        assert_eq!(config.service_account.project_id, "project_id");
+        assert_eq!(config.key.key_ring_id, "key_ring_id");
+        assert_eq!(config.key.key_id, "key_id");
+        assert_eq!(config.key.key_version, 1);
+        assert_eq!(
+            config.service_account.private_key.to_str().as_str(),
+            "private_key"
+        );
+        assert_eq!(
+            config.service_account.private_key_id.to_str().as_str(),
+            "private_key_id"
+        );
+        assert_eq!(
+            config.service_account.client_email.to_str().as_str(),
+            "client_email"
+        );
+        assert_eq!(config.service_account.client_id, "client_id");
+        assert_eq!(config.service_account.auth_uri, "auth_uri");
+        assert_eq!(config.service_account.token_uri, "token_uri");
+        assert_eq!(
+            config.service_account.auth_provider_x509_cert_url,
+            "auth_provider_x509_cert_url"
+        );
+        assert_eq!(
+            config.service_account.client_x509_cert_url,
+            "client_x509_cert_url"
+        );
+        assert_eq!(config.service_account.universe_domain, "universe_domain");
+    }
+
+    #[test]
     fn test_signer_config_variants() {
         let test_config = SignerConfig::Test(LocalSignerConfig {
             raw_key: SecretVec::new(3, |v| v.copy_from_slice(&[1, 2, 3])),
@@ -253,6 +342,26 @@ mod tests {
             public_key: "public_key".to_string(),
         });
 
+        let google_cloud_kms_config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new("private_key"),
+                private_key_id: SecretString::new("private_key_id"),
+                project_id: "project_id".to_string(),
+                client_email: SecretString::new("client_email"),
+                client_id: "client_id".to_string(),
+                auth_uri: "auth_uri".to_string(),
+                token_uri: "token_uri".to_string(),
+                auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
+                client_x509_cert_url: "client_x509_cert_url".to_string(),
+                universe_domain: "universe_domain".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                key_ring_id: "key_ring_id".to_string(),
+                key_id: "key_id".to_string(),
+                key_version: 1,
+            },
+        });
+
         assert!(matches!(test_config, SignerConfig::Test(_)));
         assert!(matches!(local_config, SignerConfig::Local(_)));
         assert!(matches!(vault_config, SignerConfig::Vault(_)));
@@ -263,6 +372,10 @@ mod tests {
         ));
         assert!(matches!(aws_kms_config, SignerConfig::AwsKms(_)));
         assert!(matches!(turnkey_config, SignerConfig::Turnkey(_)));
+        assert!(matches!(
+            google_cloud_kms_config,
+            SignerConfig::GoogleCloudKms(_)
+        ));
     }
 
     #[test]
@@ -301,6 +414,27 @@ mod tests {
             mount_point: None,
         });
         assert!(vault_transit_config.get_local().is_none());
+
+        let google_cloud_kms_config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new("private_key"),
+                private_key_id: SecretString::new("private_key_id"),
+                project_id: "project_id".to_string(),
+                client_email: SecretString::new("client_email"),
+                client_id: "client_id".to_string(),
+                auth_uri: "auth_uri".to_string(),
+                token_uri: "token_uri".to_string(),
+                auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
+                client_x509_cert_url: "client_x509_cert_url".to_string(),
+                universe_domain: "universe_domain".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                key_ring_id: "key_ring_id".to_string(),
+                key_id: "key_id".to_string(),
+                key_version: 1,
+            },
+        });
+        assert!(google_cloud_kms_config.get_local().is_none());
 
         let aws_kms_config = SignerConfig::AwsKms(AwsKmsSignerConfig {});
         assert!(aws_kms_config.get_local().is_none());
@@ -378,5 +512,33 @@ mod tests {
         assert!(turnkey_config.get_aws_kms().is_none());
         assert!(turnkey_config.get_local().is_none());
         assert!(turnkey_config.get_vault_transit().is_none());
+    }
+
+    #[test]
+    fn test_signer_config_get_google_cloud_kms() {
+        let google_config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new("private_key"),
+                private_key_id: SecretString::new("private_key_id"),
+                project_id: "project_id".to_string(),
+                client_email: SecretString::new("client_email"),
+                client_id: "client_id".to_string(),
+                auth_uri: "auth_uri".to_string(),
+                token_uri: "token_uri".to_string(),
+                auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
+                client_x509_cert_url: "client_x509_cert_url".to_string(),
+                universe_domain: "universe_domain".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                key_ring_id: "key_ring_id".to_string(),
+                key_id: "key_id".to_string(),
+                key_version: 1,
+            },
+        });
+        let retrieved = google_config.get_google_cloud_kms().unwrap();
+        assert_eq!(retrieved.service_account.project_id, "project_id");
+        assert!(google_config.get_aws_kms().is_none());
+        assert!(google_config.get_local().is_none());
+        assert!(google_config.get_vault_transit().is_none());
     }
 }

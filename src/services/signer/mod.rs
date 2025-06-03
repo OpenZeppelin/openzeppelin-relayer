@@ -14,7 +14,8 @@
 //!   ├── EvmSigner
 //!   │   └── LocalSigner
 //!   ├── SolanaSigner
-//!   │   └── LocalSigner
+//!   │   |── LocalSigner
+//!   |   |── GoogleCloudKmsSigner
 //!   │   └── VaultTransitSigner
 //!   └── StellarSigner
 

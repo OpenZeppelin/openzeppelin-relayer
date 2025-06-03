@@ -35,6 +35,8 @@ pub enum ProviderError {
     RateLimited,
     #[error("Bad gateway (HTTP 502)")]
     BadGateway,
+    #[error("Request error (HTTP {status_code}): {error}")]
+    RequestError { error: String, status_code: u16 },
     #[error("Other provider error: {0}")]
     Other(String),
 }
@@ -82,7 +84,12 @@ fn categorize_reqwest_error(err: &reqwest::Error) -> ProviderError {
         match status.as_u16() {
             429 => return ProviderError::RateLimited,
             502 => return ProviderError::BadGateway,
-            _ => {}
+            _ => {
+                return ProviderError::RequestError {
+                    error: err.to_string(),
+                    status_code: status.as_u16(),
+                }
+            }
         }
     }
 
@@ -171,7 +178,7 @@ impl NetworkConfiguration for EvmNetwork {
     fn public_rpc_urls(&self) -> Vec<String> {
         (*self)
             .public_rpc_urls()
-            .map(|urls| urls.iter().map(|&url| url.to_string()).collect())
+            .map(|urls| urls.iter().map(|url| url.to_string()).collect())
             .unwrap_or_default()
     }
 
@@ -189,9 +196,8 @@ impl NetworkConfiguration for SolanaNetwork {
     fn public_rpc_urls(&self) -> Vec<String> {
         (*self)
             .public_rpc_urls()
-            .iter()
-            .map(|&url| url.to_string())
-            .collect()
+            .map(|urls| urls.to_vec())
+            .unwrap_or_default()
     }
 
     fn new_provider(
@@ -208,9 +214,8 @@ impl NetworkConfiguration for StellarNetwork {
     fn public_rpc_urls(&self) -> Vec<String> {
         (*self)
             .public_rpc_urls()
-            .iter()
-            .map(|&url| url.to_string())
-            .collect()
+            .map(|urls| urls.to_vec())
+            .unwrap_or_default()
     }
 
     fn new_provider(
@@ -271,7 +276,6 @@ mod tests {
     use super::*;
     use lazy_static::lazy_static;
     use std::env;
-    use std::str::FromStr;
     use std::sync::Mutex;
     use std::time::Duration;
     use wiremock::matchers::any;
@@ -292,6 +296,44 @@ mod tests {
         env::remove_var("API_KEY");
         env::remove_var("REDIS_URL");
         env::remove_var("RPC_TIMEOUT_MS");
+    }
+
+    fn create_test_evm_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "test-evm".to_string(),
+            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 12000,
+            is_testnet: true,
+            tags: vec![],
+            chain_id: 1337,
+            required_confirmations: 1,
+            features: vec![],
+            symbol: "ETH".to_string(),
+        }
+    }
+
+    fn create_test_solana_network(network_str: &str) -> SolanaNetwork {
+        SolanaNetwork {
+            network: network_str.to_string(),
+            rpc_urls: vec!["https://api.testnet.solana.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 400,
+            is_testnet: true,
+            tags: vec![],
+        }
+    }
+
+    fn create_test_stellar_network() -> StellarNetwork {
+        StellarNetwork {
+            network: "testnet".to_string(),
+            rpc_urls: vec!["https://soroban-testnet.stellar.org".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 5000,
+            is_testnet: true,
+            tags: vec![],
+            passphrase: "Test SDF Network ; September 2015".to_string(),
+        }
     }
 
     #[test]
@@ -418,7 +460,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = EvmNetwork::from_str("sepolia").unwrap();
+        let network = create_test_evm_network();
         let result = get_network_provider(&network, None);
 
         cleanup_test_env();
@@ -430,7 +472,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = EvmNetwork::from_str("sepolia").unwrap();
+        let network = create_test_evm_network();
         let custom_urls = vec![
             RpcConfig {
                 url: "https://custom-rpc1.example.com".to_string(),
@@ -452,7 +494,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = EvmNetwork::from_str("sepolia").unwrap();
+        let network = create_test_evm_network();
         let custom_urls: Vec<RpcConfig> = vec![];
         let result = get_network_provider(&network, Some(custom_urls));
 
@@ -465,7 +507,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = SolanaNetwork::from_network_str("mainnet-beta").unwrap();
+        let network = create_test_solana_network("mainnet-beta");
         let result = get_network_provider(&network, None);
 
         cleanup_test_env();
@@ -477,7 +519,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = SolanaNetwork::from_network_str("testnet").unwrap();
+        let network = create_test_solana_network("testnet");
         let result = get_network_provider(&network, None);
 
         cleanup_test_env();
@@ -489,7 +531,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = SolanaNetwork::from_network_str("testnet").unwrap();
+        let network = create_test_solana_network("testnet");
         let custom_urls = vec![
             RpcConfig {
                 url: "https://custom-rpc1.example.com".to_string(),
@@ -511,24 +553,12 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = SolanaNetwork::from_network_str("testnet").unwrap();
+        let network = create_test_solana_network("testnet");
         let custom_urls: Vec<RpcConfig> = vec![];
         let result = get_network_provider(&network, Some(custom_urls));
 
         cleanup_test_env();
         assert!(result.is_ok()); // Should fall back to public URLs
-    }
-
-    #[test]
-    fn test_get_solana_network_provider_invalid_network() {
-        let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        setup_test_env();
-
-        let network_str = "invalid-network";
-        let network_result = SolanaNetwork::from_network_str(network_str);
-
-        cleanup_test_env();
-        assert!(network_result.is_err());
     }
 
     // Tests for Stellar Network Provider
@@ -537,7 +567,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = StellarNetwork::from_str("testnet").unwrap();
+        let network = create_test_stellar_network();
         let result = get_network_provider(&network, None); // No custom URLs
 
         cleanup_test_env();
@@ -550,7 +580,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = StellarNetwork::from_str("testnet").unwrap();
+        let network = create_test_stellar_network();
         let custom_urls = vec![
             RpcConfig::new("https://custom-stellar-rpc1.example.com".to_string()),
             RpcConfig::with_weight("http://custom-stellar-rpc2.example.com".to_string(), 50)
@@ -568,7 +598,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = StellarNetwork::from_str("mainnet").unwrap();
+        let network = create_test_stellar_network();
         let custom_urls: Vec<RpcConfig> = vec![]; // Empty custom URLs
         let result = get_network_provider(&network, Some(custom_urls));
 
@@ -582,7 +612,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = StellarNetwork::from_str("testnet").unwrap();
+        let network = create_test_stellar_network();
         let custom_urls = vec![
             RpcConfig::with_weight("http://zero-weight-rpc.example.com".to_string(), 0).unwrap(),
             RpcConfig::new("http://active-rpc.example.com".to_string()), // Default weight 100
@@ -597,7 +627,7 @@ mod tests {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
 
-        let network = StellarNetwork::from_str("testnet").unwrap();
+        let network = create_test_stellar_network();
         let custom_urls = vec![
             RpcConfig::with_weight("http://zero1.example.com".to_string(), 0).unwrap(),
             RpcConfig::with_weight("http://zero2.example.com".to_string(), 0).unwrap(),
@@ -622,7 +652,7 @@ mod tests {
     fn test_get_stellar_network_provider_invalid_custom_url_scheme() {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();
-        let network = StellarNetwork::from_str("testnet").unwrap();
+        let network = create_test_stellar_network();
         let custom_urls = vec![RpcConfig::new("ftp://custom-ftp.example.com".to_string())];
         let result = get_network_provider(&network, Some(custom_urls));
         cleanup_test_env();

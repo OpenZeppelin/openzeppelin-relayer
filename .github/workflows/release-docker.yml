@@ -26,7 +26,7 @@ jobs:
           message: Starting docker build and push to dockerhub for ${{ github.repository }} with tag ${{ inputs.tag }}......
         if: always()
       - name: Get github app token
-        uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5  # v2.0.2
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e  # v2.0.6
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -62,7 +62,7 @@ jobs:
       - name: Set Up Docker Buildx
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
       - name: Build Docker image
-        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
         id: build
         with:
           context: .
@@ -83,6 +83,14 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: false
           github-token: ${{ steps.gh-app-token.outputs.token }}
+      - name: Docker Hub Description
+        uses: peter-evans/dockerhub-description@a701644270a123c7b02b318a8e4fe71e15a8f3cb
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PAT }}
+          repository: ${{ env.DOCKERHUB_IMAGE }}
+          short-description: ${{ github.event.repository.description }}
+          readme-filepath: ./DOCKERHUB_README.md
       - name: Slack notification success or failure
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:

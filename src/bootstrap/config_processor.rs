@@ -6,8 +6,10 @@ use crate::{
     config::{Config, SignerFileConfig, SignerFileConfigEnum},
     jobs::JobProducerTrait,
     models::{
-        AppState, AwsKmsSignerConfig, LocalSignerConfig, NotificationRepoModel, RelayerRepoModel,
-        SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
+        AppState, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, NetworkRepoModel,
+        NotificationRepoModel, RelayerRepoModel, SignerConfig, SignerRepoModel,
+        TurnkeySignerConfig, VaultTransitSignerConfig,
     },
     repositories::Repository,
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
@@ -145,6 +147,46 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 api_public_key: turnkey_config.api_public_key.clone(),
             }),
         },
+        SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms_config) => SignerRepoModel {
+            id: signer.id.clone(),
+            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                    private_key: google_cloud_kms_config
+                        .service_account
+                        .private_key
+                        .get_value()?,
+                    client_email: google_cloud_kms_config
+                        .service_account
+                        .client_email
+                        .get_value()?,
+                    private_key_id: google_cloud_kms_config
+                        .service_account
+                        .private_key_id
+                        .get_value()?,
+                    client_id: google_cloud_kms_config.service_account.client_id.clone(),
+                    project_id: google_cloud_kms_config.service_account.project_id.clone(),
+                    auth_uri: google_cloud_kms_config.service_account.auth_uri.clone(),
+                    token_uri: google_cloud_kms_config.service_account.token_uri.clone(),
+                    client_x509_cert_url: google_cloud_kms_config
+                        .service_account
+                        .client_x509_cert_url
+                        .clone(),
+                    auth_provider_x509_cert_url: google_cloud_kms_config
+                        .service_account
+                        .auth_provider_x509_cert_url
+                        .clone(),
+                    universe_domain: google_cloud_kms_config
+                        .service_account
+                        .universe_domain
+                        .clone(),
+                },
+                key: GoogleCloudKmsSignerKeyConfig {
+                    key_id: google_cloud_kms_config.key.key_id.clone(),
+                    key_ring_id: google_cloud_kms_config.key.key_ring_id.clone(),
+                    key_version: google_cloud_kms_config.key.key_version,
+                },
+            }),
+        },
     };
 
     Ok(signer_repo_model)
@@ -207,6 +249,34 @@ async fn process_notifications<J: JobProducerTrait>(
     Ok(())
 }
 
+/// Process all network configurations from the config file and store them in the repository.
+///
+/// For each network in the config file:
+/// 1. Convert it to a repository model using TryFrom
+/// 2. Store the resulting model in the repository
+///
+/// This function processes networks in parallel using futures.
+async fn process_networks<J: JobProducerTrait>(
+    config_file: &Config,
+    app_state: &ThinData<AppState<J>>,
+) -> Result<()> {
+    let network_futures = config_file.networks.iter().map(|network| async move {
+        let network_repo_model = NetworkRepoModel::try_from(network.clone())?;
+
+        app_state
+            .network_repository
+            .create(network_repo_model)
+            .await
+            .wrap_err("Failed to create network repository entry")?;
+        Ok::<(), Report>(())
+    });
+
+    try_join_all(network_futures)
+        .await
+        .wrap_err("Failed to initialize network repository")?;
+    Ok(())
+}
+
 /// Process all relayer configurations from the config file and store them in the repository.
 ///
 /// For each relayer in the config file:
@@ -256,13 +326,15 @@ async fn process_relayers<J: JobProducerTrait>(
 /// This function processes the entire configuration file in the following order:
 /// 1. Process signers
 /// 2. Process notifications
-/// 3. Process relayers
+/// 3. Process networks
+/// 4. Process relayers
 pub async fn process_config_file<J: JobProducerTrait>(
     config_file: Config,
     app_state: ThinData<AppState<J>>,
 ) -> Result<()> {
     process_signers(&config_file, &app_state).await?;
     process_notifications(&config_file, &app_state).await?;
+    process_networks(&config_file, &app_state).await?;
     process_relayers(&config_file, &app_state).await?;
     Ok(())
 }
@@ -272,15 +344,17 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            AwsKmsSignerFileConfig, ConfigFileNetworkType, NotificationFileConfig,
-            RelayerFileConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
+            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, RelayerFileConfig,
+            ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
             VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
-        models::{PlainOrEnvValue, SecretString},
+        models::{NetworkType, PlainOrEnvValue, SecretString},
         repositories::{
-            InMemoryNotificationRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-            InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
+            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+            RelayerRepositoryStorage,
         },
     };
     use serde_json::json;
@@ -316,6 +390,7 @@ mod tests {
             transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
+            network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
         }
@@ -547,6 +622,7 @@ mod tests {
             signers,
             relayers: vec![],
             notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create app state
@@ -587,6 +663,7 @@ mod tests {
             signers: vec![],
             relayers: vec![],
             notifications,
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create app state
@@ -604,6 +681,223 @@ mod tests {
         assert!(stored_notifications
             .iter()
             .any(|n| n.id == "test-notification-2"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_networks_empty() -> Result<()> {
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+        };
+
+        let app_state = ThinData(create_test_app_state());
+
+        process_networks(&config, &app_state).await?;
+
+        let stored_networks = app_state.network_repository.list_all().await?;
+        assert_eq!(stored_networks.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_networks_single_evm() -> Result<()> {
+        use crate::config::network::test_utils::*;
+
+        let networks = vec![create_evm_network_wrapped("mainnet")];
+
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(networks).unwrap(),
+        };
+
+        let app_state = ThinData(create_test_app_state());
+
+        process_networks(&config, &app_state).await?;
+
+        let stored_networks = app_state.network_repository.list_all().await?;
+        assert_eq!(stored_networks.len(), 1);
+        assert_eq!(stored_networks[0].name, "mainnet");
+        assert_eq!(stored_networks[0].network_type, NetworkType::Evm);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_networks_single_solana() -> Result<()> {
+        use crate::config::network::test_utils::*;
+
+        let networks = vec![create_solana_network_wrapped("devnet")];
+
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(networks).unwrap(),
+        };
+
+        let app_state = ThinData(create_test_app_state());
+
+        process_networks(&config, &app_state).await?;
+
+        let stored_networks = app_state.network_repository.list_all().await?;
+        assert_eq!(stored_networks.len(), 1);
+        assert_eq!(stored_networks[0].name, "devnet");
+        assert_eq!(stored_networks[0].network_type, NetworkType::Solana);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_networks_multiple_mixed() -> Result<()> {
+        use crate::config::network::test_utils::*;
+
+        let networks = vec![
+            create_evm_network_wrapped("mainnet"),
+            create_solana_network_wrapped("devnet"),
+            create_evm_network_wrapped("sepolia"),
+            create_solana_network_wrapped("testnet"),
+        ];
+
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(networks).unwrap(),
+        };
+
+        let app_state = ThinData(create_test_app_state());
+
+        process_networks(&config, &app_state).await?;
+
+        let stored_networks = app_state.network_repository.list_all().await?;
+        assert_eq!(stored_networks.len(), 4);
+
+        let evm_networks: Vec<_> = stored_networks
+            .iter()
+            .filter(|n| n.network_type == NetworkType::Evm)
+            .collect();
+        assert_eq!(evm_networks.len(), 2);
+        assert!(evm_networks.iter().any(|n| n.name == "mainnet"));
+        assert!(evm_networks.iter().any(|n| n.name == "sepolia"));
+
+        let solana_networks: Vec<_> = stored_networks
+            .iter()
+            .filter(|n| n.network_type == NetworkType::Solana)
+            .collect();
+        assert_eq!(solana_networks.len(), 2);
+        assert!(solana_networks.iter().any(|n| n.name == "devnet"));
+        assert!(solana_networks.iter().any(|n| n.name == "testnet"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_networks_many_networks() -> Result<()> {
+        use crate::config::network::test_utils::*;
+
+        let networks = (0..10)
+            .map(|i| create_evm_network_wrapped(&format!("network-{}", i)))
+            .collect();
+
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(networks).unwrap(),
+        };
+
+        let app_state = ThinData(create_test_app_state());
+
+        process_networks(&config, &app_state).await?;
+
+        let stored_networks = app_state.network_repository.list_all().await?;
+        assert_eq!(stored_networks.len(), 10);
+
+        for i in 0..10 {
+            let expected_name = format!("network-{}", i);
+            assert!(
+                stored_networks.iter().any(|n| n.name == expected_name),
+                "Network {} not found",
+                expected_name
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_networks_duplicate_names() -> Result<()> {
+        use crate::config::network::test_utils::*;
+
+        let networks = vec![
+            create_evm_network_wrapped("mainnet"),
+            create_solana_network_wrapped("mainnet"),
+        ];
+
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(networks).unwrap(),
+        };
+
+        let app_state = ThinData(create_test_app_state());
+
+        process_networks(&config, &app_state).await?;
+
+        let stored_networks = app_state.network_repository.list_all().await?;
+        assert_eq!(stored_networks.len(), 2);
+
+        let mainnet_networks: Vec<_> = stored_networks
+            .iter()
+            .filter(|n| n.name == "mainnet")
+            .collect();
+        assert_eq!(mainnet_networks.len(), 2);
+        assert!(mainnet_networks
+            .iter()
+            .any(|n| n.network_type == NetworkType::Evm));
+        assert!(mainnet_networks
+            .iter()
+            .any(|n| n.network_type == NetworkType::Solana));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_networks() -> Result<()> {
+        use crate::config::network::test_utils::*;
+
+        let networks = vec![
+            create_evm_network_wrapped("mainnet"),
+            create_solana_network_wrapped("devnet"),
+        ];
+
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(networks).unwrap(),
+        };
+
+        let app_state = ThinData(create_test_app_state());
+
+        process_networks(&config, &app_state).await?;
+
+        let stored_networks = app_state.network_repository.list_all().await?;
+        assert_eq!(stored_networks.len(), 2);
+        assert!(stored_networks
+            .iter()
+            .any(|n| n.name == "mainnet" && n.network_type == NetworkType::Evm));
+        assert!(stored_networks
+            .iter()
+            .any(|n| n.name == "devnet" && n.network_type == NetworkType::Solana));
 
         Ok(())
     }
@@ -634,6 +928,7 @@ mod tests {
             signers: signers.clone(),
             relayers,
             notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create app state
@@ -687,6 +982,7 @@ mod tests {
             signers,
             relayers,
             notifications,
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
         };
 
         // Create shared repositories
@@ -695,6 +991,7 @@ mod tests {
             InMemoryRelayerRepository::default(),
         ));
         let notification_repo = Arc::new(InMemoryNotificationRepository::default());
+        let network_repo = Arc::new(InMemoryNetworkRepository::default());
         let transaction_repo = Arc::new(InMemoryTransactionRepository::default());
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
 
@@ -719,6 +1016,7 @@ mod tests {
             signer_repository: signer_repo.clone(),
             relayer_repository: relayer_repo.clone(),
             notification_repository: notification_repo.clone(),
+            network_repository: network_repo.clone(),
             transaction_repository: transaction_repo.clone(),
             transaction_counter_store: transaction_counter.clone(),
             job_producer: job_producer.clone(),
@@ -742,5 +1040,50 @@ mod tests {
         assert_eq!(stored_notifications[0].id, "test-notification-1");
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_signer_google_cloud_kms() {
+        use crate::models::SecretString;
+
+        let signer = SignerFileConfig {
+            id: "gcp-kms-signer".to_string(),
+            config: SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
+            service_account: ServiceAccountConfig {
+                private_key: PlainOrEnvValue::Plain {
+                    value: SecretString::new("-----BEGIN PRIVATE KEY-----\nFAKEKEYDATA\n-----END PRIVATE KEY-----\n"),
+                },
+                client_email: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-service-account@example.com"),
+                },
+                private_key_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("fake-private-key-id"),
+                },
+                client_id: "fake-client-id".to_string(),
+                project_id: "fake-project-id".to_string(),
+                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com".to_string(),
+                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
+                universe_domain: "googleapis.com".to_string(),
+            },
+            key: KmsKeyConfig {
+                key_id: "fake-key-id".to_string(),
+                key_ring_id: "fake-key-ring-id".to_string(),
+                key_version: 1,
+            },
+        }),
+    };
+
+        let result = process_signer(&signer).await;
+
+        assert!(
+            result.is_ok(),
+            "Failed to process Google Cloud KMS signer: {:?}",
+            result.err()
+        );
+        let model = result.unwrap();
+
+        assert_eq!(model.id, "gcp-kms-signer");
     }
 }

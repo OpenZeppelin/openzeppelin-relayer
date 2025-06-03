@@ -1,0 +1,79 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 260,
+      "chain_id": 42161,
+      "explorer_urls": [
+        "https://api.arbiscan.io/api",
+        "https://arbiscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "arbitrum-one",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum.drpc.org",
+        "https://1rpc.io/arb",
+        "https://arbitrum-one-rpc.publicnode.com",
+        "https://arbitrum-one-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 260,
+      "chain_id": 421614,
+      "explorer_urls": [
+        "https://api-sepolia.arbiscan.io/api",
+        "https://sepolia.arbiscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "arbitrum-sepolia",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://sepolia-rollup.arbitrum.io/rpc",
+        "https://arbitrum-sepolia.drpc.org",
+        "https://arbitrum-sepolia-rpc.publicnode.com"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated",
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 260,
+      "chain_id": 42170,
+      "explorer_urls": [
+        "https://api-nova.arbiscan.io/api",
+        "https://nova.arbiscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "arbitrum-nova",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://nova.arbitrum.io/rpc",
+        "https://arbitrum-nova.drpc.org",
+        "https://arbitrum-nova-rpc.publicnode.com"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "rollup"
+      ],
+      "type": "evm"
+    }
+  ]
+}
