@@ -28,11 +28,11 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 
 == Supported Networks
 
-OpenZeppelin Relayer supports multiple blockchain networks through a flexible JSON-based configuration system. Networks are defined in configuration files, allowing you to:
+OpenZeppelin Relayer supports multiple blockchain networks through a flexible JSON-based configuration system. Networks are defined in configuration files, allowing you to configure:
 
-- **Configure any EVM-compatible network** (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
-- **Set up Solana networks** (mainnet-beta, devnet, testnet, custom RPC endpoints)
-- **Define Stellar networks** (Pubnet, Testnet, custom networks) - Partial support
+- **Any EVM-compatible network** (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
+- **Solana networks** (mainnet-beta, devnet, testnet, custom RPC endpoints)
+- **Stellar networks** (Pubnet, Testnet, custom networks) - Partial support
 - **Create custom network configurations** with specific RPC endpoints, chain IDs, and network parameters
 - **Use inheritance** to create network variants that inherit from base configurations
 
