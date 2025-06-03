@@ -116,7 +116,7 @@ impl RetryConfig {
     ///
     /// # Arguments
     /// * `max_retries` - Maximum number of retry attempts per provider (0-255)
-    /// * `max_failovers` - Maximum number of provider failovers (0-255)  
+    /// * `max_failovers` - Maximum number of provider failovers (0-255)
     /// * `base_delay_ms` - Base delay in milliseconds for exponential backoff
     /// * `max_delay_ms` - Maximum delay in milliseconds (should be >= base_delay_ms)
     ///
@@ -319,14 +319,14 @@ where
 
     let error_message = match &last_error {
         Some(e) => format!(
-            "RPC call '{}' failed after {} total attempts across {} providers: {}", 
+            "RPC call '{}' failed after {} total attempts across {} providers: {}",
             operation_name,
             total_attempts,
             failover_count,
             e
         ),
         None => format!(
-            "RPC call '{}' failed after {} total attempts across {} providers with no error details", 
+            "RPC call '{}' failed after {} total attempts across {} providers with no error details",
             operation_name,
             total_attempts,
             failover_count
