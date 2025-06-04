@@ -1,0 +1,208 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 2000,
+      "chain_id": 10,
+      "explorer_urls": [
+        "https://api-optimistic.etherscan.io/api",
+        "https://optimistic.etherscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "optimism",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://mainnet.optimism.io",
+        "https://optimism.drpc.org",
+        "https://1rpc.io/op",
+        "https://optimism-rpc.publicnode.com",
+        "https://optimism-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "rollup",
+        "optimism"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 2000,
+      "chain_id": 11155420,
+      "explorer_urls": [
+        "https://api-sepolia-optimistic.etherscan.io/api",
+        "https://sepolia-optimism.etherscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "optimism-sepolia",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://sepolia.optimism.io",
+        "https://optimism-sepolia.drpc.org",
+        "https://optimism-sepolia-rpc.publicnode.com",
+        "https://optimism-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated",
+        "rollup",
+        "optimism"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 2000,
+      "chain_id": 8453,
+      "explorer_urls": [
+        "https://api.basescan.org/api",
+        "https://basescan.org"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "base",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://mainnet.base.org",
+        "https://base.drpc.org",
+        "https://1rpc.io/base",
+        "https://base-rpc.publicnode.com",
+        "https://base-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 2000,
+      "chain_id": 84532,
+      "explorer_urls": [
+        "https://api-sepolia.basescan.org/api",
+        "https://sepolia.basescan.org"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "base-sepolia",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://sepolia.base.org",
+        "https://base-sepolia.drpc.org",
+        "https://base-sepolia-rpc.publicnode.com",
+        "https://base-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated",
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 1000,
+      "chain_id": 130,
+      "explorer_urls": [
+        "https://uniscan.xyz",
+        "https://api.uniscan.xyz/api"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "unichain",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://mainnet.unichain.org",
+        "https://unichain.drpc.org",
+        "https://1rpc.io/unichain",
+        "https://unichain-rpc.publicnode.com"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 1000,
+      "chain_id": 1301,
+      "explorer_urls": [
+        "https://sepolia.uniscan.xyz",
+        "https://api-sepolia.uniscan.xyz/api"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "unichain-sepolia",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://sepolia.unichain.org",
+        "https://unichain-sepolia.drpc.org",
+        "https://unichain-sepolia-rpc.publicnode.com"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated",
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 2000,
+      "chain_id": 480,
+      "explorer_urls": [
+        "https://worldscan.org",
+        "https://api.worldscan.org/api"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "world-chain",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://worldchain-mainnet.g.alchemy.com/public",
+        "https://worldchain.drpc.org"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "rollup"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 2000,
+      "chain_id": 4801,
+      "explorer_urls": [
+        "https://worldchain-sepolia.g.alchemy.com/public",
+        "https://worldchain-sepolia.explorer.alchemy.com",
+        "https://worldchain-sepolia.explorer.alchemy.com/api"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "world-chain-sepolia",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://worldchain-sepolia.g.alchemy.com/public",
+        "https://worldchain-sepolia.drpc.org"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated",
+        "rollup"
+      ],
+      "type": "evm"
+    }
+  ]
+}

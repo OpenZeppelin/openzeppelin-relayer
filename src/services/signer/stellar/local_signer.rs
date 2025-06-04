@@ -31,7 +31,7 @@ use soroban_rs::xdr::{
     TransactionV1Envelope, VecM, WriteXdr,
 };
 use soroban_rs::Signer as SorobanSigner;
-use std::convert::TryInto;
+use std::{convert::TryInto, sync::Arc};
 
 pub struct LocalSigner {
     local_signer_client: SorobanSigner,
@@ -74,10 +74,10 @@ impl Signer for LocalSigner {
             .get_stellar_transaction_data()
             .map_err(|e| SignerError::SigningError(format!("failed to get tx data: {e}")))?;
 
-        let network_id = stellar_data
-            .network
-            .network_id()
-            .map_err(|e| SignerError::SigningError(format!("failed to get network id: {e}")))?;
+        let passphrase = &stellar_data.network_passphrase;
+
+        let hash_bytes: [u8; 32] = sha2::Sha256::digest(passphrase.as_bytes()).into();
+        let network_id = Hash(hash_bytes);
 
         let transaction = Transaction::try_from(stellar_data)
             .map_err(|e| SignerError::SigningError(format!("invalid XDR: {e}")))?;
@@ -97,8 +97,7 @@ impl Signer for LocalSigner {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionData, LocalSignerConfig, SignerConfig, StellarNamedNetwork,
-        StellarTransactionData,
+        EvmTransactionData, LocalSignerConfig, SignerConfig, StellarTransactionData,
     };
     use secrets::SecretVec;
 
@@ -148,7 +147,7 @@ mod tests {
             operations: vec![],
             memo: None,
             valid_until: None,
-            network: StellarNamedNetwork::Testnet,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
             signatures: Vec::new(),
             hash: None,
         };

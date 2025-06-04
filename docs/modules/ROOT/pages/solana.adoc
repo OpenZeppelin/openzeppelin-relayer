@@ -17,9 +17,45 @@ OpenZeppelin Relayer provides robust support for Solana networks, enabling secur
 
 == Supported Networks
 
-- `mainnet-beta`
-- `devnet`
-- `testnet`
+Solana networks are defined via JSON configuration files, providing flexibility to:
+
+- Configure standard Solana clusters: `mainnet-beta`, `devnet`, `testnet`
+- Set up custom Solana-compatible networks with specific RPC endpoints
+- Create network variants using inheritance from base configurations
+
+Example Solana network configurations:
+
+[source,json]
+----
+{
+  "networks": [
+    {
+      "type": "solana",
+      "network": "solana-mainnet",
+      "rpc_urls": ["https://api.mainnet-beta.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com"],
+      "is_testnet": false,
+      "tags": ["mainnet", "solana"]
+    },
+    {
+      "type": "solana",
+      "network": "solana-devnet", 
+      "rpc_urls": ["https://api.devnet.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
+      "is_testnet": true,
+      "tags": ["devnet", "solana"]
+    },
+    {
+      "type": "solana",
+      "network": "solana-custom",
+      "rpc_urls": ["https://your-custom-solana-rpc.example.com"],
+      "tags": ["custom", "solana"]
+    }
+  ]
+}
+----
+
+For detailed network configuration options, see the main documentation's Network Configuration Reference section.
 
 == Supported Signers
 

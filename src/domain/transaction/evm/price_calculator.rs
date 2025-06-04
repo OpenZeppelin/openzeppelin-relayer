@@ -668,7 +668,7 @@ mod tests {
     use super::*;
     use crate::models::NetworkTransactionData;
     use crate::models::{
-        evm::Speed, EvmNamedNetwork, EvmNetwork, EvmTransactionData, NetworkType, RelayerEvmPolicy,
+        evm::Speed, EvmNetwork, EvmTransactionData, NetworkType, RelayerEvmPolicy,
         RelayerNetworkPolicy, RelayerRepoModel, U256,
     };
     use crate::services::{
@@ -676,6 +676,26 @@ mod tests {
         SpeedPrices,
     };
     use futures::FutureExt;
+
+    fn create_mock_evm_network(name: &str) -> EvmNetwork {
+        let average_blocktime_ms = match name {
+            "optimism" => 2000, // 2 seconds for optimism to test max cap
+            _ => 12000,         // 12 seconds for mainnet and others
+        };
+
+        EvmNetwork {
+            network: name.to_string(),
+            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms,
+            is_testnet: true,
+            tags: vec![],
+            chain_id: 1337,
+            required_confirmations: 1,
+            features: vec![],
+            symbol: "ETH".to_string(),
+        }
+    }
 
     fn create_mock_relayer() -> RelayerRepoModel {
         RelayerRepoModel {
@@ -702,7 +722,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         let tx_data = EvmTransactionData {
             gas_price: Some(20000000000),
@@ -734,7 +754,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -770,8 +790,7 @@ mod tests {
             .returning(|| async { Ok(20000000000) }.boxed());
 
         let relayer = create_mock_relayer();
-        let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Celo));
+        let gas_price_service = EvmGasPriceService::new(provider, create_mock_evm_network("celo"));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -807,7 +826,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -838,7 +857,7 @@ mod tests {
 
         let mut relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
 
         // Update policies with new EVM policy
         let evm_policy = RelayerEvmPolicy {
@@ -868,12 +887,12 @@ mod tests {
 
     #[test]
     fn test_get_base_fee_multiplier() {
-        let mainnet = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let mainnet = create_mock_evm_network("mainnet");
         let multiplier = super::get_base_fee_multiplier(&mainnet);
         // 90s with ~12s blocks = ~7.5 blocks => ~2.4 multiplier
         assert!(multiplier > 2_300_000_000 && multiplier < 2_500_000_000);
 
-        let optimism = EvmNetwork::from_named(EvmNamedNetwork::Optimism);
+        let optimism = create_mock_evm_network("optimism");
         let multiplier = super::get_base_fee_multiplier(&optimism);
         // 2s block time => ~45 blocks => capped at 10.0
         assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
@@ -881,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_calculate_max_fee_per_gas() {
-        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let network = create_mock_evm_network("mainnet");
         let base_fee = 100_000_000_000u128; // 100 Gwei
         let priority_fee = 2_000_000_000u128; // 2 Gwei
 
@@ -929,7 +948,7 @@ mod tests {
             });
 
         // Mock the network method
-        let network = EvmNetwork::from_named(EvmNamedNetwork::Mainnet);
+        let network = create_mock_evm_network("mainnet");
         mock_gas_price_service
             .expect_network()
             .return_const(network);
@@ -980,7 +999,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -1029,7 +1048,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
@@ -1075,7 +1094,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
@@ -1151,7 +1170,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -1200,7 +1219,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -1280,7 +1299,7 @@ mod tests {
             });
         mock_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let mut relayer = create_mock_relayer();
@@ -1346,7 +1365,7 @@ mod tests {
             });
         mock_gas_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         // Create a PriceCalculator without extra fee service first
         let pc = PriceCalculator::new(mock_gas_service, NetworkExtraFeeCalculator::None);
@@ -1396,7 +1415,7 @@ mod tests {
             });
         mock_gas_service
             .expect_network()
-            .return_const(EvmNetwork::from_named(EvmNamedNetwork::Mainnet));
+            .return_const(create_mock_evm_network("mainnet"));
 
         // Create mock extra fee service
         let mut mock_extra_fee_service = MockNetworkExtraFeeCalculatorServiceTrait::new();

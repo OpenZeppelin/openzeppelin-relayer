@@ -26,17 +26,19 @@ use crate::{
         TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
-        Repository, TransactionCounterTrait, TransactionRepository,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        NetworkRepository, RelayerRepositoryStorage, Repository, TransactionCounterTrait,
+        TransactionRepository,
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
 };
 
 #[allow(dead_code)]
-pub struct EvmRelayerTransaction<P, R, T, J, S, C, PC>
+pub struct EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
 where
     P: EvmProviderTrait,
     R: Repository<RelayerRepoModel, String>,
+    N: NetworkRepository,
     T: TransactionRepository,
     J: JobProducerTrait,
     S: Signer,
@@ -45,6 +47,7 @@ where
 {
     provider: P,
     relayer_repository: Arc<R>,
+    network_repository: Arc<N>,
     transaction_repository: Arc<T>,
     job_producer: Arc<J>,
     signer: S,
@@ -54,10 +57,11 @@ where
 }
 
 #[allow(dead_code, clippy::too_many_arguments)]
-impl<P, R, T, J, S, C, PC> EvmRelayerTransaction<P, R, T, J, S, C, PC>
+impl<P, R, N, T, J, S, C, PC> EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
 where
     P: EvmProviderTrait,
     R: Repository<RelayerRepoModel, String>,
+    N: NetworkRepository,
     T: TransactionRepository,
     J: JobProducerTrait,
     S: Signer,
@@ -84,6 +88,7 @@ where
         relayer: RelayerRepoModel,
         provider: P,
         relayer_repository: Arc<R>,
+        network_repository: Arc<N>,
         transaction_repository: Arc<T>,
         transaction_counter_service: Arc<C>,
         job_producer: Arc<J>,
@@ -94,6 +99,7 @@ where
             relayer,
             provider,
             relayer_repository,
+            network_repository,
             transaction_repository,
             transaction_counter_service,
             job_producer,
@@ -110,6 +116,11 @@ where
     /// Returns a reference to the relayer model.
     pub fn relayer(&self) -> &RelayerRepoModel {
         &self.relayer
+    }
+
+    /// Returns a reference to the network repository.
+    pub fn network_repository(&self) -> &N {
+        &self.network_repository
     }
 
     /// Returns a reference to the job producer.
@@ -218,10 +229,11 @@ where
 }
 
 #[async_trait]
-impl<P, R, T, J, S, C, PC> Transaction for EvmRelayerTransaction<P, R, T, J, S, C, PC>
+impl<P, R, N, T, J, S, C, PC> Transaction for EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
 where
     P: EvmProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + Send + Sync,
+    N: NetworkRepository + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     S: Signer + Send + Sync,
@@ -603,6 +615,7 @@ where
 pub type DefaultEvmTransaction = EvmRelayerTransaction<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    InMemoryNetworkRepository,
     crate::repositories::transaction::InMemoryTransactionRepository,
     JobProducer,
     EvmSigner,
@@ -616,7 +629,10 @@ mod tests {
         domain::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
         models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy, U256},
-        repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
+        repositories::{
+            MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
+            MockTransactionRepository,
+        },
         services::{MockEvmProviderTrait, MockSigner},
     };
     use chrono::Utc;
@@ -776,10 +792,13 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
+        let mock_network = MockNetworkRepository::new();
+
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
             provider: mock_provider,
             relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
             transaction_repository: Arc::new(mock_transaction),
             transaction_counter_service: Arc::new(counter_service),
             job_producer: Arc::new(mock_job_producer),
@@ -861,10 +880,13 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
+        let mock_network = MockNetworkRepository::new();
+
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
             provider: mock_provider,
             relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
             transaction_repository: Arc::new(mock_transaction),
             transaction_counter_service: Arc::new(counter_service),
             job_producer: Arc::new(mock_job_producer),
@@ -916,11 +938,14 @@ mod tests {
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(ready(Ok(()))));
 
+            let mock_network = MockNetworkRepository::new();
+
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
                 relayer: relayer.clone(),
                 provider: mock_provider,
                 relayer_repository: Arc::new(mock_relayer),
+                network_repository: Arc::new(mock_network),
                 transaction_repository: Arc::new(mock_transaction),
                 transaction_counter_service: Arc::new(counter_service),
                 job_producer: Arc::new(mock_job_producer),
@@ -1014,11 +1039,14 @@ mod tests {
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(ready(Ok(()))));
 
+            let mock_network = MockNetworkRepository::new();
+
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
                 relayer: relayer.clone(),
                 provider: mock_provider,
                 relayer_repository: Arc::new(mock_relayer),
+                network_repository: Arc::new(mock_network),
                 transaction_repository: Arc::new(mock_transaction),
                 transaction_counter_service: Arc::new(counter_service),
                 job_producer: Arc::new(mock_job_producer),
@@ -1059,11 +1087,14 @@ mod tests {
             let mut test_tx = create_test_transaction();
             test_tx.status = TransactionStatus::Confirmed;
 
+            let mock_network = MockNetworkRepository::new();
+
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
                 relayer: relayer.clone(),
                 provider: mock_provider,
                 relayer_repository: Arc::new(mock_relayer),
+                network_repository: Arc::new(mock_network),
                 transaction_repository: Arc::new(mock_transaction),
                 transaction_counter_service: Arc::new(counter_service),
                 job_producer: Arc::new(mock_job_producer),

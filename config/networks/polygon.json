@@ -1,0 +1,92 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 2100,
+      "chain_id": 137,
+      "explorer_urls": [
+        "https://api.polygonscan.com/api",
+        "https://polygonscan.com"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "polygon",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://polygon-rpc.com",
+        "https://polygon.drpc.org",
+        "https://1rpc.io/matic",
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://polygon-public.nodies.app",
+        "https://polygon.meowrpc.com"
+      ],
+      "symbol": "POL",
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 2100,
+      "chain_id": 80002,
+      "explorer_urls": [
+        "https://api-amoy.polygonscan.com/api",
+        "https://amoy.polygonscan.com"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "polygon-amoy",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc-amoy.polygon.technology",
+        "https://polygon-amoy.drpc.org",
+        "https://polygon-amoy-bor-rpc.publicnode.com"
+      ],
+      "symbol": "POL",
+      "tags": [
+        "deprecated"
+      ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 5000,
+      "chain_id": 1101,
+      "explorer_urls": [
+        "https://api-zkevm.polygonscan.com/api",
+        "https://zkevm.polygonscan.com"
+      ],
+      "is_testnet": false,
+      "network": "polygon-zkevm",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://zkevm-rpc.com",
+        "https://polygon-zkevm.drpc.org",
+        "https://1rpc.io/polygon/zkevm",
+        "https://polygon-zkevm-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 5000,
+      "chain_id": 1442,
+      "explorer_urls": [
+        "https://api-testnet-zkevm.polygonscan.com/api",
+        "https://testnet-zkevm.polygonscan.com"
+      ],
+      "is_testnet": true,
+      "network": "polygon-zkevm-testnet",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc.cardona.zkevm-rpc.com",
+        "https://polygon-zkevm-cardona.drpc.org",
+        "https://testnet-zkevm.polygonscan.com"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated"
+      ],
+      "type": "evm"
+    }
+  ]
+}

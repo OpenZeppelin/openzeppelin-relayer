@@ -28,18 +28,41 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 
 == Supported Networks
 
-- Solana
-- EVM (Basic support for Ethereum and other EVM-compatible chains):
-  * Ethereum (Mainnet, Sepolia, Holesky)
-  * Optimism (Mainnet, Sepolia)
-  * Worldchain (Sepolia)
-- Stellar (Partial support)
+OpenZeppelin Relayer supports multiple blockchain networks through a flexible JSON-based configuration system. Networks are defined in configuration files, allowing you to configure:
+
+- **Any EVM-compatible network** (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
+- **Solana networks** (mainnet-beta, devnet, testnet, custom RPC endpoints)
+- **Stellar networks** (Pubnet, Testnet, custom networks) - Partial support
+- **Create custom network configurations** with specific RPC endpoints, chain IDs, and network parameters
+- **Use inheritance** to create network variants that inherit from base configurations
+
+=== Network Types
+
+[cols="1,2"]
+|===
+|Network Type |Description
+
+|`evm`
+|Ethereum Virtual Machine compatible networks. Supports any EVM chain by configuring chain ID, RPC URLs, and network-specific parameters.
+
+|`solana`
+|Solana blockchain networks. Supports all Solana clusters and custom RPC endpoints.
+
+|`stellar`
+|Stellar blockchain networks (Partial support). Supports Stellar Public Network and Testnet.
+|===
+
+Networks can be loaded from:
+
+- **JSON arrays**: Direct network definitions in configuration files
+- **Directory of files**: Multiple JSON files each containing network definitions
+
+For detailed network configuration options and examples, see the <<network_configuration_reference,Network Configuration Reference>> section below.
 
 [NOTE]
 ====
 For information about our development plans and upcoming features, see xref:roadmap.adoc[Project Roadmap].
 ====
-
 
 [NOTE]
 ====
@@ -832,7 +855,7 @@ Available configuration fields
 
 |network
 |String
-|Network the relayer will connect to. Please refer to xref:supported_networks[`Supported networks`].
+|Network the relayer will connect to. Must match a network identifier defined in your network configuration files. See <<network_configuration_reference,Network Configuration Reference>> for details on defining networks.
 
 |custom_rpc_urls
 |list
@@ -841,45 +864,6 @@ Available configuration fields
 |policies
 |list
 |Overrides default policies. Please refer to the xref:network_policies[`Policies`] table
-|===
-
-[#supported_networks]
-Supported networks
-[cols="1,1, 2"]
-|===
-|Network type |Network |Description
-
-|solana
-|mainnet-beta
-|Solana's mainnet
-
-|solana
-|devnet
-|Solana's devnet
-
-|solana
-|testnet
-|Solana's testnet
-
-|evm
-|mainnet
-|Ethereum mainnet
-
-|evm
-|sepolia
-|Ethereum testnet
-
-|evm
-|holesky
-|Ethereum testnet
-
-|stellar
-|mainnet
-|Stellar Public Network (Partial support)
-
-|stellar
-|testnet
-|Stellar Test Network (Partial support)
 |===
 
 [#network_policies]
@@ -954,7 +938,390 @@ Policies
 |A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional)
 |===
 
-==== Config file full example
+===== RPC URL Configuration
+
+The relayer supports two ways to configure RPC URLs:
+
+1. **Public RPC URLs**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
+
+2. **Custom RPC URLs**: You can specify custom RPC URLs using the `custom_rpc_urls` field in the relayer configuration. Each URL can be configured with an optional weight for high availability:
+
+[source,json]
+----
+"custom_rpc_urls": [
+  {
+    "url": "https://primary-rpc.example.com",
+    "weight": 2  // Higher weight routes more requests to this endpoint. The value must be an integer between 0 and 100 (inclusive).
+  },
+  {
+    "url": "https://secondary-rpc.example.com",
+    "weight": 100, // Max allowed weight
+  },
+  {
+    "url": "https://backup-rpc.example.com"  // No weight specified, defaults to 100
+  },
+  {
+    "url": "https://backup2-rpc.example.com",
+    "weight": 0, //  A value of 0 disables the endpoint.
+  }
+]
+----
+
+This is useful when you want to:
+   * Use your own RPC nodes with load balancing
+   * Use a paid service provider for better reliability and performance
+   * Override the default public RPC URLs
+   * Access custom network endpoints
+   * Configure primary and backup endpoints with different weights
+
+When both are available, the relayer will:
+1. First attempt to use the `custom_rpc_urls` if configured.
+2. Fall back to the public RPC URLs if no custom URL is configured.
+
+For backward compatibility, string arrays are still supported:
+
+[source,json]
+----
+"custom_rpc_urls": ["https://your-rpc.example.com"]
+----
+
+[IMPORTANT]
+====
+When using custom RPC URLs:
+
+* Ensure the URLs are secure (HTTPS) when accessing over public networks
+* Keep your API keys and authentication tokens secure
+* Test the RPC endpoints' reliability and performance before using it in production
+* Configure weights to prioritize endpoints, assigning higher values to more reliable or performant ones.
+* The weight must be an integer between 0 and 100 (inclusive).
+* A weight of 0 disables the endpoint.
+* If a weight is not specified for an endpoint, it defaults to 100.
+====
+
+[#network_configuration_reference]
+==== 4. Networks
+
+Networks can be configured in two ways:
+
+===== Option 1: Separate JSON Files
+
+When using separate JSON files, you specify the path to the network configuration files in the main `config.json`:
+
+[source,json]
+----
+{
+  "relayers": [...],
+  "notifications": [...],
+  "signers": [...],
+  "networks": "./config/networks"  // String path to directory or file
+}
+----
+
+The separate JSON files **must follow the standard structure with a top-level `networks` array:**
+
+[source,json]
+----
+{
+  "networks": [
+    // ... network definitions ...
+  ]
+}
+----
+
+===== Option 2: Direct Configuration in config.json
+
+Networks can be added directly to the main `config.json` file:
+
+[source,json]
+----
+{
+  "relayers": [...],
+  "notifications": [...],
+  "signers": [...],
+  "networks": [
+    {
+      "type": "evm",
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "required_confirmations": 12,
+      "symbol": "ETH",
+      "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"]
+    }
+  ]
+}
+----
+
+===== Example Network Configurations
+
+Here are examples for each supported network type:
+
+[source,json]
+----
+{
+  "networks": [
+    {
+      "type": "evm",
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "required_confirmations": 12,
+      "symbol": "ETH",
+      "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"],
+      "explorer_urls": ["https://etherscan.io"]
+    },
+    {
+      "type": "evm", 
+      "network": "polygon-mainnet",
+      "chain_id": 137,
+      "required_confirmations": 30,
+      "symbol": "MATIC",
+      "rpc_urls": ["https://polygon-rpc.com"],
+      "features": ["eip1559"]
+    },
+    {
+      "type": "solana",
+      "network": "mainnet-beta",
+      "rpc_urls": ["https://api.mainnet-beta.solana.com"]
+    },
+    {
+      "type": "stellar",
+      "network": "pubnet",
+      "rpc_urls": ["https://horizon.stellar.org"],
+      "passphrase": "Public Global Stellar Network ; September 2015"
+    }
+  ]
+}
+----
+
+===== Network Inheritance
+
+Networks can inherit from other networks of the same type, allowing you to create variants without duplicating configuration:
+
+[source,json]
+----
+{
+  "networks": [
+    {
+      "type": "evm",
+      "network": "ethereum-base",
+      "chain_id": 1,
+      "required_confirmations": 12,
+      "symbol": "ETH",
+      "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"]
+    },
+    {
+      "from": "ethereum-base",
+      "type": "evm",
+      "network": "ethereum-sepolia",
+      "chain_id": 11155111,
+      "required_confirmations": 3,
+      "rpc_urls": ["https://sepolia.infura.io/v3/YOUR_KEY"]
+    }
+  ]
+}
+----
+
+===== File Structure Requirements
+
+====== Option 1: Separate JSON Files
+Each separate JSON file must contain a top-level `networks` array:
+
+[source,json]
+----
+{
+  "networks": [
+    {
+      "type": "evm",
+      "network": "my-network",
+      // ... other network fields
+    }
+  ]
+}
+----
+
+====== Option 2: Direct in config.json
+When configuring networks directly in the main `config.json` file, use a `networks` array:
+
+[source,json]
+----
+{
+  "relayers": [...],
+  "notifications": [...], 
+  "signers": [...],
+  "networks": [
+    {
+      "type": "evm",
+      "network": "my-network",
+      // ... other network fields  
+    }
+  ]
+}
+----
+
+====== Directory Structure
+When loading from a directory, each `.json` file must follow the same format:
+
+```
+networks/
+├── evm.json          # {"networks": [...]}
+├── solana.json       # {"networks": [...]}
+└── stellar.json      # {"networks": [...]}
+```
+
+===== Network Field Reference
+
+====== Common Network Fields
+
+All network types support these common configuration fields:
+
+[cols="1,1,1,2"]
+|===
+|Field |Type |Required |Description
+
+|`type`
+|string
+|Yes
+|Network type: `"evm"`, `"solana"`, or `"stellar"`
+
+|`network`
+|string  
+|Yes
+|Unique network identifier (e.g., "ethereum-mainnet", "polygon-mumbai")
+
+|`from`
+|string
+|No
+|Name of parent network to inherit from (same type only)
+
+|`rpc_urls`
+|array[string]
+|Yes*
+|List of RPC endpoint URLs (*Required for base networks, optional for inherited)
+
+|`explorer_urls`
+|array[string]
+|No
+|List of blockchain explorer URLs
+
+|`average_blocktime_ms`
+|number
+|No
+|Estimated average time between blocks in milliseconds
+
+|`is_testnet`
+|boolean
+|No
+|Whether this is a testnet (affects behavior and validation)
+
+|`tags`
+|array[string]
+|No
+|Arbitrary tags for categorization and filtering
+|===
+
+====== EVM-Specific Fields
+
+[cols="1,1,1,2"]
+|===
+|Field |Type |Required |Description
+
+|`chain_id`
+|number
+|Yes
+|Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon)
+
+|`required_confirmations`
+|number
+|Yes
+|Number of block confirmations before considering a transaction final
+
+|`symbol`
+|string
+|Yes
+|Native currency symbol (e.g., "ETH", "MATIC", "BNB")
+
+|`features`
+|array[string]
+|No
+|Supported features (e.g., ["eip1559", "london"])
+|===
+
+====== Solana-Specific Fields
+
+Currently, Solana networks use only the common fields. Additional Solana-specific configuration options may be added in future versions.
+
+====== Stellar-Specific Fields
+
+[cols="1,1,1,2"]
+|===
+|Field |Type |Required |Description
+
+|`passphrase`
+|string
+|No
+|Network passphrase for transaction signing and network identification
+|===
+
+===== Individual Network Definition Examples
+
+====== Basic EVM Network
+[source,json]
+----
+{
+  "type": "evm",
+  "network": "ethereum-mainnet",
+  "chain_id": 1,
+  "required_confirmations": 12,
+  "symbol": "ETH",
+  "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"],
+  "explorer_urls": ["https://etherscan.io"],
+  "average_blocktime_ms": 12000,
+  "is_testnet": false,
+  "tags": ["mainnet", "ethereum"]
+}
+----
+
+====== Inherited EVM Network
+[source,json]
+----
+{
+  "from": "ethereum-mainnet",
+  "type": "evm",
+  "network": "ethereum-sepolia", 
+  "chain_id": 11155111,
+  "required_confirmations": 3,
+  "rpc_urls": ["https://sepolia.infura.io/v3/YOUR_KEY"],
+  "is_testnet": true,
+  "tags": ["testnet", "ethereum", "sepolia"]
+}
+----
+
+====== Solana Network
+[source,json]
+----
+{
+  "type": "solana",
+  "network": "mainnet-beta",
+  "rpc_urls": ["https://api.mainnet-beta.solana.com"],
+  "explorer_urls": ["https://explorer.solana.com"],
+  "is_testnet": false,
+  "tags": ["mainnet", "solana"]
+}
+----
+
+====== Stellar Network
+[source,json]
+----
+{
+  "type": "stellar",
+  "network": "pubnet",
+  "rpc_urls": ["https://horizon.stellar.org"],
+  "passphrase": "Public Global Stellar Network ; September 2015",
+  "is_testnet": false,
+  "tags": ["mainnet", "stellar"]
+}
+----
+
+=== Config file full example
 
 Full `config/config.json` example with evm and solana relayers definitions using keystore signer:
 
@@ -1074,70 +1441,52 @@ Full `config/config.json` example with evm and solana relayers definitions using
         }
       }
     }
+  ],
+  "networks": [
+    {
+      "average_blocktime_ms": 12000,
+      "chain_id": 11155111,
+      "explorer_urls": [
+        "https://api-sepolia.etherscan.io/api",
+        "https://sepolia.etherscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "sepolia",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://sepolia.drpc.org",
+        "https://1rpc.io/sepolia",
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://ethereum-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated"
+      ],
+      "type": "evm"
+    },
+    {
+      "type": "solana",
+      "network": "devnet",
+      "rpc_urls": ["https://api.devnet.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
+      "average_blocktime_ms": 400,
+      "is_testnet": true
+    }
+    {
+      "type": "solana",
+      "network": "mainnet-beta",
+      "rpc_urls": ["https://api.mainnet-beta.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com"],
+      "average_blocktime_ms": 400,
+      "is_testnet": false
+    },
   ]
 }
-```
 ----
-
-=== RPC URL Configuration
-
-The relayer supports two ways to configure RPC URLs:
-
-1. **Public RPC URLs**: These are the default RPC endpoints provided by the network. They are automatically selected based on the network configuration.
-
-2. **Custom RPC URLs**: You can specify custom RPC URLs using the `custom_rpc_urls` field in the relayer configuration. Each URL can be configured with an optional weight for high availability:
-
-[source,json]
-----
-"custom_rpc_urls": [
-  {
-    "url": "https://primary-rpc.example.com",
-    "weight": 2  // Higher weight routes more requests to this endpoint. The value must be an integer between 0 and 100 (inclusive).
-  },
-  {
-    "url": "https://secondary-rpc.example.com",
-    "weight": 100, // Max allowed weight
-  },
-  {
-    "url": "https://backup-rpc.example.com"  // No weight specified, defaults to 100
-  },
-  {
-    "url": "https://backup2-rpc.example.com",
-    "weight": 0, //  A value of 0 disables the endpoint.
-  }
-]
-----
-
-This is useful when you want to:
-   * Use your own RPC nodes with load balancing
-   * Use a paid service provider for better reliability and performance
-   * Override the default public RPC URLs
-   * Access custom network endpoints
-   * Configure primary and backup endpoints with different weights
-
-When both are available, the relayer will:
-1. First attempt to use the `custom_rpc_urls` if configured.
-2. Fall back to the public RPC URLs if no custom URL is configured.
-
-For backward compatibility, string arrays are still supported:
-
-[source,json]
-----
-"custom_rpc_urls": ["https://your-rpc.example.com"]
-----
-
-[IMPORTANT]
-====
-When using custom RPC URLs:
-
-* Ensure the URLs are secure (HTTPS) when accessing over public networks
-* Keep your API keys and authentication tokens secure
-* Test the RPC endpoints' reliability and performance before using it in production
-* Configure weights to prioritize endpoints, assigning higher values to more reliable or performant ones.
-* The weight must be an integer between 0 and 100 (inclusive).
-* A weight of 0 disables the endpoint.
-* If a weight is not specified for an endpoint, it defaults to 100.
-====
 
 == Important Considerations
 

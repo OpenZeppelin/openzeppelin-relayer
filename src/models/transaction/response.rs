@@ -126,8 +126,8 @@ impl From<TransactionRepoModel> for TransactionResponse {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionData, NetworkType, SolanaTransactionData, StellarNamedNetwork,
-        StellarTransactionData, TransactionRepoModel,
+        EvmTransactionData, NetworkType, SolanaTransactionData, StellarTransactionData,
+        TransactionRepoModel,
     };
     use chrono::Utc;
 
@@ -249,7 +249,7 @@ mod tests {
                 fee: Some(100),
                 sequence_number: Some(12345),
                 operations: vec![],
-                network: StellarNamedNetwork::Testnet,
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 memo: None,
                 valid_until: None,
                 signatures: Vec::new(),

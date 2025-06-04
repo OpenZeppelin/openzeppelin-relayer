@@ -4,8 +4,8 @@ use crate::{
     jobs::MockJobProducerTrait,
     models::{
         AssetSpec, DecoratedSignature, NetworkTransactionData, NetworkType, OperationSpec,
-        RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy, StellarNamedNetwork,
-        StellarTransactionData, TransactionRepoModel, TransactionStatus,
+        RelayerNetworkPolicy, RelayerRepoModel, RelayerStellarPolicy, StellarTransactionData,
+        TransactionRepoModel, TransactionStatus,
     },
     repositories::{MockRepository, MockTransactionCounterTrait, MockTransactionRepository},
     services::{MockSigner, MockStellarProviderTrait},
@@ -58,7 +58,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         operations: vec![payment_op(TEST_PK)],
         memo: None,
         valid_until: None,
-        network: StellarNamedNetwork::Testnet,
+        network_passphrase: "Test SDF Network ; September 2015".to_string(),
         signatures: Vec::new(),
         hash: None,
     };
