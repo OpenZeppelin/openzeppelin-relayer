@@ -11,9 +11,10 @@ use crate::config::{
     ConfigFileRelayerSolanaFeePaymentStrategy, ConfigFileRelayerSolanaSwapPolicy,
     ConfigFileRelayerSolanaSwapStrategy,
 };
+use crate::constants::DEFAULT_MIDNIGHT_MIN_BALANCE;
 use crate::models::{
-    JupiterSwapOptions, PaginationQuery, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,
-    SolanaFeePaymentStrategy, SolanaSwapStrategy,
+    JupiterSwapOptions, PaginationQuery, RelayerMidnightPolicy, RelayerSolanaSwapConfig,
+    SolanaAllowedTokensSwapConfig, SolanaFeePaymentStrategy, SolanaSwapStrategy,
 };
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
@@ -262,6 +263,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
             ConfigFileNetworkType::Evm => NetworkType::Evm,
             ConfigFileNetworkType::Stellar => NetworkType::Stellar,
             ConfigFileNetworkType::Solana => NetworkType::Solana,
+            ConfigFileNetworkType::Midnight => NetworkType::Midnight,
         };
 
         let policies = if let Some(config_policies) = &config.policies {
@@ -276,6 +278,9 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
                     RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default())
                 }
                 NetworkType::Solana => RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default()),
+                NetworkType::Midnight => {
+                    RelayerNetworkPolicy::Midnight(RelayerMidnightPolicy::default())
+                }
             }
         };
 
@@ -411,6 +416,11 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
                     max_fee: stellar.max_fee,
                     timeout_seconds: stellar.timeout_seconds,
                     min_balance: stellar.min_balance.unwrap_or(DEFAULT_STELLAR_MIN_BALANCE),
+                }))
+            }
+            ConfigFileRelayerNetworkPolicy::Midnight(midnight) => {
+                Ok(RelayerNetworkPolicy::Midnight(RelayerMidnightPolicy {
+                    min_balance: midnight.min_balance.unwrap_or(DEFAULT_MIDNIGHT_MIN_BALANCE),
                 }))
             }
         }

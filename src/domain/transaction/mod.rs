@@ -452,6 +452,8 @@ impl RelayerTransactionFactory {
                     transaction_counter_store,
                 )?))
             }
+            // TODO: Implement MidnightRelayer
+            NetworkType::Midnight => unimplemented!(),
         }
     }
 }

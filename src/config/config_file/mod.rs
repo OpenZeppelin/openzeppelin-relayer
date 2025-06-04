@@ -36,7 +36,7 @@ pub use signer::*;
 mod notification;
 pub use notification::*;
 
-use crate::models::{EvmNetwork, SolanaNetwork, StellarNetwork};
+use crate::models::{EvmNetwork, MidnightNetwork, SolanaNetwork, StellarNetwork};
 
 #[derive(Error, Debug)]
 pub enum ConfigFileError {
@@ -80,6 +80,7 @@ pub enum ConfigFileNetworkType {
     Evm,
     Stellar,
     Solana,
+    Midnight,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -176,6 +177,21 @@ impl Config {
                             StellarNetwork::from_network_str(&relayer.network).map_err(|_| {
                                 ConfigFileError::InvalidNetwork {
                                     network_type: "EVM".to_string(),
+                                    name: relayer.network.clone(),
+                                }
+                            })?;
+                        if !network.is_testnet() {
+                            return Err(ConfigFileError::TestSigner(
+                                "Test signer type cannot be used on production networks"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    ConfigFileNetworkType::Midnight => {
+                        let network =
+                            MidnightNetwork::from_network_str(&relayer.network).map_err(|_| {
+                                ConfigFileError::InvalidNetwork {
+                                    network_type: "Midnight".to_string(),
                                     name: relayer.network.clone(),
                                 }
                             })?;

@@ -6,7 +6,7 @@
 //! - Transaction validation rules
 //! - Network endpoints
 use super::{ConfigFileError, ConfigFileNetworkType};
-use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
+use crate::models::{EvmNetwork, MidnightNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use apalis_cron::Schedule;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ pub enum ConfigFileRelayerNetworkPolicy {
     Evm(ConfigFileRelayerEvmPolicy),
     Solana(ConfigFileRelayerSolanaPolicy),
     Stellar(ConfigFileRelayerStellarPolicy),
+    Midnight(ConfigFileRelayerMidnightPolicy),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -140,6 +141,12 @@ pub struct ConfigFileRelayerStellarPolicy {
     pub min_balance: Option<u64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFileRelayerMidnightPolicy {
+    pub min_balance: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct RelayerFileConfig {
     pub id: String,
@@ -232,6 +239,12 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
                         .map(Some)
                         .map_err(de::Error::custom)
                 }
+                ConfigFileNetworkType::Midnight => {
+                    serde_json::from_value::<ConfigFileRelayerMidnightPolicy>(policy_value.clone())
+                        .map(ConfigFileRelayerNetworkPolicy::Midnight)
+                        .map(Some)
+                        .map_err(de::Error::custom)
+                }
             }
         } else {
             Ok(None) // `policies` is optional
@@ -294,6 +307,14 @@ impl RelayerFileConfig {
                 if SolanaNetwork::from_network_str(&self.network).is_err() {
                     return Err(ConfigFileError::InvalidNetwork {
                         network_type: "Solana".to_string(),
+                        name: self.network.clone(),
+                    });
+                }
+            }
+            ConfigFileNetworkType::Midnight => {
+                if MidnightNetwork::from_network_str(&self.network).is_err() {
+                    return Err(ConfigFileError::InvalidNetwork {
+                        network_type: "Midnight".to_string(),
                         name: self.network.clone(),
                     });
                 }
@@ -457,6 +478,7 @@ impl RelayerFileConfig {
             }
             ConfigFileNetworkType::Evm => {}
             ConfigFileNetworkType::Stellar => {}
+            ConfigFileNetworkType::Midnight => {}
         }
         Ok(())
     }

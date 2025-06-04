@@ -88,6 +88,7 @@ pub enum NetworkTransactionData {
     Evm(EvmTransactionData),
     Solana(SolanaTransactionData),
     Stellar(StellarTransactionData),
+    Midnight(MidnightTransactionData),
 }
 
 impl NetworkTransactionData {
@@ -114,6 +115,17 @@ impl NetworkTransactionData {
             NetworkTransactionData::Stellar(data) => Ok(data.clone()),
             _ => Err(TransactionError::InvalidType(
                 "Expected Stellar transaction".to_string(),
+            )),
+        }
+    }
+
+    pub fn get_midnight_transaction_data(
+        &self,
+    ) -> Result<MidnightTransactionData, TransactionError> {
+        match self {
+            NetworkTransactionData::Midnight(data) => Ok(data.clone()),
+            _ => Err(TransactionError::InvalidType(
+                "Expected Midnight transaction".to_string(),
             )),
         }
     }
@@ -295,6 +307,12 @@ impl StellarTransactionData {
     }
 }
 
+// TODO: Implement MidnightTransactionData
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MidnightTransactionData {
+    pub hash: Option<String>,
+}
+
 impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRepoModel {
     type Error = RelayerError;
 
@@ -380,6 +398,25 @@ impl TryFrom<(&NetworkTransactionRequest, &RelayerRepoModel)> for TransactionRep
                     hash: None,
                     fee: None,
                     sequence_number: None,
+                }),
+                priced_at: None,
+                hashes: Vec::new(),
+                noop_count: None,
+                is_canceled: Some(false),
+            }),
+            // TODO: Implement NetworkTransactionRequest
+            NetworkTransactionRequest::Midnight(_) => Ok(Self {
+                id: Uuid::new_v4().to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Pending,
+                status_reason: None,
+                created_at: now,
+                sent_at: None,
+                confirmed_at: None,
+                valid_until: None,
+                network_type: NetworkType::Midnight,
+                network_data: NetworkTransactionData::Midnight(MidnightTransactionData {
+                    hash: None,
                 }),
                 priced_at: None,
                 hashes: Vec::new(),

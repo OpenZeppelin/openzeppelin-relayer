@@ -205,6 +205,8 @@ pub enum NetworkRelayer {
     Evm(DefaultEvmRelayer),
     Solana(DefaultSolanaRelayer),
     Stellar(DefaultStellarRelayer),
+    // TODO: Implement MidnightRelayer
+    Midnight(DefaultStellarRelayer),
 }
 
 #[async_trait]
@@ -219,6 +221,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Stellar(relayer) => {
                 relayer.process_transaction_request(tx_request).await
             }
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -227,6 +231,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.get_balance().await,
             NetworkRelayer::Solana(relayer) => relayer.get_balance().await,
             NetworkRelayer::Stellar(relayer) => relayer.get_balance().await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -235,6 +241,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.delete_pending_transactions().await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -243,6 +251,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.sign_data(request).await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_data(request).await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -254,6 +264,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.sign_typed_data(request).await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_typed_data(request).await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -265,6 +277,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.rpc(request).await,
             NetworkRelayer::Solana(relayer) => relayer.rpc(request).await,
             NetworkRelayer::Stellar(relayer) => relayer.rpc(request).await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -273,6 +287,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -281,6 +297,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.validate_min_balance().await,
             NetworkRelayer::Solana(relayer) => relayer.validate_min_balance().await,
             NetworkRelayer::Stellar(relayer) => relayer.validate_min_balance().await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 
@@ -289,6 +307,8 @@ impl Relayer for NetworkRelayer {
             NetworkRelayer::Evm(relayer) => relayer.initialize_relayer().await,
             NetworkRelayer::Solana(relayer) => relayer.initialize_relayer().await,
             NetworkRelayer::Stellar(relayer) => relayer.initialize_relayer().await,
+            // TODO: Implement MidnightRelayer
+            NetworkRelayer::Midnight(_) => unimplemented!(),
         }
     }
 }
@@ -377,6 +397,10 @@ impl RelayerFactoryTrait for RelayerFactory {
                     job_producer,
                 )?;
                 Ok(NetworkRelayer::Stellar(relayer))
+            }
+            // TODO: Implement MidnightRelayer
+            NetworkType::Midnight => {
+                unimplemented!()
             }
         }
     }
