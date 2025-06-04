@@ -100,6 +100,10 @@ impl EvmNetwork {
         self.tags.contains(&"rollup".to_string())
     }
 
+    pub fn lacks_mempool(&self) -> bool {
+        self.tags.contains(&"no-mempool".to_string())
+    }
+
     pub fn is_testnet(&self) -> bool {
         self.is_testnet
     }
