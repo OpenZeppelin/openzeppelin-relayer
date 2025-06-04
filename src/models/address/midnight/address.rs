@@ -2,6 +2,9 @@
 //!
 //! This module provides functionality for encoding, decoding, and managing Midnight addresses.
 //! It supports different network types and address formats.
+//!
+//! Majority of the code is directly copied from midnight-node repository (node-0.12.0):
+//! <https://github.com/midnightntwrk/midnight-node/blob/29935d2f0ef1cc6cba8830f652e814b9668ab11d/util/toolkit/src/address.rs>.
 
 use bech32::Bech32m;
 use rand::Rng;
