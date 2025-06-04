@@ -30,7 +30,7 @@ USER root
 RUN npm install -g pnpm ts-node typescript
 
 # Copy plugins folder and install dependencies
-COPY ./plugins /app/plugins
+COPY --chown=nobody ./plugins /app/plugins
 WORKDIR /app/plugins
 RUN pnpm install --frozen-lockfile
 
