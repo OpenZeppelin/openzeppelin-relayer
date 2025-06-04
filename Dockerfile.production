@@ -43,5 +43,7 @@ ENV METRICS_PORT=8081
 
 EXPOSE ${APP_PORT}/tcp ${METRICS_PORT}/tcp
 
+USER nobody
+
 # starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]
