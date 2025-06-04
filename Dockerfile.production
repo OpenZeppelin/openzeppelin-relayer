@@ -18,7 +18,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/glibc-dynamic:latest
 
 # Node image
-FROM cgr.dev/chainguard/node:latest-dev AS node
+FROM cgr.dev/chainguard/node:latest AS node
+ENV NODE_ENV=production
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
