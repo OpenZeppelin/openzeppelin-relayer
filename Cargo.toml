@@ -54,6 +54,7 @@ k256 = { version = "0.13" }
 lazy_static = "1.5"
 libsodium-sys = "0.2.7"
 log = "0.4"
+midnight-ledger-prototype = { git = "https://github.com/midnightntwrk/midnight-ledger-prototype", package = "midnight-ledger", tag = "ledger-4.0.0" }
 midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-ledger-helpers", tag = "node-0.12.0" }
 mpl-token-metadata = { version = "5.1" }
 num_enum = { version = "0.7", default-features = false }
