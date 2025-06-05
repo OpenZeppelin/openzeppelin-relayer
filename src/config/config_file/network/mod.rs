@@ -603,7 +603,7 @@ mod tests {
         ];
 
         let names: Vec<&str> = configs.iter().map(|c| c.network_name()).collect();
-        assert_eq!(names.len(), 3);
+        assert_eq!(names.len(), 4);
         assert!(names.contains(&"test-evm"));
         assert!(names.contains(&"test-solana"));
         assert!(names.contains(&"test-stellar"));

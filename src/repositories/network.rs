@@ -165,7 +165,8 @@ impl NetworkRepository for InMemoryNetworkRepository {
 mod tests {
     use super::*;
     use crate::config::{
-        EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
+        EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig,
+        StellarNetworkConfig,
     };
 
     fn create_test_network(name: String, network_type: NetworkType) -> NetworkRepoModel {
@@ -200,6 +201,10 @@ mod tests {
                     passphrase: None,
                 };
                 NetworkRepoModel::new_stellar(stellar_config)
+            }
+            NetworkType::Midnight => {
+                let midnight_config = MidnightNetworkConfig { common };
+                NetworkRepoModel::new_midnight(midnight_config)
             }
         }
     }

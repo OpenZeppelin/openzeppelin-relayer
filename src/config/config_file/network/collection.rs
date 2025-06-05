@@ -379,8 +379,8 @@ mod tests {
 
         assert!(config.is_ok());
         let config = config.unwrap();
-        assert_eq!(config.networks.len(), 3);
-        assert_eq!(config.network_map.len(), 3);
+        assert_eq!(config.networks.len(), 4);
+        assert_eq!(config.network_map.len(), 4);
         assert!(config
             .network_map
             .contains_key(&(ConfigFileNetworkType::Evm, "evm-1".to_string())));
@@ -691,7 +691,7 @@ mod tests {
             create_midnight_network_wrapped("test4"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
-        assert_eq!(config.len(), 5);
+        assert_eq!(config.len(), 4);
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
         let config = NetworksFileConfig::new(networks).unwrap();
 
         let names: Vec<_> = config.network_names().collect();
-        assert_eq!(names.len(), 3);
+        assert_eq!(names.len(), 4);
         assert!(names.contains(&"alpha"));
         assert!(names.contains(&"beta"));
         assert!(names.contains(&"gamma"));
@@ -941,7 +941,7 @@ mod tests {
         let config = NetworksFileConfig::new(networks);
         assert!(config.is_ok());
         let config = config.unwrap();
-        assert_eq!(config.len(), 3);
+        assert_eq!(config.len(), 4);
         assert!(config
             .get_network(ConfigFileNetworkType::Evm, "测试网络")
             .is_some());
@@ -1022,8 +1022,8 @@ mod tests {
 
         assert!(result.is_ok());
         let config = result.unwrap();
-        assert_eq!(config.networks.len(), 3);
-        assert_eq!(config.network_map.len(), 3);
+        assert_eq!(config.networks.len(), 4);
+        assert_eq!(config.network_map.len(), 4);
 
         // Verify we can retrieve each network by type and name
         assert!(config
