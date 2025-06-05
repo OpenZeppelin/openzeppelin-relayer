@@ -150,6 +150,9 @@ impl NotificationsFileConfig {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_valid_webhook_notification() {
@@ -281,6 +284,10 @@ mod tests {
     fn test_webhook_signing_key_from_env() {
         use std::env;
 
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
         let valid_key = "C6D72367-EB3A-4D34-8900-DFF794A633F9"; // noboost
         env::set_var(env_var_name, valid_key);
@@ -308,6 +315,10 @@ mod tests {
     #[test]
     fn test_webhook_signing_key_from_env_insufficient_length() {
         use std::env;
+
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let env_var_name = "TEST_WEBHOOK_SIGNING_KEY";
         let valid_key = "insufficient_length";

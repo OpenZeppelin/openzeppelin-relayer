@@ -44,15 +44,14 @@ This roadmap represents our current plans and is subject to change. We will upda
 * Basic Transaction Submission
 * Fee Estimation
 * Transaction Status Tracking
-* Limited Network Support(Ethereum Mainnet, Sepolia, Holesky, Optimism, Optimism Sepolia, Worldchain Sepolia)
+* Flexible Network Configuration System (any EVM-compatible network via JSON configuration)
 
 ==== Upcoming Features
 ** Enhanced Transaction Status Logic
-** Expanded EVM-Compatible Network Support
+** Expanded EVM-Compatible Network Support (via enhanced JSON configuration)
 ** AWS KMS Hosted Signer Integration
 ** RPC Retries and Failover Mechanisms
 ** Custom RPC Endpoints
-** Custom Network Configurations
 
 === Solana ( 🏗️ In Progress)
 
@@ -64,7 +63,6 @@ This roadmap represents our current plans and is subject to change. We will upda
 
 ==== Upcoming Features
 ** Custom RPC Endpoints
-** Custom Network Configurations
 ** Expanded Hosted Signer Support
 ** Extended RPC Methods
 ** Improved Transaction Status Checks

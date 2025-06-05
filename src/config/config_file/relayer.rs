@@ -5,8 +5,8 @@
 //! - Gas/fee policies
 //! - Transaction validation rules
 //! - Network endpoints
-use super::{ConfigFileError, ConfigFileNetworkType};
-use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
+use super::{ConfigFileError, ConfigFileNetworkType, NetworksFileConfig};
+use crate::models::RpcConfig;
 use apalis_cron::Schedule;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -272,36 +272,6 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
 impl RelayerFileConfig {
     const MAX_ID_LENGTH: usize = 36;
 
-    fn validate_network(&self) -> Result<(), ConfigFileError> {
-        match self.network_type {
-            ConfigFileNetworkType::Evm => {
-                if EvmNetwork::from_network_str(&self.network).is_err() {
-                    return Err(ConfigFileError::InvalidNetwork {
-                        network_type: "EVM".to_string(),
-                        name: self.network.clone(),
-                    });
-                }
-            }
-            ConfigFileNetworkType::Stellar => {
-                if StellarNetwork::from_network_str(&self.network).is_err() {
-                    return Err(ConfigFileError::InvalidNetwork {
-                        network_type: "Stellar".to_string(),
-                        name: self.network.clone(),
-                    });
-                }
-            }
-            ConfigFileNetworkType::Solana => {
-                if SolanaNetwork::from_network_str(&self.network).is_err() {
-                    return Err(ConfigFileError::InvalidNetwork {
-                        network_type: "Solana".to_string(),
-                        name: self.network.clone(),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn validate_solana_pub_keys(&self, keys: &Option<Vec<String>>) -> Result<(), ConfigFileError> {
         if let Some(keys) = keys {
             let solana_pub_key_regex =
@@ -505,7 +475,6 @@ impl RelayerFileConfig {
             return Err(ConfigFileError::MissingField("network".into()));
         }
 
-        self.validate_network()?;
         self.validate_policies()?;
         self.validate_custom_rpc_urls()?;
         Ok(())
@@ -523,13 +492,28 @@ impl RelayersFileConfig {
         Self { relayers }
     }
 
-    pub fn validate(&self) -> Result<(), ConfigFileError> {
+    pub fn validate(&self, networks: &NetworksFileConfig) -> Result<(), ConfigFileError> {
         if self.relayers.is_empty() {
             return Err(ConfigFileError::MissingField("relayers".into()));
         }
 
         let mut ids = HashSet::new();
         for relayer in &self.relayers {
+            if relayer.network.is_empty() {
+                return Err(ConfigFileError::InvalidFormat(
+                    "relayer.network cannot be empty".into(),
+                ));
+            }
+
+            if networks
+                .get_network(relayer.network_type, &relayer.network)
+                .is_none()
+            {
+                return Err(ConfigFileError::InvalidReference(format!(
+                    "Relayer '{}' references non-existent network '{}' for type '{:?}'",
+                    relayer.id, relayer.network, relayer.network_type
+                )));
+            }
             relayer.validate()?;
             if !ids.insert(relayer.id.clone()) {
                 return Err(ConfigFileError::DuplicateId(relayer.id.clone()));
@@ -541,6 +525,7 @@ impl RelayersFileConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::{EvmNetworkConfig, NetworkConfigCommon, NetworkFileConfig};
     use crate::constants::DEFAULT_RPC_WEIGHT;
 
     use super::*;
@@ -1046,5 +1031,48 @@ mod tests {
             err.to_string(),
             "Invalid policy: JupiterUltra strategy is only supported on mainnet-beta"
         );
+    }
+
+    #[test]
+    fn test_relayer_with_non_existent_network_fails_validation() {
+        let relayers = vec![RelayerFileConfig {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "non-existent-network".to_string(),
+            paused: false,
+            network_type: ConfigFileNetworkType::Evm,
+            policies: None,
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        }];
+
+        let networks = NetworksFileConfig::new(vec![NetworkFileConfig::Evm(EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "existing-network".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://rpc.test.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://explorer.test.example.com".to_string()]),
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(true),
+                tags: Some(vec!["test".to_string()]),
+            },
+            chain_id: Some(31337),
+            required_confirmations: Some(1),
+            features: None,
+            symbol: Some("ETH".to_string()),
+        })])
+        .expect("Failed to create NetworksFileConfig for test");
+
+        let relayers_config = RelayersFileConfig::new(relayers);
+        let result = relayers_config.validate(&networks);
+
+        assert!(result.is_err());
+        if let Err(ConfigFileError::InvalidReference(msg)) = result {
+            assert!(msg.contains("non-existent network 'non-existent-network'"));
+            assert!(msg.contains("Relayer 'test-relayer'"));
+        } else {
+            panic!("Expected InvalidReference error, got: {:?}", result);
+        }
     }
 }

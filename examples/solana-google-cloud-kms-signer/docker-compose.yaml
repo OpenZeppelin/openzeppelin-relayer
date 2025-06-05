@@ -1,5 +1,4 @@
 ---
-
 services:
   relayer:
     build:
@@ -32,8 +31,6 @@ services:
     depends_on:
       - redis
     restart: on-failure:5
-
-
   redis:
     image: redis:bookworm
     ports:
@@ -42,25 +39,27 @@ services:
       - no-new-privileges
     volumes:
       - redis_data:/data
-    command: [redis-server, --appendonly, yes, --save, '60', '1']
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
     networks:
       - relayer-network
       - metrics-network
     restart: on-failure:5
-
 networks:
   metrics-network:
     internal: true
   relayer-network:
     driver: bridge
-
 volumes:
   redis_data:
     driver: local
   vault-data:
     driver: local
-
-
 secrets:
   api_key:
     environment: API_KEY
@@ -72,4 +71,3 @@ secrets:
     environment: GOOGLE_CLOUD_KMS_PRIVATE_KEY
   google_cloud_kms_client_email:
     environment: GOOGLE_CLOUD_KMS_CLIENT_EMAIL
-

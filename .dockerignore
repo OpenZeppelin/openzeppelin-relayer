@@ -3,3 +3,6 @@
 target/
 logs/
 docs/
+
+# plugins dependencies
+plugins/**/node_modules
