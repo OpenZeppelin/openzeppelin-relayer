@@ -189,6 +189,11 @@ impl NetworksFileConfig {
                     resolver.resolve_stellar_inheritance(config, network_name, parent_name)?;
                 Ok(NetworkFileConfig::Stellar(resolved_config))
             }
+            NetworkFileConfig::Midnight(config) => {
+                let resolved_config =
+                    resolver.resolve_midnight_inheritance(config, network_name, parent_name)?;
+                Ok(NetworkFileConfig::Midnight(resolved_config))
+            }
         }
     }
 
@@ -368,13 +373,14 @@ mod tests {
             create_evm_network_wrapped("evm-1"),
             create_solana_network_wrapped("solana-1"),
             create_stellar_network_wrapped("stellar-1"),
+            create_midnight_network_wrapped("midnight-1"),
         ];
         let config = NetworksFileConfig::new(networks);
 
         assert!(config.is_ok());
         let config = config.unwrap();
-        assert_eq!(config.networks.len(), 3);
-        assert_eq!(config.network_map.len(), 3);
+        assert_eq!(config.networks.len(), 4);
+        assert_eq!(config.network_map.len(), 4);
         assert!(config
             .network_map
             .contains_key(&(ConfigFileNetworkType::Evm, "evm-1".to_string())));
@@ -384,6 +390,9 @@ mod tests {
         assert!(config
             .network_map
             .contains_key(&(ConfigFileNetworkType::Stellar, "stellar-1".to_string())));
+        assert!(config
+            .network_map
+            .contains_key(&(ConfigFileNetworkType::Midnight, "midnight-1".to_string())));
     }
 
     #[test]
@@ -642,13 +651,14 @@ mod tests {
             create_solana_network_wrapped("solana-parent"),
             create_solana_network_wrapped_with_parent("solana-child", "solana-parent"),
             create_stellar_network_wrapped("stellar-standalone"),
+            create_midnight_network_wrapped("midnight-standalone"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
 
         let flattened = config.flatten();
         assert!(flattened.is_ok());
         let flattened = flattened.unwrap();
-        assert_eq!(flattened.networks.len(), 5);
+        assert_eq!(flattened.networks.len(), 6);
     }
 
     #[test]
@@ -678,9 +688,10 @@ mod tests {
             create_evm_network_wrapped("test1"),
             create_solana_network_wrapped("test2"),
             create_stellar_network_wrapped("test3"),
+            create_midnight_network_wrapped("test4"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
-        assert_eq!(config.len(), 3);
+        assert_eq!(config.len(), 4);
     }
 
     #[test]
@@ -700,6 +711,7 @@ mod tests {
             create_evm_network_wrapped("evm-2"),
             create_solana_network_wrapped("solana-1"),
             create_stellar_network_wrapped("stellar-1"),
+            create_midnight_network_wrapped("midnight-1"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
 
@@ -717,6 +729,11 @@ mod tests {
             .networks_by_type(ConfigFileNetworkType::Stellar)
             .collect();
         assert_eq!(stellar_networks.len(), 1);
+
+        let midnight_networks: Vec<_> = config
+            .networks_by_type(ConfigFileNetworkType::Midnight)
+            .collect();
+        assert_eq!(midnight_networks.len(), 1);
     }
 
     #[test]
@@ -736,14 +753,16 @@ mod tests {
             create_evm_network_wrapped("alpha"),
             create_solana_network_wrapped("beta"),
             create_stellar_network_wrapped("gamma"),
+            create_midnight_network_wrapped("delta"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
 
         let names: Vec<_> = config.network_names().collect();
-        assert_eq!(names.len(), 3);
+        assert_eq!(names.len(), 4);
         assert!(names.contains(&"alpha"));
         assert!(names.contains(&"beta"));
         assert!(names.contains(&"gamma"));
+        assert!(names.contains(&"delta"));
     }
 
     #[test]
@@ -916,12 +935,13 @@ mod tests {
             create_evm_network_wrapped("测试网络"),
             create_solana_network_wrapped("тестовая-сеть"),
             create_stellar_network_wrapped("réseau-test"),
+            create_midnight_network_wrapped("❣⩪❅♒Ⱎ"),
         ];
 
         let config = NetworksFileConfig::new(networks);
         assert!(config.is_ok());
         let config = config.unwrap();
-        assert_eq!(config.len(), 3);
+        assert_eq!(config.len(), 4);
         assert!(config
             .get_network(ConfigFileNetworkType::Evm, "测试网络")
             .is_some());
@@ -931,6 +951,9 @@ mod tests {
         assert!(config
             .get_network(ConfigFileNetworkType::Stellar, "réseau-test")
             .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Midnight, "❣⩪❅♒Ⱎ")
+            .is_some());
     }
 
     #[test]
@@ -939,12 +962,13 @@ mod tests {
             create_evm_network_wrapped("test-network_123"),
             create_solana_network_wrapped("test.network.with.dots"),
             create_stellar_network_wrapped("test@network#with$symbols"),
+            create_midnight_network_wrapped("test!network+123"),
         ];
 
         let config = NetworksFileConfig::new(networks);
         assert!(config.is_ok());
         let config = config.unwrap();
-        assert_eq!(config.len(), 3);
+        assert_eq!(config.len(), 4);
     }
 
     #[test]
@@ -992,13 +1016,14 @@ mod tests {
             create_evm_network_wrapped("mainnet"),
             create_solana_network_wrapped("mainnet"),
             create_stellar_network_wrapped("mainnet"),
+            create_midnight_network_wrapped("mainnet"),
         ];
         let result = NetworksFileConfig::new(networks);
 
         assert!(result.is_ok());
         let config = result.unwrap();
-        assert_eq!(config.networks.len(), 3);
-        assert_eq!(config.network_map.len(), 3);
+        assert_eq!(config.networks.len(), 4);
+        assert_eq!(config.network_map.len(), 4);
 
         // Verify we can retrieve each network by type and name
         assert!(config
@@ -1009,6 +1034,9 @@ mod tests {
             .is_some());
         assert!(config
             .get_network(ConfigFileNetworkType::Stellar, "mainnet")
+            .is_some());
+        assert!(config
+            .get_network(ConfigFileNetworkType::Midnight, "mainnet")
             .is_some());
     }
 
@@ -1123,6 +1151,7 @@ mod tests {
             create_evm_network_wrapped("network-0"),
             create_solana_network_wrapped("network-1"),
             create_stellar_network_wrapped("network-2"),
+            create_midnight_network_wrapped("network-3"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
 
@@ -1137,6 +1166,10 @@ mod tests {
         let network_2 = config.get(2);
         assert!(network_2.is_some());
         assert_eq!(network_2.unwrap().network_name(), "network-2");
+
+        let network_3 = config.get(3);
+        assert!(network_3.is_some());
+        assert_eq!(network_3.unwrap().network_name(), "network-3");
     }
 
     #[test]
