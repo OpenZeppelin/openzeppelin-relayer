@@ -15,7 +15,7 @@ use alloy::{
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::{convert::TryFrom, str::FromStr};
+use std::{collections::HashMap, convert::TryFrom, str::FromStr};
 
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -307,10 +307,13 @@ impl StellarTransactionData {
     }
 }
 
-// TODO: Implement MidnightTransactionData
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidnightTransactionData {
     pub hash: Option<String>,
+    pub binding_randomness: Option<String>, // Fr serialized as hex
+    pub segment_results: Option<HashMap<u16, bool>>, // For partial success tracking
+    pub prover_request_id: Option<String>,  // To track async proof generation
+    pub raw: Option<Vec<u8>>,               // Serialized transaction
 }
 
 impl
@@ -426,6 +429,10 @@ impl
                 network_type: NetworkType::Midnight,
                 network_data: NetworkTransactionData::Midnight(MidnightTransactionData {
                     hash: None,
+                    binding_randomness: None,
+                    segment_results: None,
+                    prover_request_id: None,
+                    raw: None,
                 }),
                 priced_at: None,
                 hashes: Vec::new(),

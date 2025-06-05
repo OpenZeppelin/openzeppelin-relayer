@@ -203,7 +203,12 @@ mod tests {
                 NetworkRepoModel::new_stellar(stellar_config)
             }
             NetworkType::Midnight => {
-                let midnight_config = MidnightNetworkConfig { common };
+                let midnight_config = MidnightNetworkConfig {
+                    common,
+                    prover_url: None,
+                    commitment_tree_ttl: None,
+                    network_id: None,
+                };
                 NetworkRepoModel::new_midnight(midnight_config)
             }
         }
