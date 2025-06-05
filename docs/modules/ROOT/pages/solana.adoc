@@ -17,9 +17,45 @@ OpenZeppelin Relayer provides robust support for Solana networks, enabling secur
 
 == Supported Networks
 
-- `mainnet-beta`
-- `devnet`
-- `testnet`
+Solana networks are defined via JSON configuration files, providing flexibility to:
+
+- Configure standard Solana clusters: `mainnet-beta`, `devnet`, `testnet`
+- Set up custom Solana-compatible networks with specific RPC endpoints
+- Create network variants using inheritance from base configurations
+
+Example Solana network configurations:
+
+[source,json]
+----
+{
+  "networks": [
+    {
+      "type": "solana",
+      "network": "solana-mainnet",
+      "rpc_urls": ["https://api.mainnet-beta.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com"],
+      "is_testnet": false,
+      "tags": ["mainnet", "solana"]
+    },
+    {
+      "type": "solana",
+      "network": "solana-devnet", 
+      "rpc_urls": ["https://api.devnet.solana.com"],
+      "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
+      "is_testnet": true,
+      "tags": ["devnet", "solana"]
+    },
+    {
+      "type": "solana",
+      "network": "solana-custom",
+      "rpc_urls": ["https://your-custom-solana-rpc.example.com"],
+      "tags": ["custom", "solana"]
+    }
+  ]
+}
+----
+
+For detailed network configuration options, see the main documentation's Network Configuration Reference section.
 
 == Supported Signers
 
@@ -38,7 +74,7 @@ In production systems, hosted signers are recommended for the best security mode
 
 == Quickstart
 
-For a step-by-step setup, see xref:quickstart.adoc[Quick Start Guide].  
+For a step-by-step setup, see xref:quickstart.adoc[Quick Start Guide].
 Key prerequisites:
 
 - Rust 2021 edition
@@ -129,14 +165,14 @@ Swaps can be set to work as:
 The Solana API conforms to the link:https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav[Paymaster spec, window=_blank].
 
 Common endpoints:
-- `POST /api/v1/relayers/<relayer_id>/rpc`  
-  Methods: 
-  
+- `POST /api/v1/relayers/<relayer_id>/rpc`
+  Methods:
+
 - `feeEstimate`,
 - `prepareTransaction`,
-- `transferTransaction`, 
-- `signTransaction`, 
-- `signAndSendTransaction`, 
+- `transferTransaction`,
+- `signTransaction`,
+- `signAndSendTransaction`,
 - `getSupportedTokens`
 - `getSupportedFeatures`
 

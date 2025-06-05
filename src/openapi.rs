@@ -19,12 +19,17 @@ impl Modify for SecurityAddon {
         }
     }
 }
+// https://gitbook.com/docs/api-references/guides/managing-api-operations
 
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),
-    tags((name = "OpenZeppelin Relayer API")),
-    info(description = "The OpenZeppelin Relayer API provides endpoints for managing, monitoring, and interacting with relayers. It enables developers to relay and manage blockchain transactions across EVM and non-EVM networks, making it ideal for dApps and backend services that require secure and scalable transaction infrastructure.", version = "0.1.0", title = "OpenZeppelin Relayer API",  license(
+    tags(
+      (name = "Relayers", description = "Relayers are the core components of the OpenZeppelin Relayer API. They are responsible for executing transactions on behalf of users and providing a secure and reliable way to interact with the blockchain."),
+      (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
+      (name = "Health", description = "Health is responsible for showing the health of the relayers.")
+    ),
+    info(description = "OpenZeppelin Relayer API", version = "0.1.0", title = "OpenZeppelin Relayer API",  license(
         name = "AGPL-3.0 license",
         url = "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     ),

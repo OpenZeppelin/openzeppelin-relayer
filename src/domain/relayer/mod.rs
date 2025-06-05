@@ -20,11 +20,11 @@ use crate::{
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
+        RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
 };
@@ -125,9 +125,9 @@ pub trait Relayer {
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if the relayer is active, or a
+    /// A `Result` containing `RelayerStatus` on success, or a
     /// `RelayerError` on failure.
-    async fn get_status(&self) -> Result<bool, RelayerError>;
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError>;
 
     /// Initializes the relayer.
     ///
@@ -282,7 +282,7 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn get_status(&self) -> Result<bool, RelayerError> {
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
@@ -313,11 +313,13 @@ impl Relayer for NetworkRelayer {
     }
 }
 
+#[async_trait]
 pub trait RelayerFactoryTrait {
-    fn create_relayer(
+    async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+        networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
@@ -326,21 +328,32 @@ pub trait RelayerFactoryTrait {
 
 pub struct RelayerFactory;
 
+#[async_trait]
 impl RelayerFactoryTrait for RelayerFactory {
-    fn create_relayer(
+    async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+        networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
             NetworkType::Evm => {
-                let network = match EvmNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-                };
+                let network_repo = networks_repository
+                    .get(NetworkType::Evm, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = EvmNetwork::try_from(network_repo)?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
@@ -355,6 +368,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     evm_provider,
                     network,
                     relayer_repository,
+                    networks_repository,
                     transaction_repository,
                     transaction_counter_service,
                     job_producer,
@@ -367,16 +381,27 @@ impl RelayerFactoryTrait for RelayerFactory {
                     relayer,
                     signer,
                     relayer_repository,
+                    networks_repository,
                     transaction_repository,
                     job_producer.clone(),
-                )?;
+                )
+                .await?;
                 Ok(NetworkRelayer::Solana(solana_relayer))
             }
             NetworkType::Stellar => {
-                let network = match StellarNetwork::from_network_str(&relayer.network) {
-                    Ok(network) => network,
-                    Err(e) => return Err(RelayerError::NetworkConfiguration(e.to_string())),
-                };
+                let network_repo = networks_repository
+                    .get(NetworkType::Stellar, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = StellarNetwork::try_from(network_repo)?;
 
                 let stellar_provider =
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
@@ -391,11 +416,15 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let relayer = DefaultStellarRelayer::new(
                     relayer,
                     stellar_provider,
-                    relayer_repository,
-                    transaction_repository,
-                    transaction_counter_service,
-                    job_producer,
-                )?;
+                    stellar::StellarRelayerDependencies::new(
+                        relayer_repository,
+                        networks_repository,
+                        transaction_repository,
+                        transaction_counter_service,
+                        job_producer,
+                    ),
+                )
+                .await?;
                 Ok(NetworkRelayer::Stellar(relayer))
             }
             // TODO: Implement MidnightRelayer
@@ -451,10 +480,17 @@ pub struct SignTransactionResponseStellar {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SignTransactionResponseMidnight {
+    // TODO: Implement signature
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
     Solana(Vec<u8>),
     Stellar(SignTransactionResponseStellar),
+    Midnight(SignTransactionResponseMidnight),
 }
 
 impl SignTransactionResponse {

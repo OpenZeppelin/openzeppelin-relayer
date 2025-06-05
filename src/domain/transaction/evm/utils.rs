@@ -2,7 +2,7 @@ use crate::constants::{
     DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
 use crate::models::{
-    EvmNetwork, EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
+    EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
 };
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
@@ -47,10 +47,8 @@ pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
 pub fn has_enough_confirmations(
     tx_block_number: u64,
     current_block_number: u64,
-    chain_id: u64,
+    required_confirmations: u64,
 ) -> bool {
-    let network = EvmNetwork::from_id(chain_id);
-    let required_confirmations = network.required_confirmations();
     current_block_number >= tx_block_number + required_confirmations
 }
 
@@ -258,16 +256,14 @@ mod tests {
 
     #[test]
     fn test_has_enough_confirmations() {
-        // Test Ethereum Mainnet (requires 12 confirmations)
-        let chain_id = 1; // Ethereum Mainnet
-
         // Not enough confirmations
         let tx_block_number = 100;
         let current_block_number = 110; // Only 10 confirmations
+        let required_confirmations = 12;
         assert!(!has_enough_confirmations(
             tx_block_number,
             current_block_number,
-            chain_id
+            required_confirmations
         ));
 
         // Exactly enough confirmations
@@ -275,7 +271,7 @@ mod tests {
         assert!(has_enough_confirmations(
             tx_block_number,
             current_block_number,
-            chain_id
+            required_confirmations
         ));
 
         // More than enough confirmations
@@ -283,7 +279,7 @@ mod tests {
         assert!(has_enough_confirmations(
             tx_block_number,
             current_block_number,
-            chain_id
+            required_confirmations
         ));
     }
 

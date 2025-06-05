@@ -11,6 +11,8 @@
 //! Configuration is organized into sections:
 //! - Relayers: Network-specific relayer configurations
 //! - Signers: Key management and signing configurations
+//! - Notifications: Alert and monitoring configurations
+//! - Networks: Custom and overridden network definitions
 mod server_config;
 pub use server_config::*;
 
@@ -19,3 +21,6 @@ pub use config_file::*;
 
 mod rate_limit;
 pub use rate_limit::*;
+
+mod error;
+pub use error::*;
