@@ -27,9 +27,9 @@ WORKDIR /app
 
 # Install pnpm and ts-node
 USER root
-RUN npm install -g pnpm ts-node typescript
+RUN npm install -g ts-node typescript
 
-COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
+COPY --from=base --chown=nobody:nobody /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 
 # Copy plugins folder and install dependencies
 COPY --chown=nobody ./plugins /app/plugins
