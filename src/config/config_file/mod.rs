@@ -1286,7 +1286,6 @@ mod tests {
         );
 
         let result = load_config(config_path.to_str().unwrap());
-        println!("Result: {:#?}", result);
         assert!(result.is_ok());
 
         let config = result.unwrap();

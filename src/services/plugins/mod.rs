@@ -1,26 +1,14 @@
 //! Plugins service module for handling plugins execution and interaction with relayer
-
-use std::collections::HashMap;
-
-struct PluginService {
-    plugins: HashMap<String, Box<dyn PluginTrait>>,
-}
+struct PluginService {}
 
 impl PluginService {
-    pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-        }
-    }
-
-    pub fn load_all(&mut self) -> Result<(), String> {
-        // TODO: load all plugins from config
-        Ok(())
+    pub fn call_plugin(&self, _plugin_id: &str) -> Result<String, String> {
+        unimplemented!()
     }
 }
 
 impl Default for PluginService {
     fn default() -> Self {
-        Self::new()
+        Self {}
     }
 }
