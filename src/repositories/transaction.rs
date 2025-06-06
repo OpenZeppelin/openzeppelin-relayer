@@ -101,6 +101,7 @@ mockall::mock! {
         async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
         async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
         async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
+
     }
 }
 
@@ -261,11 +262,19 @@ impl TransactionRepository for InMemoryTransactionRepository {
         statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
-        Ok(store
+        let filtered: Vec<TransactionRepoModel> = store
             .values()
             .filter(|tx| tx.relayer_id == relayer_id && statuses.contains(&tx.status))
             .cloned()
-            .collect())
+            .collect();
+
+        // Sort by created_at (oldest first)
+        let sorted = filtered
+            .into_iter()
+            .sorted_by_key(|tx| tx.created_at.clone())
+            .collect();
+
+        Ok(sorted)
     }
 
     async fn find_by_nonce(
@@ -890,54 +899,95 @@ mod tests {
     #[tokio::test]
     async fn test_find_by_status() {
         let repo = InMemoryTransactionRepository::new();
-        let tx1 = create_test_transaction("test-1");
-        let mut tx2 = create_test_transaction("test-2");
-        tx2.status = TransactionStatus::Confirmed;
-        let mut tx3 = create_test_transaction("test-3");
+        let tx1 = create_test_transaction_pending_state("tx1");
+        let mut tx2 = create_test_transaction_pending_state("tx2");
+        tx2.status = TransactionStatus::Submitted;
+        let mut tx3 = create_test_transaction_pending_state("tx3");
         tx3.relayer_id = "relayer-2".to_string();
+        tx3.status = TransactionStatus::Pending;
 
-        repo.create(tx1).await.unwrap();
-        repo.create(tx2).await.unwrap();
+        repo.create(tx1.clone()).await.unwrap();
+        repo.create(tx2.clone()).await.unwrap();
         repo.create(tx3.clone()).await.unwrap();
 
+        // Test finding by single status
+        let pending_txs = repo
+            .find_by_status("relayer-1", &[TransactionStatus::Pending])
+            .await
+            .unwrap();
+        assert_eq!(pending_txs.len(), 1);
+        assert_eq!(pending_txs[0].id, "tx1");
+
+        let submitted_txs = repo
+            .find_by_status("relayer-1", &[TransactionStatus::Submitted])
+            .await
+            .unwrap();
+        assert_eq!(submitted_txs.len(), 1);
+        assert_eq!(submitted_txs[0].id, "tx2");
+
+        // Test finding by multiple statuses
+        let multiple_status_txs = repo
+            .find_by_status(
+                "relayer-1",
+                &[TransactionStatus::Pending, TransactionStatus::Submitted],
+            )
+            .await
+            .unwrap();
+        assert_eq!(multiple_status_txs.len(), 2);
+
+        // Test finding for different relayer
+        let relayer2_pending = repo
+            .find_by_status("relayer-2", &[TransactionStatus::Pending])
+            .await
+            .unwrap();
+        assert_eq!(relayer2_pending.len(), 1);
+        assert_eq!(relayer2_pending[0].id, "tx3");
+
+        // Test finding for non-existent relayer
+        let no_txs = repo
+            .find_by_status("non-existent", &[TransactionStatus::Pending])
+            .await
+            .unwrap();
+        assert_eq!(no_txs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_by_status_sorted_by_created_at() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // Helper function to create transaction with custom created_at timestamp
+        let create_tx_with_timestamp = |id: &str, timestamp: &str| -> TransactionRepoModel {
+            let mut tx = create_test_transaction_pending_state(id);
+            tx.created_at = timestamp.to_string();
+            tx.status = TransactionStatus::Pending;
+            tx
+        };
+
+        // Create transactions with different timestamps (out of chronological order)
+        let tx3 = create_tx_with_timestamp("tx3", "2025-01-27T17:00:00.000000+00:00"); // Latest
+        let tx1 = create_tx_with_timestamp("tx1", "2025-01-27T15:00:00.000000+00:00"); // Earliest
+        let tx2 = create_tx_with_timestamp("tx2", "2025-01-27T16:00:00.000000+00:00"); // Middle
+
+        // Create them in reverse chronological order to test sorting
+        repo.create(tx3.clone()).await.unwrap();
+        repo.create(tx1.clone()).await.unwrap();
+        repo.create(tx2.clone()).await.unwrap();
+
+        // Find by status
         let result = repo
             .find_by_status("relayer-1", &[TransactionStatus::Pending])
             .await
             .unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "test-1");
 
-        let result = repo
-            .find_by_status("relayer-1", &[TransactionStatus::Confirmed])
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "test-2");
+        // Verify they are sorted by created_at (oldest first)
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].id, "tx1"); // Earliest
+        assert_eq!(result[1].id, "tx2"); // Middle
+        assert_eq!(result[2].id, "tx3"); // Latest
 
-        let result = repo
-            .find_by_status("relayer-2", &[TransactionStatus::Pending])
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "test-3");
-
-        let result = repo
-            .find_by_status("relayer-1", &[TransactionStatus::Failed])
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 0);
-
-        // Test finding transactions with multiple statuses
-        let result = repo
-            .find_by_status(
-                "relayer-1",
-                &[TransactionStatus::Pending, TransactionStatus::Confirmed],
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 2);
-        let ids: Vec<&str> = result.iter().map(|tx| tx.id.as_str()).collect();
-        assert!(ids.contains(&"test-1"));
-        assert!(ids.contains(&"test-2"));
+        // Verify the timestamps are in ascending order
+        assert_eq!(result[0].created_at, "2025-01-27T15:00:00.000000+00:00");
+        assert_eq!(result[1].created_at, "2025-01-27T16:00:00.000000+00:00");
+        assert_eq!(result[2].created_at, "2025-01-27T17:00:00.000000+00:00");
     }
 }

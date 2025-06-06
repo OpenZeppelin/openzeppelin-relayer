@@ -126,22 +126,10 @@ impl From<TransactionRepoModel> for TransactionResponse {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionData, NetworkType, SolanaTransactionData, StellarNetwork,
-        StellarTransactionData, TransactionRepoModel,
+        EvmTransactionData, NetworkType, SolanaTransactionData, StellarTransactionData,
+        TransactionRepoModel,
     };
     use chrono::Utc;
-
-    fn create_test_stellar_network() -> StellarNetwork {
-        StellarNetwork {
-            network: "testnet".to_string(),
-            rpc_urls: vec!["https://horizon.stellar.org".to_string()],
-            explorer_urls: None,
-            average_blocktime_ms: 5000,
-            is_testnet: true,
-            tags: vec![],
-            passphrase: "Test SDF Network ; September 2015".to_string(),
-        }
-    }
 
     #[test]
     fn test_from_transaction_repo_model_evm() {
@@ -261,7 +249,7 @@ mod tests {
                 fee: Some(100),
                 sequence_number: Some(12345),
                 operations: vec![],
-                network: create_test_stellar_network(),
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 memo: None,
                 valid_until: None,
                 signatures: Vec::new(),

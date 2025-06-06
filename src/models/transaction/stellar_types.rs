@@ -239,22 +239,10 @@ impl TryFrom<StellarTransactionData> for Transaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{transaction::repository::StellarTransactionData, StellarNetwork};
+    use crate::models::transaction::repository::StellarTransactionData;
     use serde_json;
 
     const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-
-    fn create_test_stellar_network() -> StellarNetwork {
-        StellarNetwork {
-            network: "testnet".to_string(),
-            rpc_urls: vec!["https://horizon.stellar.org".to_string()],
-            explorer_urls: None,
-            average_blocktime_ms: 5000,
-            is_testnet: true,
-            tags: vec![],
-            passphrase: "Test SDF Network ; September 2015".to_string(),
-        }
-    }
 
     mod memospec {
         use super::*;
@@ -618,7 +606,7 @@ mod tests {
                 memo: Some(MemoSpec::None),
                 valid_until: None,
                 operations: vec![payment_op(TEST_PK)],
-                network: create_test_stellar_network(),
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 signatures: Vec::new(),
                 hash: None,
             };
@@ -637,7 +625,7 @@ mod tests {
                 memo: None,
                 valid_until: None,
                 operations: vec![payment_op(TEST_PK)],
-                network: create_test_stellar_network(),
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 signatures: Vec::new(),
                 hash: None,
             };
@@ -654,7 +642,7 @@ mod tests {
                 memo: None,
                 valid_until: None,
                 operations: ops,
-                network: create_test_stellar_network(),
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 signatures: Vec::new(),
                 hash: None,
             };
@@ -670,7 +658,7 @@ mod tests {
                 memo: None,
                 valid_until: Some("1735689600".to_string()), // "2025-01-01T00:00:00Z"
                 operations: vec![payment_op(TEST_PK)],
-                network: create_test_stellar_network(),
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 signatures: Vec::new(),
                 hash: None,
             };
@@ -692,7 +680,7 @@ mod tests {
                 memo: Some(MemoSpec::Id(12345)),
                 valid_until: None,
                 operations: vec![payment_op(TEST_PK)],
-                network: create_test_stellar_network(),
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 signatures: Vec::new(),
                 hash: None,
             };
