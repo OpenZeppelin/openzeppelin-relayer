@@ -8,5 +8,5 @@ pub mod midnight_transaction;
 pub mod types;
 
 pub use builder::MidnightTransactionBuilder;
-pub use midnight_transaction::{MidnightTransaction, MidnightTransactionConfig};
+pub use midnight_transaction::MidnightTransaction;
 pub use types::*;

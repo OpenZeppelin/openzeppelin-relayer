@@ -44,6 +44,8 @@ pub use solana::*;
 pub use stellar::*;
 pub use util::*;
 
+use self::midnight_transaction::DefaultMidnightTransaction;
+
 /// A trait that defines the operations for handling transactions across different networks.
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -169,7 +171,7 @@ pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
     Solana(SolanaRelayerTransaction),
     Stellar(DefaultStellarTransaction),
-    Midnight(MidnightTransaction),
+    Midnight(DefaultMidnightTransaction),
 }
 
 #[async_trait]
@@ -524,16 +526,14 @@ impl RelayerTransactionFactory {
                 );
 
                 Ok(NetworkTransaction::Midnight(MidnightTransaction::new(
-                    MidnightTransactionConfig {
-                        relayer,
-                        relayer_repository,
-                        transaction_repository,
-                        transaction_counter_store,
-                        job_producer,
-                        provider: midnight_provider,
-                        signer: signer_service,
-                        network,
-                    },
+                    relayer,
+                    midnight_provider,
+                    relayer_repository,
+                    transaction_repository,
+                    job_producer,
+                    signer_service,
+                    transaction_counter_store,
+                    network,
                 )?))
             }
         }

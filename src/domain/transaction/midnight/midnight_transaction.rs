@@ -4,60 +4,122 @@
 
 use crate::{
     domain::Transaction,
-    jobs::JobProducer,
+    jobs::{JobProducer, JobProducerTrait},
     models::{MidnightNetwork, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+        RelayerRepositoryStorage, Repository, TransactionCounterTrait, TransactionRepository,
     },
-    services::{MidnightProvider, Signer},
+    services::{MidnightProvider, MidnightProviderTrait, MidnightSigner, Signer},
 };
 use async_trait::async_trait;
 use std::sync::Arc;
 
 #[allow(dead_code)]
-/// Default implementation of Midnight transaction handling
-pub struct MidnightTransaction {
+/// Midnight transaction handler with generic dependencies
+pub struct MidnightTransaction<P, R, T, J, S, C>
+where
+    P: MidnightProviderTrait,
+    R: Repository<RelayerRepoModel, String>,
+    T: TransactionRepository,
+    J: JobProducerTrait,
+    S: Signer,
+    C: TransactionCounterTrait,
+{
     relayer: RelayerRepoModel,
-    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-    transaction_repository: Arc<InMemoryTransactionRepository>,
-    transaction_counter_store: Arc<InMemoryTransactionCounter>,
-    job_producer: Arc<JobProducer>,
-    provider: Arc<MidnightProvider>,
-    signer: Arc<dyn Signer>,
+    provider: Arc<P>,
+    relayer_repository: Arc<R>,
+    transaction_repository: Arc<T>,
+    job_producer: Arc<J>,
+    signer: Arc<S>,
+    transaction_counter_service: Arc<C>,
     network: MidnightNetwork,
 }
 
-/// Configuration for creating a MidnightTransaction
-pub struct MidnightTransactionConfig {
-    pub relayer: RelayerRepoModel,
-    pub relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-    pub transaction_repository: Arc<InMemoryTransactionRepository>,
-    pub transaction_counter_store: Arc<InMemoryTransactionCounter>,
-    pub job_producer: Arc<JobProducer>,
-    pub provider: Arc<MidnightProvider>,
-    pub signer: Arc<dyn Signer>,
-    pub network: MidnightNetwork,
-}
-
-impl MidnightTransaction {
-    /// Creates a new MidnightTransaction instance from configuration
-    pub fn new(config: MidnightTransactionConfig) -> Result<Self, TransactionError> {
+#[allow(dead_code, clippy::too_many_arguments)]
+impl<P, R, T, J, S, C> MidnightTransaction<P, R, T, J, S, C>
+where
+    P: MidnightProviderTrait,
+    R: Repository<RelayerRepoModel, String>,
+    T: TransactionRepository,
+    J: JobProducerTrait,
+    S: Signer,
+    C: TransactionCounterTrait,
+{
+    /// Creates a new `MidnightTransaction`.
+    ///
+    /// # Arguments
+    ///
+    /// * `relayer` - The relayer model.
+    /// * `provider` - The Midnight provider.
+    /// * `relayer_repository` - Storage for relayer repository.
+    /// * `transaction_repository` - Storage for transaction repository.
+    /// * `job_producer` - Producer for job queue.
+    /// * `signer` - The signer service.
+    /// * `transaction_counter_service` - Service for managing transaction counters.
+    /// * `network` - The Midnight network configuration.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the new `MidnightTransaction` or a `TransactionError`.
+    pub fn new(
+        relayer: RelayerRepoModel,
+        provider: Arc<P>,
+        relayer_repository: Arc<R>,
+        transaction_repository: Arc<T>,
+        job_producer: Arc<J>,
+        signer: Arc<S>,
+        transaction_counter_service: Arc<C>,
+        network: MidnightNetwork,
+    ) -> Result<Self, TransactionError> {
         Ok(Self {
-            relayer: config.relayer,
-            relayer_repository: config.relayer_repository,
-            transaction_repository: config.transaction_repository,
-            transaction_counter_store: config.transaction_counter_store,
-            job_producer: config.job_producer,
-            provider: config.provider,
-            signer: config.signer,
-            network: config.network,
+            relayer,
+            provider,
+            relayer_repository,
+            transaction_repository,
+            job_producer,
+            signer,
+            transaction_counter_service,
+            network,
         })
+    }
+
+    /// Returns a reference to the provider.
+    pub fn provider(&self) -> &P {
+        &self.provider
+    }
+
+    /// Returns a reference to the relayer model.
+    pub fn relayer(&self) -> &RelayerRepoModel {
+        &self.relayer
+    }
+
+    /// Returns a reference to the job producer.
+    pub fn job_producer(&self) -> &J {
+        &self.job_producer
+    }
+
+    /// Returns a reference to the transaction repository.
+    pub fn transaction_repository(&self) -> &T {
+        &self.transaction_repository
+    }
+
+    /// Returns a reference to the network configuration.
+    pub fn network(&self) -> &MidnightNetwork {
+        &self.network
     }
 }
 
 #[async_trait]
-impl Transaction for MidnightTransaction {
+impl<P, R, T, J, S, C> Transaction for MidnightTransaction<P, R, T, J, S, C>
+where
+    P: MidnightProviderTrait + Send + Sync,
+    R: Repository<RelayerRepoModel, String> + Send + Sync,
+    T: TransactionRepository + Send + Sync,
+    J: JobProducerTrait + Send + Sync,
+    S: Signer + Send + Sync,
+    C: TransactionCounterTrait + Send + Sync,
+{
     async fn prepare_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -176,3 +238,13 @@ impl Transaction for MidnightTransaction {
         Ok(true)
     }
 }
+
+/// Default concrete type for Midnight transactions
+pub type DefaultMidnightTransaction = MidnightTransaction<
+    MidnightProvider,
+    RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    InMemoryTransactionRepository,
+    JobProducer,
+    MidnightSigner,
+    InMemoryTransactionCounter,
+>;
