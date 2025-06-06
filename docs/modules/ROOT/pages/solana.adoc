@@ -39,7 +39,7 @@ Example Solana network configurations:
     },
     {
       "type": "solana",
-      "network": "solana-devnet", 
+      "network": "solana-devnet",
       "rpc_urls": ["https://api.devnet.solana.com"],
       "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
       "is_testnet": true,

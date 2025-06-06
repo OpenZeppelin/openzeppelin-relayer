@@ -1069,7 +1069,7 @@ Here are examples for each supported network type:
       "explorer_urls": ["https://etherscan.io"]
     },
     {
-      "type": "evm", 
+      "type": "evm",
       "network": "polygon-mainnet",
       "chain_id": 137,
       "required_confirmations": 30,
@@ -1145,13 +1145,13 @@ When configuring networks directly in the main `config.json` file, use a `networ
 ----
 {
   "relayers": [...],
-  "notifications": [...], 
+  "notifications": [...],
   "signers": [...],
   "networks": [
     {
       "type": "evm",
       "network": "my-network",
-      // ... other network fields  
+      // ... other network fields
     }
   ]
 }
@@ -1183,7 +1183,7 @@ All network types support these common configuration fields:
 |Network type: `"evm"`, `"solana"`, or `"stellar"`
 
 |`network`
-|string  
+|string
 |Yes
 |Unique network identifier (e.g., "ethereum-mainnet", "polygon-mumbai")
 
@@ -1286,7 +1286,7 @@ Currently, Solana networks use only the common fields. Additional Solana-specifi
 {
   "from": "ethereum-mainnet",
   "type": "evm",
-  "network": "ethereum-sepolia", 
+  "network": "ethereum-sepolia",
   "chain_id": 11155111,
   "required_confirmations": 3,
   "rpc_urls": ["https://sepolia.infura.io/v3/YOUR_KEY"],

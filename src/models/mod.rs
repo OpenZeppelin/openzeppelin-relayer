@@ -43,3 +43,6 @@ pub use secret_string::*;
 
 mod plain_or_env_value;
 pub use plain_or_env_value::*;
+
+mod plugin;
+pub use plugin::*;

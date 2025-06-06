@@ -19,7 +19,8 @@ updates:
       interval: monthly
     ignore:
       - dependency-name: '*'
-        update-types: [version-update:semver-major]
+        update-types:
+          - version-update:semver-major
     commit-message:
       # Prefix all commit messages
       prefix: 'chore(deps): '
