@@ -1,6 +1,5 @@
 ---
 # Ports `8080` for relayer server, `6379`for redis server.
-
 services:
   relayer:
     image: openzeppelin/openzeppelin-relayer:latest
@@ -46,7 +45,6 @@ services:
     networks:
       - relayer-network
       - metrics-network
-
   redis:
     image: redis:bookworm
     ports:
@@ -55,18 +53,37 @@ services:
       - no-new-privileges
     volumes:
       - redis_data:/data
-    command: [redis-server, --appendonly, yes, --save, '60', '1']
+      - ./certs:/certs:ro
+    command:
+      - redis-server
+      - --daemonize no
+      - --port 0
+      - --tls-port 6379
+      - --tls-cert-file /certs/redis.crt
+      - --tls-key-file  /certs/redis.key
+      - --tls-ca-cert-file /certs/ca.crt
+      - --tls-auth-clients no  # One-way TLS (clients need not present a cert)
+      - --appendonly yes
+      - --save 60 1
     networks:
       - relayer-network
       - metrics-network
     restart: on-failure:5
-
   redis-exporter:
     image: oliver006/redis_exporter:v1.67.0
-    environment:
-      - REDIS_ADDR=redis://redis:6379
+    ports:
+      - 9121:9121/tcp
+    # Change `rediss://` to `redis://` if not using TLS
+    # Note: The `rediss://` scheme is used for Redis with TLS enabled.
+    # Comment out the `--tls-ca-cert-file` line if not using TLS.
+    # If using TLS, ensure the Redis server is configured with TLS and the CA certificate is mounted correctly.
+    command:
+      - --redis.addr=rediss://redis:6379
+      - --tls-ca-cert-file=/certs/ca.crt
     security_opt:
       - no-new-privileges
+    volumes:
+      - ./certs:/certs:ro
     profiles:
       - metrics
     depends_on:
@@ -74,14 +91,11 @@ services:
     networks:
       - metrics-network
     restart: on-failure:5
-
   prometheus:
     image: prom/prometheus:v3.1.0
     security_opt:
       - no-new-privileges
-    command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
-      --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries
-      --web.console.templates=/usr/share/prometheus/consoles
+    command: --log.level=warn --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=30d --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles
     ports:
       - 9090:9090/tcp
     networks:
@@ -92,12 +106,12 @@ services:
     restart: on-failure:5
     profiles:
       - metrics
-
   grafana:
     image: grafana/grafana:11.5.1
     security_opt:
       - no-new-privileges
-    ports: [3000:3000/tcp]
+    ports:
+      - 3000:3000/tcp
     networks:
       - metrics-network
       - relayer-network
@@ -108,17 +122,14 @@ services:
     restart: on-failure:5
     profiles:
       - metrics
-
 networks:
   metrics-network:
     internal: true
   relayer-network:
     driver: bridge
-
 volumes:
   redis_data:
     driver: local
-
 secrets:
   api_key:
     environment: API_KEY

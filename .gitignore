@@ -23,6 +23,8 @@ local-signer.json
 
 !examples/**/*.json
 
+# Ignore certs
+certs/
 
 # docs
 docs/build/
