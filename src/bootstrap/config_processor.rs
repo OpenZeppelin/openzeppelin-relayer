@@ -8,10 +8,10 @@ use crate::{
     models::{
         AppState, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
         GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, NetworkRepoModel,
-        NotificationRepoModel, RelayerRepoModel, SignerConfig, SignerRepoModel,
+        NotificationRepoModel, PluginModel, RelayerRepoModel, SignerConfig, SignerRepoModel,
         TurnkeySignerConfig, VaultTransitSignerConfig,
     },
-    repositories::Repository,
+    repositories::{PluginRepositoryTrait, Repository},
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
     utils::unsafe_generate_random_private_key,
 };
@@ -24,10 +24,23 @@ use zeroize::Zeroizing;
 
 /// Process all plugins from the config file and store them in the repository.
 async fn process_plugins<J: JobProducerTrait>(
-    _config_file: &Config,
-    _app_state: &ThinData<AppState<J>>,
+    config_file: &Config,
+    app_state: &ThinData<AppState<J>>,
 ) -> Result<()> {
-    // TODO: implement.
+    let plugin_futures = config_file.plugins.iter().map(|plugin| async {
+        let plugin_model =
+            PluginModel::try_from(plugin.clone()).wrap_err("Failed to convert plugin config")?;
+        app_state
+            .plugin_store
+            .add(plugin_model)
+            .await
+            .wrap_err("Failed to create plugin repository entry")?;
+        Ok::<(), Report>(())
+    });
+
+    try_join_all(plugin_futures)
+        .await
+        .wrap_err("Failed to initialize plugin repository")?;
     Ok(())
 }
 
@@ -355,16 +368,16 @@ mod tests {
     use crate::{
         config::{
             AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
-            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, RelayerFileConfig,
-            ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, PluginFileConfig,
+            RelayerFileConfig, ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
             VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
         models::{NetworkType, PlainOrEnvValue, SecretString},
         repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
-            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-            RelayerRepositoryStorage,
+            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
+            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
+            InMemoryTransactionRepository, RelayerRepositoryStorage,
         },
     };
     use serde_json::json;
@@ -403,6 +416,7 @@ mod tests {
             network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
+            plugin_store: Arc::new(InMemoryPluginRepository::default()),
         }
     }
 
@@ -971,6 +985,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_process_plugins() -> Result<()> {
+        // Create test plugins
+        let plugins = vec![
+            PluginFileConfig {
+                id: "test-plugin-1".to_string(),
+                path: "/app/plugins/test.ts".to_string(),
+            },
+            PluginFileConfig {
+                id: "test-plugin-2".to_string(),
+                path: "/app/plugins/test2.ts".to_string(),
+            },
+        ];
+
+        // Create config
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins,
+        };
+
+        // Create app state
+        let app_state = ThinData(create_test_app_state());
+
+        // Process plugins
+        process_plugins(&config, &app_state).await?;
+
+        // Verify plugins were created
+        let plugin_1 = app_state.plugin_store.get_by_id("test-plugin-1").await?;
+        let plugin_2 = app_state.plugin_store.get_by_id("test-plugin-2").await?;
+
+        assert!(plugin_1.is_some());
+        assert!(plugin_2.is_some());
+        assert_eq!(plugin_1.unwrap().path, "/app/plugins/test.ts");
+        assert_eq!(plugin_2.unwrap().path, "/app/plugins/test2.ts");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_process_config_file() -> Result<()> {
         // Create test signers, relayers, and notifications
         let signers = vec![SignerFileConfig {
@@ -997,13 +1052,18 @@ mod tests {
             signing_key: None,
         }];
 
+        let plugins = vec![PluginFileConfig {
+            id: "test-plugin-1".to_string(),
+            path: "/app/plugins/test.ts".to_string(),
+        }];
+
         // Create config
         let config = Config {
             signers,
             relayers,
             notifications,
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins,
         };
 
         // Create shared repositories
@@ -1015,6 +1075,7 @@ mod tests {
         let network_repo = Arc::new(InMemoryNetworkRepository::default());
         let transaction_repo = Arc::new(InMemoryTransactionRepository::default());
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
+        let plugin_repo = Arc::new(InMemoryPluginRepository::default());
 
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1041,6 +1102,7 @@ mod tests {
             transaction_repository: transaction_repo.clone(),
             transaction_counter_store: transaction_counter.clone(),
             job_producer: job_producer.clone(),
+            plugin_store: plugin_repo.clone(),
         });
 
         // Process the entire config file
@@ -1059,6 +1121,9 @@ mod tests {
         let stored_notifications = notification_repo.list_all().await?;
         assert_eq!(stored_notifications.len(), 1);
         assert_eq!(stored_notifications[0].id, "test-notification-1");
+
+        let stored_plugin = plugin_repo.get_by_id("test-plugin-1").await?;
+        assert_eq!(stored_plugin.unwrap().path, "/app/plugins/test.ts");
 
         Ok(())
     }

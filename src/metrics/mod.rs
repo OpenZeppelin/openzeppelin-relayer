@@ -269,53 +269,32 @@ mod actix_tests {
         update_system_metrics();
 
         // Verify that metrics have been updated with reasonable values
+        let cpu_usage = CPU_USAGE.get();
+        assert!((0.0..=100.0).contains(&cpu_usage));
 
-        // CPU usage should be between 0 and 100
-        let cpu = CPU_USAGE.get();
-        assert!(
-            (0.0..=100.0).contains(&cpu),
-            "CPU usage should be between 0-100%, got {}",
-            cpu
-        );
+        let memory_usage = MEMORY_USAGE.get();
+        assert!(memory_usage >= 0.0);
 
-        // Memory values should be positive
-        assert!(TOTAL_MEMORY.get() > 0.0, "Total memory should be positive");
-        assert!(
-            AVAILABLE_MEMORY.get() > 0.0,
-            "Available memory should be positive"
-        );
-        assert!(
-            MEMORY_USAGE.get() >= 0.0,
-            "Memory usage should be non-negative"
-        );
+        let memory_percent = MEMORY_USAGE_PERCENT.get();
+        assert!((0.0..=100.0).contains(&memory_percent));
 
-        // Memory percentage should be between 0 and 100
-        let mem_percent = MEMORY_USAGE_PERCENT.get();
-        assert!(
-            (0.0..=100.0).contains(&mem_percent),
-            "Memory usage percentage should be between 0-100%, got {}",
-            mem_percent
-        );
+        let total_memory = TOTAL_MEMORY.get();
+        assert!(total_memory > 0.0);
 
-        // Disk usage percentage should be between 0 and 100
+        let available_memory = AVAILABLE_MEMORY.get();
+        assert!(available_memory >= 0.0);
+
+        let disk_usage = DISK_USAGE.get();
+        assert!(disk_usage >= 0.0);
+
         let disk_percent = DISK_USAGE_PERCENT.get();
-        assert!(
-            (0.0..=100.0).contains(&disk_percent),
-            "Disk usage percentage should be between 0-100%, got {}",
-            disk_percent
-        );
+        assert!((0.0..=100.0).contains(&disk_percent));
 
-        // Disk usage should be non-negative
-        assert!(DISK_USAGE.get() >= 0.0, "Disk usage should be non-negative");
+        // Verify that memory usage doesn't exceed total memory
+        assert!(memory_usage <= total_memory);
 
-        // Verify that memory calculations are consistent
-        let total = TOTAL_MEMORY.get();
-        let used = MEMORY_USAGE.get();
-        let available = AVAILABLE_MEMORY.get();
-
-        // Used + Available should be less than or equal to total
-        assert!(available <= total);
-        assert!(used <= total);
+        // Verify that available memory plus used memory doesn't exceed total memory
+        assert!((available_memory + memory_usage) <= total_memory);
     }
 
     #[actix_rt::test]
