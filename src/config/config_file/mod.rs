@@ -89,6 +89,7 @@ impl Config {
         self.validate_relayers(&self.networks)?;
         self.validate_signers()?;
         self.validate_notifications()?;
+        self.validate_plugins()?;
 
         self.validate_relayer_signer_refs(&self.networks)?;
         self.validate_relayer_notification_refs()?;
@@ -194,6 +195,12 @@ impl Config {
 
         self.networks.validate()
     }
+
+    /// Validates that all plugins are valid and have unique IDs.
+    /// and correct paths (prefix /app/plugins/)
+    fn validate_plugins(&self) -> Result<(), ConfigFileError> {
+        PluginsFileConfig::new(self.plugins.clone()).validate()
+    }
 }
 
 /// Loads and validates a configuration file from the specified path.
@@ -273,7 +280,7 @@ mod tests {
             .expect("Failed to create NetworksFileConfig for test"),
             plugins: vec![PluginFileConfig {
                 id: "test-1".to_string(),
-                path: "plugins/test-plugin".to_string(),
+                path: "/app/plugins/test-plugin.ts".to_string(),
             }],
         }
     }
@@ -1134,7 +1141,10 @@ mod tests {
                 "rpc_urls": ["https://rpc.test.example.com"],
                 "is_testnet": true
             }],
-            "plugins": [],
+            "plugins": [{
+                "id": "plugin-id",
+                "path": "/app/plugins/plugin.ts"
+            }],
         });
 
         setup_config_file(dir.path(), "valid_config.json", &config_content.to_string());
@@ -1146,6 +1156,7 @@ mod tests {
         assert_eq!(config.relayers.len(), 1);
         assert_eq!(config.signers.len(), 1);
         assert_eq!(config.networks.len(), 1);
+        assert_eq!(config.plugins.len(), 1);
     }
 
     #[test]
@@ -1275,6 +1286,7 @@ mod tests {
         );
 
         let result = load_config(config_path.to_str().unwrap());
+        println!("Result: {:#?}", result);
         assert!(result.is_ok());
 
         let config = result.unwrap();
@@ -1351,6 +1363,58 @@ mod tests {
         let config = create_valid_config();
         let result = config.validate_networks();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_plugins_method() {
+        let config = create_valid_config();
+        let result = config.validate_plugins();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_plugins_method_with_empty_plugins() {
+        let config = Config {
+            relayers: vec![],
+            signers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: vec![],
+        };
+        let result = config.validate_plugins();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_plugins_method_with_invalid_plugin_path() {
+        let config = Config {
+            relayers: vec![],
+            signers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: vec![PluginFileConfig {
+                id: "test-plugin".to_string(),
+                path: "/invalid/path/test.ts".to_string(),
+            }],
+        };
+        let result = config.validate_plugins();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_plugins_method_with_invalid_plugin_extension() {
+        let config = Config {
+            relayers: vec![],
+            signers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: vec![PluginFileConfig {
+                id: "id".to_string(),
+                path: "/app/plugins/test-plugin.js".to_string(),
+            }],
+        };
+        let result = config.validate_plugins();
+        assert!(result.is_err());
     }
 
     #[test]
