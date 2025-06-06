@@ -55,7 +55,6 @@ hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 dashmap = { version = "6.1" }
 actix-governor = "0.8"
-governor = "0.8.0"
 solana-sdk = { version = "2.2" }
 solana-client = { version = "2.2" }
 spl-token = { version = "8" }
@@ -74,7 +73,7 @@ libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
 ed25519-dalek = "2.1"
-stellar-strkey = "0.0.12"
+stellar-strkey = "0.0.13"
 soroban-rs = "0.2.4"
 p256 = { version = "0.13.2" }
 google-cloud-auth = "0.20.0"

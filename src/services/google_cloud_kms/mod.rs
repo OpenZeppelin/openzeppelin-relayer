@@ -357,7 +357,7 @@ mod tests {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
                 project_id: "test-project".to_string(),
                 private_key_id: SecretString::new("test-private-key-id"),
-                private_key: SecretString::new("-----BEGIN PRIVATE KEY-----\nFAKEKEYDATA\n-----END PRIVATE KEY-----\n"),
+                private_key: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                 client_email: SecretString::new("test-service-account@example.com"),
                 client_id: "test-client-id".to_string(),
                 auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),

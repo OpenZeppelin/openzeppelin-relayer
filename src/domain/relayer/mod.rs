@@ -20,7 +20,7 @@ use crate::{
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
+        RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -125,9 +125,9 @@ pub trait Relayer {
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if the relayer is active, or a
+    /// A `Result` containing `RelayerStatus` on success, or a
     /// `RelayerError` on failure.
-    async fn get_status(&self) -> Result<bool, RelayerError>;
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError>;
 
     /// Initializes the relayer.
     ///
@@ -268,7 +268,7 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn get_status(&self) -> Result<bool, RelayerError> {
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),

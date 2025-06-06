@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub enum NetworkConfigData {
     /// EVM network configuration
     Evm(EvmNetworkConfig),
-    /// Solana network configuration  
+    /// Solana network configuration
     Solana(SolanaNetworkConfig),
     /// Stellar network configuration
     Stellar(StellarNetworkConfig),

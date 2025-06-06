@@ -1,13 +1,14 @@
 //! This module provides rate limiting functionality using API keys.
 
 use crate::constants::{AUTHORIZATION_HEADER_NAME, PUBLIC_ENDPOINTS};
+use actix_governor::governor::clock::{Clock, DefaultClock, QuantaInstant};
+use actix_governor::governor::NotUntil;
 use actix_governor::{KeyExtractor, SimpleKeyExtractionError};
 use actix_web::{
     dev::ServiceRequest,
     http::{header::ContentType, StatusCode},
     HttpResponse, HttpResponseBuilder,
 };
-use governor::clock::{Clock, DefaultClock};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -41,7 +42,7 @@ impl KeyExtractor for ApiKeyRateLimit {
 
     fn exceed_rate_limit_response(
         &self,
-        negative: &governor::NotUntil<governor::clock::QuantaInstant>,
+        negative: &NotUntil<QuantaInstant>,
         mut response: HttpResponseBuilder,
     ) -> HttpResponse {
         let wait_time = negative
@@ -60,9 +61,9 @@ impl KeyExtractor for ApiKeyRateLimit {
 mod tests {
 
     use super::*;
+    use actix_governor::governor::{Quota, RateLimiter};
     use actix_web::test::TestRequest;
     use actix_web::{body::MessageBody, http::header::HeaderValue};
-    use governor::{Quota, RateLimiter};
     use std::num::NonZeroU32;
 
     #[tokio::test]
