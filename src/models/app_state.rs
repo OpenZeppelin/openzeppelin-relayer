@@ -30,8 +30,8 @@ pub struct AppState<J: JobProducerTrait> {
     pub transaction_counter_store: Arc<InMemoryTransactionCounter>,
     /// Producer for managing job creation and execution.
     pub job_producer: Arc<J>,
-    /// Store for managing plugins.
-    pub plugin_store: Arc<InMemoryPluginRepository>,
+    /// Repository for managing plugins.
+    pub plugin_repository: Arc<InMemoryPluginRepository>,
 }
 
 pub type DefaultAppState = AppState<JobProducer>;
@@ -100,13 +100,13 @@ impl<J: JobProducerTrait> AppState<J> {
         Arc::clone(&self.job_producer)
     }
 
-    /// Returns a clone of the plugin store.
+    /// Returns a clone of the plugin repository.
     ///
     /// # Returns
     ///
     /// An `Arc` pointing to the `InMemoryPluginRepository`.
-    pub fn plugin_store(&self) -> Arc<InMemoryPluginRepository> {
-        Arc::clone(&self.plugin_store)
+    pub fn plugin_repository(&self) -> Arc<InMemoryPluginRepository> {
+        Arc::clone(&self.plugin_repository)
     }
 }
 
@@ -148,7 +148,7 @@ mod tests {
             network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
-            plugin_store: Arc::new(InMemoryPluginRepository::new()),
+            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }
     }
 
@@ -214,12 +214,12 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_store_getter() {
+    fn test_plugin_repository_getter() {
         let app_state = create_test_app_state();
-        let store1 = app_state.plugin_store();
-        let store2 = app_state.plugin_store();
+        let store1 = app_state.plugin_repository();
+        let store2 = app_state.plugin_repository();
 
         assert!(Arc::ptr_eq(&store1, &store2));
-        assert!(Arc::ptr_eq(&store1, &app_state.plugin_store));
+        assert!(Arc::ptr_eq(&store1, &app_state.plugin_repository));
     }
 }

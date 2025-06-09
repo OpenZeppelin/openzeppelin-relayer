@@ -31,7 +31,7 @@ async fn process_plugins<J: JobProducerTrait>(
         let plugin_model =
             PluginModel::try_from(plugin.clone()).wrap_err("Failed to convert plugin config")?;
         app_state
-            .plugin_store
+            .plugin_repository
             .add(plugin_model)
             .await
             .wrap_err("Failed to create plugin repository entry")?;
@@ -416,7 +416,7 @@ mod tests {
             network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
-            plugin_store: Arc::new(InMemoryPluginRepository::default()),
+            plugin_repository: Arc::new(InMemoryPluginRepository::default()),
         }
     }
 
@@ -1014,8 +1014,14 @@ mod tests {
         process_plugins(&config, &app_state).await?;
 
         // Verify plugins were created
-        let plugin_1 = app_state.plugin_store.get_by_id("test-plugin-1").await?;
-        let plugin_2 = app_state.plugin_store.get_by_id("test-plugin-2").await?;
+        let plugin_1 = app_state
+            .plugin_repository
+            .get_by_id("test-plugin-1")
+            .await?;
+        let plugin_2 = app_state
+            .plugin_repository
+            .get_by_id("test-plugin-2")
+            .await?;
 
         assert!(plugin_1.is_some());
         assert!(plugin_2.is_some());
@@ -1102,7 +1108,7 @@ mod tests {
             transaction_repository: transaction_repo.clone(),
             transaction_counter_store: transaction_counter.clone(),
             job_producer: job_producer.clone(),
-            plugin_store: plugin_repo.clone(),
+            plugin_repository: plugin_repo.clone(),
         });
 
         // Process the entire config file

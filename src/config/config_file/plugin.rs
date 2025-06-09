@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 // TODO: in case we want to support other languages and add
 // more flexibility to the plugins folder, we should
 // move this to a config file
-const PLUGIN_PATH_PREFIX: &str = "/app/plugins/";
 const PLUGIN_FILE_TYPE: &str = ".ts";
 const PLUGIN_LANG: &str = "typescript";
 
@@ -38,13 +37,6 @@ impl PluginsFileConfig {
 
             if plugin.path.is_empty() {
                 return Err(ConfigFileError::MissingField("path".into()));
-            }
-
-            if !plugin.path.starts_with(PLUGIN_PATH_PREFIX) {
-                return Err(ConfigFileError::InvalidFormat(format!(
-                    "Plugin must be under plugins directory (path must start with '{}')",
-                    PLUGIN_PATH_PREFIX
-                )));
             }
 
             if !plugin.path.ends_with(PLUGIN_FILE_TYPE) {

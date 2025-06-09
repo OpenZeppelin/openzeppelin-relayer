@@ -1385,22 +1385,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_plugins_method_with_invalid_plugin_path() {
-        let config = Config {
-            relayers: vec![],
-            signers: vec![],
-            notifications: vec![],
-            networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![PluginFileConfig {
-                id: "test-plugin".to_string(),
-                path: "/invalid/path/test.ts".to_string(),
-            }],
-        };
-        let result = config.validate_plugins();
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_validate_plugins_method_with_invalid_plugin_extension() {
         let config = Config {
             relayers: vec![],

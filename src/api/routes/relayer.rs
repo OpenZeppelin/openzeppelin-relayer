@@ -210,7 +210,7 @@ mod tests {
             network_repository: Arc::new(InMemoryNetworkRepository::new()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
             job_producer: Arc::new(JobProducer::new(Queue::setup().await.unwrap())),
-            plugin_store: Arc::new(InMemoryPluginRepository::new()),
+            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }
     }
 
