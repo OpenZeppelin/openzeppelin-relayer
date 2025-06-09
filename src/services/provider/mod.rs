@@ -1,7 +1,7 @@
 use std::num::ParseIntError;
 
 use crate::config::ServerConfig;
-use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
+use crate::models::{EvmNetwork, MidnightNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -15,6 +15,9 @@ pub use solana::*;
 
 mod stellar;
 pub use stellar::*;
+
+mod midnight;
+pub use midnight::*;
 
 mod retry;
 pub use retry::*;
@@ -223,6 +226,35 @@ impl NetworkConfiguration for StellarNetwork {
         timeout_seconds: u64,
     ) -> Result<Self::Provider, ProviderError> {
         StellarProvider::new(rpc_urls, timeout_seconds)
+    }
+}
+
+impl NetworkConfiguration for MidnightNetwork {
+    type Provider = MidnightProvider;
+
+    fn public_rpc_urls(&self) -> Vec<String> {
+        (*self)
+            .public_rpc_urls()
+            .map(|urls| urls.to_vec())
+            .unwrap_or_default()
+    }
+
+    fn new_provider(
+        rpc_urls: Vec<RpcConfig>,
+        _timeout_seconds: u64,
+    ) -> Result<Self::Provider, ProviderError> {
+        // For Midnight, we need to handle the prover URL separately
+        // For now, we'll use a default local prover URL
+        let network = MidnightNetwork {
+            network: "midnight".to_string(),
+            rpc_urls: rpc_urls.iter().map(|c| c.url.clone()).collect(),
+            explorer_urls: None,
+            average_blocktime_ms: 5000,
+            is_testnet: true,
+            tags: vec![],
+        };
+
+        MidnightProvider::new(network, None)
     }
 }
 
