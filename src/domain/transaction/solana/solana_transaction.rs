@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::{
     domain::transaction::Transaction,
     jobs::JobProducer,
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel},
+    models::{NetworkTransactionRequest, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
@@ -84,9 +84,10 @@ impl Transaction for SolanaRelayerTransaction {
 
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        _old_tx: TransactionRepoModel,
+        _new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        Ok(tx)
+        Ok(_old_tx)
     }
 
     async fn sign_transaction(

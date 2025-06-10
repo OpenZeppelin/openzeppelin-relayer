@@ -349,6 +349,7 @@ pub async fn cancel_transaction(
 ///
 /// * `relayer_id` - The ID of the relayer.
 /// * `transaction_id` - The ID of the transaction to replace.
+/// * `request` - The new transaction request data.
 /// * `state` - The application state containing the transaction repository.
 ///
 /// # Returns
@@ -357,20 +358,24 @@ pub async fn cancel_transaction(
 pub async fn replace_transaction(
     relayer_id: String,
     transaction_id: String,
+    request: serde_json::Value,
     state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
 
-    let relayer_transaction = get_relayer_transaction_by_model(relayer.clone(), &state).await?;
+    let new_tx_request: NetworkTransactionRequest =
+        NetworkTransactionRequest::from_json(&relayer.network_type, request.clone())?;
+    new_tx_request.validate(&relayer)?;
 
     let transaction_to_replace = state
         .transaction_repository
         .get_by_id(transaction_id)
         .await?;
 
+    let relayer_transaction = get_relayer_transaction_by_model(relayer.clone(), &state).await?;
     let replaced_transaction = relayer_transaction
-        .replace_transaction(transaction_to_replace)
+        .replace_transaction(transaction_to_replace, new_tx_request)
         .await?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(replaced_transaction)))

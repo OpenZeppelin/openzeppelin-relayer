@@ -100,6 +100,10 @@ impl EvmNetwork {
         self.tags.contains(&"rollup".to_string())
     }
 
+    pub fn lacks_mempool(&self) -> bool {
+        self.tags.contains(&"no-mempool".to_string())
+    }
+
     pub fn is_testnet(&self) -> bool {
         self.is_testnet
     }
@@ -131,5 +135,126 @@ impl EvmNetwork {
         } else {
             Some(&self.rpc_urls)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+    use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+
+    fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
+        EvmNetwork {
+            network: "test-network".to_string(),
+            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 12000,
+            is_testnet: false,
+            tags: tags.into_iter().map(|s| s.to_string()).collect(),
+            chain_id: 1,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_is_optimism_with_optimism_tag() {
+        let network = create_test_evm_network_with_tags(vec!["optimism", "rollup"]);
+        assert!(network.is_optimism());
+    }
+
+    #[test]
+    fn test_is_optimism_without_optimism_tag() {
+        let network = create_test_evm_network_with_tags(vec!["rollup", "mainnet"]);
+        assert!(!network.is_optimism());
+    }
+
+    #[test]
+    fn test_is_rollup_with_rollup_tag() {
+        let network = create_test_evm_network_with_tags(vec!["rollup", "no-mempool"]);
+        assert!(network.is_rollup());
+    }
+
+    #[test]
+    fn test_is_rollup_without_rollup_tag() {
+        let network = create_test_evm_network_with_tags(vec!["mainnet", "ethereum"]);
+        assert!(!network.is_rollup());
+    }
+
+    #[test]
+    fn test_lacks_mempool_with_no_mempool_tag() {
+        let network = create_test_evm_network_with_tags(vec!["rollup", "no-mempool"]);
+        assert!(network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_lacks_mempool_without_no_mempool_tag() {
+        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
+        assert!(!network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_arbitrum_like_network() {
+        let network = create_test_evm_network_with_tags(vec!["rollup", "no-mempool"]);
+        assert!(network.is_rollup());
+        assert!(network.lacks_mempool());
+        assert!(!network.is_optimism());
+    }
+
+    #[test]
+    fn test_optimism_like_network() {
+        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
+        assert!(network.is_rollup());
+        assert!(network.is_optimism());
+        assert!(!network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_ethereum_mainnet_like_network() {
+        let network = create_test_evm_network_with_tags(vec!["mainnet", "ethereum"]);
+        assert!(!network.is_rollup());
+        assert!(!network.is_optimism());
+        assert!(!network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_empty_tags() {
+        let network = create_test_evm_network_with_tags(vec![]);
+        assert!(!network.is_rollup());
+        assert!(!network.is_optimism());
+        assert!(!network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_try_from_with_tags() {
+        let config = EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "test-network".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                explorer_urls: None,
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false),
+                tags: Some(vec!["rollup".to_string(), "optimism".to_string()]),
+            },
+            chain_id: Some(10),
+            required_confirmations: Some(1),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+        };
+
+        let repo_model = NetworkRepoModel {
+            id: "evm:test-network".to_string(),
+            name: "test-network".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(config),
+        };
+
+        let network = EvmNetwork::try_from(repo_model).unwrap();
+        assert!(network.is_optimism());
+        assert!(network.is_rollup());
+        assert!(!network.lacks_mempool());
     }
 }

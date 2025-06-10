@@ -1215,7 +1215,25 @@ All network types support these common configuration fields:
 |`tags`
 |array[string]
 |No
-|Arbitrary tags for categorization and filtering
+|Arbitrary tags for categorization and filtering.
+|===
+
+====== Special Network Tags
+
+Some tags have special meaning and affect the relayer's behavior:
+
+[cols="1,2"]
+|===
+|Tag |Description and Behavior
+
+|`rollup`
+|Identifies Layer 2 rollup networks (e.g., Arbitrum, Optimism, Base).
+
+|`optimism`
+|Identifies Optimism-based networks and Layer 2s using the OP Stack (e.g., Optimism, Base, World Chain).
+
+|`no-mempool`
+|Indicates networks that lack a traditional mempool (e.g., Arbitrum).
 |===
 
 ====== EVM-Specific Fields

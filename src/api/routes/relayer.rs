@@ -126,10 +126,11 @@ async fn cancel_transaction(
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_transaction(
     path: web::Path<TransactionPath>,
+    req: web::Json<serde_json::Value>,
     data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     let path = path.into_inner();
-    relayer::replace_transaction(path.relayer_id, path.transaction_id, data).await
+    relayer::replace_transaction(path.relayer_id, path.transaction_id, req.into_inner(), data).await
 }
 
 /// Signs data using the specified relayer.
