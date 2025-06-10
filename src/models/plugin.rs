@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct PluginModel {
@@ -8,7 +8,7 @@ pub struct PluginModel {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginCallRequest {
     /// Plugin ID
     pub plugin_id: String,

@@ -127,4 +127,19 @@ mod tests {
             }
         );
     }
+
+    #[tokio::test]
+    async fn test_get_by_id() {
+        let plugin_repository = Arc::new(InMemoryPluginRepository::new());
+
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+        };
+        plugin_repository.add(plugin.clone()).await.unwrap();
+        assert_eq!(
+            plugin_repository.get_by_id("test-plugin").await.unwrap(),
+            Some(plugin)
+        );
+    }
 }

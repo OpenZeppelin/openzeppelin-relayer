@@ -23,3 +23,43 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
     cfg.service(plugin_call); // /plugins/{plugin_id}/call
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::plugins::PluginCallResponse;
+    use actix_web::{test, App, HttpResponse};
+
+    async fn mock_plugin_call() -> impl Responder {
+        HttpResponse::Ok().json(PluginCallResponse { success: true })
+    }
+
+    #[actix_web::test]
+    async fn test_plugin_call() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}/call")
+                        .route(web::post().to(mock_plugin_call)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/plugins/test-plugin/call")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "plugin_id": "test-plugin",
+                "params": serde_json::Value::Null,
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let plugin_call_response: PluginCallResponse = serde_json::from_slice(&body).unwrap();
+        assert!(plugin_call_response.success);
+    }
+}

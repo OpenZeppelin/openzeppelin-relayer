@@ -5,7 +5,7 @@
 use crate::{
     jobs::JobProducer,
     models::{ApiError, ApiResponse, AppState, PluginCallRequest},
-    services::plugins::PluginService,
+    services::plugins::{PluginService, PluginServiceTrait},
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
@@ -32,9 +32,10 @@ pub async fn call_plugin(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {} not found", plugin_id)))?;
 
-    let plugin_service = PluginService::default();
-
-    let result = plugin_service.call_plugin(&plugin.path, plugin_call_request);
+    let plugin_service = PluginService::new();
+    let result = plugin_service
+        .call_plugin(&plugin.path, plugin_call_request)
+        .await;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
