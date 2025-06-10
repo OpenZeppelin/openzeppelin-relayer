@@ -1,11 +1,7 @@
-//! # Relayer Controller
+//! # Plugin Controller
 //!
-//! Handles HTTP endpoints for relayer operations including:
-//! - Listing relayers
-//! - Getting relayer details
-//! - Submitting transactions
-//! - Signing messages
-//! - JSON-RPC proxy
+//! Handles HTTP endpoints for plugin operations including:
+//! - Calling plugins
 use crate::{
     jobs::JobProducer,
     models::{ApiError, ApiResponse, AppState, PluginCallRequest},
@@ -18,12 +14,13 @@ use eyre::Result;
 ///
 /// # Arguments
 ///
+/// * `plugin_id` - The ID of the plugin to call.
 /// * `plugin_call_request` - The plugin call request.
-/// * `state` - The application state containing the relayer repository.
+/// * `state` - The application state containing the plugin repository.
 ///
 /// # Returns
 ///
-/// A paginated list of relayers.
+/// The result of the plugin call.
 pub async fn call_plugin(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
