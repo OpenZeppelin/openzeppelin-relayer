@@ -27,6 +27,11 @@ impl InMemoryPluginRepository {
         }
     }
 
+    pub async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(store.get(id).cloned())
+    }
+
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
         Ok(lock.lock().await)
     }
