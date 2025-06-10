@@ -39,7 +39,7 @@ Example Solana network configurations:
     },
     {
       "type": "solana",
-      "network": "solana-devnet", 
+      "network": "solana-devnet",
       "rpc_urls": ["https://api.devnet.solana.com"],
       "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
       "is_testnet": true,
@@ -74,7 +74,7 @@ In production systems, hosted signers are recommended for the best security mode
 
 == Quickstart
 
-For a step-by-step setup, see xref:quickstart.adoc[Quick Start Guide].  
+For a step-by-step setup, see xref:quickstart.adoc[Quick Start Guide].
 Key prerequisites:
 
 - Rust 2021 edition
@@ -165,14 +165,14 @@ Swaps can be set to work as:
 The Solana API conforms to the link:https://docs.google.com/document/d/1lweO5WH12QJaSAu5RG_wUistyk_nFeT6gy1CdvyCEHg/edit?tab=t.0#heading=h.4yldgprkuvav[Paymaster spec, window=_blank].
 
 Common endpoints:
-- `POST /api/v1/relayers/<relayer_id>/rpc`  
-  Methods: 
-  
+- `POST /api/v1/relayers/<relayer_id>/rpc`
+  Methods:
+
 - `feeEstimate`,
 - `prepareTransaction`,
-- `transferTransaction`, 
-- `signTransaction`, 
-- `signAndSendTransaction`, 
+- `transferTransaction`,
+- `signTransaction`,
+- `signAndSendTransaction`,
 - `getSupportedTokens`
 - `getSupportedFeatures`
 

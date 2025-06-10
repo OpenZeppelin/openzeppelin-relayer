@@ -190,9 +190,9 @@ mod tests {
     use crate::{
         jobs::{JobProducer, Queue},
         repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
-            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-            RelayerRepositoryStorage,
+            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
+            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
+            InMemoryTransactionRepository, RelayerRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -210,6 +210,7 @@ mod tests {
             network_repository: Arc::new(InMemoryNetworkRepository::new()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
             job_producer: Arc::new(JobProducer::new(Queue::setup().await.unwrap())),
+            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }
     }
 

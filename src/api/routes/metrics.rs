@@ -39,7 +39,7 @@ async fn list_metrics() -> impl Responder {
     let metric_families = REGISTRY.gather();
     let metric_names: Vec<String> = metric_families
         .iter()
-        .map(|mf| mf.get_name().to_string())
+        .map(|mf| mf.name().to_string())
         .collect();
     HttpResponse::Ok().json(metric_names)
 }
@@ -78,7 +78,7 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
     let metric_families = REGISTRY.gather();
 
     for mf in metric_families {
-        if mf.get_name() == metric_name {
+        if mf.name() == metric_name {
             let encoder = TextEncoder::new();
             let mut buffer = Vec::new();
             if let Err(e) = encoder.encode(&[mf], &mut buffer) {
@@ -150,7 +150,7 @@ mod tests {
 
         let metric_names: Vec<String> = metric_families
             .iter()
-            .map(|mf| mf.get_name().to_string())
+            .map(|mf| mf.name().to_string())
             .collect();
 
         HttpResponse::Ok().json(metric_names)
@@ -188,7 +188,7 @@ mod tests {
         let metric_families = registry.gather();
 
         for mf in metric_families {
-            if mf.get_name() == metric_name {
+            if mf.name() == metric_name {
                 let encoder = TextEncoder::new();
                 let mut buffer = Vec::new();
                 if let Err(e) = encoder.encode(&[mf], &mut buffer) {
@@ -334,7 +334,7 @@ mod tests {
             let metric_families = registry.gather();
 
             for mf in metric_families {
-                if mf.get_name() == metric_name {
+                if mf.name() == metric_name {
                     // Simulate an encoding error by returning an error response directly
                     return HttpResponse::InternalServerError()
                         .body("Encoding error: simulated error");
