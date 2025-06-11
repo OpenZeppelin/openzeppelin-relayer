@@ -12,7 +12,7 @@
 //! - Network-specific block time considerations for fee estimations
 //!
 //! # Example
-//! ```no_run
+//! ```rust, ignore
 //! # use your_crate::{PriceCalculator, EvmTransactionData, RelayerRepoModel, EvmGasPriceService};
 //! # async fn example<P: EvmProviderTrait>(
 //! #     tx_data: &EvmTransactionData,
