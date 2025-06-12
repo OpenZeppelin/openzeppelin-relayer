@@ -94,5 +94,6 @@
       }
     }
   ],
-  "networks": "./config/networks"
+  "networks": "./config/networks",
+  "plugins": []
 }
