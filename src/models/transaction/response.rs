@@ -253,6 +253,7 @@ mod tests {
                 memo: None,
                 valid_until: None,
                 signatures: Vec::new(),
+                simulation_transaction_data: None,
             }),
             valid_until: None,
             network_type: NetworkType::Stellar,

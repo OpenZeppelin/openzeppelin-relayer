@@ -61,6 +61,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         network_passphrase: "Test SDF Network ; September 2015".to_string(),
         signatures: Vec::new(),
         hash: None,
+        simulation_transaction_data: None,
     };
     TransactionRepoModel {
         id: "tx-1".to_string(),
