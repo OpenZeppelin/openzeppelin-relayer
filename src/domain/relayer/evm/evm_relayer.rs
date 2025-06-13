@@ -163,6 +163,35 @@ where
 
         Ok(())
     }
+
+    /// Initiates transaction cancellation via the job queue system.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction` - The transaction model to cancel.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `RelayerError` if the job creation fails.
+    async fn cancel_transaction_via_job(
+        &self,
+        transaction: TransactionRepoModel,
+    ) -> Result<(), RelayerError> {
+        use crate::jobs::TransactionSend;
+
+        let cancel_job = TransactionSend::cancel(
+            transaction.id.clone(),
+            transaction.relayer_id.clone(),
+            "Cancelled via delete_pending_transactions".to_string(),
+        );
+
+        self.job_producer
+            .produce_submit_transaction_job(cancel_job, None)
+            .await
+            .map_err(RelayerError::from)?;
+
+        Ok(())
+    }
 }
 
 // Define a concrete type alias for common usage
@@ -304,7 +333,59 @@ where
     ///
     /// A `Result` containing a boolean indicating success or a `RelayerError`.
     async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
-        println!("EVM delete_pending_transactions...");
+        let pending_statuses = [
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+        ];
+
+        // Get all pending transactions
+        let pending_transactions = self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &pending_statuses[..])
+            .await
+            .map_err(RelayerError::from)?;
+
+        let transaction_count = pending_transactions.len();
+
+        if transaction_count == 0 {
+            info!(
+                "No pending transactions found for relayer: {}",
+                self.relayer.id
+            );
+            return Ok(true);
+        }
+
+        info!(
+            "Processing {} pending transactions for relayer: {}",
+            transaction_count, self.relayer.id
+        );
+
+        let mut cancelled_count = 0;
+        let mut failed_count = 0;
+
+        // Process all pending transactions using the proper cancellation logic via job queue
+        for transaction in pending_transactions {
+            match self.cancel_transaction_via_job(transaction.clone()).await {
+                Ok(_) => {
+                    cancelled_count += 1;
+                    info!(
+                        "Initiated cancellation for transaction {} with status {:?} for relayer {}",
+                        transaction.id, transaction.status, self.relayer.id
+                    );
+                }
+                Err(e) => {
+                    failed_count += 1;
+                    warn!(
+                        "Failed to cancel transaction {} for relayer {}: {}",
+                        transaction.id, self.relayer.id, e
+                    );
+                }
+            }
+        }
+
+        info!("Completed processing pending transactions for relayer {}: {} cancellation jobs initiated, {} failed",
+              self.relayer.id, cancelled_count, failed_count);
         Ok(true)
     }
 
