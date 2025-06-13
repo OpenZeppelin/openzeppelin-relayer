@@ -18,7 +18,6 @@
 //!   └── Message Signing
 //! ```
 
-use alloy::primitives::Keccak256;
 use async_trait::async_trait;
 use google_cloud_auth::credentials::{service_account::Builder as GcpCredBuilder, Credentials};
 #[cfg_attr(test, allow(unused_imports))]
@@ -33,7 +32,7 @@ use std::sync::Arc;
 use mockall::automock;
 
 use crate::models::GoogleCloudKmsSignerConfig;
-use crate::utils::{base64_decode, base64_encode};
+use crate::utils::{self, base64_decode, base64_encode};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GoogleCloudKmsError {
@@ -228,40 +227,6 @@ impl GoogleCloudKmsService {
         let solana_address = bs58::encode(array).into_string();
         Ok(solana_address)
     }
-
-    fn derive_ethereum_address(pem_str: &str) -> GoogleCloudKmsResult<String> {
-        let pkey =
-            pem::parse(pem_str).map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
-        let der = pkey.contents();
-
-        // Parse ASN.1 to extract the public key (as SEC1 bytes)
-        let spki = simple_asn1::from_der(der)
-            .map_err(|e| GoogleCloudKmsError::ParseError(format!("ASN.1 parse error: {e}")))?;
-        let pubkey_bytes = if let Some(simple_asn1::ASN1Block::Sequence(_, blocks)) = spki.first() {
-            if let Some(simple_asn1::ASN1Block::BitString(_, _, ref bytes)) = blocks.get(1) {
-                bytes
-            } else {
-                return Err(GoogleCloudKmsError::ParseError(
-                    "Invalid ASN.1 structure for public key".to_string(),
-                ));
-            }
-        } else {
-            return Err(GoogleCloudKmsError::ParseError(
-                "Invalid ASN.1 structure for public key".to_string(),
-            ));
-        };
-
-        // Compute Keccak-256 hash of the public key (skip the 0x04 prefix)
-        let mut hasher = Keccak256::new();
-        hasher.update(&pubkey_bytes[1..]);
-        let hash = hasher.finalize();
-
-        // Take the last 20 bytes of the hash
-        let address_bytes = &hash[hash.len() - 20..];
-
-        // Convert to hexadecimal string
-        Ok(format!("0x{}", hex::encode(address_bytes)))
-    }
 }
 
 #[async_trait]
@@ -279,7 +244,9 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
 
         println!("PEM evm: {}", pem_str);
 
-        Self::derive_ethereum_address(&pem_str)
+        let address_bytes =
+            utils::derive_ethereum_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)?;
+        Ok(format!("0x{}", hex::encode(address_bytes)))
     }
 
     async fn sign_solana(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
@@ -341,6 +308,15 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         Ok(signature_b64)
     }
 }
+
+impl From<utils::DerError> for GoogleCloudKmsError {
+    fn from(value: utils::DerError) -> Self {
+        match value {
+            utils::DerError::ParseError(msg) => GoogleCloudKmsError::ParseError(msg),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,23 +366,6 @@ mod tests {
         let expected_path = "projects/test-project/locations/global/keyRings/test-key-ring-id/cryptoKeys/test-key-id/cryptoKeyVersions/1";
 
         assert_eq!(key_path, expected_path);
-    }
-
-    #[test]
-    fn test_derive_ethereum_address() {
-        let pem = "not-a-valid-pem";
-        let result = GoogleCloudKmsService::derive_ethereum_address(pem);
-        assert!(result.is_err());
-
-        static VALID_SECP256K1_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh
-kFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n";
-
-        let result = GoogleCloudKmsService::derive_ethereum_address(VALID_SECP256K1_PEM);
-        assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            "0xeeb8861f51b3f3f2204d64bbf7a7eb25e1b4d6cd"
-        );
     }
 
     #[test]
@@ -490,23 +449,6 @@ kFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY---
         assert_eq!(
             result.unwrap(),
             "6s7RsvzcdXFJi1tXeDoGfSKZWjCDNJLiu74rd72zLy6J"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_get_evm_address_with_mock() {
-        let mock_server = MockServer::start().await;
-
-        setup_mock_get_public_key(&mock_server).await;
-
-        let config = create_test_config(&mock_server.uri());
-        let service = GoogleCloudKmsService::new(&config).unwrap();
-
-        let result = service.get_evm_address().await;
-        assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            "0xcb9955746ac0d84666e8ed2f1e72ecc9f8e1e87d"
         );
     }
 

@@ -294,7 +294,7 @@ impl Relayer for NetworkRelayer {
 }
 
 #[async_trait]
-pub trait RelayerFactoryTrait {
+pub trait RelayerFactoryTrait: Send + Sync {
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
@@ -336,7 +336,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let network = EvmNetwork::try_from(network_repo)?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
-                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),

@@ -12,7 +12,9 @@
 //! ```text
 //! Signer Trait (Common Interface)
 //!   ├── EvmSigner
-//!   │   └── LocalSigner
+//!   │   |── LocalSigner
+//!   |   |── TurnkeySigner
+//!   |   └── AwsKmsSigner
 //!   ├── SolanaSigner
 //!   │   |── LocalSigner
 //!   |   |── GoogleCloudKmsSigner
@@ -130,13 +132,13 @@ impl DataSignerTrait for NetworkSigner {
 pub struct SignerFactory;
 
 impl SignerFactory {
-    pub fn create_signer(
+    pub async fn create_signer(
         network_type: &NetworkType,
         signer_model: &SignerRepoModel,
     ) -> Result<NetworkSigner, SignerFactoryError> {
         let signer = match network_type {
             NetworkType::Evm => {
-                let evm_signer = EvmSignerFactory::create_evm_signer(signer_model)?;
+                let evm_signer = EvmSignerFactory::create_evm_signer(signer_model.clone()).await?;
                 NetworkSigner::Evm(evm_signer)
             }
             NetworkType::Solana => {

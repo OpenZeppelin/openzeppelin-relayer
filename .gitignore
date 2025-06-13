@@ -26,6 +26,7 @@ local-signer.json
 
 # docs
 docs/build/
+docs/yarn.lock
 rust_docs
 
 # logs

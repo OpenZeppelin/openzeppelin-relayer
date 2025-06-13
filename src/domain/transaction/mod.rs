@@ -401,7 +401,7 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
-                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
                 let price_calculator = PriceCalculator::new(
