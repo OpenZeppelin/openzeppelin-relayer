@@ -255,7 +255,7 @@ mod tests {
             "method": "feeEstimate",
             "params": {
                 "transaction": "base64encodedtransaction",
-                "fee_token": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                "fee_token": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" // noboost
             },
             "id": 1
         });
@@ -307,7 +307,7 @@ mod tests {
             "method": "transferTransaction",
             "params": {
                 "amount": 1000000,
-                "token": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "token": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // noboost
                 "source": "source_address",
                 "destination": "destination_address"
             },
