@@ -3,9 +3,9 @@
 //! The routes are integrated with the Actix-web framework and interact with the relayer controller.
 use crate::{
     api::controllers::relayer,
-    domain::{JsonRpcRequest, RelayerUpdateRequest, SignDataRequest, SignTypedDataRequest},
+    domain::{RelayerUpdateRequest, SignDataRequest, SignTypedDataRequest},
     jobs::JobProducer,
-    models::{AppState, NetworkRpcRequest, PaginationQuery},
+    models::{AppState, PaginationQuery},
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -156,7 +156,7 @@ async fn sign_typed_data(
 #[post("/relayers/{relayer_id}/rpc")]
 async fn rpc(
     relayer_id: web::Path<String>,
-    req: web::Json<JsonRpcRequest<NetworkRpcRequest>>,
+    req: web::Json<serde_json::Value>,
     data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
@@ -331,7 +331,7 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        // // Test POST /relayers/{id}/rpc
+        // Test POST /relayers/{id}/rpc
         let req = test::TestRequest::post()
             .uri("/relayers/test-id/rpc")
             .set_json(serde_json::json!({
@@ -342,7 +342,7 @@ mod tests {
             }))
             .to_request();
         let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         Ok(())
     }

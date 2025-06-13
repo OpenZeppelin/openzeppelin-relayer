@@ -5,10 +5,18 @@ use utoipa::ToSchema;
 #[serde(untagged)]
 pub enum EvmRpcResult {
     GenericRpcResult(String),
+    RawRpcResult(serde_json::Value),
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
-#[serde(tag = "method", content = "params")]
+#[serde(untagged)]
 pub enum EvmRpcRequest {
-    GenericRpcRequest(String),
+    GenericRpcRequest {
+        method: String,
+        params: String,
+    },
+    RawRpcRequest {
+        method: String,
+        params: serde_json::Value,
+    },
 }
