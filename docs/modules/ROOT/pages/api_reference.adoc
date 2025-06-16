@@ -757,9 +757,9 @@ Example response:
 [#stellar_api]
 === Stellar
 
-NOTE: Basic support for Stellar, it is currently under active development. The API interactions and specifics described below may evolve.
+NOTE: Basic support for Stellar; it is currently under active development. The API interactions and specifics described below may evolve.
 
-This section outlines how to interact with the Stellar network via the Relayer API. The relayer now supports Soroban smart contract operations including contract invocation, deployment, and WASM uploads.
+This section outlines how to interact with the Stellar network via the Relayer API. The relayer supports Soroban smart contract operations, including contract invocation, deployment, and WASM uploads.
 
 [cols="1,1,2"]
 |===

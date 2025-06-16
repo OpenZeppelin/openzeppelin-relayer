@@ -20,6 +20,7 @@ use std::{convert::TryFrom, str::FromStr};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::models::transaction::stellar::DecoratedSignature;
 use soroban_rs::xdr::{
     Transaction as SorobanTransaction, TransactionEnvelope, TransactionV1Envelope, VecM,
@@ -304,14 +305,13 @@ impl StellarTransactionData {
         use log::info;
 
         // Update fee based on simulation (using soroban-helpers formula)
-        let base_fee_per_op = 100u32;
         let operations_count = self.operations.len() as u64;
-        let inclusion_fee = operations_count * base_fee_per_op as u64;
+        let inclusion_fee = operations_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
         let resource_fee = sim_response.min_resource_fee;
 
         let updated_fee = u32::try_from(inclusion_fee + resource_fee)
             .map_err(|_| crate::models::SignerError::ConversionError("Fee too high".to_string()))?
-            .max(base_fee_per_op);
+            .max(STELLAR_DEFAULT_TRANSACTION_FEE);
         self.fee = Some(updated_fee);
 
         // Store simulation transaction data for TransactionExt::V1

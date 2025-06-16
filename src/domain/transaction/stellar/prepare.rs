@@ -46,7 +46,6 @@ where
                 return Err(TransactionError::SimulationFailed(err_msg));
             }
 
-            info!("Stellar simulation successful for InvokeHostFunction operations");
             return Ok(Some(resp));
         }
 
