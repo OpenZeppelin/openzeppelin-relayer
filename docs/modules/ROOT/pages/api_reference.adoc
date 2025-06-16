@@ -837,9 +837,9 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
         "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
         "function_name": "transfer",
         "args": [
-          {"Address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
-          {"Address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
-          {"U64": 1000000}
+          {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+          {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+          {"u64": 1000000}
         ]
       }
     }
@@ -986,50 +986,65 @@ Example response:
 }
 ----
 
-==== JSON-to-ScVal Type Conversion
+==== ScVal Argument Format
 
-When using the `invoke_host_function` operation with contract calls, arguments must be provided in a JSON format that maps to Soroban's ScVal types:
+When using the `invoke_host_function` operation with contract calls, arguments must be provided as ScVal values in JSON format. The relayer uses the stellar-xdr JSON serialization format.
+
+Here are the supported ScVal types and their formats:
 
 [cols="1,2,2"]
 |===
-|Type |JSON Format |Description
+|Type |Format |Description
 
-|`U64`
-|`{"U64": 1000}`
+|U64
+|`{"u64": 1000000}`
 |Unsigned 64-bit integer
 
-|`I64`
-|`{"I64": -500}`
+|I64
+|`{"i64": -500}`
 |Signed 64-bit integer
 
-|`U32`
-|`{"U32": 42}`
+|U32
+|`{"u32": 42}`
 |Unsigned 32-bit integer
 
-|`I32`
-|`{"I32": -42}`
+|I32
+|`{"i32": -42}`
 |Signed 32-bit integer
 
-|`Bool`
-|`{"Bool": true}`
+|Boolean
+|`{"bool": true}`
 |Boolean value
 
-|`String`
-|`{"String": "hello"}`
+|String
+|`{"string": "hello world"}`
 |UTF-8 string
 
-|`Address`
-|`{"Address": "GA..."}`
-|Stellar account (G...) or contract (C...) address
+|Symbol
+|`{"symbol": "transfer"}`
+|Symbol (used for function names and identifiers)
 
-|`Bytes`
-|`{"Bytes": "deadbeef"}`
+|Address
+|`{"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"}`
+|Stellar account or contract address
+
+|Bytes
+|`{"bytes": "deadbeef"}`
 |Hex-encoded byte array
 
-|`Vec`
-|`{"Vec": [{"U32": 1}, {"U32": 2}]}`
-|Vector of ScVal values
+|Vector
+|`{"vec": [{"u32": 1}, {"u32": 2}, {"u32": 3}]}`
+|Array of ScVal values
+
+|Map
+|`{"map": [{"key": {"symbol": "name"}, "val": {"string": "MyToken"}}]}`
+|Key-value pairs of ScVal values
 |===
+
+**Address Format Notes:**
+- Account addresses start with 'G'
+- Contract addresses start with 'C'
+- All addresses use SEP-23 Strkey encoding
 
 ==== Authorization Modes
 
@@ -1046,7 +1061,11 @@ If no `auth` field is provided, the relayer automatically generates appropriate 
   "invoke_contract": {
     "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
     "function_name": "transfer",
-    "args": [{"U64": 1000}]
+    "args": [
+      {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+      {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+      {"u64": 1000000}
+    ]
   },
   "auth": {
     "type": "simple",
@@ -1064,7 +1083,11 @@ For advanced use cases, provide complete authorization entries as base64-encoded
   "invoke_contract": {
     "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
     "function_name": "transfer",
-    "args": [{"U64": 1000}]
+    "args": [
+      {"address": {"accountId": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"}},
+      {"address": {"accountId": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"}},
+      {"u64": "1000000"}
+    ]
   },
   "auth": {
     "type": "xdr",

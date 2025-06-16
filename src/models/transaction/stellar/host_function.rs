@@ -1,6 +1,5 @@
 //! Host function types and conversions for Stellar transactions
 
-use crate::models::transaction::stellar::helpers::json_to_scval;
 use crate::models::SignerError;
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{
@@ -149,11 +148,12 @@ fn convert_invoke_contract(
     let function_symbol = ScSymbol::try_from(function_name.as_bytes().to_vec())
         .map_err(|e| SignerError::ConversionError(format!("Invalid function name: {}", e)))?;
 
-    // Convert JSON args to ScVals
+    // Convert JSON args to ScVals using serde
     let scval_args: Vec<ScVal> = args
         .iter()
-        .map(json_to_scval)
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|json| serde_json::from_value(json.clone()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e)))?;
     let args_vec = VecM::try_from(scval_args)
         .map_err(|e| SignerError::ConversionError(format!("Failed to convert arguments: {}", e)))?;
 
@@ -185,11 +185,14 @@ fn convert_create_contract(
     // Handle constructor args if provided
     if let Some(args) = constructor_args {
         if !args.is_empty() {
-            // Convert JSON args to ScVals
+            // Convert JSON args to ScVals using serde
             let scval_args: Vec<ScVal> = args
                 .iter()
-                .map(json_to_scval)
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|json| serde_json::from_value(json.clone()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e))
+                })?;
             let constructor_args_vec = VecM::try_from(scval_args).map_err(|e| {
                 SignerError::ConversionError(format!(
                     "Failed to convert constructor arguments: {}",
@@ -455,9 +458,9 @@ mod tests {
         #[test]
         fn test_various_arg_types() {
             let args = vec![
-                json!({"U64": 1000}),
-                json!({"String": "hello"}),
-                json!({"Address": TEST_PK}),
+                json!({"u64": 1000}),
+                json!({"string": "hello"}),
+                json!({"address": TEST_PK}),
             ];
             let result =
                 convert_invoke_contract(TEST_CONTRACT.to_string(), "test".to_string(), args);
@@ -538,7 +541,7 @@ mod tests {
             };
             let wasm_hash =
                 "0000000000000000000000000000000000000000000000000000000000000001".to_string();
-            let args = Some(vec![json!({"String": "hello"}), json!({"U64": 42})]);
+            let args = Some(vec![json!({"string": "hello"}), json!({"u64": 42})]);
             let result = convert_create_contract(source, wasm_hash, None, args);
 
             assert!(result.is_ok());
@@ -585,7 +588,7 @@ mod tests {
         let spec = HostFunctionSpec::InvokeContract {
             contract_address: TEST_CONTRACT.to_string(),
             function_name: "hello".to_string(),
-            args: vec![json!({"String": "world"})],
+            args: vec![json!({"string": "world"})],
         };
 
         let result = HostFunction::try_from(spec);
@@ -635,7 +638,7 @@ mod tests {
             wasm_hash: "0000000000000000000000000000000000000000000000000000000000000001"
                 .to_string(),
             salt: None,
-            constructor_args: Some(vec![json!({"String": "init"})]),
+            constructor_args: Some(vec![json!({"string": "init"})]),
         };
 
         let result = HostFunction::try_from(spec);
@@ -648,7 +651,7 @@ mod tests {
         let spec = HostFunctionSpec::InvokeContract {
             contract_address: TEST_CONTRACT.to_string(),
             function_name: "test".to_string(),
-            args: vec![json!({"U64": 42})],
+            args: vec![json!({"u64": 42})],
         };
         let json = serde_json::to_string(&spec).unwrap();
         assert!(json.contains("invoke_contract"));

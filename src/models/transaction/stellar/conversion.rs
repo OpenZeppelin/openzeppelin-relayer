@@ -2,8 +2,8 @@
 
 use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
 use crate::models::transaction::repository::StellarTransactionData;
-use crate::models::transaction::stellar::helpers::valid_until_to_time_bounds;
 use crate::models::SignerError;
+use chrono::DateTime;
 use soroban_rs::xdr::{
     Memo, MuxedAccount as XdrMuxedAccount, MuxedAccountMed25519, Operation, Preconditions,
     SequenceNumber, TimeBounds, TimePoint, Transaction, TransactionExt, Uint256, VecM,
@@ -12,6 +12,30 @@ use std::convert::TryFrom;
 use stellar_strkey::ed25519::{MuxedAccount, PublicKey};
 
 pub type DecoratedSignature = soroban_rs::xdr::DecoratedSignature;
+
+#[derive(Debug, Clone)]
+pub struct TimeBoundsSpec {
+    pub min_time: u64,
+    pub max_time: u64,
+}
+
+fn valid_until_to_time_bounds(valid_until: Option<String>) -> Option<TimeBoundsSpec> {
+    valid_until.and_then(|expiry| {
+        if let Ok(expiry_time) = expiry.parse::<u64>() {
+            Some(TimeBoundsSpec {
+                min_time: 0,
+                max_time: expiry_time,
+            })
+        } else if let Ok(dt) = DateTime::parse_from_rfc3339(&expiry) {
+            Some(TimeBoundsSpec {
+                min_time: 0,
+                max_time: dt.timestamp() as u64,
+            })
+        } else {
+            None
+        }
+    })
+}
 
 impl TryFrom<StellarTransactionData> for Transaction {
     type Error = SignerError;
@@ -146,5 +170,29 @@ mod tests {
         } else {
             panic!("Expected time bounds");
         }
+    }
+
+    #[test]
+    fn test_valid_until_numeric_string() {
+        let tb = valid_until_to_time_bounds(Some("12345".to_string())).unwrap();
+        assert_eq!(tb.max_time, 12_345);
+        assert_eq!(tb.min_time, 0);
+    }
+
+    #[test]
+    fn test_valid_until_rfc3339_string() {
+        let tb = valid_until_to_time_bounds(Some("2025-01-01T00:00:00Z".to_string())).unwrap();
+        assert_eq!(tb.max_time, 1_735_689_600);
+        assert_eq!(tb.min_time, 0);
+    }
+
+    #[test]
+    fn test_valid_until_invalid_string() {
+        assert!(valid_until_to_time_bounds(Some("not a date".to_string())).is_none());
+    }
+
+    #[test]
+    fn test_valid_until_none() {
+        assert!(valid_until_to_time_bounds(None).is_none());
     }
 }
