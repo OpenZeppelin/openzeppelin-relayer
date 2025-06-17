@@ -341,8 +341,8 @@ where
     ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
         println!("Stellar delete_pending_transactions...");
         Ok(DeletePendingTransactionsResponse {
-            cancelled_transaction_ids: vec![],
-            failed_transaction_ids: vec![],
+            queued_for_cancellation_transaction_ids: vec![],
+            failed_to_queue_transaction_ids: vec![],
             total_processed: 0,
         })
     }

@@ -9,8 +9,8 @@ use super::{
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct DeletePendingTransactionsResponse {
-    pub cancelled_transaction_ids: Vec<String>,
-    pub failed_transaction_ids: Vec<String>,
+    pub queued_for_cancellation_transaction_ids: Vec<String>,
+    pub failed_to_queue_transaction_ids: Vec<String>,
     pub total_processed: u32,
 }
 
