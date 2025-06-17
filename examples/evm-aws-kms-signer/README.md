@@ -37,7 +37,7 @@ cd openzeppelin-relayer
 5. Finish key creation by following the next tabs
 6. Take a note of key id in the dashboard. Usually it is in UUIDv4 format
 
-### Step 3: Setup AWS Shared Credentials Credentials
+### Step 3: Setup AWS Shared Credentials
 
 1. Go to Access Portal -> Access Keys
 2. Follow Option 1: Set AWS environment variables

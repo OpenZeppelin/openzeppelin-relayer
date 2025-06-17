@@ -4,7 +4,7 @@
 //! AWS KMS allows you to manage cryptographic keys and perform signing operations
 //! without exposing private keys directly to your application.
 //!
-//! THe configuration supports:
+//! The configuration supports:
 //! - AWS Region (aws_region) - important for region-specific key
 //! - KMS Key identification (key_id)
 //!

@@ -5,19 +5,6 @@ allowed_patterns:
 - .*@[a-fA-F0-9]*
 # Ignore checksums
 - sha256:[a-fA-F0-9]*
-
-fileignoreconfig:
-- filename: Cargo.lock
-  checksum: cf138b9650da1e905e861b689689c702f8cfa3266712c1061282903c7d2b4c71
-  ignore_detectors: []
-- filename: plugins/pnpm-lock.yaml
-  checksum: 2e99218833c260fbfd77f5eddadaeb0876e14eb40cda4c6e448446084ec040ef
-  ignore_detectors: []
-- filename: src/utils/der.rs
-  checksum: 4219a6f6002afe6a9dd52e95d7d0dd7c21651bed725e1f958fe0bf695d387131
-- filename: examples/evm-aws-kms-signer/.env.example
-  checksum: ce11768b9265683d777ad66d02929664a7a3512d3d839de7c4394d7b75e8f645
-- filename: examples/evm-aws-kms-signer/docker-compose.yaml
-  checksum: c345ea0c72c14b5dd4b7a7efd3c61628ca4bd79459f59669f72f6b746032a4bd
-- filename: examples/evm-aws-kms-signer/README.md
-  checksum: 3b3a849b24e5e2da95ca9d30a820f649320b11391412ffa6b3198066a6fdcc87
+- sha512-[a-fA-F0-9]*
+# Match Cargo.lock checksums
+- checksum\s*=\s*"([a-fA-F0-9]{64})"
