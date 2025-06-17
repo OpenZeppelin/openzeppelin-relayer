@@ -49,7 +49,6 @@ mod tests {
             .call_plugin(
                 "test-plugin",
                 PluginCallRequest {
-                    plugin_id: "test-plugin".to_string(),
                     params: serde_json::Value::Null,
                 },
             )

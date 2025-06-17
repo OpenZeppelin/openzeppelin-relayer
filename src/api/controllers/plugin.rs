@@ -82,7 +82,6 @@ mod tests {
     async fn test_call_plugin() {
         let app_state = get_test_app_state().await;
         let plugin_call_request = PluginCallRequest {
-            plugin_id: "test-plugin".to_string(),
             params: serde_json::json!({"key":"value"}),
         };
         let response = call_plugin(

@@ -10,8 +10,6 @@ pub struct PluginModel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginCallRequest {
-    /// Plugin ID
-    pub plugin_id: String,
     /// Plugin parameters
     pub params: serde_json::Value,
 }
