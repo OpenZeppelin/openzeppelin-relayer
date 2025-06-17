@@ -38,13 +38,11 @@ use aws_sdk_kms::{
     types::{MessageType, SigningAlgorithmSpec},
     Client,
 };
-use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use serde::Serialize;
-use sha3::{Digest, Keccak256};
 
 use crate::{
     models::{Address, AwsKmsSignerConfig},
-    utils::{derive_ethereum_address_from_der, extract_public_key_from_der},
+    utils::{self, derive_ethereum_address_from_der, extract_public_key_from_der},
 };
 
 #[cfg(test)]
@@ -62,8 +60,8 @@ pub enum AwsKmsError {
     SignError(String),
     #[error("KMS permissions error: {0}")]
     PermissionError(String),
-    #[error("KMS public key recovery error: {0}")]
-    RecoveryError(String),
+    #[error("KMS public key error: {0}")]
+    RecoveryError(#[from] utils::Secp256k1Error),
     #[error("Other error: {0}")]
     Other(String),
 }
@@ -204,29 +202,6 @@ impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
 }
 
 impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
-    fn recover_public_key(pk: &[u8], sig: &Signature, bytes: &[u8]) -> AwsKmsResult<u8> {
-        let mut hasher = Keccak256::new();
-        hasher.update(bytes);
-        for v in 0..2 {
-            let rec_id =
-                RecoveryId::try_from(v).map_err(|e| AwsKmsError::RecoveryError(e.to_string()))?;
-
-            let recovered_key = VerifyingKey::recover_from_digest(hasher.clone(), sig, rec_id)
-                .map_err(|e| AwsKmsError::RecoveryError(e.to_string()))?
-                .to_encoded_point(false)
-                .as_bytes()
-                .to_vec();
-
-            if recovered_key[1..] == pk[..] {
-                return Ok(v);
-            }
-        }
-
-        Err(AwsKmsError::RecoveryError(
-            "No valid v point was found".to_string(),
-        ))
-    }
-
     /// Signs a bytes with the private key stored in AWS KMS.
     ///
     /// Pre-hashes the message with keccak256.
@@ -249,7 +224,7 @@ impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
             .map_err(|e| AwsKmsError::ParseError(e.to_string()))?;
 
         // Extract v value from the public key recovery
-        let v = Self::recover_public_key(&pk, &rs, bytes)?;
+        let v = utils::recover_public_key(&pk, &rs, bytes)?;
 
         // Adjust v value for Ethereum legacy transaction.
         let eth_v = 27 + v;
@@ -329,41 +304,6 @@ pub mod tests {
         client.expect_clone().return_once(MockAwsKmsClient::new);
 
         (client, key)
-    }
-
-    #[test]
-    fn test_recover_public_key() {
-        // Generate keypair
-        let signing_key = SigningKey::random(&mut OsRng);
-        let verifying_key = signing_key.verifying_key();
-        let public_key_bytes = &verifying_key.to_encoded_point(false).as_bytes().to_vec()[1..];
-        println!("Pub key length: {}", public_key_bytes.len());
-
-        // EIP-191 style of a message
-        let eip_message = eip191_message(b"Hello World");
-
-        // Ethereum-style hash: keccak256 of message
-        let mut hasher = Keccak256::new();
-        hasher.update(eip_message.clone());
-
-        // Sign the message pre-hash
-        let (signature, rec_id) = signing_key.sign_digest_recoverable(hasher).unwrap();
-
-        // Try to recover the public key
-        let recovery_result = AwsKmsService::<AwsKmsClient>::recover_public_key(
-            public_key_bytes,
-            &signature,
-            &eip_message,
-        );
-
-        // Check that a valid recovery ID (0 or 1) is returned
-        match recovery_result {
-            Ok(v) => {
-                assert!(v == 0 || v == 1, "Recovery ID should be 0 or 1, got {}", v);
-                assert_eq!(rec_id.to_byte(), v, "Recovery ID should match")
-            }
-            Err(e) => panic!("Failed to recover public key: {:?}", e),
-        }
     }
 
     #[tokio::test]
