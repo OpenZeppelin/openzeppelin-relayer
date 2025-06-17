@@ -2,6 +2,8 @@
 //!
 //! Handles HTTP endpoints for plugin operations including:
 //! - Calling plugins
+use std::sync::Arc;
+
 use crate::{
     jobs::JobProducerTrait,
     models::{ApiError, ApiResponse, AppState, PluginCallRequest},
@@ -21,7 +23,7 @@ use eyre::Result;
 /// # Returns
 ///
 /// The result of the plugin call.
-pub async fn call_plugin<J: JobProducerTrait>(
+pub async fn call_plugin<J: JobProducerTrait + 'static>(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
     state: web::ThinData<AppState<J>>,
@@ -32,9 +34,9 @@ pub async fn call_plugin<J: JobProducerTrait>(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {} not found", plugin_id)))?;
 
-    let plugin_service = PluginService::new();
+    let plugin_service = PluginService::new::<J>();
     let result = plugin_service
-        .call_plugin(&plugin.path, plugin_call_request)
+        .call_plugin(plugin.path, plugin_call_request, Arc::new(state))
         .await;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
