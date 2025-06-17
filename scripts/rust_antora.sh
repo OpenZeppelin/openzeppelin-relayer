@@ -15,7 +15,7 @@ REMOTE=${REMOTE%.git}
 REPO_FULL=${REMOTE#*github.com[:/]}
 # For netlify, we need to use $HEAD to determine the branch
 # If HEAD is not set, we default to the current branch
-LOCAL_BRANCH=branch="${HEAD:-$(git rev-parse --abbrev-ref HEAD)}"
+LOCAL_BRANCH="${HEAD:-$(git rev-parse --abbrev-ref HEAD)}"
 
 SPEC_URL="https://raw.githubusercontent.com/${REPO_FULL}/${LOCAL_BRANCH}/docs/openapi.json"
 
