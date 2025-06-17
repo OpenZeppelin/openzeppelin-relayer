@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use crate::domain::{get_network_relayer, get_relayer_by_id, Relayer};
+use crate::models::{NetworkTransactionRequest, TransactionResponse};
 use crate::{jobs::JobProducerTrait, models::AppState};
 
 use super::PluginError;
@@ -18,9 +20,9 @@ use tokio::{
 #[serde(rename_all = "snake_case")]
 pub struct Request {
     request_id: String,
-    _relayer_id: String,
-    _method: String,
-    _payload: serde_json::Value,
+    relayer_id: String,
+    method: PluginMethod,
+    payload: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,12 +39,18 @@ pub struct Response {
     error: Option<String>,
 }
 
-pub struct SocketService {
+#[derive(Debug, Serialize, Deserialize)]
+pub enum PluginMethod {
+    #[serde(rename = "sendTransaction")]
+    SendTransaction,
+}
+
+pub struct PluginRunner {
     socket_path: String,
     listener: UnixListener,
 }
 
-impl SocketService {
+impl PluginRunner {
     pub fn from_path(path: &str) -> Result<Self, PluginError> {
         // Remove existing socket file if it exists.
         let _ = std::fs::remove_file(path);
@@ -63,7 +71,10 @@ impl SocketService {
         // clone socket path to use in the spawned task.
         let socket_path = self.socket_path.clone();
         let server_handle = tokio::spawn(async move {
-            self.listen(shutdown_rx, state).await.unwrap();
+            let _ = self
+                .listen(shutdown_rx, state)
+                .await
+                .map_err(|e| PluginError::SocketError(e.to_string()));
         });
 
         let output = Command::new("ts-node")
@@ -113,46 +124,65 @@ impl SocketService {
     async fn handle_connection<J: JobProducerTrait + 'static>(
         stream: UnixStream,
         state: Arc<web::ThinData<AppState<J>>>,
-    ) {
+    ) -> Result<(), PluginError> {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
-            let request: Request = serde_json::from_str(&line).unwrap();
+            let request: Request =
+                serde_json::from_str(&line).map_err(|e| PluginError::PluginError(e.to_string()))?;
             let response = Self::handle_request(request, &state).await;
 
-            let response_str = serde_json::to_string(&response).unwrap() + "\n";
+            let response_str = serde_json::to_string(&response)
+                .map_err(|e| PluginError::PluginError(e.to_string()))?
+                + "\n";
             let _ = w.write_all(response_str.as_bytes()).await;
         }
+
+        Ok(())
     }
 
     async fn handle_request<J: JobProducerTrait + 'static>(
         request: Request,
-        _state: &web::ThinData<AppState<J>>,
-    ) -> Response {
-        // let relayer_repo_model =
-        //     get_relayer_by_id(request.relayer_id.clone(), state).await.unwrap();
-        // relayer_repo_model.validate_active_state().unwrap();
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError> {
+        match request.method {
+            PluginMethod::SendTransaction => {
+                let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
+                    .await
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+                relayer_repo_model
+                    .validate_active_state()
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        // let network_relayer =
-        //     get_network_relayer(request.relayer_id.clone(), state).await.unwrap();
+                let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+                    .await
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        // let tx_request = NetworkTransactionRequest::from_json(
-        //     &relayer_repo_model.network_type,
-        //     request.payload.clone(),
-        // )
-        // .unwrap();
+                let tx_request = NetworkTransactionRequest::from_json(
+                    &relayer_repo_model.network_type,
+                    request.payload.clone(),
+                )
+                .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        // tx_request.validate(&relayer_repo_model).unwrap();
+                tx_request
+                    .validate(&relayer_repo_model)
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        // let transaction = network_relayer.process_transaction_request(tx_request).await.unwrap();
-        // let transaction_response: TransactionResponse = transaction.into();
-        // let result = serde_json::to_value(request.payload.clone()).unwrap();
+                let transaction = network_relayer
+                    .process_transaction_request(tx_request)
+                    .await
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+                let transaction_response: TransactionResponse = transaction.into();
+                let result = serde_json::to_value(transaction_response)
+                    .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        Response {
-            request_id: request.request_id,
-            result: Some(serde_json::Value::Null),
-            error: None,
+                Ok(Response {
+                    request_id: request.request_id,
+                    result: Some(result),
+                    error: None,
+                })
+            }
         }
     }
 }

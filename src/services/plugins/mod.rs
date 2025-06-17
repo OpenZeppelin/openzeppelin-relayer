@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-pub mod socket;
-pub use socket::*;
+pub mod runner;
+pub use runner::*;
 
 #[cfg(test)]
 use mockall::automock;
@@ -24,6 +24,8 @@ pub enum PluginError {
     SocketError(String),
     #[error("Plugin error: {0}")]
     PluginError(String),
+    #[error("Relayer error: {0}")]
+    RelayerError(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,7 +69,7 @@ impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService {
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
 
-        let socket_service = SocketService::from_path(&socket_path)
+        let socket_service = PluginRunner::from_path(&socket_path)
             .map_err(|e| PluginError::PluginError(e.to_string()))?;
 
         let result = socket_service
