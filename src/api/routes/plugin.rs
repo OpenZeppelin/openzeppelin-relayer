@@ -55,7 +55,6 @@ mod tests {
             .uri("/plugins/test-plugin/call")
             .insert_header(("Content-Type", "application/json"))
             .set_json(serde_json::json!({
-                "plugin_id": "test-plugin",
                 "params": serde_json::Value::Null,
             }))
             .to_request();

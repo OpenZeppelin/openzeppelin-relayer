@@ -2,8 +2,6 @@
 //!
 //! Handles HTTP endpoints for plugin operations including:
 //! - Calling plugins
-use std::sync::Arc;
-
 use crate::{
     jobs::JobProducerTrait,
     models::{ApiError, ApiResponse, AppState, PluginCallRequest},
@@ -11,6 +9,7 @@ use crate::{
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
+use std::sync::Arc;
 
 /// Call plugin
 ///
@@ -84,7 +83,6 @@ mod tests {
     async fn test_call_plugin() {
         let app_state = get_test_app_state().await;
         let plugin_call_request = PluginCallRequest {
-            plugin_id: "test-plugin".to_string(),
             params: serde_json::json!({"key":"value"}),
         };
         let response = call_plugin(

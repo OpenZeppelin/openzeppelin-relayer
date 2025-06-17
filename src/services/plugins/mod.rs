@@ -1,4 +1,5 @@
 //! Plugins service module for handling plugins execution and interaction with relayer
+
 use std::sync::Arc;
 
 use crate::{
@@ -128,7 +129,6 @@ mod tests {
             .call_plugin(
                 "test-plugin".to_string(),
                 PluginCallRequest {
-                    plugin_id: "test-plugin".to_string(),
                     params: serde_json::Value::Null,
                 },
                 Arc::new(web::ThinData(app_state)),
