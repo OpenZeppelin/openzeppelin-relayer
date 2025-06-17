@@ -40,5 +40,3 @@ node_modules
 
 # Ignore local signer keystore files everywhere
 **/local-signer.json
-
-openapi.json

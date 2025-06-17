@@ -111,7 +111,7 @@ path = "helpers/create_key.rs"
 name = "generate_uuid"
 path = "helpers/generate_uuid.rs"
 
-[[example]]
+[[gen-openapi]]
 name = "generate_openapi"
 path = "helpers/generate_openapi.rs"
 
