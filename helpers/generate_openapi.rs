@@ -10,10 +10,10 @@
 //!
 //! ```bash
 //! # Generate to default location (openapi.json in current directory)
-//! cargo run --example generate_openapi
+//! cargo run --gen-openapi generate_openapi
 //!
 //! # Or specify a custom output path
-//! cargo run --example generate_openapi -- ./docs/api/openapi.json
+//! cargo run --gen-openapi generate_openapi -- ./docs/openapi.json
 //! ```
 //!
 //! ## Features
