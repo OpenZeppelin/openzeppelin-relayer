@@ -35,9 +35,9 @@ use crate::{
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, EvmNetwork,
+        EvmRpcResult, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
+        RelayerRepoModel, RelayerStatus, RepositoryError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -331,8 +331,11 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` containing a boolean indicating success or a `RelayerError`.
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
+    /// A `Result` containing a `DeletePendingTransactionsResponse` with details
+    /// about which transactions were cancelled and which failed, or a `RelayerError`.
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
         let pending_statuses = [
             TransactionStatus::Pending,
             TransactionStatus::Sent,
@@ -353,7 +356,11 @@ where
                 "No pending transactions found for relayer: {}",
                 self.relayer.id
             );
-            return Ok(true);
+            return Ok(DeletePendingTransactionsResponse {
+                cancelled_transaction_ids: vec![],
+                failed_transaction_ids: vec![],
+                total_processed: 0,
+            });
         }
 
         info!(
@@ -361,21 +368,21 @@ where
             transaction_count, self.relayer.id
         );
 
-        let mut cancelled_count = 0;
-        let mut failed_count = 0;
+        let mut cancelled_transaction_ids = Vec::new();
+        let mut failed_transaction_ids = Vec::new();
 
         // Process all pending transactions using the proper cancellation logic via job queue
         for transaction in pending_transactions {
             match self.cancel_transaction_via_job(transaction.clone()).await {
                 Ok(_) => {
-                    cancelled_count += 1;
+                    cancelled_transaction_ids.push(transaction.id.clone());
                     info!(
                         "Initiated cancellation for transaction {} with status {:?} for relayer {}",
                         transaction.id, transaction.status, self.relayer.id
                     );
                 }
                 Err(e) => {
-                    failed_count += 1;
+                    failed_transaction_ids.push(transaction.id.clone());
                     warn!(
                         "Failed to cancel transaction {} for relayer {}: {}",
                         transaction.id, self.relayer.id, e
@@ -384,9 +391,16 @@ where
             }
         }
 
+        let total_processed = cancelled_transaction_ids.len() + failed_transaction_ids.len();
+
         info!("Completed processing pending transactions for relayer {}: {} cancellation jobs initiated, {} failed",
-              self.relayer.id, cancelled_count, failed_count);
-        Ok(true)
+              self.relayer.id, cancelled_transaction_ids.len(), failed_transaction_ids.len());
+
+        Ok(DeletePendingTransactionsResponse {
+            cancelled_transaction_ids,
+            failed_transaction_ids,
+            total_processed: total_processed as u32,
+        })
     }
 
     /// Signs data using the relayer's signer.

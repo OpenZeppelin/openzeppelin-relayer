@@ -297,7 +297,7 @@ pub async fn list_transactions(
 ///
 /// # Returns
 ///
-/// A success response if the operation was successful.
+/// A success response with details about cancelled and failed transactions.
 pub async fn delete_pending_transactions(
     relayer_id: String,
     state: web::ThinData<AppState<JobProducer>>,
@@ -306,9 +306,9 @@ pub async fn delete_pending_transactions(
     relayer.validate_active_state()?;
     let network_relayer = get_network_relayer_by_model(relayer.clone(), &state).await?;
 
-    network_relayer.delete_pending_transactions().await?;
+    let result = network_relayer.delete_pending_transactions().await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(())))
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
 /// Cancels a specific transaction for a relayer.
