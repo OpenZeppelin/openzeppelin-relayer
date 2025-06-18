@@ -43,7 +43,7 @@ color-eyre = "0.6"
 apalis = { version = "0.7", features = ["limit", "retry", "catch-panic", "timeout"] }
 apalis-redis = { version = "0.7" }
 apalis-cron = { version = "0.7" }
-redis = { version = "0.31" }
+redis = { version = "0.32" }
 tokio = { version = "1.43", features = ["sync", "io-util", "time"] }
 rand = "0.9"
 parking_lot = "0.12"

@@ -1068,7 +1068,7 @@ dependencies = [
  "chrono",
  "futures",
  "log",
- "redis",
+ "redis 0.31.0",
  "serde",
  "thiserror 2.0.12",
  "tokio",
@@ -5337,7 +5337,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "rand 0.9.1",
- "redis",
+ "redis 0.32.1",
  "regex",
  "reqwest 0.12.20",
  "secrets",
@@ -6102,6 +6102,22 @@ dependencies = [
  "socket2",
  "tokio",
  "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "redis"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c65f367b70919b9600eb6a77436dacd7131fc185cc3bda949a97ab27bfd6213e"
+dependencies = [
+ "combine",
+ "itoa",
+ "num-bigint 0.4.6",
+ "percent-encoding",
+ "ryu",
+ "sha1_smol",
+ "socket2",
  "url",
 ]
 
