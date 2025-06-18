@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+mod json_rpc;
+pub use json_rpc::*;
+
 mod solana;
 pub use solana::*;
 
@@ -32,30 +35,24 @@ pub enum NetworkRpcRequest {
 
 /// Converts a raw JSON-RPC request to the internal NetworkRpcRequest format.
 ///
-/// This function takes a generic JSON-RPC request and transforms it into a strongly-typed
-/// internal representation based on the specified network type. Each network type (EVM, Solana, Stellar)
-/// has different serialization requirements and this function handles the conversion accordingly.
+/// This function parses a raw JSON-RPC request and converts it into the appropriate
+/// internal request type based on the specified network type. It handles the
+/// JSON-RPC 2.0 specification including proper ID handling (String, Number, or Null).
 ///
 /// # Arguments
 ///
-/// * `request` - A raw JSON-RPC request as a `serde_json::Value` containing the method,
-///   parameters, and other JSON-RPC fields
-/// * `network_type` - The target network type that determines how the request should be parsed
-///   and structured
+/// * `request` - A raw JSON value containing the JSON-RPC request
+/// * `network_type` - The type of network (EVM, Solana, or Stellar) to parse the request for
 ///
 /// # Returns
 ///
-/// Returns a `Result` containing:
-/// - `Ok(JsonRpcRequest<NetworkRpcRequest>)` - Successfully converted request with the appropriate
-///   network-specific format
-/// - `Err(ApiError)` - Conversion failed due to missing required fields, invalid format, or
-///   serialization errors
+/// Returns a `Result` containing the parsed `JsonRpcRequest` on success, or an `ApiError` on failure.
 ///
 /// # Examples
 ///
 /// ```rust,ignore
 /// use serde_json::json;
-/// use crate::models::NetworkType;
+/// use crate::models::{convert_to_internal_rpc_request, NetworkType};
 ///
 /// let request = json!({
 ///     "jsonrpc": "2.0",
@@ -69,14 +66,32 @@ pub enum NetworkRpcRequest {
 pub fn convert_to_internal_rpc_request(
     request: serde_json::Value,
     network_type: &crate::models::NetworkType,
-) -> Result<crate::domain::JsonRpcRequest<NetworkRpcRequest>, crate::models::ApiError> {
+) -> Result<JsonRpcRequest<NetworkRpcRequest>, crate::models::ApiError> {
     let jsonrpc = request
         .get("jsonrpc")
         .and_then(|v| v.as_str())
         .unwrap_or("2.0")
         .to_string();
 
-    let id = request.get("id").and_then(|v| v.as_u64()).unwrap_or(1);
+    let id = match request.get("id") {
+        Some(id_value) => match id_value {
+            serde_json::Value::String(s) => Some(JsonRpcId::String(s.clone())),
+            serde_json::Value::Number(n) => {
+                n.as_i64().map(JsonRpcId::Number).map(Some).ok_or_else(|| {
+                    crate::models::ApiError::BadRequest(
+                        "Invalid 'id' field: must be a string, integer, or null".to_string(),
+                    )
+                })?
+            }
+            serde_json::Value::Null => None,
+            _ => {
+                return Err(crate::models::ApiError::BadRequest(
+                    "Invalid 'id' field: must be a string, integer, or null".to_string(),
+                ))
+            }
+        },
+        None => Some(JsonRpcId::Number(1)), // Default ID when none provided
+    };
 
     let method = request
         .get("method")
@@ -90,7 +105,7 @@ pub fn convert_to_internal_rpc_request(
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
 
-            Ok(crate::domain::JsonRpcRequest {
+            Ok(JsonRpcRequest {
                 jsonrpc,
                 params: NetworkRpcRequest::Evm(crate::models::EvmRpcRequest::RawRpcRequest {
                     method: method.to_string(),
@@ -108,7 +123,7 @@ pub fn convert_to_internal_rpc_request(
                     ))
                 })?;
 
-            Ok(crate::domain::JsonRpcRequest {
+            Ok(JsonRpcRequest {
                 jsonrpc,
                 params: NetworkRpcRequest::Solana(solana_request),
                 id,
@@ -123,7 +138,7 @@ pub fn convert_to_internal_rpc_request(
                     ))
                 })?;
 
-            Ok(crate::domain::JsonRpcRequest {
+            Ok(JsonRpcRequest {
                 jsonrpc,
                 params: NetworkRpcRequest::Stellar(stellar_request),
                 id,
@@ -150,7 +165,7 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
 
         assert_eq!(result.jsonrpc, "2.0");
-        assert_eq!(result.id, 1);
+        assert_eq!(result.id, Some(JsonRpcId::Number(1)));
 
         match result.params {
             NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest { method, params }) => {
@@ -183,7 +198,7 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
 
         assert_eq!(result.jsonrpc, "2.0");
-        assert_eq!(result.id, 1);
+        assert_eq!(result.id, Some(JsonRpcId::Number(1)));
 
         match result.params {
             NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest { method, params }) => {
@@ -206,11 +221,11 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
 
         assert_eq!(result.jsonrpc, "1.0");
-        assert_eq!(result.id, 42);
+        assert_eq!(result.id, Some(JsonRpcId::Number(42)));
     }
 
     #[test]
-    fn test_convert_evm_with_non_numeric_id() {
+    fn test_convert_evm_with_string_id() {
         let request = json!({
             "jsonrpc": "2.0",
             "method": "eth_chainId",
@@ -220,8 +235,23 @@ mod tests {
 
         let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
 
-        // Non-numeric ID should default to 1
-        assert_eq!(result.id, 1);
+        // String ID should be preserved
+        assert_eq!(result.id, Some(JsonRpcId::String("test-id".to_string())));
+    }
+
+    #[test]
+    fn test_convert_evm_with_null_id() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_chainId",
+            "params": [],
+            "id": null
+        });
+
+        let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
+
+        // Null ID should be preserved
+        assert_eq!(result.id, None);
     }
 
     #[test]
@@ -263,7 +293,7 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Solana).unwrap();
 
         assert_eq!(result.jsonrpc, "2.0");
-        assert_eq!(result.id, 1);
+        assert_eq!(result.id, Some(JsonRpcId::Number(1)));
 
         match result.params {
             NetworkRpcRequest::Solana(solana_request) => {
@@ -289,7 +319,7 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Solana).unwrap();
 
         assert_eq!(result.jsonrpc, "2.0");
-        assert_eq!(result.id, 2);
+        assert_eq!(result.id, Some(JsonRpcId::Number(2)));
 
         match result.params {
             NetworkRpcRequest::Solana(solana_request) => match solana_request {
@@ -363,7 +393,7 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Solana).unwrap();
 
         assert_eq!(result.jsonrpc, "2.0");
-        assert_eq!(result.id, 1);
+        assert_eq!(result.id, Some(JsonRpcId::Number(1)));
     }
 
     #[test]
@@ -378,7 +408,7 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Stellar).unwrap();
 
         assert_eq!(result.jsonrpc, "2.0");
-        assert_eq!(result.id, 1);
+        assert_eq!(result.id, Some(JsonRpcId::Number(1)));
 
         match result.params {
             NetworkRpcRequest::Stellar(stellar_request) => match stellar_request {
@@ -413,7 +443,7 @@ mod tests {
         let result = convert_to_internal_rpc_request(request, &NetworkType::Stellar).unwrap();
 
         assert_eq!(result.jsonrpc, "2.0");
-        assert_eq!(result.id, 1);
+        assert_eq!(result.id, Some(JsonRpcId::Number(1)));
     }
 
     #[test]
@@ -480,8 +510,14 @@ mod tests {
             "id": 18446744073709551615u64  // u64::MAX
         });
 
-        let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
-        assert_eq!(result.id, 18446744073709551615u64);
+        let result = convert_to_internal_rpc_request(request, &NetworkType::Evm);
+        assert!(result.is_err());
+
+        if let Err(crate::models::ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid 'id' field: must be a string, integer, or null"));
+        } else {
+            panic!("Expected BadRequest error");
+        }
     }
 
     #[test]
@@ -494,7 +530,7 @@ mod tests {
         });
 
         let result = convert_to_internal_rpc_request(request, &NetworkType::Evm).unwrap();
-        assert_eq!(result.id, 0);
+        assert_eq!(result.id, Some(JsonRpcId::Number(0)));
     }
 
     #[test]
@@ -533,6 +569,82 @@ mod tests {
                 assert_eq!(method, long_method);
             }
             _ => unreachable!("Expected EVM RawRpcRequest"),
+        }
+    }
+
+    #[test]
+    fn test_convert_with_invalid_id_type_boolean() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_chainId",
+            "params": [],
+            "id": true
+        });
+
+        let result = convert_to_internal_rpc_request(request, &NetworkType::Evm);
+        assert!(result.is_err());
+
+        if let Err(crate::models::ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid 'id' field: must be a string, integer, or null"));
+        } else {
+            panic!("Expected BadRequest error");
+        }
+    }
+
+    #[test]
+    fn test_convert_with_invalid_id_type_array() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_chainId",
+            "params": [],
+            "id": [1, 2, 3]
+        });
+
+        let result = convert_to_internal_rpc_request(request, &NetworkType::Evm);
+        assert!(result.is_err());
+
+        if let Err(crate::models::ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid 'id' field: must be a string, integer, or null"));
+        } else {
+            panic!("Expected BadRequest error");
+        }
+    }
+
+    #[test]
+    fn test_convert_with_invalid_id_type_object() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_chainId",
+            "params": [],
+            "id": {"nested": "object"}
+        });
+
+        let result = convert_to_internal_rpc_request(request, &NetworkType::Evm);
+        assert!(result.is_err());
+
+        if let Err(crate::models::ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid 'id' field: must be a string, integer, or null"));
+        } else {
+            panic!("Expected BadRequest error");
+        }
+    }
+
+    #[test]
+    fn test_convert_with_fractional_id() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_chainId",
+            "params": [],
+            "id": 42.5
+        });
+
+        let result = convert_to_internal_rpc_request(request, &NetworkType::Evm);
+        assert!(result.is_err());
+
+        if let Err(crate::models::ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid 'id' field: must be a string, integer, or null"));
+        } else {
+            panic!("Expected BadRequest error");
         }
     }
 }

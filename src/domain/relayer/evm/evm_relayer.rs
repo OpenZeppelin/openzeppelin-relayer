@@ -30,14 +30,14 @@ use crate::{
     constants::EVM_SMALLEST_UNIT_NAME,
     domain::{
         relayer::{Relayer, RelayerError},
-        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
-        SignTypedDataRequest,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, EvmNetwork, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
-        RpcErrorCodes, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, EvmNetwork, JsonRpcRequest, JsonRpcResponse,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
+        RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes, TransactionRepoModel,
+        TransactionStatus,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -469,8 +469,9 @@ mod tests {
     use crate::{
         jobs::MockJobProducerTrait,
         models::{
-            EvmRpcRequest, EvmRpcResult, NetworkRepoModel, NetworkType, RelayerEvmPolicy,
-            RelayerNetworkPolicy, RepositoryError, SignerError, TransactionStatus, U256,
+            EvmRpcRequest, EvmRpcResult, JsonRpcId, NetworkRepoModel, NetworkType,
+            RelayerEvmPolicy, RelayerNetworkPolicy, RepositoryError, SignerError,
+            TransactionStatus, U256,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{MockEvmProviderTrait, MockTransactionCounterServiceTrait, ProviderError},
@@ -1046,7 +1047,7 @@ mod tests {
                 method: "eth_getBalance".to_string(),
                 params: r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string(),
             }),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1088,7 +1089,7 @@ mod tests {
                 method: "eth_blockNumber".to_string(),
                 params: "[]".to_string(),
             }),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1136,7 +1137,7 @@ mod tests {
                 method: "eth_unsupportedMethod".to_string(),
                 params: "[]".to_string(),
             }),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1183,7 +1184,7 @@ mod tests {
                 method: "eth_getBalance".to_string(),
                 params: "[]".to_string(), // Missing address parameter
             }),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1218,7 +1219,7 @@ mod tests {
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetSupportedTokens(
                 crate::models::GetSupportedTokensRequestParams {},
             )),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1272,13 +1273,13 @@ mod tests {
                 method: "eth_getTransactionByHash".to_string(),
                 params: serde_json::json!(["0x1234567890abcdef"]),
             }),
-            id: 42,
+            id: Some(JsonRpcId::Number(42)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
-        assert_eq!(response.id, Some(42));
+        assert_eq!(response.id, Some(JsonRpcId::Number(42)));
 
         if let Some(NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(result))) = response.result {
             assert!(result.get("hash").is_some());
@@ -1330,13 +1331,13 @@ mod tests {
                     "data": "0x70a08231000000000000000000000000742d35cc6634c0532925a3b844bc454e4438f44e"
                 }),
             }),
-            id: 123,
+            id: Some(JsonRpcId::Number(123)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
-        assert_eq!(response.id, Some(123));
+        assert_eq!(response.id, Some(JsonRpcId::Number(123)));
     }
 
     #[tokio::test]
@@ -1369,13 +1370,13 @@ mod tests {
                 method: "net_version".to_string(),
                 params: "[]".to_string(),
             }),
-            id: 999,
+            id: Some(JsonRpcId::Number(999)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
         assert!(response.error.is_none());
         assert!(response.result.is_some());
-        assert_eq!(response.id, Some(999));
+        assert_eq!(response.id, Some(JsonRpcId::Number(999)));
     }
 
     #[tokio::test]
@@ -1411,7 +1412,7 @@ mod tests {
                 method: "eth_getBalance".to_string(),
                 params: r#"["invalid_address", "latest"]"#.to_string(),
             }),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1455,7 +1456,7 @@ mod tests {
                 method: "eth_chainId".to_string(),
                 params: "[]".to_string(),
             }),
-            id: 2,
+            id: Some(JsonRpcId::Number(2)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1495,7 +1496,7 @@ mod tests {
                 method: "eth_blockNumber".to_string(),
                 params: serde_json::json!([]),
             }),
-            id: 3,
+            id: Some(JsonRpcId::Number(3)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1535,7 +1536,7 @@ mod tests {
                 method: "eth_getBalance".to_string(),
                 params: r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string(),
             }),
-            id: 4,
+            id: Some(JsonRpcId::Number(4)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1575,7 +1576,7 @@ mod tests {
                 method: "eth_gasPrice".to_string(),
                 params: serde_json::json!([]),
             }),
-            id: 5,
+            id: Some(JsonRpcId::Number(5)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1620,7 +1621,7 @@ mod tests {
                 method: "invalid_method".to_string(),
                 params: "{}".to_string(),
             }),
-            id: 6,
+            id: Some(JsonRpcId::Number(6)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1664,7 +1665,7 @@ mod tests {
                 method: "eth_getBalance".to_string(),
                 params: serde_json::json!(["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]),
             }),
-            id: 7,
+            id: Some(JsonRpcId::Number(7)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
@@ -1705,11 +1706,11 @@ mod tests {
                 method: "eth_chainId".to_string(),
                 params: "[]".to_string(),
             }),
-            id: request_id,
+            id: Some(JsonRpcId::Number(request_id as i64)),
         };
 
         let response = relayer.rpc(request).await.unwrap();
-        assert_eq!(response.id, Some(request_id));
+        assert_eq!(response.id, Some(JsonRpcId::Number(request_id as i64)));
         assert_eq!(response.jsonrpc, "2.0");
     }
 
@@ -1758,7 +1759,7 @@ mod tests {
                 method: "eth_getBlockByNumber".to_string(),
                 params: serde_json::json!(["0x1b4", true]),
             }),
-            id: 8,
+            id: Some(JsonRpcId::Number(8)),
         };
 
         let response = relayer.rpc(request).await.unwrap();

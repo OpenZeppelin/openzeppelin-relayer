@@ -18,9 +18,10 @@ use mockall::automock;
 use crate::{
     jobs::JobProducer,
     models::{
-        DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
+        DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, JsonRpcRequest,
+        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        NetworkType, RelayerError, RelayerRepoModel, RelayerStatus, SignerRepoModel,
+        StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -471,70 +472,6 @@ impl SignTransactionResponse {
             )),
         }
     }
-}
-
-// JSON-RPC Request struct
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcRequest<T> {
-    pub jsonrpc: String,
-    #[serde(flatten)]
-    pub params: T,
-    pub id: u64,
-}
-
-// JSON-RPC Response struct
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcResponse<T> {
-    pub jsonrpc: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub result: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub error: Option<JsonRpcError>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub id: Option<u64>,
-}
-
-impl<T> JsonRpcResponse<T> {
-    /// Creates a new successful JSON-RPC response with the given result and id.
-    ///
-    /// # Arguments
-    /// * `id` - The request identifier
-    /// * `result` - The result value to include in the response
-    ///
-    /// # Returns
-    /// A new JsonRpcResponse with the specified result
-    pub fn result(id: u64, result: T) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: Some(result),
-            error: None,
-            id: Some(id),
-        }
-    }
-
-    pub fn error(code: i32, message: &str, description: &str) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: None,
-            error: Some(JsonRpcError {
-                code,
-                message: message.to_string(),
-                description: description.to_string(),
-            }),
-            id: None,
-        }
-    }
-}
-
-// JSON-RPC Error struct
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcError {
-    pub code: i32,
-    pub message: String,
-    pub description: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

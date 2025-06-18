@@ -23,14 +23,13 @@
 use crate::{
     constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
-        next_sequence_u64, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest,
+        next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
-        StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
+        RepositoryError, StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -362,7 +361,7 @@ where
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         println!("Stellar rpc...");
         Ok(JsonRpcResponse {
-            id: Some(1),
+            id: None,
             jsonrpc: "2.0".to_string(),
             result: Some(NetworkRpcResult::Stellar(
                 StellarRpcResult::GenericRpcResult("".to_string()),

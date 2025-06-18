@@ -9,7 +9,7 @@
 //! invokes the respective methods of the underlying implementation.
 use super::{SolanaRpcError, SolanaRpcMethods};
 use crate::{
-    domain::{JsonRpcRequest, JsonRpcResponse},
+    models::{JsonRpcRequest, JsonRpcResponse},
     models::{NetworkRpcRequest, NetworkRpcResult, SolanaRpcRequest, SolanaRpcResult},
 };
 use eyre::Result;
@@ -116,7 +116,7 @@ mod tests {
         domain::MockSolanaRpcMethods,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams, FeeEstimateResult,
-            GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult,
+            GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult, JsonRpcId,
             PrepareTransactionRequestParams, PrepareTransactionResult,
             SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
             SignTransactionRequestParams, SignTransactionResult, TransferTransactionRequestParams,
@@ -146,7 +146,7 @@ mod tests {
         let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::FeeEstimate(
                 FeeEstimateRequestParams {
                     transaction: EncodedSerializedTransaction::new("test_transaction".to_string()),
@@ -185,7 +185,7 @@ mod tests {
         let mock_handler = Arc::new(SolanaRpcHandler::new(mock_rpc_methods));
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::GetFeaturesEnabled(
                 GetFeaturesEnabledRequestParams {},
             )),
@@ -230,7 +230,7 @@ mod tests {
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignTransaction(
                 SignTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
@@ -280,7 +280,7 @@ mod tests {
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::SignAndSendTransaction(
                 SignAndSendTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
@@ -334,7 +334,7 @@ mod tests {
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::TransferTransaction(
                 TransferTransactionRequestParams {
                     source: "C6VBV1EK2Jx7kFgCkCD5wuDeQtEH8ct2hHGUPzEhUSc8".to_string(),
@@ -393,7 +393,7 @@ mod tests {
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
             params: NetworkRpcRequest::Solana(SolanaRpcRequest::PrepareTransaction(
                 PrepareTransactionRequestParams {
                     transaction: EncodedSerializedTransaction::new("AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),

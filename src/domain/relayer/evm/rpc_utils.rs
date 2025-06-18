@@ -10,8 +10,8 @@
 //! - Handle EVM-specific result types and error formatting
 
 use crate::{
-    domain::{JsonRpcError, JsonRpcResponse},
     models::{EvmRpcResult, NetworkRpcResult, OpenZeppelinErrorCodes, RpcErrorCodes},
+    models::{JsonRpcError, JsonRpcId, JsonRpcResponse},
     services::ProviderError,
 };
 use serde_json;
@@ -30,13 +30,13 @@ use serde_json;
 /// Returns a `JsonRpcResponse<NetworkRpcResult>` containing the error details
 /// and no result data.
 pub fn create_error_response(
-    id: u64,
+    id: Option<JsonRpcId>,
     code: i32,
     message: &str,
     description: &str,
 ) -> JsonRpcResponse<NetworkRpcResult> {
     JsonRpcResponse {
-        id: Some(id),
+        id,
         jsonrpc: "2.0".to_string(),
         result: None,
         error: Some(JsonRpcError {
@@ -59,11 +59,11 @@ pub fn create_error_response(
 /// Returns a `JsonRpcResponse<NetworkRpcResult>` containing the result data
 /// wrapped in an EVM-specific result type, with no error information.
 pub fn create_success_response(
-    id: u64,
+    id: Option<JsonRpcId>,
     result: serde_json::Value,
 ) -> JsonRpcResponse<NetworkRpcResult> {
     JsonRpcResponse {
-        id: Some(id),
+        id,
         jsonrpc: "2.0".to_string(),
         result: Some(NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(result))),
         error: None,
@@ -124,13 +124,13 @@ mod tests {
     #[test]
     fn test_create_error_response_basic() {
         let response = create_error_response(
-            123,
+            Some(JsonRpcId::Number(123)),
             -32602,
             "Invalid params",
             "The provided parameters are invalid",
         );
 
-        assert_eq!(response.id, Some(123));
+        assert_eq!(response.id, Some(JsonRpcId::Number(123)));
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_none());
         assert!(response.error.is_some());
@@ -143,9 +143,14 @@ mod tests {
 
     #[test]
     fn test_create_error_response_zero_id() {
-        let response = create_error_response(0, -32603, "Internal error", "Something went wrong");
+        let response = create_error_response(
+            Some(JsonRpcId::Number(0)),
+            -32603,
+            "Internal error",
+            "Something went wrong",
+        );
 
-        assert_eq!(response.id, Some(0));
+        assert_eq!(response.id, Some(JsonRpcId::Number(0)));
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_none());
         assert!(response.error.is_some());
@@ -153,10 +158,14 @@ mod tests {
 
     #[test]
     fn test_create_error_response_max_id() {
-        let response =
-            create_error_response(u64::MAX, -32700, "Parse error", "JSON parsing failed");
+        let response = create_error_response(
+            Some(JsonRpcId::Number(u64::MAX as i64)),
+            -32700,
+            "Parse error",
+            "JSON parsing failed",
+        );
 
-        assert_eq!(response.id, Some(u64::MAX));
+        assert_eq!(response.id, Some(JsonRpcId::Number(u64::MAX as i64)));
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_none());
         assert!(response.error.is_some());
@@ -164,9 +173,14 @@ mod tests {
 
     #[test]
     fn test_create_error_response_empty_message() {
-        let response = create_error_response(42, -32601, "", "Method not found error");
+        let response = create_error_response(
+            Some(JsonRpcId::Number(42)),
+            -32601,
+            "",
+            "Method not found error",
+        );
 
-        assert_eq!(response.id, Some(42));
+        assert_eq!(response.id, Some(JsonRpcId::Number(42)));
         let error = response.error.unwrap();
         assert!(error.message.is_empty());
         assert!(!error.description.is_empty());
@@ -174,9 +188,10 @@ mod tests {
 
     #[test]
     fn test_create_error_response_empty_description() {
-        let response = create_error_response(99, -32600, "Invalid Request", "");
+        let response =
+            create_error_response(Some(JsonRpcId::Number(99)), -32600, "Invalid Request", "");
 
-        assert_eq!(response.id, Some(99));
+        assert_eq!(response.id, Some(JsonRpcId::Number(99)));
         let error = response.error.unwrap();
         assert!(!error.message.is_empty());
         assert!(error.description.is_empty());
@@ -186,7 +201,8 @@ mod tests {
     fn test_create_error_response_preserves_input() {
         let message = "Error with unicode: 🚨 ñáéíóú";
         let description = "Description with symbols: @#$%^&*()";
-        let response = create_error_response(500, -33000, message, description);
+        let response =
+            create_error_response(Some(JsonRpcId::Number(500)), -33000, message, description);
 
         let error = response.error.unwrap();
         assert!(!error.message.is_empty());
@@ -198,7 +214,12 @@ mod tests {
     fn test_create_error_response_long_strings() {
         let long_message = "a".repeat(1000);
         let long_description = "b".repeat(2000);
-        let response = create_error_response(777, -33001, &long_message, &long_description);
+        let response = create_error_response(
+            Some(JsonRpcId::Number(777)),
+            -33001,
+            &long_message,
+            &long_description,
+        );
 
         let error = response.error.unwrap();
         assert_eq!(error.message.len(), 1000);
@@ -216,7 +237,12 @@ mod tests {
         ];
 
         for code in test_cases {
-            let response = create_error_response(1, code, "Test message", "Test description");
+            let response = create_error_response(
+                Some(JsonRpcId::Number(1)),
+                code,
+                "Test message",
+                "Test description",
+            );
             let error = response.error.unwrap();
             assert_eq!(error.code, code);
             assert!(!error.message.is_empty());
@@ -235,7 +261,12 @@ mod tests {
         ];
 
         for code in test_cases {
-            let response = create_error_response(1, code, "Test message", "Test description");
+            let response = create_error_response(
+                Some(JsonRpcId::Number(1)),
+                code,
+                "Test message",
+                "Test description",
+            );
             let error = response.error.unwrap();
             assert_eq!(error.code, code);
             assert!(!error.message.is_empty());
@@ -250,9 +281,9 @@ mod tests {
             "hash": "0xabcd"
         });
 
-        let response = create_success_response(456, result_data.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(456)), result_data.clone());
 
-        assert_eq!(response.id, Some(456));
+        assert_eq!(response.id, Some(JsonRpcId::Number(456)));
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.error.is_none());
         assert!(response.result.is_some());
@@ -268,9 +299,9 @@ mod tests {
     #[test]
     fn test_create_success_response_zero_id() {
         let result_data = json!(null);
-        let response = create_success_response(0, result_data);
+        let response = create_success_response(Some(JsonRpcId::Number(0)), result_data);
 
-        assert_eq!(response.id, Some(0));
+        assert_eq!(response.id, Some(JsonRpcId::Number(0)));
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.error.is_none());
     }
@@ -278,9 +309,10 @@ mod tests {
     #[test]
     fn test_create_success_response_max_id() {
         let result_data = json!(42);
-        let response = create_success_response(u64::MAX, result_data);
+        let response =
+            create_success_response(Some(JsonRpcId::Number(u64::MAX as i64)), result_data);
 
-        assert_eq!(response.id, Some(u64::MAX));
+        assert_eq!(response.id, Some(JsonRpcId::Number(u64::MAX as i64)));
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.error.is_none());
     }
@@ -288,7 +320,7 @@ mod tests {
     #[test]
     fn test_create_success_response_null_result() {
         let result_data = json!(null);
-        let response = create_success_response(100, result_data.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(100)), result_data.clone());
 
         match response.result.unwrap() {
             NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(value)) => {
@@ -302,7 +334,7 @@ mod tests {
     #[test]
     fn test_create_success_response_boolean_result() {
         let result_data = json!(true);
-        let response = create_success_response(200, result_data.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(200)), result_data.clone());
 
         match response.result.unwrap() {
             NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(value)) => {
@@ -316,7 +348,7 @@ mod tests {
     #[test]
     fn test_create_success_response_number_result() {
         let result_data = json!(12345);
-        let response = create_success_response(300, result_data.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(300)), result_data.clone());
 
         match response.result.unwrap() {
             NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(value)) => {
@@ -330,7 +362,7 @@ mod tests {
     #[test]
     fn test_create_success_response_string_result() {
         let result_data = json!("test string");
-        let response = create_success_response(400, result_data.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(400)), result_data.clone());
 
         match response.result.unwrap() {
             NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(value)) => {
@@ -344,7 +376,7 @@ mod tests {
     #[test]
     fn test_create_success_response_array_result() {
         let result_data = json!([1, 2, 3, "test", true, null]);
-        let response = create_success_response(500, result_data.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(500)), result_data.clone());
 
         match response.result.unwrap() {
             NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(value)) => {
@@ -375,7 +407,7 @@ mod tests {
             "nullField": null
         });
 
-        let response = create_success_response(600, result_data.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(600)), result_data.clone());
 
         match response.result.unwrap() {
             NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(value)) => {
@@ -399,7 +431,7 @@ mod tests {
             object.insert(format!("field_{}", i), json!(format!("value_{}", i)));
         }
 
-        let response = create_success_response(700, large_object.clone());
+        let response = create_success_response(Some(JsonRpcId::Number(700)), large_object.clone());
 
         match response.result.unwrap() {
             NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(value)) => {
@@ -595,10 +627,14 @@ mod tests {
         let provider_error = ProviderError::InvalidAddress("0xinvalid".to_string());
         let (error_code, error_message) = map_provider_error(&provider_error);
 
-        let response =
-            create_error_response(999, error_code, error_message, "Invalid address provided");
+        let response = create_error_response(
+            Some(JsonRpcId::Number(999)),
+            error_code,
+            error_message,
+            "Invalid address provided",
+        );
 
-        assert_eq!(response.id, Some(999));
+        assert_eq!(response.id, Some(JsonRpcId::Number(999)));
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_none());
 
@@ -643,9 +679,14 @@ mod tests {
 
         for (provider_error, expected_code) in test_cases {
             let (error_code, error_message) = map_provider_error(&provider_error);
-            let response = create_error_response(1, error_code, error_message, "Test integration");
+            let response = create_error_response(
+                Some(JsonRpcId::Number(1)),
+                error_code,
+                error_message,
+                "Test integration",
+            );
 
-            assert_eq!(response.id, Some(1));
+            assert_eq!(response.id, Some(JsonRpcId::Number(1)));
             assert_eq!(response.jsonrpc, "2.0");
             assert!(response.result.is_none());
 
@@ -658,8 +699,14 @@ mod tests {
     #[test]
     fn test_response_structure_consistency() {
         // Test that both success and error responses have consistent structure
-        let success_response = create_success_response(100, json!({"status": "ok"}));
-        let error_response = create_error_response(100, -32603, "Internal error", "Test error");
+        let success_response =
+            create_success_response(Some(JsonRpcId::Number(100)), json!({"status": "ok"}));
+        let error_response = create_error_response(
+            Some(JsonRpcId::Number(100)),
+            -32603,
+            "Internal error",
+            "Test error",
+        );
 
         // Both should have same basic structure
         assert_eq!(success_response.id, error_response.id);
