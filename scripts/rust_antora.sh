@@ -33,11 +33,15 @@ fi
 
 # Copy the API docs file to the target directory
 if [ -f "$API_DOCS_FILE" ]; then
+  # Inject nonce to the script tag in the API docs file
+  echo "Injecting nonce into the script tag in '$API_DOCS_FILE'..."
+  sed -i -e "s/<script>/<script nonce=\"TngzuFQT7LvVFJMfvb8cxW0zN8XF79n6L9OphJOxH8\">/g" "$API_DOCS_FILE"
+  echo "Nonce injected successfully."
   echo "Copying '$API_DOCS_FILE' to '$BUILD_DIR'..."
   cp "$API_DOCS_FILE" "$BUILD_DIR/"
   echo "API docs successfully copied to '$BUILD_DIR'."
   # Remove the original API docs file
   echo "Removing original API docs file '$API_DOCS_FILE'..."
-  rm "$API_DOCS_FILE"
+  rm -f "${API_DOCS_FILE}" "${API_DOCS_FILE}-e"
   echo "Original API docs file '$API_DOCS_FILE' removed."
 fi
