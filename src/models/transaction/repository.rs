@@ -2,7 +2,7 @@ use super::evm::Speed;
 use crate::{
     domain::{PriceParams, SignTransactionResponseEvm},
     models::{
-        transaction::stellar_types::{MemoSpec, OperationSpec},
+        transaction::stellar::{MemoSpec, OperationSpec},
         AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
         RelayerError, RelayerRepoModel, SignerError, StellarNetwork, TransactionError, U256,
     },
@@ -20,7 +20,8 @@ use std::{convert::TryFrom, str::FromStr};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::models::transaction::stellar_types::DecoratedSignature;
+use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
+use crate::models::transaction::stellar::DecoratedSignature;
 use soroban_rs::xdr::{
     Transaction as SorobanTransaction, TransactionEnvelope, TransactionV1Envelope, VecM,
 };
@@ -254,6 +255,8 @@ pub struct StellarTransactionData {
     #[serde(skip_serializing, skip_deserializing)]
     pub signatures: Vec<DecoratedSignature>,
     pub hash: Option<String>,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub simulation_transaction_data: Option<String>,
 }
 
 impl StellarTransactionData {
@@ -292,6 +295,33 @@ impl StellarTransactionData {
     pub fn with_hash(mut self, hash: String) -> Self {
         self.hash = Some(hash);
         self
+    }
+
+    /// Return a new instance with simulation data applied (fees and transaction extension).
+    pub fn with_simulation_data(
+        mut self,
+        sim_response: soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
+    ) -> Result<Self, crate::models::SignerError> {
+        use log::info;
+
+        // Update fee based on simulation (using soroban-helpers formula)
+        let operations_count = self.operations.len() as u64;
+        let inclusion_fee = operations_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+        let resource_fee = sim_response.min_resource_fee;
+
+        let updated_fee = u32::try_from(inclusion_fee + resource_fee)
+            .map_err(|_| crate::models::SignerError::ConversionError("Fee too high".to_string()))?
+            .max(STELLAR_DEFAULT_TRANSACTION_FEE);
+        self.fee = Some(updated_fee);
+
+        // Store simulation transaction data for TransactionExt::V1
+        self.simulation_transaction_data = Some(sim_response.transaction_data);
+
+        info!(
+            "Applied simulation fee: {} stroops and stored transaction extension data",
+            updated_fee
+        );
+        Ok(self)
     }
 }
 
@@ -369,32 +399,53 @@ impl
                 noop_count: None,
                 is_canceled: Some(false),
             }),
-            NetworkTransactionRequest::Stellar(stellar_request) => Ok(Self {
-                id: Uuid::new_v4().to_string(),
-                relayer_id: relayer_model.id.clone(),
-                status: TransactionStatus::Pending,
-                status_reason: None,
-                created_at: now,
-                sent_at: None,
-                confirmed_at: None,
-                valid_until: None,
-                network_type: NetworkType::Stellar,
-                network_data: NetworkTransactionData::Stellar(StellarTransactionData {
-                    source_account: stellar_request.source_account.clone(),
-                    operations: stellar_request.operations.clone(),
-                    memo: stellar_request.memo.clone(),
-                    valid_until: stellar_request.valid_until.clone(),
-                    network_passphrase: StellarNetwork::try_from(network_model.clone())?.passphrase,
-                    signatures: Vec::new(),
-                    hash: None,
-                    fee: None,
-                    sequence_number: None,
-                }),
-                priced_at: None,
-                hashes: Vec::new(),
-                noop_count: None,
-                is_canceled: Some(false),
-            }),
+            NetworkTransactionRequest::Stellar(stellar_request) => {
+                let source_account = stellar_request.source_account.clone();
+                let operations = stellar_request.operations.clone();
+
+                // Validate InvokeHostFunction exclusivity
+                let has_invoke_host_function = operations
+                    .iter()
+                    .any(|op| matches!(op, OperationSpec::InvokeHostFunction { .. }));
+
+                if has_invoke_host_function {
+                    // Check if there's exactly one operation
+                    if operations.len() != 1 {
+                        return Err(RelayerError::PolicyConfigurationError(
+                            "InvokeHostFunction operations must be exclusive - only one InvokeHostFunction operation is allowed per transaction and it cannot be mixed with other operations".to_string()
+                        ));
+                    }
+                }
+
+                Ok(Self {
+                    id: Uuid::new_v4().to_string(),
+                    relayer_id: relayer_model.id.clone(),
+                    status: TransactionStatus::Pending,
+                    status_reason: None,
+                    created_at: now,
+                    sent_at: None,
+                    confirmed_at: None,
+                    valid_until: None,
+                    network_type: NetworkType::Stellar,
+                    network_data: NetworkTransactionData::Stellar(StellarTransactionData {
+                        source_account,
+                        operations,
+                        memo: stellar_request.memo.clone(),
+                        valid_until: stellar_request.valid_until.clone(),
+                        network_passphrase: StellarNetwork::try_from(network_model.clone())?
+                            .passphrase,
+                        signatures: Vec::new(),
+                        hash: None,
+                        fee: None,
+                        sequence_number: None,
+                        simulation_transaction_data: None,
+                    }),
+                    priced_at: None,
+                    hashes: Vec::new(),
+                    noop_count: None,
+                    is_canceled: Some(false),
+                })
+            }
         }
     }
 }
@@ -548,6 +599,7 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 mod tests {
     use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
 
+    use crate::models::transaction::stellar::HostFunctionSpec;
     use crate::models::AssetSpec;
 
     use super::*;
@@ -796,7 +848,7 @@ mod tests {
 
     #[test]
     fn test_network_tx_data_get_stellar_transaction_data() {
-        use crate::models::transaction::stellar_types::{AssetSpec, MemoSpec, OperationSpec};
+        use crate::models::transaction::stellar::{AssetSpec, MemoSpec, OperationSpec};
 
         let stellar_tx_data = StellarTransactionData {
             source_account: "account123".to_string(),
@@ -812,6 +864,7 @@ mod tests {
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             signatures: Vec::new(),
             hash: Some("hash123".to_string()),
+            simulation_transaction_data: None,
         };
         let network_data = NetworkTransactionData::Stellar(stellar_tx_data.clone());
 
@@ -928,6 +981,7 @@ mod tests {
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             signatures: Vec::new(),
             hash: None,
+            simulation_transaction_data: None,
         }
     }
 
@@ -980,5 +1034,197 @@ mod tests {
         let tx = test_stellar_tx_data();
         let updated = tx.with_hash("hash123".to_string());
         assert_eq!(updated.hash, Some("hash123".to_string()));
+    }
+
+    // Helper function to create test network and relayer models
+    fn test_models() -> (NetworkRepoModel, RelayerRepoModel) {
+        use crate::config::{NetworkConfigCommon, StellarNetworkConfig};
+        use crate::constants::DEFAULT_STELLAR_MIN_BALANCE;
+        use crate::models::network::NetworkConfigData;
+        use crate::models::relayer::{RelayerNetworkPolicy, RelayerStellarPolicy};
+
+        let network_config = NetworkConfigData::Stellar(StellarNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "testnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://test.stellar.org".to_string()]),
+                explorer_urls: None,
+                average_blocktime_ms: Some(5000), // 5 seconds for Stellar
+                is_testnet: Some(true),
+                tags: None,
+            },
+            passphrase: Some("Test SDF Network ; September 2015".to_string()),
+        });
+
+        let network_model = NetworkRepoModel {
+            id: "stellar:testnet".to_string(),
+            name: "testnet".to_string(),
+            network_type: NetworkType::Stellar,
+            config: network_config,
+        };
+
+        let relayer_model = RelayerRepoModel {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "stellar:testnet".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "test-signer".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                max_fee: None,
+                timeout_seconds: None,
+                min_balance: DEFAULT_STELLAR_MIN_BALANCE,
+            }),
+            address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        (network_model, relayer_model)
+    }
+
+    #[test]
+    fn test_invoke_host_function_must_be_exclusive() {
+        let (network_model, relayer_model) = test_models();
+
+        // Test case 1: Single InvokeHostFunction - should succeed
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![OperationSpec::InvokeHostFunction {
+                    host_function_spec: HostFunctionSpec::InvokeContract {
+                        contract_address:
+                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
+                        function_name: "transfer".to_string(),
+                        args: vec![],
+                    },
+                    auth: None,
+                }],
+                memo: None,
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_ok(), "Test case 1 failed: {:?}", result.err());
+
+        // Test case 2: InvokeHostFunction mixed with Payment - should fail
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![
+                    OperationSpec::Payment {
+                        destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                            .to_string(),
+                        amount: 1000,
+                        asset: AssetSpec::Native,
+                    },
+                    OperationSpec::InvokeHostFunction {
+                        host_function_spec: HostFunctionSpec::InvokeContract {
+                            contract_address:
+                                "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                                    .to_string(),
+                            function_name: "transfer".to_string(),
+                            args: vec![],
+                        },
+                        auth: None,
+                    },
+                ],
+                memo: None,
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_err());
+        if let Err(err) = result {
+            let err_str = err.to_string();
+            assert!(
+                err_str.contains("InvokeHostFunction operations must be exclusive"),
+                "Got error: {}",
+                err_str
+            );
+        } else {
+            panic!("Expected an error");
+        }
+
+        // Test case 3: Multiple InvokeHostFunction operations - should fail
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![
+                    OperationSpec::InvokeHostFunction {
+                        host_function_spec: HostFunctionSpec::InvokeContract {
+                            contract_address:
+                                "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                                    .to_string(),
+                            function_name: "transfer".to_string(),
+                            args: vec![],
+                        },
+                        auth: None,
+                    },
+                    OperationSpec::InvokeHostFunction {
+                        host_function_spec: HostFunctionSpec::InvokeContract {
+                            contract_address:
+                                "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                                    .to_string(),
+                            function_name: "approve".to_string(),
+                            args: vec![],
+                        },
+                        auth: None,
+                    },
+                ],
+                memo: None,
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_err());
+        if let Err(err) = result {
+            let err_str = err.to_string();
+            assert!(
+                err_str.contains("InvokeHostFunction operations must be exclusive"),
+                "Got error: {}",
+                err_str
+            );
+        } else {
+            panic!("Expected an error");
+        }
+
+        // Test case 4: Multiple Payment operations - should succeed
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![
+                    OperationSpec::Payment {
+                        destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                            .to_string(),
+                        amount: 1000,
+                        asset: AssetSpec::Native,
+                    },
+                    OperationSpec::Payment {
+                        destination: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+                            .to_string(),
+                        amount: 2000,
+                        asset: AssetSpec::Native,
+                    },
+                ],
+                memo: None,
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_ok(), "Test case 4 failed: {:?}", result.err());
     }
 }

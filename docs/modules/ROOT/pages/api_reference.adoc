@@ -757,9 +757,9 @@ Example response:
 [#stellar_api]
 === Stellar
 
-NOTE: Basic support for Stellar, it is currently under active development. The API interactions and specifics described below may evolve.
+NOTE: Basic support for Stellar; it is currently under active development. The API interactions and specifics described below may evolve.
 
-This section outlines how to interact with the Stellar network via the Relayer API.
+This section outlines how to interact with the Stellar network via the Relayer API. The relayer supports Soroban smart contract operations, including contract invocation, deployment, and WASM uploads.
 
 [cols="1,1,2"]
 |===
@@ -767,7 +767,7 @@ This section outlines how to interact with the Stellar network via the Relayer A
 
 |Send Transaction
 |`source_account`, `network`, `operations`
-|Submit a transaction to the Stellar network.
+|Submit a transaction to the Stellar network. Supports payment and InvokeHostFunction operations.
 
 |Get Transaction Details
 |`transaction_id`
@@ -778,13 +778,28 @@ This section outlines how to interact with the Stellar network via the Relayer A
 |List transactions for the relayer.
 |===
 
+==== Supported Operation Types
+
+[cols="1,2"]
+|===
+|Operation Type |Description
+
+|`payment`
+|Transfer native XLM or other assets between accounts
+
+|`invoke_host_function`
+|Execute Soroban smart contract operations including contract calls, deployments, and WASM uploads
+|===
+
 
 ==== Send Transaction
 Submit a transaction to the Stellar network.
 
 Request: `POST http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions`
 
-Example request (cURL):
+Example requests (cURL):
+
+**Payment Operation Example:**
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
@@ -799,6 +814,78 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
       "destination": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
       "asset": "NATIVE",
       "amount": 1
+    }
+  ]
+}'
+----
+
+**InvokeHostFunction Operation Examples:**
+
+1. **Invoke Contract Function:**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "op": "invoke_host_function",
+      "invoke_contract": {
+        "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
+        "function_name": "transfer",
+        "args": [
+          {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+          {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+          {"u64": 1000000}
+        ]
+      }
+    }
+  ]
+}'
+----
+
+2. **Deploy Contract (Create Contract):**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "op": "invoke_host_function",
+      "create_contract": {
+        "source": {
+          "type": "account",
+          "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
+        },
+        "wasm_hash": "d3b2f6f8a1c5e9b4a7d8c2e1f5a9b3c6e8d4f7a2b5c8e1d4f7a0b3c6e9d2f5a8"
+      }
+    }
+  ]
+}'
+----
+
+3. **Upload WASM Contract Code:**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "op": "invoke_host_function",
+      "upload_wasm": {
+        "wasm": "AGFzbQEAAAABBgFgAX8BfwMCAQAFAwEAAQcPAgVoZWxsbwAACG1lbW9yeTIDCgQAAAAL"
+      }
     }
   ]
 }'
@@ -896,5 +983,115 @@ Example response:
         "per_page": 10,
         "total_items": 1
     }
+}
+----
+
+==== ScVal Argument Format
+
+When using the `invoke_host_function` operation with contract calls, arguments must be provided as ScVal values in JSON format. The relayer uses the stellar-xdr JSON serialization format.
+
+Here are the supported ScVal types and their formats:
+
+[cols="1,2,2"]
+|===
+|Type |Format |Description
+
+|U64
+|`{"u64": 1000000}`
+|Unsigned 64-bit integer
+
+|I64
+|`{"i64": -500}`
+|Signed 64-bit integer
+
+|U32
+|`{"u32": 42}`
+|Unsigned 32-bit integer
+
+|I32
+|`{"i32": -42}`
+|Signed 32-bit integer
+
+|Boolean
+|`{"bool": true}`
+|Boolean value
+
+|String
+|`{"string": "hello world"}`
+|UTF-8 string
+
+|Symbol
+|`{"symbol": "transfer"}`
+|Symbol (used for function names and identifiers)
+
+|Address
+|`{"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"}`
+|Stellar account or contract address
+
+|Bytes
+|`{"bytes": "deadbeef"}`
+|Hex-encoded byte array
+
+|Vector
+|`{"vec": [{"u32": 1}, {"u32": 2}, {"u32": 3}]}`
+|Array of ScVal values
+
+|Map
+|`{"map": [{"key": {"symbol": "name"}, "val": {"string": "MyToken"}}]}`
+|Key-value pairs of ScVal values
+|===
+
+**Address Format Notes:**
+- Account addresses start with 'G'
+- Contract addresses start with 'C'
+- All addresses use SEP-23 Strkey encoding
+
+==== Authorization Modes
+
+The `invoke_host_function` operation supports different authorization modes for Soroban operations:
+
+===== Default Authorization
+If no `auth` field is provided, the relayer automatically generates appropriate authorization entries based on the operation type.
+
+===== Simple Authorization
+[source,json]
+----
+{
+  "op": "invoke_host_function",
+  "invoke_contract": {
+    "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
+    "function_name": "transfer",
+    "args": [
+      {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+      {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+      {"u64": 1000000}
+    ]
+  },
+  "auth": {
+    "type": "simple",
+    "value": ["source_account"]
+  }
+}
+----
+
+===== XDR Authorization
+For advanced use cases, provide complete authorization entries as base64-encoded XDR:
+[source,json]
+----
+{
+  "op": "invoke_host_function",
+  "invoke_contract": {
+    "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
+    "function_name": "transfer",
+    "args": [
+      {"address": {"accountId": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"}},
+      {"address": {"accountId": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"}},
+      {"u64": "1000000"}
+    ]
+  },
+  "auth": {
+    "type": "xdr",
+    "value": ["base64_encoded_auth_entry_1", "base64_encoded_auth_entry_2"]
+  }
 }
 ----

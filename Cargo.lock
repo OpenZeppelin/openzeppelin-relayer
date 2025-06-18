@@ -4630,7 +4630,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -9114,9 +9114,9 @@ dependencies = [
 
 [[package]]
 name = "soroban-rs"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "790ecbbc2f864561c405f485383605960eb49353e2bd9f70b29b6ac9feb70b72"
+checksum = "d76badaf19e40acdf5e12291c24b7a151f98331debfa28874a73c2a3722b6536"
 dependencies = [
  "async-trait",
  "ed25519-dalek 2.1.1",
@@ -9125,7 +9125,7 @@ dependencies = [
  "sha2 0.10.9",
  "soroban-rs-macros",
  "stellar-rpc-client",
- "stellar-strkey 0.0.11",
+ "stellar-strkey 0.0.13",
  "stellar-xdr",
  "tokio",
 ]
@@ -9799,16 +9799,6 @@ dependencies = [
 
 [[package]]
 name = "stellar-strkey"
-version = "0.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0989c9a05eccbd08b60e603a1c7e3ed3ec92c0de73b8681fc964d272ab2b2697"
-dependencies = [
- "crate-git-revision",
- "data-encoding",
-]
-
-[[package]]
-name = "stellar-strkey"
 version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee1832fb50c651ad10f734aaf5d31ca5acdfb197a6ecda64d93fcdb8885af913"
@@ -9828,6 +9818,7 @@ dependencies = [
  "escape-bytes",
  "hex",
  "serde",
+ "serde_json",
  "serde_with",
  "stellar-strkey 0.0.9",
 ]

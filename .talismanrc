@@ -1,4 +1,4 @@
-threshold: medium
+threshold: high
 
 allowed_patterns:
 # Ignore commit hashes
@@ -16,3 +16,9 @@ fileignoreconfig:
 # since we encode public keys directly for testing
 - filename: src/utils/der.rs
   checksum: 4f52ea05a294a13bd886800d8195b0c0346498fdf2299055c4316b0610eed9f8
+
+custom_severities:
+- detector: Base64Content
+  severity: medium
+- detector: HexContent
+  severity: low

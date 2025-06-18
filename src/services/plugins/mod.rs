@@ -1,14 +1,58 @@
 //! Plugins service module for handling plugins execution and interaction with relayer
-struct PluginService {}
+use crate::models::PluginCallRequest;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
-impl PluginService {
-    pub fn call_plugin(&self, _plugin_id: &str) -> Result<String, String> {
-        unimplemented!()
+#[cfg(test)]
+use mockall::automock;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginCallResponse {
+    pub success: bool,
+}
+
+pub struct PluginService {}
+
+#[async_trait]
+#[cfg_attr(test, automock)]
+pub trait PluginServiceTrait {
+    fn new() -> Self;
+    async fn call_plugin(
+        &self,
+        path: &str,
+        plugin_call_request: PluginCallRequest,
+    ) -> PluginCallResponse;
+}
+
+#[async_trait]
+impl PluginServiceTrait for PluginService {
+    fn new() -> Self {
+        Self {}
+    }
+    async fn call_plugin(
+        &self,
+        _path: &str,
+        _plugin_call_request: PluginCallRequest,
+    ) -> PluginCallResponse {
+        PluginCallResponse { success: true }
     }
 }
 
-impl Default for PluginService {
-    fn default() -> Self {
-        Self {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_call_plugin() {
+        let plugin_service = PluginService::new();
+        let result = plugin_service
+            .call_plugin(
+                "test-plugin",
+                PluginCallRequest {
+                    params: serde_json::Value::Null,
+                },
+            )
+            .await;
+        assert!(result.success);
     }
 }

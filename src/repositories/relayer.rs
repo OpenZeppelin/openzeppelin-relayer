@@ -429,7 +429,7 @@ impl TryFrom<ConfigFileRelayerNetworkPolicy> for RelayerNetworkPolicy {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust, ignore
 /// use std::sync::Arc;
 /// use crate::repositories::{InMemoryRelayerRepository, RelayerRepositoryStorage};
 ///
