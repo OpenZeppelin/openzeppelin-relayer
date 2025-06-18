@@ -14,19 +14,19 @@
 //! ## Architecture
 //!
 //! ```text
-//! AwsKmsService (implements AwsKmsServiceTrait)
+//! AwsKmsService (implements AwsKmsEvmService)
 //!   ├── Authentication (via AwsKmsClient)
 //!   ├── Public Key Retrieval (via AwsKmsClient)
 //!   └── Message Signing (via AwsKmsClient)
 //! ```
 //! is based on
 //! ```text
-//! AwsKmsClient (implements AwsKmsClientTrait)
+//! AwsKmsClient (implements AwsKmsK256)
 //!   ├── Authentication (via shared credentials)
 //!   ├── Public Key Retrieval in DER Encoding
 //!   └── Message Digest Signing in DER Encoding
 //! ```
-//! `AwsKmsClientTrait` is mocked with `mockall` for unit testing
+//! `AwsKmsK256` is mocked with `mockall` for unit testing
 //! and injected into `AwsKmsService`
 //!
 
@@ -50,19 +50,21 @@ use mockall::{automock, mock};
 
 #[derive(Clone, Debug, thiserror::Error, Serialize)]
 pub enum AwsKmsError {
-    #[error("KMS response parse error: {0}")]
+    #[error("AWS KMS response parse error: {0}")]
     ParseError(String),
-    #[error("KMS config error: {0}")]
+    #[error("AWS KMS config error: {0}")]
     ConfigError(String),
-    #[error("KMS get error: {0}")]
+    #[error("AWS KMS get error: {0}")]
     GetError(String),
-    #[error("KMS signing error: {0}")]
+    #[error("AWS KMS signing error: {0}")]
     SignError(String),
-    #[error("KMS permissions error: {0}")]
+    #[error("AWS KMS permissions error: {0}")]
     PermissionError(String),
-    #[error("KMS public key error: {0}")]
+    #[error("AWS KMS public key error: {0}")]
     RecoveryError(#[from] utils::Secp256k1Error),
-    #[error("Other error: {0}")]
+    #[error("AWS KMS conversion error: {0}")]
+    ConvertError(String),
+    #[error("AWS KMS Other error: {0}")]
     Other(String),
 }
 
@@ -70,7 +72,7 @@ pub type AwsKmsResult<T> = Result<T, AwsKmsError>;
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait AwsKmsServiceTrait: Send + Sync {
+pub trait AwsKmsEvmService: Send + Sync {
     /// Returns the EVM address derived from the configured public key.
     async fn get_evm_address(&self) -> AwsKmsResult<Address>;
     /// Signs a payload using the EVM signing scheme.
@@ -80,7 +82,7 @@ pub trait AwsKmsServiceTrait: Send + Sync {
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait AwsKmsClientTrait: Send + Sync {
+pub trait AwsKmsK256: Send + Sync {
     /// Fetches the DER-encoded public key from AWS KMS.
     async fn get_der_public_key<'a, 'b>(&'a self, key_id: &'b str) -> AwsKmsResult<Vec<u8>>;
     /// Signs a digest using EcdsaSha256 spec. Returns DER-encoded signature
@@ -99,7 +101,7 @@ mock! {
     }
 
     #[async_trait]
-    impl AwsKmsClientTrait for AwsKmsClient {
+    impl AwsKmsK256 for AwsKmsClient {
         async fn get_der_public_key<'a, 'b>(&'a self, key_id: &'b str) -> AwsKmsResult<Vec<u8>>;
         async fn sign_digest<'a, 'b>(
             &'a self,
@@ -116,7 +118,7 @@ pub struct AwsKmsClient {
 }
 
 #[async_trait]
-impl AwsKmsClientTrait for AwsKmsClient {
+impl AwsKmsK256 for AwsKmsClient {
     async fn get_der_public_key<'a, 'b>(&'a self, key_id: &'b str) -> AwsKmsResult<Vec<u8>> {
         let get_output = self
             .inner
@@ -166,7 +168,7 @@ impl AwsKmsClientTrait for AwsKmsClient {
 }
 
 #[derive(Debug, Clone)]
-pub struct AwsKmsService<T: AwsKmsClientTrait + Clone = AwsKmsClient> {
+pub struct AwsKmsService<T: AwsKmsK256 + Clone = AwsKmsClient> {
     pub kms_key_id: String,
     client: T,
 }
@@ -192,7 +194,7 @@ impl AwsKmsService<AwsKmsClient> {
 }
 
 #[cfg(test)]
-impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
+impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
     pub fn new_for_testing(client: T, config: AwsKmsSignerConfig) -> Self {
         Self {
             client,
@@ -201,7 +203,7 @@ impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
     }
 }
 
-impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
+impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
     /// Signs a bytes with the private key stored in AWS KMS.
     ///
     /// Pre-hashes the message with keccak256.
@@ -221,7 +223,7 @@ impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
 
         // Extract public key from AWS KMS and convert it to an uncompressed 64 pk
         let pk = extract_public_key_from_der(&der_pk)
-            .map_err(|e| AwsKmsError::ParseError(e.to_string()))?;
+            .map_err(|e| AwsKmsError::ConvertError(e.to_string()))?;
 
         // Extract v value from the public key recovery
         let v = utils::recover_public_key(&pk, &rs, bytes)?;
@@ -238,7 +240,7 @@ impl<T: AwsKmsClientTrait + Clone> AwsKmsService<T> {
 }
 
 #[async_trait]
-impl<T: AwsKmsClientTrait + Clone> AwsKmsServiceTrait for AwsKmsService<T> {
+impl<T: AwsKmsK256 + Clone> AwsKmsEvmService for AwsKmsService<T> {
     async fn get_evm_address(&self) -> AwsKmsResult<Address> {
         let der = self.client.get_der_public_key(&self.kms_key_id).await?;
         let eth_address = derive_ethereum_address_from_der(&der)

@@ -13,14 +13,14 @@ use crate::{
         Address, EvmTransactionDataSignature, EvmTransactionDataTrait, NetworkTransactionData,
         SignerError,
     },
-    services::{AwsKmsClient, AwsKmsService, AwsKmsServiceTrait, DataSignerTrait, Signer},
+    services::{AwsKmsClient, AwsKmsEvmService, AwsKmsService, DataSignerTrait, Signer},
 };
 
 pub type DefaultAwsKmsService = AwsKmsService<AwsKmsClient>;
 
 pub struct AwsKmsSigner<T = DefaultAwsKmsService>
 where
-    T: AwsKmsServiceTrait,
+    T: AwsKmsEvmService,
 {
     aws_kms_service: T,
 }
@@ -32,14 +32,14 @@ impl AwsKmsSigner<DefaultAwsKmsService> {
 }
 
 #[cfg(test)]
-impl<T: AwsKmsServiceTrait> AwsKmsSigner<T> {
+impl<T: AwsKmsEvmService> AwsKmsSigner<T> {
     pub fn new_for_testing(aws_kms_service: T) -> Self {
         Self { aws_kms_service }
     }
 }
 
 #[async_trait]
-impl<T: AwsKmsServiceTrait> Signer for AwsKmsSigner<T> {
+impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
     async fn address(&self) -> Result<Address, SignerError> {
         let address = self.aws_kms_service.get_evm_address().await?;
 
@@ -133,7 +133,7 @@ impl<T: AwsKmsServiceTrait> Signer for AwsKmsSigner<T> {
 }
 
 #[async_trait]
-impl<T: AwsKmsServiceTrait> DataSignerTrait for AwsKmsSigner<T> {
+impl<T: AwsKmsEvmService> DataSignerTrait for AwsKmsSigner<T> {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
         let eip191_message = eip191_message(&request.message);
 

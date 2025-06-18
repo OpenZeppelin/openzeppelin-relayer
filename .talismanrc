@@ -8,6 +8,8 @@ allowed_patterns:
 - sha512-[a-fA-F0-9]*
 # Match Cargo.lock checksums
 - checksum\s*=\s*"([a-fA-F0-9]{64})"
+- key
+- public key
 
 fileignoreconfig:
 # We need to ignore this module,
