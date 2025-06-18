@@ -415,12 +415,13 @@ impl
                             "InvokeHostFunction operations must be exclusive - only one InvokeHostFunction operation is allowed per transaction and it cannot be mixed with other operations".to_string()
                         ));
                     }
-                    
+
                     // Check if memo is None when using InvokeHostFunction
                     if let Some(ref memo) = stellar_request.memo {
                         if !matches!(memo, MemoSpec::None) {
                             return Err(RelayerError::PolicyConfigurationError(
-                                "Memo must be null when using InvokeHostFunction operations".to_string()
+                                "Memo must be null when using InvokeHostFunction operations"
+                                    .to_string(),
                             ));
                         }
                     }
@@ -1235,7 +1236,7 @@ mod tests {
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_ok(), "Test case 4 failed: {:?}", result.err());
-        
+
         // Test case 5: InvokeHostFunction with non-None memo - should fail
         let stellar_request =
             crate::models::transaction::request::stellar::StellarTransactionRequest {
@@ -1268,7 +1269,7 @@ mod tests {
         } else {
             panic!("Expected an error");
         }
-        
+
         // Test case 6: InvokeHostFunction with memo None - should succeed
         let stellar_request =
             crate::models::transaction::request::stellar::StellarTransactionRequest {
@@ -1291,7 +1292,7 @@ mod tests {
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_ok(), "Test case 6 failed: {:?}", result.err());
-        
+
         // Test case 7: InvokeHostFunction with no memo field - should succeed
         let stellar_request =
             crate::models::transaction::request::stellar::StellarTransactionRequest {
@@ -1314,7 +1315,7 @@ mod tests {
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_ok(), "Test case 7 failed: {:?}", result.err());
-        
+
         // Test case 8: Payment operation with memo - should succeed
         let stellar_request =
             crate::models::transaction::request::stellar::StellarTransactionRequest {
