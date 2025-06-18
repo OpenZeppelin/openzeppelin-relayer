@@ -1058,15 +1058,14 @@ If no `auth` field is provided, the relayer automatically generates appropriate 
 ----
 {
   "op": "invoke_host_function",
-  "invoke_contract": {
-    "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
-    "function_name": "transfer",
-    "args": [
-      {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
-      {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
-      {"u64": 1000000}
-    ]
-  },
+  "type": "invoke_contract",
+  "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
+  "function_name": "transfer",
+  "args": [
+    {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+    {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+    {"u64": 1000000}
+  ],
   "auth": {
     "type": "simple",
     "value": ["source_account"]
@@ -1080,18 +1079,86 @@ For advanced use cases, provide complete authorization entries as base64-encoded
 ----
 {
   "op": "invoke_host_function",
-  "invoke_contract": {
-    "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
-    "function_name": "transfer",
-    "args": [
-      {"address": {"accountId": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"}},
-      {"address": {"accountId": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"}},
-      {"u64": "1000000"}
-    ]
-  },
+  "type": "invoke_contract",
+  "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
+  "function_name": "transfer",
+  "args": [
+    {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+    {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+    {"u64": 1000000}
+  ],
   "auth": {
     "type": "xdr",
-    "value": ["base64_encoded_auth_entry_1", "base64_encoded_auth_entry_2"]
+    "value": ["<base64_encoded_auth_entry>"]
+  }
+}
+----
+
+===== Upload WASM
+Upload contract code to the ledger:
+
+**With hex encoding:**
+[source,json]
+----
+{
+  "op": "invoke_host_function",
+  "type": "upload_wasm",
+  "wasm": {
+    "hex": "<hex_encoded_wasm_bytecode>"
+  }
+}
+----
+
+**With base64 encoding:**
+[source,json]
+----
+{
+  "op": "invoke_host_function",
+  "type": "upload_wasm",
+  "wasm": {
+    "base64": "<base64_encoded_wasm_bytecode>"
+  }
+}
+----
+
+===== Create Contract
+Deploy a new smart contract:
+
+**Simple contract without constructor:**
+[source,json]
+----
+{
+  "op": "invoke_host_function",
+  "type": "create_contract",
+  "source": {
+    "from": "address",
+    "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
+  },
+  "wasm_hash": "a5fb7934e9a1158d0e85387e2c8901dd0bbcf085848bbea2f29c5a40fb0b3659",
+  "salt": "0000000000000000000000000000000000000000000000000000000000000001"
+}
+----
+
+**With constructor arguments:**
+[source,json]
+----
+{
+  "op": "invoke_host_function",
+  "type": "create_contract",
+  "source": {
+    "from": "address",
+    "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
+  },
+  "wasm_hash": "a5fb7934e9a1158d0e85387e2c8901dd0bbcf085848bbea2f29c5a40fb0b3659",
+  "salt": "0000000000000000000000000000000000000000000000000000000000000001",
+  "constructor_args": [
+    {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+    {"string": "ComprehensiveTest"},
+    {"u64": 100}
+  ],
+  "auth": {
+    "type": "simple",
+    "value": ["source_account"]
   }
 }
 ----
