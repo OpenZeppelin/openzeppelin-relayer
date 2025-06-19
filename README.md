@@ -34,6 +34,7 @@ This relayer service enables interaction with blockchain networks through transa
 - Solana
 - EVM (🚧 Partial support)
 - Stellar (🚧 Partial support)
+- Midnight (🚧 Partial support)
 
 > For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/roadmap).
 
