@@ -15,6 +15,15 @@ use uuid::Uuid;
 pub mod runner;
 pub use runner::*;
 
+pub mod relayer_api;
+pub use relayer_api::*;
+
+pub mod script_executor;
+pub use script_executor::*;
+
+pub mod socket;
+pub use socket::*;
+
 #[cfg(test)]
 use mockall::automock;
 
@@ -69,13 +78,7 @@ impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService {
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
 
-        let socket_service = PluginRunner::from_path(&socket_path)
-            .map_err(|e| PluginError::PluginError(e.to_string()))?;
-
-        let result = socket_service
-            .run(code_path, state)
-            .await
-            .map_err(|e| PluginError::PluginError(e.to_string()))?;
+        let result = PluginRunner::run(&socket_path, code_path, state).await?;
 
         Ok(PluginCallResponse {
             success: true,

@@ -16,3 +16,6 @@ pub use transaction::*;
 
 mod base64;
 pub use base64::*;
+
+#[cfg(test)]
+pub mod mocks;
