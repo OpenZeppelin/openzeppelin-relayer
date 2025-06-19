@@ -10,13 +10,14 @@ pub mod mockutils {
         jobs::MockJobProducerTrait,
         models::{
             AppState, EvmTransactionRequest, LocalSignerConfig, NetworkRepoModel, NetworkType,
-            RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfig,
+            PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfig,
             SignerRepoModel,
         },
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage, Repository,
+            InMemoryTransactionRepository, PluginRepositoryTrait, RelayerRepositoryStorage,
+            Repository,
         },
     };
 
@@ -78,6 +79,7 @@ pub mod mockutils {
         relayers: Option<Vec<RelayerRepoModel>>,
         signers: Option<Vec<SignerRepoModel>>,
         networks: Option<Vec<NetworkRepoModel>>,
+        plugins: Option<Vec<PluginModel>>,
     ) -> AppState<MockJobProducerTrait> {
         let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
             InMemoryRelayerRepository::default(),
@@ -99,6 +101,13 @@ pub mod mockutils {
         if let Some(networks) = networks {
             for network in networks {
                 network_repository.create(network).await.unwrap();
+            }
+        }
+
+        let plugin_repository = Arc::new(InMemoryPluginRepository::default());
+        if let Some(plugins) = plugins {
+            for plugin in plugins {
+                plugin_repository.add(plugin).await.unwrap();
             }
         }
 
@@ -132,7 +141,7 @@ pub mod mockutils {
             network_repository,
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
-            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
+            plugin_repository,
         }
     }
 

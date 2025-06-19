@@ -37,14 +37,16 @@ impl SocketService {
         self,
         shutdown_rx: oneshot::Receiver<()>,
         state: Arc<web::ThinData<AppState<J>>>,
+        relayer_api: Arc<RelayerApi>,
     ) -> Result<(), PluginError> {
         let mut shutdown = shutdown_rx;
 
         loop {
             let state = Arc::clone(&state);
+            let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    tokio::spawn(Self::handle_connection(stream, state));
+                    tokio::spawn(Self::handle_connection(stream, state, relayer_api));
                 }
                 _ = &mut shutdown => {
                     println!("Shutdown signal received. Closing listener.");
@@ -59,6 +61,7 @@ impl SocketService {
     async fn handle_connection<J: JobProducerTrait + 'static>(
         stream: UnixStream,
         state: Arc<web::ThinData<AppState<J>>>,
+        relayer_api: Arc<RelayerApi>,
     ) -> Result<(), PluginError> {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
@@ -67,7 +70,7 @@ impl SocketService {
             let request: Request =
                 serde_json::from_str(&line).map_err(|e| PluginError::PluginError(e.to_string()))?;
 
-            let response = RelayerApi::handle_request(request, &state).await;
+            let response = relayer_api.handle_request(request, &state).await;
 
             let response_str = serde_json::to_string(&response)
                 .map_err(|e| PluginError::PluginError(e.to_string()))?

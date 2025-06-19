@@ -2,9 +2,13 @@ use crate::domain::{get_network_relayer, get_relayer_by_id, Relayer};
 use crate::models::{NetworkTransactionRequest, TransactionResponse};
 use crate::{jobs::JobProducerTrait, models::AppState};
 use actix_web::web;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::PluginError;
+
+#[cfg(test)]
+use mockall::automock;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum PluginMethod {
@@ -29,14 +33,36 @@ pub struct Response {
     pub error: Option<String>,
 }
 
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait RelayerApiTrait {
+    async fn handle_request<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Response;
+    async fn process_request<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError>;
+    async fn handle_send_transaction<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError>;
+}
+
+#[derive(Default)]
 pub struct RelayerApi;
 
 impl RelayerApi {
     pub async fn handle_request<J: JobProducerTrait + 'static>(
+        &self,
         request: Request,
         state: &web::ThinData<AppState<J>>,
     ) -> Response {
-        match Self::process_request(request.clone(), state).await {
+        match self.process_request(request.clone(), state).await {
             Ok(response) => response,
             Err(e) => Response {
                 request_id: request.request_id,
@@ -47,15 +73,17 @@ impl RelayerApi {
     }
 
     async fn process_request<J: JobProducerTrait + 'static>(
+        &self,
         request: Request,
         state: &web::ThinData<AppState<J>>,
     ) -> Result<Response, PluginError> {
         match request.method {
-            PluginMethod::SendTransaction => Self::handle_send_transaction(request, state).await,
+            PluginMethod::SendTransaction => self.handle_send_transaction(request, state).await,
         }
     }
 
     async fn handle_send_transaction<J: JobProducerTrait + 'static>(
+        &self,
         request: Request,
         state: &web::ThinData<AppState<J>>,
     ) -> Result<Response, PluginError> {
@@ -98,6 +126,33 @@ impl RelayerApi {
     }
 }
 
+#[async_trait]
+impl RelayerApiTrait for RelayerApi {
+    async fn handle_request<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Response {
+        self.handle_request(request, state).await
+    }
+
+    async fn process_request<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError> {
+        self.process_request(request, state).await
+    }
+
+    async fn handle_send_transaction<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError> {
+        self.handle_send_transaction(request, state).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -122,6 +177,7 @@ mod tests {
             Some(vec![create_mock_relayer("test".to_string())]),
             Some(vec![create_mock_signer()]),
             Some(vec![create_mock_network()]),
+            None,
         )
         .await;
 
@@ -132,7 +188,10 @@ mod tests {
             payload: serde_json::json!(create_mock_evm_transaction_request()),
         };
 
-        let response = RelayerApi::handle_request(request.clone(), &web::ThinData(state)).await;
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
 
         assert!(response.error.is_none());
         assert!(response.result.is_some());

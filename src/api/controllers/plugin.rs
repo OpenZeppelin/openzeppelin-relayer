@@ -5,7 +5,7 @@
 use crate::{
     jobs::JobProducerTrait,
     models::{ApiError, ApiResponse, AppState, PluginCallRequest},
-    services::plugins::{PluginService, PluginServiceTrait},
+    services::plugins::{PluginRunner, PluginService, PluginServiceTrait},
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
@@ -33,7 +33,8 @@ pub async fn call_plugin<J: JobProducerTrait + 'static>(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {} not found", plugin_id)))?;
 
-    let plugin_service = PluginService::new::<J>();
+    let plugin_runner = PluginRunner;
+    let plugin_service = PluginService::new(plugin_runner);
     let result = plugin_service
         .call_plugin(plugin.path, plugin_call_request, Arc::new(state))
         .await;
@@ -43,45 +44,16 @@ pub async fn call_plugin<J: JobProducerTrait + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::{
-        jobs::MockJobProducerTrait,
-        models::PluginModel,
-        repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, PluginRepositoryTrait, RelayerRepositoryStorage,
-        },
-    };
+    use crate::{models::PluginModel, utils::mocks::mockutils::create_mock_app_state};
 
-    async fn get_test_app_state() -> AppState<MockJobProducerTrait> {
-        // adds a custom plugin
-        let plugin_repository = InMemoryPluginRepository::new();
+    #[actix_web::test]
+    async fn test_call_plugin() {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
         };
-        plugin_repository.add(plugin.clone()).await.unwrap();
-
-        AppState {
-            relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
-                InMemoryRelayerRepository::new(),
-            )),
-            transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
-            signer_repository: Arc::new(InMemorySignerRepository::new()),
-            notification_repository: Arc::new(InMemoryNotificationRepository::new()),
-            network_repository: Arc::new(InMemoryNetworkRepository::new()),
-            transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
-            job_producer: Arc::new(MockJobProducerTrait::new()),
-            plugin_repository: Arc::new(plugin_repository),
-        }
-    }
-
-    #[actix_web::test]
-    async fn test_call_plugin() {
-        let app_state = get_test_app_state().await;
+        let app_state = create_mock_app_state(None, None, None, Some(vec![plugin])).await;
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({"key":"value"}),
         };

@@ -45,40 +45,24 @@ pub struct PluginCallResponse {
     pub error: String,
 }
 
-pub struct PluginService {}
-
-impl PluginService {
-    pub fn new<J: JobProducerTrait + 'static>() -> Self {
-        Self {}
-    }
+#[derive(Default)]
+pub struct PluginService<R: PluginRunnerTrait> {
+    runner: R,
 }
 
-#[async_trait]
-#[cfg_attr(test, automock)]
-pub trait PluginServiceTrait<J: JobProducerTrait + 'static>: Send + Sync {
-    fn new() -> Self;
-    async fn call_plugin(
-        &self,
-        path: String,
-        plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J>>>,
-    ) -> Result<PluginCallResponse, PluginError>;
-}
-
-#[async_trait]
-impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService {
-    fn new() -> Self {
-        Self {}
+impl<R: PluginRunnerTrait> PluginService<R> {
+    pub fn new(runner: R) -> Self {
+        Self { runner }
     }
-    async fn call_plugin(
+
+    async fn call_plugin<J: JobProducerTrait + 'static>(
         &self,
         code_path: String,
         _plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
-
-        let result = PluginRunner::run(&socket_path, code_path, state).await?;
+        let result = self.runner.run(&socket_path, code_path, state).await?;
 
         Ok(PluginCallResponse {
             success: true,
@@ -89,47 +73,65 @@ impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService {
     }
 }
 
+#[async_trait]
+#[cfg_attr(test, automock)]
+pub trait PluginServiceTrait<J: JobProducerTrait + 'static>: Send + Sync {
+    fn new(runner: PluginRunner) -> Self;
+    async fn call_plugin(
+        &self,
+        code_path: String,
+        plugin_call_request: PluginCallRequest,
+        state: Arc<web::ThinData<AppState<J>>>,
+    ) -> Result<PluginCallResponse, PluginError>;
+}
+
+#[async_trait]
+impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService<PluginRunner> {
+    fn new(runner: PluginRunner) -> Self {
+        Self::new(runner)
+    }
+
+    async fn call_plugin(
+        &self,
+        code_path: String,
+        plugin_call_request: PluginCallRequest,
+        state: Arc<web::ThinData<AppState<J>>>,
+    ) -> Result<PluginCallResponse, PluginError> {
+        self.call_plugin(code_path, plugin_call_request, state)
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
-        jobs::MockJobProducerTrait,
-        models::PluginModel,
-        repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, PluginRepositoryTrait, RelayerRepositoryStorage,
-        },
+        jobs::MockJobProducerTrait, models::PluginModel,
+        utils::mocks::mockutils::create_mock_app_state,
     };
 
     use super::*;
 
-    async fn get_test_app_state() -> AppState<MockJobProducerTrait> {
-        // adds a custom plugin
-        let plugin_repository = InMemoryPluginRepository::new();
+    #[tokio::test]
+    async fn test_call_plugin() {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
         };
-        plugin_repository.add(plugin.clone()).await.unwrap();
+        let app_state: AppState<MockJobProducerTrait> =
+            create_mock_app_state(None, None, None, Some(vec![plugin])).await;
 
-        AppState {
-            relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
-                InMemoryRelayerRepository::new(),
-            )),
-            transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
-            signer_repository: Arc::new(InMemorySignerRepository::new()),
-            notification_repository: Arc::new(InMemoryNotificationRepository::new()),
-            network_repository: Arc::new(InMemoryNetworkRepository::new()),
-            transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
-            job_producer: Arc::new(MockJobProducerTrait::new()),
-            plugin_repository: Arc::new(plugin_repository),
-        }
-    }
+        let mut plugin_runner = MockPluginRunnerTrait::default();
 
-    #[tokio::test]
-    async fn test_call_plugin() {
-        let app_state = get_test_app_state().await;
-        let plugin_service = PluginService::new::<MockJobProducerTrait>();
+        plugin_runner
+            .expect_run::<MockJobProducerTrait>()
+            .returning(|_, _, _| {
+                Ok(ScriptResult {
+                    output: "test-output".to_string(),
+                    error: "test-error".to_string(),
+                })
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
         let result = plugin_service
             .call_plugin(
                 "test-plugin".to_string(),
