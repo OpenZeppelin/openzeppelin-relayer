@@ -30,14 +30,14 @@ use crate::{
     constants::EVM_SMALLEST_UNIT_NAME,
     domain::{
         relayer::{Relayer, RelayerError},
-        BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest, SignDataResponse,
-        SignTypedDataRequest,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, EvmNetwork, EvmRpcResult, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, EvmNetwork, JsonRpcRequest, JsonRpcResponse,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
+        RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes, TransactionRepoModel,
+        TransactionStatus,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -53,7 +53,9 @@ use async_trait::async_trait;
 use eyre::Result;
 use log::{info, warn};
 
-use super::EvmTransactionValidator;
+use super::{
+    create_error_response, create_success_response, map_provider_error, EvmTransactionValidator,
+};
 
 #[allow(dead_code)]
 pub struct EvmRelayer<P, R, N, T, J, S, C>
@@ -345,24 +347,48 @@ where
     ///
     /// # Arguments
     ///
-    /// * `_request` - The JSON-RPC request to handle.
+    /// * `request` - The JSON-RPC request to handle.
     ///
     /// # Returns
     ///
     /// A `Result` containing the `JsonRpcResponse` or a `RelayerError`.
     async fn rpc(
         &self,
-        _request: JsonRpcRequest<NetworkRpcRequest>,
+        request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
-        println!("EVM rpc...");
-        Ok(JsonRpcResponse {
-            id: Some(1),
-            jsonrpc: "2.0".to_string(),
-            result: Some(NetworkRpcResult::Evm(EvmRpcResult::GenericRpcResult(
-                "".to_string(),
-            ))),
-            error: None,
-        })
+        let evm_request = match request.params {
+            NetworkRpcRequest::Evm(evm_req) => evm_req,
+            _ => {
+                return Ok(create_error_response(
+                    request.id,
+                    RpcErrorCodes::INVALID_PARAMS,
+                    "Invalid params",
+                    "Expected EVM network request",
+                ))
+            }
+        };
+
+        // Parse method and params from the EVM request
+        let (method, params_json) = match evm_request {
+            crate::models::EvmRpcRequest::GenericRpcRequest { method, params } => {
+                (method, serde_json::Value::String(params))
+            }
+            crate::models::EvmRpcRequest::RawRpcRequest { method, params } => (method, params),
+        };
+
+        // Forward the RPC call to the provider
+        match self.provider.raw_request_dyn(&method, params_json).await {
+            Ok(result_value) => Ok(create_success_response(request.id, result_value)),
+            Err(provider_error) => {
+                let (error_code, error_message) = map_provider_error(&provider_error);
+                Ok(create_error_response(
+                    request.id,
+                    error_code,
+                    error_message,
+                    &provider_error.to_string(),
+                ))
+            }
+        }
     }
 
     /// Validates that the relayer's balance meets the minimum required balance.
@@ -443,8 +469,9 @@ mod tests {
     use crate::{
         jobs::MockJobProducerTrait,
         models::{
-            NetworkRepoModel, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RepositoryError,
-            SignerError, TransactionStatus, U256,
+            EvmRpcRequest, EvmRpcResult, JsonRpcId, NetworkRepoModel, NetworkType,
+            RelayerEvmPolicy, RelayerNetworkPolicy, RepositoryError, SignerError,
+            TransactionStatus, U256,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{MockEvmProviderTrait, MockTransactionCounterServiceTrait, ProviderError},
@@ -983,6 +1010,766 @@ mod tests {
                 assert_eq!(nonce, "10");
             }
             _ => panic!("Expected EVM RelayerStatus"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_eth_get_balance() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .withf(|method, params| {
+                method == "eth_getBalance"
+                    && params.as_str()
+                        == Some(r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#)
+            })
+            .returning(|_, _| Box::pin(async { Ok(serde_json::json!("0xde0b6b3a7640000")) }));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_getBalance".to_string(),
+                params: r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string(),
+            }),
+            id: Some(JsonRpcId::Number(1)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+
+        if let Some(NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(result))) = response.result {
+            assert_eq!(result, serde_json::json!("0xde0b6b3a7640000")); // 1 ETH in hex
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_eth_block_number() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .withf(|method, params| method == "eth_blockNumber" && params.as_str() == Some("[]"))
+            .returning(|_, _| Box::pin(async { Ok(serde_json::json!("0x3039")) }));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_blockNumber".to_string(),
+                params: "[]".to_string(),
+            }),
+            id: Some(JsonRpcId::Number(1)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+
+        if let Some(NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(result))) = response.result {
+            assert_eq!(result, serde_json::json!("0x3039")); // 12345 in hex
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_unsupported_method() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .withf(|method, _| method == "eth_unsupportedMethod")
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "Unsupported method: eth_unsupportedMethod".to_string(),
+                    ))
+                })
+            });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_unsupportedMethod".to_string(),
+                params: "[]".to_string(),
+            }),
+            id: Some(JsonRpcId::Number(1)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32603); // RpcErrorCodes::INTERNAL_ERROR
+    }
+
+    #[tokio::test]
+    async fn test_rpc_invalid_params() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .withf(|method, params| method == "eth_getBalance" && params.as_str() == Some("[]"))
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "Missing address parameter".to_string(),
+                    ))
+                })
+            });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_getBalance".to_string(),
+                params: "[]".to_string(), // Missing address parameter
+            }),
+            id: Some(JsonRpcId::Number(1)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32603); // RpcErrorCodes::INTERNAL_ERROR
+    }
+
+    #[tokio::test]
+    async fn test_rpc_non_evm_request() {
+        let (provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetSupportedTokens(
+                crate::models::GetSupportedTokensRequestParams {},
+            )),
+            id: Some(JsonRpcId::Number(1)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32602); // RpcErrorCodes::INVALID_PARAMS
+    }
+
+    #[tokio::test]
+    async fn test_rpc_raw_request_with_array_params() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .withf(|method, params| {
+                method == "eth_getTransactionByHash"
+                    && params.as_array().is_some_and(|arr| {
+                        arr.len() == 1 && arr[0].as_str() == Some("0x1234567890abcdef")
+                    })
+            })
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(serde_json::json!({
+                        "hash": "0x1234567890abcdef",
+                        "blockNumber": "0x1",
+                        "gasUsed": "0x5208"
+                    }))
+                })
+            });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_getTransactionByHash".to_string(),
+                params: serde_json::json!(["0x1234567890abcdef"]),
+            }),
+            id: Some(JsonRpcId::Number(42)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        assert_eq!(response.id, Some(JsonRpcId::Number(42)));
+
+        if let Some(NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(result))) = response.result {
+            assert!(result.get("hash").is_some());
+            assert!(result.get("blockNumber").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rpc_raw_request_with_object_params() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .withf(|method, params| {
+                method == "eth_call"
+                    && params
+                        .as_object()
+                        .is_some_and(|obj| obj.contains_key("to") && obj.contains_key("data"))
+            })
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(serde_json::json!(
+                        "0x0000000000000000000000000000000000000000000000000000000000000001"
+                    ))
+                })
+            });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_call".to_string(),
+                params: serde_json::json!({
+                    "to": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+                    "data": "0x70a08231000000000000000000000000742d35cc6634c0532925a3b844bc454e4438f44e"
+                }),
+            }),
+            id: Some(JsonRpcId::Number(123)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        assert_eq!(response.id, Some(JsonRpcId::Number(123)));
+    }
+
+    #[tokio::test]
+    async fn test_rpc_generic_request_with_empty_params() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .withf(|method, params| method == "net_version" && params.as_str() == Some("[]"))
+            .returning(|_, _| Box::pin(async { Ok(serde_json::json!("1")) }));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "net_version".to_string(),
+                params: "[]".to_string(),
+            }),
+            id: Some(JsonRpcId::Number(999)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+        assert_eq!(response.id, Some(JsonRpcId::Number(999)));
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_invalid_address_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider.expect_raw_request_dyn().returning(|_, _| {
+            Box::pin(async {
+                Err(ProviderError::InvalidAddress(
+                    "Invalid address format".to_string(),
+                ))
+            })
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_getBalance".to_string(),
+                params: r#"["invalid_address", "latest"]"#.to_string(),
+            }),
+            id: Some(JsonRpcId::Number(1)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32602); // RpcErrorCodes::INVALID_PARAMS
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_network_configuration_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider.expect_raw_request_dyn().returning(|_, _| {
+            Box::pin(async {
+                Err(ProviderError::NetworkConfiguration(
+                    "Network not reachable".to_string(),
+                ))
+            })
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_chainId".to_string(),
+                params: "[]".to_string(),
+            }),
+            id: Some(JsonRpcId::Number(2)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -33004); // OpenZeppelinErrorCodes::NETWORK_CONFIGURATION
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_timeout_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .returning(|_, _| Box::pin(async { Err(ProviderError::Timeout) }));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_blockNumber".to_string(),
+                params: serde_json::json!([]),
+            }),
+            id: Some(JsonRpcId::Number(3)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -33000); // OpenZeppelinErrorCodes::TIMEOUT
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_rate_limited_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .returning(|_, _| Box::pin(async { Err(ProviderError::RateLimited) }));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_getBalance".to_string(),
+                params: r#"["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]"#.to_string(),
+            }),
+            id: Some(JsonRpcId::Number(4)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -33001); // OpenZeppelinErrorCodes::RATE_LIMITED
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_bad_gateway_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .returning(|_, _| Box::pin(async { Err(ProviderError::BadGateway) }));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_gasPrice".to_string(),
+                params: serde_json::json!([]),
+            }),
+            id: Some(JsonRpcId::Number(5)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -33002); // OpenZeppelinErrorCodes::BAD_GATEWAY
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_request_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider.expect_raw_request_dyn().returning(|_, _| {
+            Box::pin(async {
+                Err(ProviderError::RequestError {
+                    error: "Bad request".to_string(),
+                    status_code: 400,
+                })
+            })
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "invalid_method".to_string(),
+                params: "{}".to_string(),
+            }),
+            id: Some(JsonRpcId::Number(6)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -33003); // OpenZeppelinErrorCodes::REQUEST_ERROR
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_other_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider.expect_raw_request_dyn().returning(|_, _| {
+            Box::pin(async {
+                Err(ProviderError::Other(
+                    "Unexpected error occurred".to_string(),
+                ))
+            })
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_getBalance".to_string(),
+                params: serde_json::json!(["0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "latest"]),
+            }),
+            id: Some(JsonRpcId::Number(7)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32603); // RpcErrorCodes::INTERNAL_ERROR
+    }
+
+    #[tokio::test]
+    async fn test_rpc_response_preserves_request_id() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_raw_request_dyn()
+            .returning(|_, _| Box::pin(async { Ok(serde_json::json!("0x1")) }));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request_id = u64::MAX;
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::GenericRpcRequest {
+                method: "eth_chainId".to_string(),
+                params: "[]".to_string(),
+            }),
+            id: Some(JsonRpcId::Number(request_id as i64)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert_eq!(response.id, Some(JsonRpcId::Number(request_id as i64)));
+        assert_eq!(response.jsonrpc, "2.0");
+    }
+
+    #[tokio::test]
+    async fn test_rpc_handles_complex_json_response() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let complex_response = serde_json::json!({
+            "number": "0x1b4",
+            "hash": "0xdc0818cf78f21a8e70579cb46a43643f78291264dda342ae31049421c82d21ae",
+            "parentHash": "0xe99e022112df268ce40b8b654759b4f39c3cc1b8c86b2f4c7da48ba6d8a6ae8b",
+            "transactions": [
+                {
+                    "hash": "0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060",
+                    "from": "0xa7d9ddbe1f17865597fbd27ec712455208b6b76d",
+                    "to": "0xf02c1c8e6114b1dbe8937a39260b5b0a374432bb",
+                    "value": "0xf3dbb76162000"
+                }
+            ],
+            "gasUsed": "0x5208"
+        });
+
+        provider.expect_raw_request_dyn().returning(move |_, _| {
+            let response = complex_response.clone();
+            Box::pin(async move { Ok(response) })
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_getBlockByNumber".to_string(),
+                params: serde_json::json!(["0x1b4", true]),
+            }),
+            id: Some(JsonRpcId::Number(8)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+
+        if let Some(NetworkRpcResult::Evm(EvmRpcResult::RawRpcResult(result))) = response.result {
+            assert!(result.get("transactions").is_some());
+            assert!(result.get("hash").is_some());
+            assert!(result.get("gasUsed").is_some());
         }
     }
 }

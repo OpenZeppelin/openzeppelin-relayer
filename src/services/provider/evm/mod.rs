@@ -21,6 +21,7 @@ use alloy::{
 use async_trait::async_trait;
 use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
+use serde_json;
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, RetryConfig};
@@ -121,6 +122,17 @@ pub trait EvmProviderTrait: Send + Sync {
     /// # Arguments
     /// * `tx` - The transaction request to call the contract function
     async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes, ProviderError>;
+
+    /// Sends a raw JSON-RPC request.
+    ///
+    /// # Arguments
+    /// * `method` - The JSON-RPC method name
+    /// * `params` - The parameters as a JSON value
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError>;
 }
 
 impl EvmProvider {
@@ -417,6 +429,34 @@ impl EvmProviderTrait for EvmProvider {
         self.retry_rpc_call("call_contract", move |provider| {
             let tx_req = tx.clone();
             async move { provider.call(&tx_req).await.map_err(ProviderError::from) }
+        })
+        .await
+    }
+
+    async fn raw_request_dyn(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError> {
+        self.retry_rpc_call("raw_request_dyn", move |provider| {
+            let method_clone = method.to_string();
+            let params_clone = params.clone();
+            async move {
+                // Convert params to RawValue and use Cow for method
+                let params_raw = serde_json::value::to_raw_value(&params_clone).map_err(|e| {
+                    ProviderError::Other(format!("Failed to serialize params: {}", e))
+                })?;
+
+                let result = provider
+                    .raw_request_dyn(std::borrow::Cow::Owned(method_clone), &params_raw)
+                    .await
+                    .map_err(ProviderError::from)?;
+
+                // Convert RawValue back to Value
+                serde_json::from_str(result.get()).map_err(|e| {
+                    ProviderError::Other(format!("Failed to deserialize result: {}", e))
+                })
+            }
         })
         .await
     }

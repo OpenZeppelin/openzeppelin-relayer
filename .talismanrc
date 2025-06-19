@@ -1,0 +1,24 @@
+threshold: high
+
+allowed_patterns:
+# Ignore commit hashes
+- .*@[a-fA-F0-9]*
+# Ignore checksums
+- sha256:[a-fA-F0-9]*
+- sha512-[a-fA-F0-9]*
+# Match Cargo.lock checksums
+- checksum\s*=\s*"([a-fA-F0-9]{64})"
+- key
+- public key
+
+fileignoreconfig:
+# We need to ignore this module,
+# since we encode public keys directly for testing
+- filename: src/utils/der.rs
+  checksum: 4f52ea05a294a13bd886800d8195b0c0346498fdf2299055c4316b0610eed9f8
+
+custom_severities:
+- detector: Base64Content
+  severity: medium
+- detector: HexContent
+  severity: low

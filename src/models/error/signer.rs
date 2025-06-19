@@ -1,7 +1,7 @@
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::services::{TurnkeyError, VaultError};
+use crate::services::{AwsKmsError, TurnkeyError, VaultError};
 
 use super::TransactionError;
 
@@ -28,6 +28,9 @@ pub enum SignerError {
 
     #[error("Turnkey error: {0}")]
     TurnkeyError(#[from] TurnkeyError),
+
+    #[error("AWS KMS error: {0}")]
+    AwsKmsError(#[from] AwsKmsError),
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),
