@@ -415,6 +415,16 @@ impl
                             "InvokeHostFunction operations must be exclusive - only one InvokeHostFunction operation is allowed per transaction and it cannot be mixed with other operations".to_string()
                         ));
                     }
+
+                    // Check if memo is None when using InvokeHostFunction
+                    if let Some(ref memo) = stellar_request.memo {
+                        if !matches!(memo, MemoSpec::None) {
+                            return Err(RelayerError::PolicyConfigurationError(
+                                "Memo must be null when using InvokeHostFunction operations"
+                                    .to_string(),
+                            ));
+                        }
+                    }
                 }
 
                 Ok(Self {
@@ -999,10 +1009,13 @@ mod tests {
         assert!(env.is_ok());
         let env = env.unwrap();
         // Should be a TransactionV1Envelope with no signatures
-        if let soroban_rs::xdr::TransactionEnvelope::Tx(env) = env {
-            assert_eq!(env.signatures.len(), 0);
-        } else {
-            panic!("Expected TransactionEnvelope::Tx");
+        match env {
+            soroban_rs::xdr::TransactionEnvelope::Tx(tx_env) => {
+                assert_eq!(tx_env.signatures.len(), 0);
+            }
+            _ => {
+                panic!("Expected TransactionEnvelope::Tx variant");
+            }
         }
     }
 
@@ -1013,10 +1026,13 @@ mod tests {
         let env = tx.signed_envelope();
         assert!(env.is_ok());
         let env = env.unwrap();
-        if let soroban_rs::xdr::TransactionEnvelope::Tx(env) = env {
-            assert_eq!(env.signatures.len(), 1);
-        } else {
-            panic!("Expected TransactionEnvelope::Tx");
+        match env {
+            soroban_rs::xdr::TransactionEnvelope::Tx(tx_env) => {
+                assert_eq!(tx_env.signatures.len(), 1);
+            }
+            _ => {
+                panic!("Expected TransactionEnvelope::Tx variant");
+            }
         }
     }
 
@@ -1109,7 +1125,7 @@ mod tests {
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
-        assert!(result.is_ok(), "Test case 1 failed: {:?}", result.err());
+        assert!(result.is_ok(), "Single InvokeHostFunction should succeed");
 
         // Test case 2: InvokeHostFunction mixed with Payment - should fail
         let stellar_request =
@@ -1141,16 +1157,17 @@ mod tests {
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
-        assert!(result.is_err());
-        if let Err(err) = result {
-            let err_str = err.to_string();
-            assert!(
-                err_str.contains("InvokeHostFunction operations must be exclusive"),
-                "Got error: {}",
-                err_str
-            );
-        } else {
-            panic!("Expected an error");
+
+        match result {
+            Ok(_) => panic!("Expected InvokeHostFunction mixed with Payment to fail"),
+            Err(err) => {
+                let err_str = err.to_string();
+                assert!(
+                    err_str.contains("InvokeHostFunction operations must be exclusive"),
+                    "Expected error about InvokeHostFunction exclusivity, got: {}",
+                    err_str
+                );
+            }
         }
 
         // Test case 3: Multiple InvokeHostFunction operations - should fail
@@ -1187,16 +1204,17 @@ mod tests {
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
-        assert!(result.is_err());
-        if let Err(err) = result {
-            let err_str = err.to_string();
-            assert!(
-                err_str.contains("InvokeHostFunction operations must be exclusive"),
-                "Got error: {}",
-                err_str
-            );
-        } else {
-            panic!("Expected an error");
+
+        match result {
+            Ok(_) => panic!("Expected multiple InvokeHostFunction operations to fail"),
+            Err(err) => {
+                let err_str = err.to_string();
+                assert!(
+                    err_str.contains("InvokeHostFunction operations must be exclusive"),
+                    "Expected error about InvokeHostFunction exclusivity, got: {}",
+                    err_str
+                );
+            }
         }
 
         // Test case 4: Multiple Payment operations - should succeed
@@ -1225,6 +1243,112 @@ mod tests {
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
-        assert!(result.is_ok(), "Test case 4 failed: {:?}", result.err());
+        assert!(result.is_ok(), "Multiple Payment operations should succeed");
+
+        // Test case 5: InvokeHostFunction with non-None memo - should fail
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![OperationSpec::InvokeHostFunction {
+                    host_function_spec: HostFunctionSpec::InvokeContract {
+                        contract_address:
+                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
+                        function_name: "transfer".to_string(),
+                        args: vec![],
+                    },
+                    auth: None,
+                }],
+                memo: Some(MemoSpec::Text("This should fail".to_string())),
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+
+        match result {
+            Ok(_) => panic!("Expected InvokeHostFunction with non-None memo to fail"),
+            Err(err) => {
+                let err_str = err.to_string();
+                assert!(
+                    err_str.contains("Memo must be null when using InvokeHostFunction operations"),
+                    "Expected error about memo restriction, got: {}",
+                    err_str
+                );
+            }
+        }
+
+        // Test case 6: InvokeHostFunction with memo None - should succeed
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![OperationSpec::InvokeHostFunction {
+                    host_function_spec: HostFunctionSpec::InvokeContract {
+                        contract_address:
+                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
+                        function_name: "transfer".to_string(),
+                        args: vec![],
+                    },
+                    auth: None,
+                }],
+                memo: Some(MemoSpec::None),
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(
+            result.is_ok(),
+            "InvokeHostFunction with MemoSpec::None should succeed"
+        );
+
+        // Test case 7: InvokeHostFunction with no memo field - should succeed
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![OperationSpec::InvokeHostFunction {
+                    host_function_spec: HostFunctionSpec::InvokeContract {
+                        contract_address:
+                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
+                        function_name: "transfer".to_string(),
+                        args: vec![],
+                    },
+                    auth: None,
+                }],
+                memo: None,
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(
+            result.is_ok(),
+            "InvokeHostFunction with no memo should succeed"
+        );
+
+        // Test case 8: Payment operation with memo - should succeed
+        let stellar_request =
+            crate::models::transaction::request::stellar::StellarTransactionRequest {
+                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                    .to_string(),
+                network: "testnet".to_string(),
+                operations: vec![OperationSpec::Payment {
+                    destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                        .to_string(),
+                    amount: 1000,
+                    asset: AssetSpec::Native,
+                }],
+                memo: Some(MemoSpec::Text("Payment memo is allowed".to_string())),
+                valid_until: None,
+            };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_ok(), "Payment operation with memo should succeed");
     }
 }
