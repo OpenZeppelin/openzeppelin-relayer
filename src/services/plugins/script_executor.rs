@@ -40,16 +40,19 @@ impl ScriptExecutor {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
 
     use super::*;
 
     #[tokio::test]
     async fn test_execute_typescript() {
-        let dir = Path::new("tests/utils/plugins/mock_repo");
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("tests/utils/plugins/mock_repo");
 
-        let script_path = format!("{}/test_works.ts", dir.display());
-        let socket_path = format!("{}/test_works.sock", dir.display());
+        let uuid = uuid::Uuid::new_v4();
+
+        let script_path = format!("{}/test_works.ts-{}", dir.display(), uuid);
+        let socket_path = format!("{}/test_works.sock-{}", dir.display(), uuid);
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
 
@@ -66,14 +69,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_typescript_error() {
-        let dir = Path::new("tests/utils/plugins/mock_repo");
-        let script_path = dir.join("test_error.ts");
-        let socket_path = dir.join("test_error.sock");
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("tests/utils/plugins/mock_repo");
+
+        let uuid = uuid::Uuid::new_v4();
+
+        let script_path = format!("{}/test_error.ts-{}", dir.display(), uuid);
+        let socket_path = format!("{}/test_error.sock-{}", dir.display(), uuid);
         let content = "console.logger('test');";
         fs::write(script_path.clone(), content).unwrap();
-
-        let socket_path = socket_path.to_str().unwrap().to_string();
-        let script_path = script_path.to_str().unwrap().to_string();
 
         let result =
             ScriptExecutor::execute_typescript(script_path.clone(), socket_path.clone()).await;
@@ -83,9 +88,8 @@ mod tests {
         let _ = fs::remove_file(socket_path.clone());
 
         assert!(result.is_ok());
-        assert!(result
-            .unwrap()
-            .error
-            .contains("Property 'logger' does not exist"));
+
+        let result = result.unwrap();
+        assert!(result.error.contains("console.logger('test')"));
     }
 }

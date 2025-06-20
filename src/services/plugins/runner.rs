@@ -67,7 +67,6 @@ impl PluginRunnerTrait for PluginRunner {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
 
     use crate::{jobs::MockJobProducerTrait, utils::mocks::mockutils::create_mock_app_state};
 
@@ -75,7 +74,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_run() {
-        let dir = Path::new("tests/utils/plugins/mock_repo");
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("tests/utils/plugins/mock_repo");
 
         let script_path = format!("{}/test.ts", dir.display());
         let socket_path = format!("{}/test.sock", dir.display());
