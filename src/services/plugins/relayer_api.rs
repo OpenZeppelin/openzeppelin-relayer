@@ -16,7 +16,7 @@ pub enum PluginMethod {
     SendTransaction,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub struct Request {
     pub request_id: String,
@@ -25,7 +25,7 @@ pub struct Request {
     pub payload: serde_json::Value,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Response {
     pub request_id: String,
