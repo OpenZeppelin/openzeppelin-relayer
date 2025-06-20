@@ -1,6 +1,5 @@
 ---
 version: '3.9'
-
 services:
   relayer:
     build:
@@ -26,11 +25,10 @@ services:
       - metrics-network
     volumes:
       - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
     depends_on:
       - redis
     restart: on-failure:5
-
-
   redis:
     image: redis:bookworm
     ports:
@@ -39,23 +37,25 @@ services:
       - no-new-privileges
     volumes:
       - redis_data:/data
-    command: [redis-server, --appendonly, yes, --save, '60', '1']
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
     networks:
       - relayer-network
       - metrics-network
     restart: on-failure:5
-
-
 networks:
   metrics-network:
     internal: true
   relayer-network:
     driver: bridge
-
 volumes:
   redis_data:
     driver: local
-
 secrets:
   api_key:
     environment: API_KEY

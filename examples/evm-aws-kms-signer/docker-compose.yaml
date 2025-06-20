@@ -28,6 +28,7 @@ services:
       - metrics-network
     volumes:
       - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
     depends_on:
       - redis
     restart: on-failure:5
