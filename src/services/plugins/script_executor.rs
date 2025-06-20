@@ -25,7 +25,7 @@ impl ScriptExecutor {
             .stderr(Stdio::piped())
             .output()
             .await
-            .map_err(|e| PluginError::SocketError(e.to_string()))?;
+            .map_err(|e| PluginError::SocketError(format!("Failed to execute script: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -65,10 +65,6 @@ mod tests {
         let script_path = temp_dir.path().join("test_execute_typescript.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
-        if let Some(parent) = socket_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
@@ -78,6 +74,8 @@ mod tests {
             socket_path.display().to_string(),
         )
         .await;
+
+        println!("Result: {:#?}", result);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");
@@ -90,10 +88,6 @@ mod tests {
         let script_path = temp_dir.path().join("test_execute_typescript_error.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript_error.sock");
 
-        if let Some(parent) = socket_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-
         let content = "console.logger('test');";
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
@@ -103,6 +97,8 @@ mod tests {
             socket_path.display().to_string(),
         )
         .await;
+
+        println!("Result: {:#?}", result);
 
         assert!(result.is_ok());
 
