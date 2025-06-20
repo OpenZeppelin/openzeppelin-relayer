@@ -17,6 +17,17 @@ impl ScriptExecutor {
         script_path: String,
         socket_path: String,
     ) -> Result<ScriptResult, PluginError> {
+        if Command::new("ts-node")
+            .arg("--version")
+            .output()
+            .await
+            .is_err()
+        {
+            return Err(PluginError::SocketError(
+                "ts-node is not installed or not in PATH. Please install it with: npm install -g ts-node".to_string()
+            ));
+        }
+
         let output = Command::new("ts-node")
             .arg(script_path)
             .arg(socket_path)
@@ -64,6 +75,12 @@ mod tests {
         let ts_config = temp_dir.path().join("tsconfig.json");
         let script_path = temp_dir.path().join("test_execute_typescript.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
+
+        println!("About to execute ts-node with:");
+        println!("  script_path: {}", script_path.display());
+        println!("  socket_path: {}", socket_path.display());
+        println!("  script exists: {}", script_path.exists());
+        println!("  current_dir: {:?}", std::env::current_dir());
 
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
