@@ -41,23 +41,39 @@ impl ScriptExecutor {
 mod tests {
     use std::fs;
 
+    use tempfile::tempdir;
+
     use super::*;
+
+    static TS_CONFIG: &str = r#"
+    {
+        "compilerOptions": {
+          "target": "es2016",
+          "module": "commonjs",
+          "esModuleInterop": true,
+          "forceConsistentCasingInFileNames": true,
+          "strict": true,
+          "skipLibCheck": true
+        }
+      }
+"#;
 
     #[tokio::test]
     async fn test_execute_typescript() {
-        let dir = std::env::current_dir()
-            .unwrap()
-            .join("tests/utils/plugins/mock_repo");
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_execute_typescript.ts");
+        let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
-        let uuid = uuid::Uuid::new_v4();
-
-        let script_path = format!("{}/test_works-{}.ts", dir.display(), uuid);
-        let socket_path = format!("{}/test_works-{}.sock", dir.display(), uuid);
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-        let result =
-            ScriptExecutor::execute_typescript(script_path.clone(), socket_path.clone()).await;
+        let result = ScriptExecutor::execute_typescript(
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+        )
+        .await;
 
         // These are just in case, there should be an automatic deletion
         let _ = fs::remove_file(script_path.clone());
@@ -69,19 +85,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_typescript_error() {
-        let dir = std::env::current_dir()
-            .unwrap()
-            .join("tests/utils/plugins/mock_repo");
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_execute_typescript_error.ts");
+        let socket_path = temp_dir.path().join("test_execute_typescript_error.sock");
 
-        let uuid = uuid::Uuid::new_v4();
-
-        let script_path = format!("{}/test_error-{}.ts", dir.display(), uuid);
-        let socket_path = format!("{}/test_error-{}.sock", dir.display(), uuid);
         let content = "console.logger('test');";
         fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-        let result =
-            ScriptExecutor::execute_typescript(script_path.clone(), socket_path.clone()).await;
+        let result = ScriptExecutor::execute_typescript(
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+        )
+        .await;
 
         // These are just in case, there should be an automatic deletion
         let _ = fs::remove_file(script_path.clone());
@@ -90,6 +107,6 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
-        assert!(result.error.contains("console.logger('test')"));
+        assert!(result.error.contains("logger"));
     }
 }

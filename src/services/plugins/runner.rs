@@ -69,36 +69,46 @@ mod tests {
     use std::fs;
 
     use crate::{jobs::MockJobProducerTrait, utils::mocks::mockutils::create_mock_app_state};
+    use tempfile::tempdir;
 
     use super::*;
 
+    static TS_CONFIG: &str = r#"
+        {
+            "compilerOptions": {
+              "target": "es2016",
+              "module": "commonjs",
+              "esModuleInterop": true,
+              "forceConsistentCasingInFileNames": true,
+              "strict": true,
+              "skipLibCheck": true
+            }
+          }
+    "#;
+
     #[tokio::test]
     async fn test_run() {
-        let dir = std::env::current_dir()
-            .unwrap()
-            .join("tests/utils/plugins/mock_repo");
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_run.ts");
+        let socket_path = temp_dir.path().join("test_run.sock");
 
-        let uuid = uuid::Uuid::new_v4();
-
-        let script_path = format!("{}/test-{}.ts", dir.display(), uuid);
-        let socket_path = format!("{}/test-{}.sock", dir.display(), uuid);
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
         let state = create_mock_app_state(None, None, None, None).await;
 
         let plugin_runner = PluginRunner;
         let result = plugin_runner
             .run::<MockJobProducerTrait>(
-                &socket_path,
-                script_path.clone(),
+                &socket_path.display().to_string(),
+                script_path.display().to_string(),
                 Arc::new(web::ThinData(state)),
             )
             .await;
 
-        // These are just in case, there should be an automatic deletion
-        let _ = fs::remove_file(script_path.clone());
-        let _ = fs::remove_file(socket_path.clone());
+        println!("Result: {:#?}", result);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");
