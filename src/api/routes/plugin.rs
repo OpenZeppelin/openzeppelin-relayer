@@ -31,7 +31,12 @@ mod tests {
     use actix_web::{test, App, HttpResponse};
 
     async fn mock_plugin_call() -> impl Responder {
-        HttpResponse::Ok().json(PluginCallResponse { success: true })
+        HttpResponse::Ok().json(PluginCallResponse {
+            success: true,
+            message: "Plugin called successfully".to_string(),
+            output: String::from(""),
+            error: String::from(""),
+        })
     }
 
     #[actix_web::test]
@@ -50,7 +55,6 @@ mod tests {
             .uri("/plugins/test-plugin/call")
             .insert_header(("Content-Type", "application/json"))
             .set_json(serde_json::json!({
-                "plugin_id": "test-plugin",
                 "params": serde_json::Value::Null,
             }))
             .to_request();

@@ -52,8 +52,12 @@ impl InMemoryNetworkRepository {
         name: &str,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
-        let id = NetworkRepoModel::create_id(network_type, name);
-        Ok(store.get(&id).cloned())
+        for (_, network) in store.iter() {
+            if network.network_type == network_type && network.name == name {
+                return Ok(Some(network.clone()));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -127,8 +131,12 @@ impl NetworkRepository for InMemoryNetworkRepository {
         name: &str,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
-        let id = NetworkRepoModel::create_id(network_type, name);
-        Ok(store.get(&id).cloned())
+        for (_, network) in store.iter() {
+            if network.network_type == network_type && network.name == name {
+                return Ok(Some(network.clone()));
+            }
+        }
+        Ok(None)
     }
 
     async fn get_by_chain_id(

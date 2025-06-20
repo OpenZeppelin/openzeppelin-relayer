@@ -15,7 +15,7 @@ use actix_web::web::ThinData;
 
 use crate::{
     domain::{RelayerFactory, RelayerFactoryTrait},
-    jobs::{JobProducer, JobProducerTrait},
+    jobs::JobProducerTrait,
     models::{ApiError, AppState, RelayerError, RelayerRepoModel},
     repositories::Repository,
 };
@@ -58,27 +58,19 @@ where
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer(
+pub async fn get_network_relayer<P: JobProducerTrait + 'static>(
     relayer_id: String,
-    state: &ThinData<AppState<JobProducer>>,
-) -> Result<NetworkRelayer, ApiError> {
+    state: &ThinData<AppState<P>>,
+) -> Result<NetworkRelayer<P>, ApiError> {
     let relayer_model = get_relayer_by_id(relayer_id, state).await?;
     let signer_model = state
         .signer_repository
         .get_by_id(relayer_model.signer_id.clone())
         .await?;
 
-    RelayerFactory::create_relayer(
-        relayer_model,
-        signer_model,
-        state.relayer_repository(),
-        state.network_repository(),
-        state.transaction_repository(),
-        state.transaction_counter_store(),
-        state.job_producer(),
-    )
-    .await
-    .map_err(|e| e.into())
+    RelayerFactory::create_relayer(relayer_model, signer_model, state)
+        .await
+        .map_err(|e| e.into())
 }
 
 /// Constructs a network relayer using a given relayer model.
@@ -92,26 +84,18 @@ pub async fn get_network_relayer(
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer_by_model(
+pub async fn get_network_relayer_by_model<P: JobProducerTrait + 'static>(
     relayer_model: RelayerRepoModel,
-    state: &ThinData<AppState<JobProducer>>,
-) -> Result<NetworkRelayer, ApiError> {
+    state: &ThinData<AppState<P>>,
+) -> Result<NetworkRelayer<P>, ApiError> {
     let signer_model = state
         .signer_repository
         .get_by_id(relayer_model.signer_id.clone())
         .await?;
 
-    RelayerFactory::create_relayer(
-        relayer_model,
-        signer_model,
-        state.relayer_repository(),
-        state.network_repository(),
-        state.transaction_repository(),
-        state.transaction_counter_store(),
-        state.job_producer(),
-    )
-    .await
-    .map_err(|e| e.into())
+    RelayerFactory::create_relayer(relayer_model, signer_model, state)
+        .await
+        .map_err(|e| e.into())
 }
 
 /// Returns an error indicating that the endpoint is not supported for Solana relayers.

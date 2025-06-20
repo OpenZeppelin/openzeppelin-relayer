@@ -17,7 +17,7 @@ use crate::{
         relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
         SolanaRelayerTrait, SwapParams,
     },
-    jobs::{JobProducer, JobProducerTrait, SolanaTokenSwapRequest},
+    jobs::{JobProducerTrait, SolanaTokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, JsonRpcRequest,
         JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkType, RelayerNetworkPolicy,
@@ -72,10 +72,10 @@ where
     dex_service: Arc<NetworkDex<SP, S, JS>>,
 }
 
-pub type DefaultSolanaRelayer = SolanaRelayer<
+pub type DefaultSolanaRelayer<J> = SolanaRelayer<
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryTransactionRepository,
-    JobProducer,
+    J,
     SolanaSigner,
     JupiterService,
     SolanaProvider,

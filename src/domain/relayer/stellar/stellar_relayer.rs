@@ -25,7 +25,7 @@ use crate::{
     domain::{
         next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
     },
-    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
+    jobs::{JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
@@ -123,12 +123,12 @@ where
     job_producer: Arc<J>,
 }
 
-pub type DefaultStellarRelayer = StellarRelayer<
+pub type DefaultStellarRelayer<J> = StellarRelayer<
     StellarProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
     InMemoryTransactionRepository,
-    JobProducer,
+    J,
     TransactionCounterService<InMemoryTransactionCounter>,
 >;
 
