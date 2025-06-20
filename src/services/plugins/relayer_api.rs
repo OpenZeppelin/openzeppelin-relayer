@@ -174,7 +174,7 @@ mod tests {
     async fn test_handle_request() {
         setup_test_env();
         let state = create_mock_app_state(
-            Some(vec![create_mock_relayer("test".to_string())]),
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
             Some(vec![create_mock_signer()]),
             Some(vec![create_mock_network()]),
             None,
@@ -195,5 +195,34 @@ mod tests {
 
         assert!(response.error.is_none());
         assert!(response.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_error_paused_relayer() {
+        setup_test_env();
+        let paused = true;
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), paused)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SendTransaction,
+            payload: serde_json::json!(create_mock_evm_transaction_request()),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        assert!(response.result.is_none());
+        assert_eq!(response.error.unwrap(), "Relayer error: Relayer is paused");
     }
 }

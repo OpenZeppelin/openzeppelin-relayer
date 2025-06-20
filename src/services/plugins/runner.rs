@@ -65,3 +65,41 @@ impl PluginRunnerTrait for PluginRunner {
         self.run(socket_path, script_path, state).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use crate::{jobs::MockJobProducerTrait, utils::mocks::mockutils::create_mock_app_state};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_run() {
+        let dir = Path::new("tests/utils/plugins/mock_repo");
+
+        let script_path = format!("{}/test.ts", dir.display());
+        let socket_path = format!("{}/test.sock", dir.display());
+        let content = "console.log('test');";
+        fs::write(script_path.clone(), content).unwrap();
+
+        let state = create_mock_app_state(None, None, None, None).await;
+
+        let plugin_runner = PluginRunner;
+        let result = plugin_runner
+            .run::<MockJobProducerTrait>(
+                &socket_path,
+                script_path.clone(),
+                Arc::new(web::ThinData(state)),
+            )
+            .await;
+
+        // These are just in case, there should be an automatic deletion
+        let _ = fs::remove_file(script_path.clone());
+        let _ = fs::remove_file(socket_path.clone());
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().output, "test\n");
+    }
+}

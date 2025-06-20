@@ -21,12 +21,12 @@ pub mod mockutils {
         },
     };
 
-    pub fn create_mock_relayer(id: String) -> RelayerRepoModel {
+    pub fn create_mock_relayer(id: String, paused: bool) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.clone(),
             name: format!("Relayer {}", id.clone()),
             network: "test".to_string(),
-            paused: false,
+            paused,
             network_type: NetworkType::Evm,
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
                 gas_price_cap: None,
