@@ -14,14 +14,15 @@ use crate::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{
-        relayer::RelayerError, BalanceResponse, DexStrategy, JsonRpcRequest, JsonRpcResponse,
-        SolanaRelayerDexTrait, SolanaRelayerTrait, SwapParams,
+        relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
+        SolanaRelayerTrait, SwapParams,
     },
     jobs::{JobProducer, JobProducerTrait, SolanaTokenSwapRequest},
     models::{
-        produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, NetworkRpcRequest,
-        NetworkRpcResult, NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        SolanaAllowedTokensPolicy, SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
+        produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, JsonRpcRequest,
+        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkType, RelayerNetworkPolicy,
+        RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaDexPayload,
+        SolanaNetwork, TransactionRepoModel,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionRepository,
@@ -745,7 +746,7 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams,
-            GetFeaturesEnabledRequestParams, NetworkConfigData, NetworkRepoModel,
+            GetFeaturesEnabledRequestParams, JsonRpcId, NetworkConfigData, NetworkRepoModel,
             RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
             SolanaSwapStrategy,
         },
@@ -1757,7 +1758,7 @@ mod tests {
                     fee_token: "".to_string(),
                 },
             )),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
         let resp = solana_relayer.rpc(req).await.unwrap();
 
@@ -1777,7 +1778,7 @@ mod tests {
             params: NetworkRpcRequest::Solana(crate::models::SolanaRpcRequest::GetFeaturesEnabled(
                 GetFeaturesEnabledRequestParams {},
             )),
-            id: 1,
+            id: Some(JsonRpcId::Number(1)),
         };
         let resp = solana_relayer.rpc(req).await.unwrap();
 

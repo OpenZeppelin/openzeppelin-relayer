@@ -7,7 +7,7 @@ use log::{info, warn};
 
 use super::{i64_from_u64, lane_gate, StellarRelayerTransaction};
 use crate::{
-    domain::SignTransactionResponse,
+    domain::{needs_simulation, SignTransactionResponse},
     jobs::{JobProducerTrait, TransactionSend},
     models::{
         NetworkTransactionData, OperationSpec, RelayerRepoModel, TransactionError,
@@ -16,7 +16,7 @@ use crate::{
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
 };
-use soroban_rs::xdr::TransactionEnvelope;
+use soroban_rs::{stellar_rpc_client::SimulateTransactionResponse, xdr::TransactionEnvelope};
 
 impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
 where
@@ -28,12 +28,13 @@ where
     C: TransactionCounterTrait + Send + Sync,
 {
     /// Optionally invoke the RPC simulation depending on the transaction operations.
+    /// Returns the simulation response if simulation was needed and successful.
     async fn simulate_if_needed(
         &self,
         unsigned_env: &TransactionEnvelope,
         operations: &[OperationSpec],
-    ) -> Result<(), TransactionError> {
-        if crate::domain::transaction::stellar::utils::needs_simulation(operations) {
+    ) -> Result<Option<SimulateTransactionResponse>, TransactionError> {
+        if needs_simulation(operations) {
             let resp = self
                 .provider()
                 .simulate_transaction_envelope(unsigned_env)
@@ -44,9 +45,11 @@ where
                 warn!("Stellar simulation failed: {}", err_msg);
                 return Err(TransactionError::SimulationFailed(err_msg));
             }
+
+            return Ok(Some(resp));
         }
 
-        Ok(())
+        Ok(None)
     }
 
     /// Send a submit-transaction job for the given transaction.
@@ -116,14 +119,21 @@ where
         );
 
         let stellar_data = tx.network_data.get_stellar_transaction_data()?;
-        let stellar_data_with_seq = stellar_data.with_sequence_number(sequence_i64);
+        let mut stellar_data_with_seq = stellar_data.with_sequence_number(sequence_i64);
 
         let unsigned_env = stellar_data_with_seq
             .unsigned_envelope()
             .map_err(TransactionError::from)?;
 
-        self.simulate_if_needed(&unsigned_env, &stellar_data_with_seq.operations)
+        let simulation_response = self
+            .simulate_if_needed(&unsigned_env, &stellar_data_with_seq.operations)
             .await?;
+
+        // Apply simulation results if available
+        if let Some(sim_resp) = simulation_response {
+            info!("Applying simulation results to transaction");
+            stellar_data_with_seq = stellar_data_with_seq.with_simulation_data(sim_resp)?;
+        }
 
         let sig_resp = self
             .signer()
@@ -137,7 +147,7 @@ where
             _ => {
                 return Err(TransactionError::InvalidType(
                     "Expected Stellar signature".into(),
-                ))
+                ));
             }
         };
 

@@ -4,8 +4,8 @@
 //! for handling transient failures in job processing.
 //!
 //! # Example
-//! ```rust
-//! use crate::jobs::workers::retry_backoff::BackoffRetryPolicy;
+//! ```rust, ignore
+//! use crate::jobs::retry_backoff::BackoffRetryPolicy;
 //! use std::time::Duration;
 //!
 //! let policy = BackoffRetryPolicy {
@@ -37,8 +37,7 @@ type Err = Error;
 /// * `max_backoff` - Maximum delay duration between retries
 ///
 /// # Example
-///
-/// ```rust
+/// ```rust, ignore
 /// let policy = BackoffRetryPolicy {
 ///     retries: 5,
 ///     initial_backoff: Duration::from_secs(1),

@@ -9,14 +9,14 @@
 use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
-        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, JsonRpcRequest,
-        Relayer, RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest,
-        Transaction,
+        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
+        RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest, Transaction,
     },
     jobs::JobProducer,
     models::{
-        ApiError, ApiResponse, AppState, NetworkRpcRequest, NetworkTransactionRequest, NetworkType,
-        PaginationMeta, PaginationQuery, RelayerResponse, TransactionResponse,
+        convert_to_internal_rpc_request, ApiError, ApiResponse, AppState,
+        NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery, RelayerResponse,
+        TransactionResponse,
     },
     repositories::{RelayerRepository, Repository, TransactionRepository},
 };
@@ -435,7 +435,7 @@ pub async fn sign_typed_data(
 /// # Arguments
 ///
 /// * `relayer_id` - The ID of the relayer.
-/// * `request` - The JSON-RPC request.
+/// * `request` - The raw JSON-RPC request value.
 /// * `state` - The application state containing the relayer repository.
 ///
 /// # Returns
@@ -443,14 +443,15 @@ pub async fn sign_typed_data(
 /// The result of the JSON-RPC call.
 pub async fn relayer_rpc(
     relayer_id: String,
-    request: JsonRpcRequest<NetworkRpcRequest>,
+    request: serde_json::Value,
     state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
-    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+    let network_relayer = get_network_relayer_by_model(relayer.clone(), &state).await?;
 
-    let result = network_relayer.rpc(request).await?;
+    let internal_request = convert_to_internal_rpc_request(request, &relayer.network_type)?;
+    let result = network_relayer.rpc(internal_request).await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

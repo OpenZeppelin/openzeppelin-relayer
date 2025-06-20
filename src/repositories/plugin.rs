@@ -27,6 +27,11 @@ impl InMemoryPluginRepository {
         }
     }
 
+    pub async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(store.get(id).cloned())
+    }
+
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<T>, RepositoryError> {
         Ok(lock.lock().await)
     }
@@ -120,6 +125,21 @@ mod tests {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id() {
+        let plugin_repository = Arc::new(InMemoryPluginRepository::new());
+
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+        };
+        plugin_repository.add(plugin.clone()).await.unwrap();
+        assert_eq!(
+            plugin_repository.get_by_id("test-plugin").await.unwrap(),
+            Some(plugin)
         );
     }
 }

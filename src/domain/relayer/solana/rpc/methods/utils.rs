@@ -1605,7 +1605,8 @@ mod tests {
     async fn test_estimate_and_convert_fee_token_with_margin() {
         let (mut relayer, signer, mut provider, mut jupiter_service, tx, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -1924,7 +1925,8 @@ mod tests {
     async fn test_create_transaction_with_user_fee_payment_token() {
         let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -2140,7 +2142,8 @@ mod tests {
     async fn test_create_transaction_with_user_fee_payment_insufficient_balance() {
         let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -2323,7 +2326,8 @@ mod tests {
     async fn test_confirm_user_fee_payment_token_sufficient() {
         let (mut relayer, signer, mut provider, mut jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC token mint
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -2488,7 +2492,8 @@ mod tests {
     async fn test_find_token_payments_to_relayer() {
         let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
             setup_test_context();
-        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        // USDC mint address
+        let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
         // Setup policy with token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {

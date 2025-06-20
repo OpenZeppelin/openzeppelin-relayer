@@ -1,11 +1,12 @@
 use crate::{
     domain::{
-        BalanceResponse, JsonRpcRequest, JsonRpcResponse, RelayerUpdateRequest, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest,
+        BalanceResponse, RelayerUpdateRequest, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
     },
     models::{
-        ApiResponse, DeletePendingTransactionsResponse, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, RelayerResponse, RelayerStatus, TransactionResponse,
+        ApiResponse, DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerResponse,
+        RelayerStatus, TransactionResponse,
     },
 };
 /// Relayer routes implementation

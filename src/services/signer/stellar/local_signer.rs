@@ -150,6 +150,7 @@ mod tests {
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             signatures: Vec::new(),
             hash: None,
+            simulation_transaction_data: None,
         };
         let response = signer
             .sign_transaction(NetworkTransactionData::Stellar(tx_data))

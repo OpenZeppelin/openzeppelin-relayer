@@ -518,6 +518,7 @@ Supported signer types:
 - `vault_transit`: vault transit signer
 - `turnkey`: turnkey signer
 - `google_cloud_kms`: google cloud kms signer
+- `aws_kms`: amazon aws kms signer
 
 Available configuration fields
 [cols="1,1,2"]
@@ -741,6 +742,21 @@ Available configuration fields
 | key.key_id
 | String
 | The KMS key ID used for signing operations.
+|===
+
+`aws_kms` type config:
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| region
+| String
+| AWS region. If the key is non-replicated across regions, this must match the key's original region. Optional. If not specified, the default region from shared credentials is used.
+
+| key_id
+| String
+| Id of the key in the AWS KMS
+
 |===
 
 
