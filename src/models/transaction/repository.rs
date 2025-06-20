@@ -403,16 +403,21 @@ impl
                 let source_account = stellar_request.source_account.clone();
                 let operations = stellar_request.operations.clone();
 
-                // Validate InvokeHostFunction exclusivity
-                let has_invoke_host_function = operations
-                    .iter()
-                    .any(|op| matches!(op, OperationSpec::InvokeHostFunction { .. }));
+                // Validate Soroban operation exclusivity (InvokeContract, CreateContract, UploadWasm)
+                let has_soroban_operation = operations.iter().any(|op| {
+                    matches!(
+                        op,
+                        OperationSpec::InvokeContract { .. }
+                            | OperationSpec::CreateContract { .. }
+                            | OperationSpec::UploadWasm { .. }
+                    )
+                });
 
-                if has_invoke_host_function {
+                if has_soroban_operation {
                     // Check if there's exactly one operation
                     if operations.len() != 1 {
                         return Err(RelayerError::PolicyConfigurationError(
-                            "InvokeHostFunction operations must be exclusive - only one InvokeHostFunction operation is allowed per transaction and it cannot be mixed with other operations".to_string()
+                            "Soroban operations (InvokeContract, CreateContract, UploadWasm) must be exclusive - only one such operation is allowed per transaction and it cannot be mixed with other operations".to_string()
                         ));
                     }
 
@@ -609,7 +614,6 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 mod tests {
     use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
 
-    use crate::models::transaction::stellar::HostFunctionSpec;
     use crate::models::AssetSpec;
 
     use super::*;
@@ -869,7 +873,9 @@ mod tests {
                 amount: 100000000, // 10 XLM in stroops
                 asset: AssetSpec::Native,
             }],
-            memo: Some(MemoSpec::Text("Test memo".to_string())),
+            memo: Some(MemoSpec::Text {
+                value: "Test memo".to_string(),
+            }),
             valid_until: Some("2025-01-01T00:00:00Z".to_string()),
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             signatures: Vec::new(),
@@ -1110,13 +1116,11 @@ mod tests {
                 source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
                     .to_string(),
                 network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeHostFunction {
-                    host_function_spec: HostFunctionSpec::InvokeContract {
-                        contract_address:
-                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
-                        function_name: "transfer".to_string(),
-                        args: vec![],
-                    },
+                operations: vec![OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "transfer".to_string(),
+                    args: vec![],
                     auth: None,
                 }],
                 memo: None,
@@ -1140,14 +1144,11 @@ mod tests {
                         amount: 1000,
                         asset: AssetSpec::Native,
                     },
-                    OperationSpec::InvokeHostFunction {
-                        host_function_spec: HostFunctionSpec::InvokeContract {
-                            contract_address:
-                                "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
-                                    .to_string(),
-                            function_name: "transfer".to_string(),
-                            args: vec![],
-                        },
+                    OperationSpec::InvokeContract {
+                        contract_address:
+                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
+                        function_name: "transfer".to_string(),
+                        args: vec![],
                         auth: None,
                     },
                 ],
@@ -1159,12 +1160,12 @@ mod tests {
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
 
         match result {
-            Ok(_) => panic!("Expected InvokeHostFunction mixed with Payment to fail"),
+            Ok(_) => panic!("Expected Soroban operation mixed with Payment to fail"),
             Err(err) => {
                 let err_str = err.to_string();
                 assert!(
-                    err_str.contains("InvokeHostFunction operations must be exclusive"),
-                    "Expected error about InvokeHostFunction exclusivity, got: {}",
+                    err_str.contains("Soroban operations") && err_str.contains("must be exclusive"),
+                    "Expected error about Soroban operation exclusivity, got: {}",
                     err_str
                 );
             }
@@ -1177,24 +1178,18 @@ mod tests {
                     .to_string(),
                 network: "testnet".to_string(),
                 operations: vec![
-                    OperationSpec::InvokeHostFunction {
-                        host_function_spec: HostFunctionSpec::InvokeContract {
-                            contract_address:
-                                "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
-                                    .to_string(),
-                            function_name: "transfer".to_string(),
-                            args: vec![],
-                        },
+                    OperationSpec::InvokeContract {
+                        contract_address:
+                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
+                        function_name: "transfer".to_string(),
+                        args: vec![],
                         auth: None,
                     },
-                    OperationSpec::InvokeHostFunction {
-                        host_function_spec: HostFunctionSpec::InvokeContract {
-                            contract_address:
-                                "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
-                                    .to_string(),
-                            function_name: "approve".to_string(),
-                            args: vec![],
-                        },
+                    OperationSpec::InvokeContract {
+                        contract_address:
+                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
+                        function_name: "approve".to_string(),
+                        args: vec![],
                         auth: None,
                     },
                 ],
@@ -1206,12 +1201,12 @@ mod tests {
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
 
         match result {
-            Ok(_) => panic!("Expected multiple InvokeHostFunction operations to fail"),
+            Ok(_) => panic!("Expected multiple Soroban operations to fail"),
             Err(err) => {
                 let err_str = err.to_string();
                 assert!(
-                    err_str.contains("InvokeHostFunction operations must be exclusive"),
-                    "Expected error about InvokeHostFunction exclusivity, got: {}",
+                    err_str.contains("Soroban operations") && err_str.contains("must be exclusive"),
+                    "Expected error about Soroban operation exclusivity, got: {}",
                     err_str
                 );
             }
@@ -1251,16 +1246,16 @@ mod tests {
                 source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
                     .to_string(),
                 network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeHostFunction {
-                    host_function_spec: HostFunctionSpec::InvokeContract {
-                        contract_address:
-                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
-                        function_name: "transfer".to_string(),
-                        args: vec![],
-                    },
+                operations: vec![OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "transfer".to_string(),
+                    args: vec![],
                     auth: None,
                 }],
-                memo: Some(MemoSpec::Text("This should fail".to_string())),
+                memo: Some(MemoSpec::Text {
+                    value: "This should fail".to_string(),
+                }),
                 valid_until: None,
             };
 
@@ -1285,13 +1280,11 @@ mod tests {
                 source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
                     .to_string(),
                 network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeHostFunction {
-                    host_function_spec: HostFunctionSpec::InvokeContract {
-                        contract_address:
-                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
-                        function_name: "transfer".to_string(),
-                        args: vec![],
-                    },
+                operations: vec![OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "transfer".to_string(),
+                    args: vec![],
                     auth: None,
                 }],
                 memo: Some(MemoSpec::None),
@@ -1311,13 +1304,11 @@ mod tests {
                 source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
                     .to_string(),
                 network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeHostFunction {
-                    host_function_spec: HostFunctionSpec::InvokeContract {
-                        contract_address:
-                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
-                        function_name: "transfer".to_string(),
-                        args: vec![],
-                    },
+                operations: vec![OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "transfer".to_string(),
+                    args: vec![],
                     auth: None,
                 }],
                 memo: None,
@@ -1343,7 +1334,9 @@ mod tests {
                     amount: 1000,
                     asset: AssetSpec::Native,
                 }],
-                memo: Some(MemoSpec::Text("Payment memo is allowed".to_string())),
+                memo: Some(MemoSpec::Text {
+                    value: "Payment memo is allowed".to_string(),
+                }),
                 valid_until: None,
             };
 

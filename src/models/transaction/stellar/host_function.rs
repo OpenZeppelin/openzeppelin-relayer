@@ -10,6 +10,155 @@ use soroban_rs::xdr::{
 use std::convert::TryFrom;
 use utoipa::ToSchema;
 
+/// HACK: Temporary fix for stellar-xdr bug where u64/i64 values are expected as numbers
+/// but are provided as strings. This recursively converts string values to numbers for:
+/// - {"u64":"1000"} to {"u64":1000}
+/// - {"i64":"-1000"} to {"i64":-1000}
+/// - {"timepoint":"1000"} to {"timepoint":1000}
+/// - {"duration":"1000"} to {"duration":1000}
+/// - UInt128Parts: {"hi":"1", "lo":"2"} to {"hi":1, "lo":2}
+/// - Int128Parts: {"hi":"-1", "lo":"2"} to {"hi":-1, "lo":2}
+/// - UInt256Parts: {"hi_hi":"1", "hi_lo":"2", "lo_hi":"3", "lo_lo":"4"} to numbers
+/// - Int256Parts: {"hi_hi":"-1", "hi_lo":"2", "lo_hi":"3", "lo_lo":"4"} to numbers
+///
+/// TODO: Remove this once stellar-xdr properly handles u64/i64 as strings.
+/// Track the issue at: https://github.com/stellar/rs-stellar-xdr
+fn fix_u64_format(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Handle single-field u64/i64 objects
+            if map.len() == 1 {
+                if let Some(serde_json::Value::String(s)) = map.get("u64") {
+                    if let Ok(num) = s.parse::<u64>() {
+                        map.insert("u64".to_string(), serde_json::json!(num));
+                    }
+                } else if let Some(serde_json::Value::String(s)) = map.get("i64") {
+                    if let Ok(num) = s.parse::<i64>() {
+                        map.insert("i64".to_string(), serde_json::json!(num));
+                    }
+                } else if let Some(serde_json::Value::String(s)) = map.get("timepoint") {
+                    if let Ok(num) = s.parse::<u64>() {
+                        map.insert("timepoint".to_string(), serde_json::json!(num));
+                    }
+                } else if let Some(serde_json::Value::String(s)) = map.get("duration") {
+                    if let Ok(num) = s.parse::<u64>() {
+                        map.insert("duration".to_string(), serde_json::json!(num));
+                    }
+                }
+            }
+
+            // Handle UInt128Parts (hi: u64, lo: u64)
+            if map.contains_key("hi") && map.contains_key("lo") && map.len() == 2 {
+                if let Some(serde_json::Value::String(s)) = map.get("hi") {
+                    if let Ok(num) = s.parse::<u64>() {
+                        map.insert("hi".to_string(), serde_json::json!(num));
+                    }
+                }
+                if let Some(serde_json::Value::String(s)) = map.get("lo") {
+                    if let Ok(num) = s.parse::<u64>() {
+                        map.insert("lo".to_string(), serde_json::json!(num));
+                    }
+                }
+            }
+
+            // Handle u128 wrapper object
+            if map.contains_key("u128") {
+                if let Some(serde_json::Value::Object(inner)) = map.get_mut("u128") {
+                    // Convert UInt128Parts (hi: u64, lo: u64)
+                    if let Some(serde_json::Value::String(s)) = inner.get("hi") {
+                        if let Ok(num) = s.parse::<u64>() {
+                            inner.insert("hi".to_string(), serde_json::json!(num));
+                        }
+                    }
+                    if let Some(serde_json::Value::String(s)) = inner.get("lo") {
+                        if let Ok(num) = s.parse::<u64>() {
+                            inner.insert("lo".to_string(), serde_json::json!(num));
+                        }
+                    }
+                }
+            }
+
+            // Handle i128 wrapper object
+            if map.contains_key("i128") {
+                if let Some(serde_json::Value::Object(inner)) = map.get_mut("i128") {
+                    // Convert Int128Parts (hi: i64, lo: u64)
+                    if let Some(serde_json::Value::String(s)) = inner.get("hi") {
+                        if let Ok(num) = s.parse::<i64>() {
+                            inner.insert("hi".to_string(), serde_json::json!(num));
+                        }
+                    }
+                    if let Some(serde_json::Value::String(s)) = inner.get("lo") {
+                        if let Ok(num) = s.parse::<u64>() {
+                            inner.insert("lo".to_string(), serde_json::json!(num));
+                        }
+                    }
+                }
+            }
+
+            // Handle u256 wrapper object
+            if map.contains_key("u256") {
+                if let Some(serde_json::Value::Object(inner)) = map.get_mut("u256") {
+                    // Convert UInt256Parts (all u64)
+                    for key in ["hi_hi", "hi_lo", "lo_hi", "lo_lo"] {
+                        if let Some(serde_json::Value::String(s)) = inner.get(key) {
+                            if let Ok(num) = s.parse::<u64>() {
+                                inner.insert(key.to_string(), serde_json::json!(num));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Handle i256 wrapper object
+            if map.contains_key("i256") {
+                if let Some(serde_json::Value::Object(inner)) = map.get_mut("i256") {
+                    // Convert Int256Parts (hi_hi: i64, others: u64)
+                    if let Some(serde_json::Value::String(s)) = inner.get("hi_hi") {
+                        if let Ok(num) = s.parse::<i64>() {
+                            inner.insert("hi_hi".to_string(), serde_json::json!(num));
+                        }
+                    }
+                    for key in ["hi_lo", "lo_hi", "lo_lo"] {
+                        if let Some(serde_json::Value::String(s)) = inner.get(key) {
+                            if let Ok(num) = s.parse::<u64>() {
+                                inner.insert(key.to_string(), serde_json::json!(num));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Also handle direct UInt256Parts (all u64) without wrapper
+            if map.contains_key("hi_hi")
+                && map.contains_key("hi_lo")
+                && map.contains_key("lo_hi")
+                && map.contains_key("lo_lo")
+                && map.len() == 4
+            {
+                for key in ["hi_hi", "hi_lo", "lo_hi", "lo_lo"] {
+                    if let Some(serde_json::Value::String(s)) = map.get(key) {
+                        if let Ok(num) = s.parse::<u64>() {
+                            map.insert(key.to_string(), serde_json::json!(num));
+                        }
+                    }
+                }
+            }
+
+            // Recursively process nested structures
+            for (_, v) in map.iter_mut() {
+                fix_u64_format(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            // Recursively fix all array elements
+            for v in arr.iter_mut() {
+                fix_u64_format(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Represents different ways to provide WASM code
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
@@ -149,9 +298,15 @@ fn convert_invoke_contract(
         .map_err(|e| SignerError::ConversionError(format!("Invalid function name: {}", e)))?;
 
     // Convert JSON args to ScVals using serde
+    // HACK: stellar-xdr expects u64 as number but it should be string
+    // Convert {"u64":"1000"} to {"u64":1000} before deserialization
     let scval_args: Vec<ScVal> = args
         .iter()
-        .map(|json| serde_json::from_value(json.clone()))
+        .map(|json| {
+            let mut modified_json = json.clone();
+            fix_u64_format(&mut modified_json);
+            serde_json::from_value(modified_json)
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e)))?;
     let args_vec = VecM::try_from(scval_args)
@@ -186,9 +341,15 @@ fn convert_create_contract(
     if let Some(args) = constructor_args {
         if !args.is_empty() {
             // Convert JSON args to ScVals using serde
+            // HACK: stellar-xdr expects u64 as number but it should be string
+            // Convert {"u64":"1000"} to {"u64":1000} before deserialization
             let scval_args: Vec<ScVal> = args
                 .iter()
-                .map(|json| serde_json::from_value(json.clone()))
+                .map(|json| {
+                    let mut modified_json = json.clone();
+                    fix_u64_format(&mut modified_json);
+                    serde_json::from_value(modified_json)
+                })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| {
                     SignerError::ConversionError(format!("Failed to deserialize ScVal: {}", e))
@@ -659,5 +820,87 @@ mod tests {
 
         let deserialized: HostFunctionSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec, deserialized);
+    }
+
+    #[test]
+    fn test_u64_string_to_number_conversion() {
+        // Test direct u64 conversion
+        let args = vec![
+            json!({"u64": "1000"}),
+            json!({"i64": "-500"}),
+            json!({"timepoint": "123456"}),
+            json!({"duration": "7890"}),
+        ];
+
+        let result = convert_invoke_contract(TEST_CONTRACT.to_string(), "test".to_string(), args);
+        assert!(
+            result.is_ok(),
+            "Should successfully convert string u64/i64 to numbers"
+        );
+
+        // Test nested u128 parts
+        let u128_arg = vec![json!({"u128": {"hi": "100", "lo": "200"}})];
+        let result =
+            convert_invoke_contract(TEST_CONTRACT.to_string(), "test".to_string(), u128_arg);
+        assert!(result.is_ok(), "Should successfully convert u128 parts");
+
+        // Test nested i128 parts
+        let i128_arg = vec![json!({"i128": {"hi": "-100", "lo": "200"}})];
+        let result =
+            convert_invoke_contract(TEST_CONTRACT.to_string(), "test".to_string(), i128_arg);
+        assert!(result.is_ok(), "Should successfully convert i128 parts");
+
+        // Test nested u256 parts
+        let u256_arg =
+            vec![json!({"u256": {"hi_hi": "1", "hi_lo": "2", "lo_hi": "3", "lo_lo": "4"}})];
+        let result =
+            convert_invoke_contract(TEST_CONTRACT.to_string(), "test".to_string(), u256_arg);
+        assert!(result.is_ok(), "Should successfully convert u256 parts");
+
+        // Test nested i256 parts
+        let i256_arg =
+            vec![json!({"i256": {"hi_hi": "-1", "hi_lo": "2", "lo_hi": "3", "lo_lo": "4"}})];
+        let result =
+            convert_invoke_contract(TEST_CONTRACT.to_string(), "test".to_string(), i256_arg);
+        assert!(result.is_ok(), "Should successfully convert i256 parts");
+    }
+
+    #[test]
+    fn test_host_function_spec_json_format() {
+        // Test InvokeContract
+        let invoke = HostFunctionSpec::InvokeContract {
+            contract_address: TEST_CONTRACT.to_string(),
+            function_name: "test".to_string(),
+            args: vec![json!({"u64": 42})],
+        };
+        let invoke_json = serde_json::to_value(&invoke).unwrap();
+        assert_eq!(invoke_json["type"], "invoke_contract");
+        assert_eq!(invoke_json["contract_address"], TEST_CONTRACT);
+        assert_eq!(invoke_json["function_name"], "test");
+
+        // Test UploadWasm
+        let upload = HostFunctionSpec::UploadWasm {
+            wasm: WasmSource::Hex {
+                hex: "deadbeef".to_string(),
+            },
+        };
+        let upload_json = serde_json::to_value(&upload).unwrap();
+        assert_eq!(upload_json["type"], "upload_wasm");
+        assert!(upload_json["wasm"].is_object());
+
+        // Test CreateContract
+        let create = HostFunctionSpec::CreateContract {
+            source: ContractSource::Address {
+                address: TEST_PK.to_string(),
+            },
+            wasm_hash: "0000000000000000000000000000000000000000000000000000000000000001"
+                .to_string(),
+            salt: None,
+            constructor_args: None,
+        };
+        let create_json = serde_json::to_value(&create).unwrap();
+        assert_eq!(create_json["type"], "create_contract");
+        assert_eq!(create_json["source"]["from"], "address");
+        assert_eq!(create_json["source"]["address"], TEST_PK);
     }
 }

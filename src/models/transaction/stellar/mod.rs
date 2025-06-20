@@ -13,4 +13,4 @@ pub use asset::AssetSpec;
 pub use conversion::DecoratedSignature;
 pub use host_function::{ContractSource, HostFunctionSpec, WasmSource};
 pub use memo::MemoSpec;
-pub use operation::{AuthSpec, OperationSpec, SimpleAuthCredential};
+pub use operation::{AuthSpec, OperationSpec};

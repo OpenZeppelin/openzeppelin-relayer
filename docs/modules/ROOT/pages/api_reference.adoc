@@ -787,8 +787,14 @@ This section outlines how to interact with the Stellar network via the Relayer A
 |`payment`
 |Transfer native XLM or other assets between accounts
 
-|`invoke_host_function`
-|Execute Soroban smart contract operations including contract calls, deployments, and WASM uploads
+|`invoke_contract`
+|Call a deployed Soroban smart contract function
+
+|`create_contract`
+|Deploy a new Soroban smart contract from WASM hash
+
+|`upload_wasm`
+|Upload WASM contract code to the Stellar ledger
 |===
 
 
@@ -797,9 +803,84 @@ Submit a transaction to the Stellar network.
 
 Request: `POST http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions`
 
+===== Transaction Structure
+
+**Required fields:**
+- `source_account`: The Stellar account that will be the source of the transaction
+- `network`: The Stellar network ("testnet", "mainnet", etc.)
+- `operations`: Array of operations to execute
+
+**Optional fields:**
+- `memo`: Transaction memo (see Memo Types below)
+- `valid_until`: Transaction expiration time (ISO 8601 format)
+
+===== Asset Types
+
+Assets in Stellar operations must be specified with a type field:
+
+**Native XLM:**
+[source,json]
+----
+{"type": "native"}
+----
+
+**Credit Asset (4 characters or less):**
+[source,json]
+----
+{
+  "type": "credit_alphanum4",
+  "code": "USDC",
+  "issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+----
+
+**Credit Asset (5-12 characters):**
+[source,json]
+----
+{
+  "type": "credit_alphanum12",
+  "code": "LONGASSET",
+  "issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+----
+
+===== Memo Types
+
+Transactions can include optional memos:
+
+**No Memo:**
+[source,json]
+----
+{"type": "none"}
+----
+
+**Text Memo (max 28 UTF-8 bytes):**
+[source,json]
+----
+{"type": "text", "value": "Payment for services"}
+----
+
+**ID Memo:**
+[source,json]
+----
+{"type": "id", "value": "12345"}
+----
+
+**Hash Memo (32 bytes hex):**
+[source,json]
+----
+{"type": "hash", "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}
+----
+
+**Return Memo (32 bytes hex):**
+[source,json]
+----
+{"type": "return", "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}
+----
+
 Example requests (cURL):
 
-**Payment Operation Example:**
+**1. Payment Operation:**
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
@@ -810,18 +891,42 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
   "network": "testnet",
   "operations": [
     {
-      "op": "payment",
-      "destination": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
-      "asset": "NATIVE",
-      "amount": 1
+      "type": "payment",
+      "destination": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ",
+      "asset": {"type": "native"},
+      "amount": 1000000
+    }
+  ],
+  "memo": {"type": "text", "value": "Payment for services"}
+}'
+----
+
+**2. Invoke Contract:**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "type": "invoke_contract",
+      "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
+      "function_name": "transfer",
+      "args": [
+        {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+        {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+        {"u64": "1000000"}
+      ],
+      "auth": {"type": "source_account"}
     }
   ]
 }'
 ----
 
-**InvokeHostFunction Operation Examples:**
-
-1. **Invoke Contract Function:**
+**3. Create Contract:**
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
@@ -832,64 +937,42 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
   "network": "testnet",
   "operations": [
     {
-      "op": "invoke_host_function",
-      "invoke_contract": {
-        "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
-        "function_name": "transfer",
-        "args": [
-          {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
-          {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
-          {"u64": 1000000}
-        ]
+      "type": "create_contract",
+      "source": {
+        "from": "address",
+        "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
+      },
+      "wasm_hash": "d3b2f6f8a1c5e9b4a7d8c2e1f5a9b3c6e8d4f7a2b5c8e1d4f7a0b3c6e9d2f5a8",
+      "salt": "0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}'
+----
+
+NOTE: For create_contract, you can also include optional `constructor_args` array and use `"from": "contract"` for factory pattern deployments.
+
+**4. Upload WASM:**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "type": "upload_wasm",
+      "wasm": {
+        "type": "base64",
+        "base64": "AGFzbQEAAAABBgFgAX8BfwMCAQAFAwEAAQcPAgVoZWxsbwAACG1lbW9yeTIDCgQAAAAL"
       }
     }
   ]
 }'
 ----
 
-2. **Deploy Contract (Create Contract):**
-[source,bash]
-----
-curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
---header 'Authorization: Bearer <your_api_key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
-  "network": "testnet",
-  "operations": [
-    {
-      "op": "invoke_host_function",
-      "create_contract": {
-        "source": {
-          "type": "account",
-          "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
-        },
-        "wasm_hash": "d3b2f6f8a1c5e9b4a7d8c2e1f5a9b3c6e8d4f7a2b5c8e1d4f7a0b3c6e9d2f5a8"
-      }
-    }
-  ]
-}'
-----
-
-3. **Upload WASM Contract Code:**
-[source,bash]
-----
-curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
---header 'Authorization: Bearer <your_api_key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
-  "network": "testnet",
-  "operations": [
-    {
-      "op": "invoke_host_function",
-      "upload_wasm": {
-        "wasm": "AGFzbQEAAAABBgFgAX8BfwMCAQAFAwEAAQcPAgVoZWxsbwAACG1lbW9yeTIDCgQAAAAL"
-      }
-    }
-  ]
-}'
-----
+NOTE: WASM can be provided as either `"type": "base64"` or `"type": "hex"` encoding.
 
 Example response:
 [source,json]
@@ -988,7 +1071,8 @@ Example response:
 
 ==== ScVal Argument Format
 
-When using the `invoke_host_function` operation with contract calls, arguments must be provided as ScVal values in JSON format. The relayer uses the stellar-xdr JSON serialization format.
+When invoking contract functions, arguments must be provided as ScVal values in JSON format. The relayer uses the stellar-xdr JSON serialization format.
+
 
 Here are the supported ScVal types and their formats:
 
@@ -997,11 +1081,11 @@ Here are the supported ScVal types and their formats:
 |Type |Format |Description
 
 |U64
-|`{"u64": 1000000}`
+|`{"u64": "1000000"}`
 |Unsigned 64-bit integer
 
 |I64
-|`{"i64": -500}`
+|`{"i64": "-500"}`
 |Signed 64-bit integer
 
 |U32
@@ -1039,7 +1123,23 @@ Here are the supported ScVal types and their formats:
 |Map
 |`{"map": [{"key": {"symbol": "name"}, "val": {"string": "MyToken"}}]}`
 |Key-value pairs of ScVal values
+|U128
+|`{"u128": {"hi": "100", "lo": "200"}}`
+|Unsigned 128-bit integer (as high/low parts)
+
+|I128
+|`{"i128": {"hi": "-100", "lo": "200"}}`
+|Signed 128-bit integer (as high/low parts)
+
+|U256
+|`{"u256": {"hi_hi": "1", "hi_lo": "2", "lo_hi": "3", "lo_lo": "4"}}`
+|Unsigned 256-bit integer (as four 64-bit parts)
+
+|I256
+|`{"i256": {"hi_hi": "-1", "hi_lo": "2", "lo_hi": "3", "lo_lo": "4"}}`
+|Signed 256-bit integer (as four 64-bit parts)
 |===
+
 
 **Address Format Notes:**
 - Account addresses start with 'G'
@@ -1048,117 +1148,25 @@ Here are the supported ScVal types and their formats:
 
 ==== Authorization Modes
 
-The `invoke_host_function` operation supports different authorization modes for Soroban operations:
+Soroban operations support different authorization modes:
 
-===== Default Authorization
-If no `auth` field is provided, the relayer automatically generates appropriate authorization entries based on the operation type.
+[cols="1,2,2"]
+|===
+|Type |Description |Example Usage
 
-===== Simple Authorization
-[source,json]
-----
-{
-  "op": "invoke_host_function",
-  "type": "invoke_contract",
-  "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
-  "function_name": "transfer",
-  "args": [
-    {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
-    {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
-    {"u64": 1000000}
-  ],
-  "auth": {
-    "type": "simple",
-    "value": ["source_account"]
-  }
-}
-----
+|`none`
+|No authorization required
+|`"auth": {"type": "none"}`
 
-===== XDR Authorization
-For advanced use cases, provide complete authorization entries as base64-encoded XDR:
-[source,json]
-----
-{
-  "op": "invoke_host_function",
-  "type": "invoke_contract",
-  "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
-  "function_name": "transfer",
-  "args": [
-    {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
-    {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
-    {"u64": 1000000}
-  ],
-  "auth": {
-    "type": "xdr",
-    "value": ["<base64_encoded_auth_entry>"]
-  }
-}
-----
+|`source_account`
+|Use the transaction source account (default)
+|`"auth": {"type": "source_account"}`
 
-===== Upload WASM
-Upload contract code to the ledger:
+|`addresses`
+|Use specific addresses (future feature)
+|`"auth": {"type": "addresses", "signers": ["GABC..."]}`
 
-**With hex encoding:**
-[source,json]
-----
-{
-  "op": "invoke_host_function",
-  "type": "upload_wasm",
-  "wasm": {
-    "hex": "<hex_encoded_wasm_bytecode>"
-  }
-}
-----
-
-**With base64 encoding:**
-[source,json]
-----
-{
-  "op": "invoke_host_function",
-  "type": "upload_wasm",
-  "wasm": {
-    "base64": "<base64_encoded_wasm_bytecode>"
-  }
-}
-----
-
-===== Create Contract
-Deploy a new smart contract:
-
-**Simple contract without constructor:**
-[source,json]
-----
-{
-  "op": "invoke_host_function",
-  "type": "create_contract",
-  "source": {
-    "from": "address",
-    "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
-  },
-  "wasm_hash": "a5fb7934e9a1158d0e85387e2c8901dd0bbcf085848bbea2f29c5a40fb0b3659",
-  "salt": "0000000000000000000000000000000000000000000000000000000000000001"
-}
-----
-
-**With constructor arguments:**
-[source,json]
-----
-{
-  "op": "invoke_host_function",
-  "type": "create_contract",
-  "source": {
-    "from": "address",
-    "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
-  },
-  "wasm_hash": "a5fb7934e9a1158d0e85387e2c8901dd0bbcf085848bbea2f29c5a40fb0b3659",
-  "salt": "0000000000000000000000000000000000000000000000000000000000000001",
-  "constructor_args": [
-    {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
-    {"string": "ComprehensiveTest"},
-    {"u64": 100}
-  ],
-  "auth": {
-    "type": "simple",
-    "value": ["source_account"]
-  }
-}
-----
+|`xdr`
+|Advanced: provide base64-encoded XDR entries
+|`"auth": {"type": "xdr", "entries": ["<base64>"]}`
+|===
