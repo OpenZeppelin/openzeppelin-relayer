@@ -65,6 +65,10 @@ mod tests {
         let script_path = temp_dir.path().join("test_execute_typescript.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
@@ -74,10 +78,6 @@ mod tests {
             socket_path.display().to_string(),
         )
         .await;
-
-        // These are just in case, there should be an automatic deletion
-        let _ = fs::remove_file(script_path.clone());
-        let _ = fs::remove_file(socket_path.clone());
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");
@@ -90,6 +90,10 @@ mod tests {
         let script_path = temp_dir.path().join("test_execute_typescript_error.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript_error.sock");
 
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+
         let content = "console.logger('test');";
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
@@ -99,10 +103,6 @@ mod tests {
             socket_path.display().to_string(),
         )
         .await;
-
-        // These are just in case, there should be an automatic deletion
-        let _ = fs::remove_file(script_path.clone());
-        let _ = fs::remove_file(socket_path.clone());
 
         assert!(result.is_ok());
 

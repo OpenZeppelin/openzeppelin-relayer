@@ -93,6 +93,10 @@ mod tests {
         let script_path = temp_dir.path().join("test_run.ts");
         let socket_path = temp_dir.path().join("test_run.sock");
 
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
