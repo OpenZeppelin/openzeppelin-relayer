@@ -39,9 +39,7 @@ impl PluginRunner {
 
         let server_handle = tokio::spawn(async move {
             let relayer_api = Arc::new(RelayerApi);
-            if let Err(e) = socket_service.listen(shutdown_rx, state, relayer_api).await {
-                eprintln!("Socket service error: {}", e);
-            }
+            socket_service.listen(shutdown_rx, state, relayer_api).await;
         });
 
         let script_result =

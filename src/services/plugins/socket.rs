@@ -41,7 +41,7 @@ impl SocketService {
         shutdown_rx: oneshot::Receiver<()>,
         state: Arc<web::ThinData<AppState<J>>>,
         relayer_api: Arc<R>,
-    ) -> Result<(), PluginError> {
+    ) {
         let mut shutdown = shutdown_rx;
 
         loop {
@@ -57,8 +57,6 @@ impl SocketService {
                 }
             }
         }
-
-        Ok(())
     }
 
     async fn handle_connection<
@@ -133,7 +131,7 @@ mod tests {
 
         let result = timeout(Duration::from_millis(100), listen_handle).await;
         assert!(result.is_ok());
-        assert!(result.unwrap().unwrap().is_ok());
+        assert!(result.unwrap().is_ok());
     }
 
     #[tokio::test]

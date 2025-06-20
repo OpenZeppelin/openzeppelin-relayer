@@ -225,4 +225,42 @@ mod tests {
         assert!(response.result.is_none());
         assert_eq!(response.error.unwrap(), "Relayer error: Relayer is paused");
     }
+
+    #[tokio::test]
+    async fn test_handle_request_using_trait() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SendTransaction,
+            payload: serde_json::json!(create_mock_evm_transaction_request()),
+        };
+
+        let relayer_api = RelayerApi;
+
+        let state = web::ThinData(state);
+
+        let response = RelayerApiTrait::handle_request(&relayer_api, request.clone(), &state).await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+
+        let response =
+            RelayerApiTrait::process_request(&relayer_api, request.clone(), &state).await;
+
+        assert!(response.is_ok());
+
+        let response =
+            RelayerApiTrait::handle_send_transaction(&relayer_api, request.clone(), &state).await;
+
+        assert!(response.is_ok());
+    }
 }
