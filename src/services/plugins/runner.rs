@@ -78,8 +78,10 @@ mod tests {
             .unwrap()
             .join("tests/utils/plugins/mock_repo");
 
-        let script_path = format!("{}/test.ts", dir.display());
-        let socket_path = format!("{}/test.sock", dir.display());
+        let uuid = uuid::Uuid::new_v4();
+
+        let script_path = format!("{}/test-{}.ts", dir.display(), uuid);
+        let socket_path = format!("{}/test-{}.sock", dir.display(), uuid);
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
 

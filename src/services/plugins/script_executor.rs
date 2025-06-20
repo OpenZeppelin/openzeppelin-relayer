@@ -51,8 +51,8 @@ mod tests {
 
         let uuid = uuid::Uuid::new_v4();
 
-        let script_path = format!("{}/test_works.ts-{}", dir.display(), uuid);
-        let socket_path = format!("{}/test_works.sock-{}", dir.display(), uuid);
+        let script_path = format!("{}/test_works-{}.ts", dir.display(), uuid);
+        let socket_path = format!("{}/test_works-{}.sock", dir.display(), uuid);
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
 
@@ -75,8 +75,8 @@ mod tests {
 
         let uuid = uuid::Uuid::new_v4();
 
-        let script_path = format!("{}/test_error.ts-{}", dir.display(), uuid);
-        let socket_path = format!("{}/test_error.sock-{}", dir.display(), uuid);
+        let script_path = format!("{}/test_error-{}.ts", dir.display(), uuid);
+        let socket_path = format!("{}/test_error-{}.sock", dir.display(), uuid);
         let content = "console.logger('test');";
         fs::write(script_path.clone(), content).unwrap();
 
