@@ -34,10 +34,10 @@ use crate::{
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, EvmNetwork, JsonRpcRequest, JsonRpcResponse,
-        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
-        RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes, TransactionRepoModel,
-        TransactionStatus,
+        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, EvmNetwork,
+        JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
+        RpcErrorCodes, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -162,6 +162,35 @@ where
             .health_check()
             .await
             .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Initiates transaction cancellation via the job queue system.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction` - The transaction model to cancel.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `RelayerError` if the job creation fails.
+    async fn cancel_transaction_via_job(
+        &self,
+        transaction: TransactionRepoModel,
+    ) -> Result<(), RelayerError> {
+        use crate::jobs::TransactionSend;
+
+        let cancel_job = TransactionSend::cancel(
+            transaction.id.clone(),
+            transaction.relayer_id.clone(),
+            "Cancelled via delete_pending_transactions".to_string(),
+        );
+
+        self.job_producer
+            .produce_submit_transaction_job(cancel_job, None)
+            .await
+            .map_err(RelayerError::from)?;
 
         Ok(())
     }
@@ -304,10 +333,76 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` containing a boolean indicating success or a `RelayerError`.
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
-        println!("EVM delete_pending_transactions...");
-        Ok(true)
+    /// A `Result` containing a `DeletePendingTransactionsResponse` with details
+    /// about which transactions were cancelled and which failed, or a `RelayerError`.
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
+        let pending_statuses = [
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+        ];
+
+        // Get all pending transactions
+        let pending_transactions = self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &pending_statuses[..])
+            .await
+            .map_err(RelayerError::from)?;
+
+        let transaction_count = pending_transactions.len();
+
+        if transaction_count == 0 {
+            info!(
+                "No pending transactions found for relayer: {}",
+                self.relayer.id
+            );
+            return Ok(DeletePendingTransactionsResponse {
+                queued_for_cancellation_transaction_ids: vec![],
+                failed_to_queue_transaction_ids: vec![],
+                total_processed: 0,
+            });
+        }
+
+        info!(
+            "Processing {} pending transactions for relayer: {}",
+            transaction_count, self.relayer.id
+        );
+
+        let mut cancelled_transaction_ids = Vec::new();
+        let mut failed_transaction_ids = Vec::new();
+
+        // Process all pending transactions using the proper cancellation logic via job queue
+        for transaction in pending_transactions {
+            match self.cancel_transaction_via_job(transaction.clone()).await {
+                Ok(_) => {
+                    cancelled_transaction_ids.push(transaction.id.clone());
+                    info!(
+                        "Initiated cancellation for transaction {} with status {:?} for relayer {}",
+                        transaction.id, transaction.status, self.relayer.id
+                    );
+                }
+                Err(e) => {
+                    failed_transaction_ids.push(transaction.id.clone());
+                    warn!(
+                        "Failed to cancel transaction {} for relayer {}: {}",
+                        transaction.id, self.relayer.id, e
+                    );
+                }
+            }
+        }
+
+        let total_processed = cancelled_transaction_ids.len() + failed_transaction_ids.len();
+
+        info!("Completed processing pending transactions for relayer {}: {} queued for cancellation, {} failed to queue",
+              self.relayer.id, cancelled_transaction_ids.len(), failed_transaction_ids.len());
+
+        Ok(DeletePendingTransactionsResponse {
+            queued_for_cancellation_transaction_ids: cancelled_transaction_ids,
+            failed_to_queue_transaction_ids: failed_transaction_ids,
+            total_processed: total_processed as u32,
+        })
     }
 
     /// Signs data using the relayer's signer.
@@ -1010,6 +1105,397 @@ mod tests {
                 assert_eq!(nonce, "10");
             }
             _ => panic!("Expected EVM RelayerStatus"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cancel_transaction_via_job_success() {
+        let (provider, relayer_repo, network_repo, tx_repo, mut job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let test_transaction = TransactionRepoModel {
+            id: "test-tx-id".to_string(),
+            relayer_id: relayer_model.id.clone(),
+            status: TransactionStatus::Pending,
+            ..TransactionRepoModel::default()
+        };
+
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .withf(|job, delay| {
+                matches!(job.command, crate::jobs::TransactionCommand::Cancel { ref reason }
+                    if job.transaction_id == "test-tx-id"
+                    && job.relayer_id == "test-relayer-id"
+                    && reason == "Cancelled via delete_pending_transactions")
+                    && delay.is_none()
+            })
+            .returning(|_, _| Box::pin(ready(Ok(()))))
+            .once();
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.cancel_transaction_via_job(test_transaction).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_transaction_via_job_failure() {
+        let (provider, relayer_repo, network_repo, tx_repo, mut job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let test_transaction = TransactionRepoModel {
+            id: "test-tx-id".to_string(),
+            relayer_id: relayer_model.id.clone(),
+            status: TransactionStatus::Pending,
+            ..TransactionRepoModel::default()
+        };
+
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "Queue is full".to_string(),
+                ))))
+            })
+            .once();
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.cancel_transaction_via_job(test_transaction).await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            RelayerError::QueueError(_) => (),
+            _ => panic!("Expected QueueError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_pending_transactions_no_pending() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
+            })
+            .returning(|_, _| Ok(vec![]))
+            .once();
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.delete_pending_transactions().await.unwrap();
+        assert_eq!(result.queued_for_cancellation_transaction_ids.len(), 0);
+        assert_eq!(result.failed_to_queue_transaction_ids.len(), 0);
+        assert_eq!(result.total_processed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pending_transactions_all_successful() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, mut job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let pending_transactions = vec![
+            TransactionRepoModel {
+                id: "tx1".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Pending,
+                ..TransactionRepoModel::default()
+            },
+            TransactionRepoModel {
+                id: "tx2".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Sent,
+                ..TransactionRepoModel::default()
+            },
+            TransactionRepoModel {
+                id: "tx3".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Submitted,
+                ..TransactionRepoModel::default()
+            },
+        ];
+
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
+            })
+            .returning(move |_, _| Ok(pending_transactions.clone()))
+            .once();
+
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))))
+            .times(3);
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.delete_pending_transactions().await.unwrap();
+        assert_eq!(result.queued_for_cancellation_transaction_ids.len(), 3);
+        assert_eq!(result.failed_to_queue_transaction_ids.len(), 0);
+        assert_eq!(result.total_processed, 3);
+
+        let expected_ids = vec!["tx1", "tx2", "tx3"];
+        for id in expected_ids {
+            assert!(result
+                .queued_for_cancellation_transaction_ids
+                .contains(&id.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_pending_transactions_partial_failures() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, mut job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let pending_transactions = vec![
+            TransactionRepoModel {
+                id: "tx1".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Pending,
+                ..TransactionRepoModel::default()
+            },
+            TransactionRepoModel {
+                id: "tx2".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Sent,
+                ..TransactionRepoModel::default()
+            },
+            TransactionRepoModel {
+                id: "tx3".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Submitted,
+                ..TransactionRepoModel::default()
+            },
+        ];
+
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
+            })
+            .returning(move |_, _| Ok(pending_transactions.clone()))
+            .once();
+
+        // First job succeeds, second fails, third succeeds
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))))
+            .times(1);
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "Queue is full".to_string(),
+                ))))
+            })
+            .times(1);
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))))
+            .times(1);
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.delete_pending_transactions().await.unwrap();
+        assert_eq!(result.queued_for_cancellation_transaction_ids.len(), 2);
+        assert_eq!(result.failed_to_queue_transaction_ids.len(), 1);
+        assert_eq!(result.total_processed, 3);
+    }
+
+    #[tokio::test]
+    async fn test_delete_pending_transactions_repository_error() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
+            })
+            .returning(|_, _| {
+                Err(RepositoryError::Unknown(
+                    "Database connection failed".to_string(),
+                ))
+            })
+            .once();
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.delete_pending_transactions().await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            RelayerError::NetworkConfiguration(msg) => {
+                assert!(msg.contains("Database connection failed"))
+            }
+            _ => panic!("Expected NetworkConfiguration error for repository failure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_pending_transactions_all_failures() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, mut job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let pending_transactions = vec![
+            TransactionRepoModel {
+                id: "tx1".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Pending,
+                ..TransactionRepoModel::default()
+            },
+            TransactionRepoModel {
+                id: "tx2".to_string(),
+                relayer_id: relayer_model.id.clone(),
+                status: TransactionStatus::Sent,
+                ..TransactionRepoModel::default()
+            },
+        ];
+
+        tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "test-relayer-id"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
+            })
+            .returning(move |_, _| Ok(pending_transactions.clone()))
+            .once();
+
+        job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "Queue is full".to_string(),
+                ))))
+            })
+            .times(2);
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.delete_pending_transactions().await.unwrap();
+        assert_eq!(result.queued_for_cancellation_transaction_ids.len(), 0);
+        assert_eq!(result.failed_to_queue_transaction_ids.len(), 2);
+        assert_eq!(result.total_processed, 2);
+
+        let expected_failed_ids = vec!["tx1", "tx2"];
+        for id in expected_failed_ids {
+            assert!(result
+                .failed_to_queue_transaction_ids
+                .contains(&id.to_string()));
         }
     }
 

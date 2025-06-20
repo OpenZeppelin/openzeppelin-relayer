@@ -27,9 +27,10 @@ use crate::{
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcRequest,
+        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError, StellarNetwork,
+        StellarRpcResult, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -335,9 +336,15 @@ where
         })
     }
 
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
         println!("Stellar delete_pending_transactions...");
-        Ok(true)
+        Ok(DeletePendingTransactionsResponse {
+            queued_for_cancellation_transaction_ids: vec![],
+            failed_to_queue_transaction_ids: vec![],
+            total_processed: 0,
+        })
     }
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {

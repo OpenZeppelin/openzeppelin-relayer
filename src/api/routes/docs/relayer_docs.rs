@@ -4,8 +4,9 @@ use crate::{
         SignTypedDataRequest,
     },
     models::{
-        ApiResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, RelayerResponse, RelayerStatus, TransactionResponse,
+        ApiResponse, DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerResponse,
+        RelayerStatus, TransactionResponse,
     },
 };
 /// Relayer routes implementation
@@ -651,7 +652,7 @@ fn doc_list_transactions() {}
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
     responses(
-        (status = 200, description = "Relayer pending transactions successfully", body = ApiResponse<String>),
+        (status = 200, description = "Relayer pending transactions successfully", body = ApiResponse<DeletePendingTransactionsResponse>),
         (
             status = 400,
             description = "BadRequest",

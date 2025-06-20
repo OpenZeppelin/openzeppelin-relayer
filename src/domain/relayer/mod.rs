@@ -19,10 +19,10 @@ use mockall::automock;
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        AppState, DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, JsonRpcRequest,
-        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
-        NetworkType, RelayerError, RelayerRepoModel, RelayerStatus, SignerRepoModel,
-        StellarNetwork, TransactionError, TransactionRepoModel,
+        AppState, DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
+        EvmTransactionDataSignature, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
+        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
+        RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
 };
@@ -73,9 +73,11 @@ pub trait Relayer {
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if transactions were successfully deleted,
-    /// or a `RelayerError` on failure.
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
+    /// A `Result` containing a `DeletePendingTransactionsResponse` with details
+    /// about which transactions were cancelled and which failed, or a `RelayerError` on failure.
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError>;
 
     /// Signs data using the relayer's credentials.
     ///
@@ -228,7 +230,9 @@ impl<J: JobProducerTrait + 'static> Relayer for NetworkRelayer<J> {
         }
     }
 
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),

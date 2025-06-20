@@ -12,6 +12,12 @@ allowed_patterns:
 - public key
 
 fileignoreconfig:
+- filename: examples/evm-aws-kms-signer/.env.example
+  checksum: ce11768b9265683d777ad66d02929664a7a3512d3d839de7c4394d7b75e8f645
+- filename: examples/evm-aws-kms-signer/README.md
+  checksum: e9a407d55a1444f530ec882340e2cbf54bba0946f56b036efa9b56b2979b57f8
+- filename: examples/evm-aws-kms-signer/docker-compose.yaml
+  checksum: c345ea0c72c14b5dd4b7a7efd3c61628ca4bd79459f59669f72f6b746032a4bd
 # We need to ignore this module,
 # since we encode public keys directly for testing
 - filename: src/utils/der.rs
