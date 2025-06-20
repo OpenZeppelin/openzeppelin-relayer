@@ -6,7 +6,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot;
 
 use super::{
-    relayer_api::{RelayerApi, Request},
+    relayer_api::{RelayerApiTrait, Request},
     PluginError,
 };
 
@@ -33,11 +33,14 @@ impl SocketService {
         &self.socket_path
     }
 
-    pub async fn listen<J: JobProducerTrait + 'static>(
+    pub async fn listen<
+        J: JobProducerTrait + 'static,
+        R: RelayerApiTrait + 'static + Send + Sync,
+    >(
         self,
         shutdown_rx: oneshot::Receiver<()>,
         state: Arc<web::ThinData<AppState<J>>>,
-        relayer_api: Arc<RelayerApi>,
+        relayer_api: Arc<R>,
     ) -> Result<(), PluginError> {
         let mut shutdown = shutdown_rx;
 
@@ -46,7 +49,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    tokio::spawn(Self::handle_connection(stream, state, relayer_api));
+                    tokio::spawn(Self::handle_connection::<J, R>(stream, state, relayer_api));
                 }
                 _ = &mut shutdown => {
                     println!("Shutdown signal received. Closing listener.");
@@ -58,10 +61,13 @@ impl SocketService {
         Ok(())
     }
 
-    async fn handle_connection<J: JobProducerTrait + 'static>(
+    async fn handle_connection<
+        J: JobProducerTrait + 'static,
+        R: RelayerApiTrait + 'static + Send + Sync,
+    >(
         stream: UnixStream,
         state: Arc<web::ThinData<AppState<J>>>,
-        relayer_api: Arc<RelayerApi>,
+        relayer_api: Arc<R>,
     ) -> Result<(), PluginError> {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
@@ -80,5 +86,48 @@ impl SocketService {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::{
+        services::plugins::MockRelayerApiTrait, utils::mocks::mockutils::create_mock_app_state,
+    };
+
+    use super::*;
+
+    use tempfile::tempdir;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_socket_service_listen_and_shutdown() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("test.sock");
+
+        let mock_relayer = MockRelayerApiTrait::default();
+
+        let service = SocketService::new(socket_path.to_str().unwrap()).unwrap();
+
+        let state = create_mock_app_state(None, None, None, None).await;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let listen_handle = tokio::spawn(async move {
+            service
+                .listen(
+                    shutdown_rx,
+                    Arc::new(web::ThinData(state)),
+                    Arc::new(mock_relayer),
+                )
+                .await
+        });
+
+        shutdown_tx.send(()).unwrap();
+
+        let result = timeout(Duration::from_millis(100), listen_handle).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().unwrap().is_ok());
     }
 }

@@ -25,7 +25,7 @@ pub struct Request {
     pub payload: serde_json::Value,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Response {
     pub request_id: String,
