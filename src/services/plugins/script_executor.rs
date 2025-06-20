@@ -76,12 +76,6 @@ mod tests {
         let script_path = temp_dir.path().join("test_execute_typescript.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
-        println!("About to execute ts-node with:");
-        println!("  script_path: {}", script_path.display());
-        println!("  socket_path: {}", socket_path.display());
-        println!("  script exists: {}", script_path.exists());
-        println!("  current_dir: {:?}", std::env::current_dir());
-
         let content = "console.log('test');";
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
@@ -91,8 +85,6 @@ mod tests {
             socket_path.display().to_string(),
         )
         .await;
-
-        println!("Result: {:#?}", result);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");
@@ -115,10 +107,7 @@ mod tests {
         )
         .await;
 
-        println!("Result: {:#?}", result);
-
         assert!(result.is_ok());
-
         let result = result.unwrap();
         assert!(result.error.contains("logger"));
     }

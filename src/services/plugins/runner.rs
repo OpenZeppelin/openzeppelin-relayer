@@ -108,8 +108,6 @@ mod tests {
             )
             .await;
 
-        println!("Result: {:#?}", result);
-
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");
     }
