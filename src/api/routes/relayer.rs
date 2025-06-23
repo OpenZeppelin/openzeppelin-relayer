@@ -190,7 +190,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
-        jobs::{JobProducer, Queue},
+        jobs::MockJobProducerTrait,
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
@@ -201,7 +201,7 @@ mod tests {
     use std::sync::Arc;
 
     // Simple mock for AppState
-    async fn get_test_app_state() -> AppState<JobProducer> {
+    async fn get_test_app_state() -> AppState<MockJobProducerTrait> {
         let relayer_repo = Arc::new(RelayerRepositoryStorage::in_memory(
             InMemoryRelayerRepository::new(),
         ));
@@ -304,20 +304,13 @@ mod tests {
             notification_repository: Arc::new(InMemoryNotificationRepository::new()),
             network_repository: network_repo,
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
-            job_producer: Arc::new(JobProducer::new(Queue::setup().await.unwrap())),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }
     }
 
     #[actix_web::test]
     async fn test_routes_are_registered() -> Result<(), color_eyre::eyre::Error> {
-        // Set required environment variables for Queue::setup
-        std::env::set_var(
-            "API_KEY",
-            "test-api-key-1234567890123456789012345678901234567890",
-        );
-        std::env::set_var("REDIS_URL", "redis://localhost:6379");
-
         // Create a test app with our routes
         let app = test::init_service(
             App::new()
