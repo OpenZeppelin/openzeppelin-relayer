@@ -27,21 +27,25 @@ async fn process_plugins<J: JobProducerTrait>(
     config_file: &Config,
     app_state: &ThinData<AppState<J>>,
 ) -> Result<()> {
-    let plugin_futures = config_file.plugins.iter().map(|plugin| async {
-        let plugin_model =
-            PluginModel::try_from(plugin.clone()).wrap_err("Failed to convert plugin config")?;
-        app_state
-            .plugin_repository
-            .add(plugin_model)
-            .await
-            .wrap_err("Failed to create plugin repository entry")?;
-        Ok::<(), Report>(())
-    });
+    if let Some(plugins) = &config_file.plugins {
+        let plugin_futures = plugins.iter().map(|plugin| async {
+            let plugin_model = PluginModel::try_from(plugin.clone())
+                .wrap_err("Failed to convert plugin config")?;
+            app_state
+                .plugin_repository
+                .add(plugin_model)
+                .await
+                .wrap_err("Failed to create plugin repository entry")?;
+            Ok::<(), Report>(())
+        });
 
-    try_join_all(plugin_futures)
-        .await
-        .wrap_err("Failed to initialize plugin repository")?;
-    Ok(())
+        try_join_all(plugin_futures)
+            .await
+            .wrap_err("Failed to initialize plugin repository")?;
+        Ok(())
+    } else {
+        Ok(())
+    }
 }
 
 /// Process a signer configuration from the config file and convert it into a `SignerRepoModel`.
@@ -654,7 +658,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         // Create app state
@@ -696,7 +700,7 @@ mod tests {
             relayers: vec![],
             notifications,
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         // Create app state
@@ -725,7 +729,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -749,7 +753,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -775,7 +779,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -806,7 +810,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -848,7 +852,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -884,7 +888,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -923,7 +927,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -969,7 +973,7 @@ mod tests {
             relayers,
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         // Create app state
@@ -1011,7 +1015,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins,
+            plugins: Some(plugins),
         };
 
         // Create app state
@@ -1076,7 +1080,7 @@ mod tests {
             relayers,
             notifications,
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins,
+            plugins: Some(plugins),
         };
 
         // Create shared repositories

@@ -60,7 +60,7 @@ pub struct Config {
     pub signers: Vec<SignerFileConfig>,
     pub notifications: Vec<NotificationFileConfig>,
     pub networks: NetworksFileConfig,
-    pub plugins: Vec<PluginFileConfig>,
+    pub plugins: Option<Vec<PluginFileConfig>>,
 }
 
 impl Config {
@@ -197,9 +197,12 @@ impl Config {
     }
 
     /// Validates that all plugins are valid and have unique IDs.
-    /// and correct paths (prefix /app/plugins/)
     fn validate_plugins(&self) -> Result<(), ConfigFileError> {
-        PluginsFileConfig::new(self.plugins.clone()).validate()
+        if let Some(plugins) = &self.plugins {
+            PluginsFileConfig::new(plugins.clone()).validate()
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -278,10 +281,10 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .expect("Failed to create NetworksFileConfig for test"),
-            plugins: vec![PluginFileConfig {
+            plugins: Some(vec![PluginFileConfig {
                 id: "test-1".to_string(),
                 path: "/app/plugins/test-plugin.ts".to_string(),
-            }],
+            }]),
         }
     }
 
@@ -313,7 +316,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
-            plugins: Vec::new(),
+            plugins: Some(vec![]),
         };
         assert!(matches!(
             config.validate(),
@@ -343,7 +346,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
-            plugins: Vec::new(),
+            plugins: Some(vec![]),
         };
         assert!(matches!(
             config.validate(),
@@ -1156,7 +1159,7 @@ mod tests {
         assert_eq!(config.relayers.len(), 1);
         assert_eq!(config.signers.len(), 1);
         assert_eq!(config.networks.len(), 1);
-        assert_eq!(config.plugins.len(), 1);
+        assert_eq!(config.plugins.unwrap().len(), 1);
     }
 
     #[test]
@@ -1378,7 +1381,7 @@ mod tests {
             signers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
         let result = config.validate_plugins();
         assert!(result.is_ok());
@@ -1391,10 +1394,10 @@ mod tests {
             signers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![PluginFileConfig {
+            plugins: Some(vec![PluginFileConfig {
                 id: "id".to_string(),
                 path: "/app/plugins/test-plugin.js".to_string(),
-            }],
+            }]),
         };
         let result = config.validate_plugins();
         assert!(result.is_err());
@@ -1458,7 +1461,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
-            plugins: Vec::new(),
+            plugins: Some(vec![]),
         };
 
         let result = config.validate();
@@ -1498,7 +1501,7 @@ mod tests {
                 symbol: Some("ETH".to_string()),
             })])
             .unwrap(),
-            plugins: Vec::new(),
+            plugins: Some(vec![]),
         };
 
         let result = config.validate();
@@ -1692,5 +1695,65 @@ mod tests {
         assert!(evm_str.contains("Evm"));
         assert!(solana_str.contains("Solana"));
         assert!(stellar_str.contains("Stellar"));
+    }
+
+    #[test]
+    fn test_config_file_plugins_validation_with_empty_plugins() {
+        let config = Config {
+            relayers: vec![],
+            signers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: None,
+        };
+        let result = config.validate_plugins();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_config_file_without_plugins() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let config_path = dir.path().join("valid_config.json");
+
+        let config_content = serde_json::json!({
+            "relayers": [{
+                "id": "test-relayer",
+                "name": "Test Relayer",
+                "network": "test-network",
+                "paused": false,
+                "network_type": "evm",
+                "signer_id": "test-signer"
+            }],
+            "signers": [{
+                "id": "test-signer",
+                "type": "test",
+                "config": {}
+            }],
+            "notifications": [{
+                "id": "test-notification",
+                "type": "webhook",
+                "url": "https://api.example.com/notifications"
+            }],
+            "networks": [{
+                "type": "evm",
+                "network": "test-network",
+                "chain_id": 31337,
+                "required_confirmations": 1,
+                "symbol": "ETH",
+                "rpc_urls": ["https://rpc.test.example.com"],
+                "is_testnet": true
+            }]
+        });
+
+        setup_config_file(dir.path(), "valid_config.json", &config_content.to_string());
+
+        let result = load_config(config_path.to_str().unwrap());
+        assert!(result.is_ok());
+
+        let config = result.unwrap();
+        assert_eq!(config.relayers.len(), 1);
+        assert_eq!(config.signers.len(), 1);
+        assert_eq!(config.networks.len(), 1);
+        assert!(config.plugins.is_none());
     }
 }
