@@ -41,15 +41,24 @@ impl SocketService {
         shutdown_rx: oneshot::Receiver<()>,
         state: Arc<web::ThinData<AppState<J>>>,
         relayer_api: Arc<R>,
-    ) {
+    ) -> Result<Vec<String>, PluginError> {
         let mut shutdown = shutdown_rx;
+
+        let mut traces = Vec::new();
 
         loop {
             let state = Arc::clone(&state);
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    tokio::spawn(Self::handle_connection::<J, R>(stream, state, relayer_api));
+                    let result = tokio::spawn(Self::handle_connection::<J, R>(stream, state, relayer_api))
+                        .await
+                        .map_err(|e| PluginError::SocketError(e.to_string()))?;
+
+                    match result {
+                        Ok(trace) => traces.extend(trace),
+                        Err(e) => return Err(e),
+                    }
                 }
                 _ = &mut shutdown => {
                     println!("Shutdown signal received. Closing listener.");
@@ -57,6 +66,8 @@ impl SocketService {
                 }
             }
         }
+
+        Ok(traces)
     }
 
     async fn handle_connection<
@@ -66,11 +77,13 @@ impl SocketService {
         stream: UnixStream,
         state: Arc<web::ThinData<AppState<J>>>,
         relayer_api: Arc<R>,
-    ) -> Result<(), PluginError> {
+    ) -> Result<Vec<String>, PluginError> {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
+        let mut traces = Vec::new();
 
         while let Ok(Some(line)) = reader.next_line().await {
+            traces.push(line.clone());
             let request: Request =
                 serde_json::from_str(&line).map_err(|e| PluginError::PluginError(e.to_string()))?;
 
@@ -83,7 +96,7 @@ impl SocketService {
             let _ = w.write_all(response_str.as_bytes()).await;
         }
 
-        Ok(())
+        Ok(traces)
     }
 }
 

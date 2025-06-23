@@ -8,6 +8,7 @@ use super::PluginError;
 pub struct ScriptResult {
     pub output: String,
     pub error: String,
+    pub trace: Vec<String>,
 }
 
 pub struct ScriptExecutor;
@@ -44,6 +45,7 @@ impl ScriptExecutor {
         Ok(ScriptResult {
             output: stdout.to_string(),
             error: stderr.to_string(),
+            trace: Vec::new(),
         })
     }
 }

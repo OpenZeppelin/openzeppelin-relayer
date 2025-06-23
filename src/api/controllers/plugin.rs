@@ -5,7 +5,7 @@
 use crate::{
     jobs::JobProducerTrait,
     models::{ApiError, ApiResponse, AppState, PluginCallRequest},
-    services::plugins::{PluginRunner, PluginService, PluginServiceTrait},
+    services::plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
@@ -39,7 +39,10 @@ pub async fn call_plugin<J: JobProducerTrait + 'static>(
         .call_plugin(plugin.path, plugin_call_request, Arc::new(state))
         .await;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+    match result {
+        Ok(plugin_result) => Ok(HttpResponse::Ok().json(ApiResponse::success(plugin_result))),
+        Err(e) => Ok(HttpResponse::Ok().json(ApiResponse::<PluginCallResponse>::error(e))),
+    }
 }
 
 #[cfg(test)]
