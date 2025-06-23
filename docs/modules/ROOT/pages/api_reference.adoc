@@ -182,6 +182,91 @@ Example response:
 }
 ----
 
+==== Get relayer status
+Request: `GET http://localhost:8080/api/v1/relayers/<relayer_id>/status`
+
+Example request:
+[source,bash]
+----
+curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/status' \
+--header 'Authorization: Bearer <api_key>'
+----
+
+Example response for EVM relayer:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "balance": "1000000000000000000",
+        "pending_transactions_count": 2,
+        "last_confirmed_transaction_timestamp": "2025-02-26T13:28:55.838812+00:00",
+        "system_disabled": false,
+        "paused": false,
+        "nonce": "42"
+    },
+    "error": null
+}
+----
+
+Example response for Stellar relayer:
+[source,json]
+----
+{
+    "success": true,
+    "data": {
+        "balance": "100000000",
+        "pending_transactions_count": 0,
+        "last_confirmed_transaction_timestamp": null,
+        "system_disabled": false,
+        "paused": false,
+        "sequence_number": "12345678901234567890"
+    },
+    "error": null
+}
+----
+
+Response fields:
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+|`balance`
+|String
+|Current relayer balance in the smallest unit (wei for EVM, lamports for Solana, stroops for Stellar)
+
+|`pending_transactions_count`
+|Number
+|Number of transactions that are pending, submitted, or mined but not yet confirmed
+
+|`last_confirmed_transaction_timestamp`
+|String (optional)
+|ISO 8601 timestamp of the most recent confirmed transaction, or `null` if no transactions have been confirmed
+
+|`system_disabled`
+|Boolean
+|Whether the relayer has been disabled by the system due to errors or configuration issues
+
+|`paused`
+|Boolean
+|Whether the relayer has been manually paused
+
+|`nonce`
+|String (EVM only)
+|Current transaction nonce for EVM relayers
+
+|`sequence_number`
+|String (Stellar only)
+|Current sequence number for Stellar relayers
+|===
+
+[NOTE]
+====
+* For Solana relayers, this endpoint is currently not supported and will return an error
+* Network-specific fields (`nonce` for EVM, `sequence_number` for Stellar) are included directly in the response using JSON flattening
+* The `balance` field represents the raw balance value as a string to avoid precision loss with large numbers
+====
+
 
 [#solana_api]
 === Solana
@@ -672,9 +757,9 @@ Example response:
 [#stellar_api]
 === Stellar
 
-NOTE: Basic support for Stellar, it is currently under active development. The API interactions and specifics described below may evolve.
+NOTE: Basic support for Stellar; it is currently under active development. The API interactions and specifics described below may evolve.
 
-This section outlines how to interact with the Stellar network via the Relayer API.
+This section outlines how to interact with the Stellar network via the Relayer API. The relayer supports Soroban smart contract operations, including contract invocation, deployment, and WASM uploads.
 
 [cols="1,1,2"]
 |===
@@ -682,7 +767,7 @@ This section outlines how to interact with the Stellar network via the Relayer A
 
 |Send Transaction
 |`source_account`, `network`, `operations`
-|Submit a transaction to the Stellar network.
+|Submit a transaction to the Stellar network. Supports payment and InvokeHostFunction operations.
 
 |Get Transaction Details
 |`transaction_id`
@@ -693,13 +778,109 @@ This section outlines how to interact with the Stellar network via the Relayer A
 |List transactions for the relayer.
 |===
 
+==== Supported Operation Types
+
+[cols="1,2"]
+|===
+|Operation Type |Description
+
+|`payment`
+|Transfer native XLM or other assets between accounts
+
+|`invoke_contract`
+|Call a deployed Soroban smart contract function
+
+|`create_contract`
+|Deploy a new Soroban smart contract from WASM hash
+
+|`upload_wasm`
+|Upload WASM contract code to the Stellar ledger
+|===
+
 
 ==== Send Transaction
 Submit a transaction to the Stellar network.
 
 Request: `POST http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions`
 
-Example request (cURL):
+===== Transaction Structure
+
+**Required fields:**
+- `source_account`: The Stellar account that will be the source of the transaction
+- `network`: The Stellar network ("testnet", "mainnet", etc.)
+- `operations`: Array of operations to execute
+
+**Optional fields:**
+- `memo`: Transaction memo (see Memo Types below)
+- `valid_until`: Transaction expiration time (ISO 8601 format)
+
+===== Asset Types
+
+Assets in Stellar operations must be specified with a type field:
+
+**Native XLM:**
+[source,json]
+----
+{"type": "native"}
+----
+
+**Credit Asset (4 characters or less):**
+[source,json]
+----
+{
+  "type": "credit_alphanum4",
+  "code": "USDC",
+  "issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+----
+
+**Credit Asset (5-12 characters):**
+[source,json]
+----
+{
+  "type": "credit_alphanum12",
+  "code": "LONGASSET",
+  "issuer": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+}
+----
+
+===== Memo Types
+
+Transactions can include optional memos:
+
+**No Memo:**
+[source,json]
+----
+{"type": "none"}
+----
+
+**Text Memo (max 28 UTF-8 bytes):**
+[source,json]
+----
+{"type": "text", "value": "Payment for services"}
+----
+
+**ID Memo:**
+[source,json]
+----
+{"type": "id", "value": "12345"}
+----
+
+**Hash Memo (32 bytes hex):**
+[source,json]
+----
+{"type": "hash", "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}
+----
+
+**Return Memo (32 bytes hex):**
+[source,json]
+----
+{"type": "return", "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}
+----
+
+Example requests (cURL):
+
+**1. Payment Operation:**
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
@@ -710,14 +891,88 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
   "network": "testnet",
   "operations": [
     {
-      "op": "payment",
-      "destination": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
-      "asset": "NATIVE",
-      "amount": 1
+      "type": "payment",
+      "destination": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ",
+      "asset": {"type": "native"},
+      "amount": 1000000
+    }
+  ],
+  "memo": {"type": "text", "value": "Payment for services"}
+}'
+----
+
+**2. Invoke Contract:**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "type": "invoke_contract",
+      "contract_address": "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA",
+      "function_name": "transfer",
+      "args": [
+        {"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"},
+        {"address": "GD77B6LYQ5XDCW6CND7CQMA23FSV7MZQGLBAU5OMEOXQM6XFTCMWQQCJ"},
+        {"u64": "1000000"}
+      ],
+      "auth": {"type": "source_account"}
     }
   ]
 }'
 ----
+
+**3. Create Contract:**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "type": "create_contract",
+      "source": {
+        "from": "address",
+        "address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
+      },
+      "wasm_hash": "d3b2f6f8a1c5e9b4a7d8c2e1f5a9b3c6e8d4f7a2b5c8e1d4f7a0b3c6e9d2f5a8",
+      "salt": "0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}'
+----
+
+NOTE: For create_contract, you can also include optional `constructor_args` array and use `"from": "contract"` for factory pattern deployments.
+
+**4. Upload WASM:**
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
+  "network": "testnet",
+  "operations": [
+    {
+      "type": "upload_wasm",
+      "wasm": {
+        "type": "base64",
+        "base64": "AGFzbQEAAAABBgFgAX8BfwMCAQAFAwEAAQcPAgVoZWxsbwAACG1lbW9yeTIDCgQAAAAL"
+      }
+    }
+  ]
+}'
+----
+
+NOTE: WASM can be provided as either `"type": "base64"` or `"type": "hex"` encoding.
 
 Example response:
 [source,json]
@@ -813,3 +1068,105 @@ Example response:
     }
 }
 ----
+
+==== ScVal Argument Format
+
+When invoking contract functions, arguments must be provided as ScVal values in JSON format. The relayer uses the stellar-xdr JSON serialization format.
+
+
+Here are the supported ScVal types and their formats:
+
+[cols="1,2,2"]
+|===
+|Type |Format |Description
+
+|U64
+|`{"u64": "1000000"}`
+|Unsigned 64-bit integer
+
+|I64
+|`{"i64": "-500"}`
+|Signed 64-bit integer
+
+|U32
+|`{"u32": 42}`
+|Unsigned 32-bit integer
+
+|I32
+|`{"i32": -42}`
+|Signed 32-bit integer
+
+|Boolean
+|`{"bool": true}`
+|Boolean value
+
+|String
+|`{"string": "hello world"}`
+|UTF-8 string
+
+|Symbol
+|`{"symbol": "transfer"}`
+|Symbol (used for function names and identifiers)
+
+|Address
+|`{"address": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"}`
+|Stellar account or contract address
+
+|Bytes
+|`{"bytes": "deadbeef"}`
+|Hex-encoded byte array
+
+|Vector
+|`{"vec": [{"u32": 1}, {"u32": 2}, {"u32": 3}]}`
+|Array of ScVal values
+
+|Map
+|`{"map": [{"key": {"symbol": "name"}, "val": {"string": "MyToken"}}]}`
+|Key-value pairs of ScVal values
+|U128
+|`{"u128": {"hi": "100", "lo": "200"}}`
+|Unsigned 128-bit integer (as high/low parts)
+
+|I128
+|`{"i128": {"hi": "-100", "lo": "200"}}`
+|Signed 128-bit integer (as high/low parts)
+
+|U256
+|`{"u256": {"hi_hi": "1", "hi_lo": "2", "lo_hi": "3", "lo_lo": "4"}}`
+|Unsigned 256-bit integer (as four 64-bit parts)
+
+|I256
+|`{"i256": {"hi_hi": "-1", "hi_lo": "2", "lo_hi": "3", "lo_lo": "4"}}`
+|Signed 256-bit integer (as four 64-bit parts)
+|===
+
+
+**Address Format Notes:**
+- Account addresses start with 'G'
+- Contract addresses start with 'C'
+- All addresses use SEP-23 Strkey encoding
+
+==== Authorization Modes
+
+Soroban operations support different authorization modes:
+
+[cols="1,2,2"]
+|===
+|Type |Description |Example Usage
+
+|`none`
+|No authorization required
+|`"auth": {"type": "none"}`
+
+|`source_account`
+|Use the transaction source account (default)
+|`"auth": {"type": "source_account"}`
+
+|`addresses`
+|Use specific addresses (future feature)
+|`"auth": {"type": "addresses", "signers": ["GABC..."]}`
+
+|`xdr`
+|Advanced: provide base64-encoded XDR entries
+|`"auth": {"type": "xdr", "entries": ["<base64>"]}`
+|===

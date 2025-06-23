@@ -8,15 +8,46 @@ use super::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct DeletePendingTransactionsResponse {
+    pub queued_for_cancellation_transaction_ids: Vec<String>,
+    pub failed_to_queue_transaction_ids: Vec<String>,
+    pub total_processed: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
     pub id: String,
     pub name: String,
     pub network: String,
+    #[serde(rename = "network_type")]
     pub network_type: NetworkType,
     pub paused: bool,
     pub policies: NetworkPolicyResponse,
     pub address: String,
     pub system_disabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(tag = "network_type")]
+pub enum RelayerStatus {
+    #[serde(rename = "evm")]
+    Evm {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        nonce: String,
+    },
+    #[serde(rename = "stellar")]
+    Stellar {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        sequence_number: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

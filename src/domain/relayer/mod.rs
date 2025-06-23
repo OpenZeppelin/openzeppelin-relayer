@@ -18,9 +18,10 @@ use mockall::automock;
 use crate::{
     jobs::JobProducer,
     models::{
-        DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, NetworkRpcRequest,
+        DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
+        EvmTransactionDataSignature, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
+        RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -75,9 +76,11 @@ pub trait Relayer {
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if transactions were successfully deleted,
-    /// or a `RelayerError` on failure.
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError>;
+    /// A `Result` containing a `DeletePendingTransactionsResponse` with details
+    /// about which transactions were cancelled and which failed, or a `RelayerError` on failure.
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError>;
 
     /// Signs data using the relayer's credentials.
     ///
@@ -125,9 +128,9 @@ pub trait Relayer {
     ///
     /// # Returns
     ///
-    /// A `Result` containing `true` if the relayer is active, or a
+    /// A `Result` containing `RelayerStatus` on success, or a
     /// `RelayerError` on failure.
-    async fn get_status(&self) -> Result<bool, RelayerError>;
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError>;
 
     /// Initializes the relayer.
     ///
@@ -230,7 +233,9 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
@@ -268,7 +273,7 @@ impl Relayer for NetworkRelayer {
         }
     }
 
-    async fn get_status(&self) -> Result<bool, RelayerError> {
+    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
         match self {
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
@@ -294,7 +299,7 @@ impl Relayer for NetworkRelayer {
 }
 
 #[async_trait]
-pub trait RelayerFactoryTrait {
+pub trait RelayerFactoryTrait: Send + Sync {
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
@@ -336,7 +341,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let network = EvmNetwork::try_from(network_repo)?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
-                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
@@ -471,70 +476,6 @@ impl SignTransactionResponse {
             )),
         }
     }
-}
-
-// JSON-RPC Request struct
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcRequest<T> {
-    pub jsonrpc: String,
-    #[serde(flatten)]
-    pub params: T,
-    pub id: u64,
-}
-
-// JSON-RPC Response struct
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcResponse<T> {
-    pub jsonrpc: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub result: Option<T>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub error: Option<JsonRpcError>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
-    pub id: Option<u64>,
-}
-
-impl<T> JsonRpcResponse<T> {
-    /// Creates a new successful JSON-RPC response with the given result and id.
-    ///
-    /// # Arguments
-    /// * `id` - The request identifier
-    /// * `result` - The result value to include in the response
-    ///
-    /// # Returns
-    /// A new JsonRpcResponse with the specified result
-    pub fn result(id: u64, result: T) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: Some(result),
-            error: None,
-            id: Some(id),
-        }
-    }
-
-    pub fn error(code: i32, message: &str, description: &str) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: None,
-            error: Some(JsonRpcError {
-                code,
-                message: message.to_string(),
-                description: description.to_string(),
-            }),
-            id: None,
-        }
-    }
-}
-
-// JSON-RPC Error struct
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct JsonRpcError {
-    pub code: i32,
-    pub message: String,
-    pub description: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

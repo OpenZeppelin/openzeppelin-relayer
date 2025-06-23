@@ -32,15 +32,17 @@ use eyre::Result;
 use mockall::automock;
 use std::sync::Arc;
 
-mod evm;
-mod solana;
-mod stellar;
-mod util;
+pub mod evm;
+pub mod solana;
+pub mod stellar;
 
-pub use evm::*;
-pub use solana::*;
-pub use stellar::*;
+mod util;
 pub use util::*;
+
+// Explicit re-exports to avoid ambiguous glob re-exports
+pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
+pub use solana::SolanaRelayerTransaction;
+pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
 /// A trait that defines the operations for handling transactions across different networks.
 #[cfg_attr(test, automock)]
@@ -409,10 +411,10 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
-                let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
-                let price_calculator = PriceCalculator::new(
+                let price_calculator = evm::PriceCalculator::new(
                     EvmGasPriceService::new(evm_provider.clone(), network),
                     network_extra_fee_calculator,
                 );

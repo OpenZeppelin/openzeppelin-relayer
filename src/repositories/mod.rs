@@ -24,6 +24,9 @@ pub use transaction_counter::*;
 mod network;
 pub use network::*;
 
+mod plugin;
+pub use plugin::*;
+
 #[derive(Debug)]
 pub struct PaginatedResult<T> {
     pub items: Vec<T>,

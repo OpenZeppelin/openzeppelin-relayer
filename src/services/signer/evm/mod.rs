@@ -3,6 +3,7 @@
 //! Provides:
 //! - Local keystore support (encrypted JSON files)
 //! - Turnkey (Turnkey backend)
+//! - AWS KMS support
 //!
 //! # Architecture
 //!
@@ -10,13 +11,15 @@
 //! EvmSigner
 //!   ├── TestSigner (Temporary testing private key)
 //!   ├── LocalSigner (encrypted JSON keystore)
-//!   ├── AwsKmsSigner (AWS KMS backend) [NOT IMPLEMENTED]
+//!   ├── AwsKmsSigner (AWS KMS backend)
 //!   ├── Vault (HashiCorp Vault backend)
 //!   ├── VaultCould (HashiCorp Vault backend)
 //!   └── Turnkey (Turnkey backend)
 //! ```
+mod aws_kms_signer;
 mod local_signer;
 mod turnkey_signer;
+use aws_kms_signer::*;
 use local_signer::*;
 use turnkey_signer::*;
 
@@ -32,7 +35,9 @@ use crate::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
         TransactionRepoModel,
     },
-    services::{turnkey::TurnkeyService, GoogleCloudKmsService, TurnkeyServiceTrait},
+    services::{
+        turnkey::TurnkeyService, AwsKmsService, GoogleCloudKmsService, TurnkeyServiceTrait,
+    },
 };
 use eyre::Result;
 
@@ -55,6 +60,7 @@ pub enum EvmSigner {
     Vault(LocalSigner),
     VaultCloud(LocalSigner),
     Turnkey(TurnkeySigner),
+    AwsKms(AwsKmsSigner),
 }
 
 #[async_trait]
@@ -65,6 +71,7 @@ impl Signer for EvmSigner {
             Self::Vault(signer) => signer.address().await,
             Self::VaultCloud(signer) => signer.address().await,
             Self::Turnkey(signer) => signer.address().await,
+            Self::AwsKms(signer) => signer.address().await,
         }
     }
 
@@ -77,6 +84,7 @@ impl Signer for EvmSigner {
             Self::Vault(signer) => signer.sign_transaction(transaction).await,
             Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
+            Self::AwsKms(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -89,6 +97,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Vault(signer) => signer.sign_data(request).await,
             Self::VaultCloud(signer) => signer.sign_data(request).await,
             Self::Turnkey(signer) => signer.sign_data(request).await,
+            Self::AwsKms(signer) => signer.sign_data(request).await,
         }
     }
 
@@ -101,6 +110,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Vault(signer) => signer.sign_typed_data(request).await,
             Self::VaultCloud(signer) => signer.sign_typed_data(request).await,
             Self::Turnkey(signer) => signer.sign_typed_data(request).await,
+            Self::AwsKms(signer) => signer.sign_typed_data(request).await,
         }
     }
 }
@@ -108,16 +118,19 @@ impl DataSignerTrait for EvmSigner {
 pub struct EvmSignerFactory;
 
 impl EvmSignerFactory {
-    pub fn create_evm_signer(
-        signer_model: &SignerRepoModel,
+    pub async fn create_evm_signer(
+        signer_model: SignerRepoModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match signer_model.config {
             SignerConfig::Local(_)
             | SignerConfig::Test(_)
             | SignerConfig::Vault(_)
-            | SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(signer_model)?),
-            SignerConfig::AwsKms(_) => {
-                return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
+            | SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(&signer_model)?),
+            SignerConfig::AwsKms(ref config) => {
+                let aws_service = AwsKmsService::new(config.clone()).await.map_err(|e| {
+                    SignerFactoryError::CreationFailed(format!("AWS KMS service error: {}", e))
+                })?;
+                EvmSigner::AwsKms(AwsKmsSigner::new(aws_service))
             }
             SignerConfig::VaultTransit(_) => {
                 return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()));
@@ -166,8 +179,8 @@ mod tests {
         ])
     }
 
-    #[test]
-    fn test_create_evm_signer_local() {
+    #[tokio::test]
+    async fn test_create_evm_signer_local() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
@@ -175,7 +188,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
 
         match signer {
             EvmSigner::Local(_) => {}
@@ -183,8 +198,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_evm_signer_test() {
+    #[tokio::test]
+    async fn test_create_evm_signer_test() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::Test(LocalSignerConfig {
@@ -192,7 +207,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
 
         match signer {
             EvmSigner::Local(_) => {}
@@ -200,8 +217,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_evm_signer_vault() {
+    #[tokio::test]
+    async fn test_create_evm_signer_vault() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::Vault(LocalSignerConfig {
@@ -209,7 +226,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
 
         match signer {
             EvmSigner::Local(_) => {}
@@ -217,8 +236,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_evm_signer_vault_cloud() {
+    #[tokio::test]
+    async fn test_create_evm_signer_vault_cloud() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::VaultCloud(LocalSignerConfig {
@@ -226,7 +245,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
 
         match signer {
             EvmSigner::Local(_) => {}
@@ -234,25 +255,28 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_evm_signer_aws_kms() {
+    #[tokio::test]
+    async fn test_create_evm_signer_aws_kms() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
+            config: SignerConfig::AwsKms(AwsKmsSignerConfig {
+                region: Some("us-east-1".to_string()),
+                key_id: "test-key-id".to_string(),
+            }),
         };
 
-        let result = EvmSignerFactory::create_evm_signer(&signer_model);
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
 
-        match result {
-            Err(SignerFactoryError::UnsupportedType(msg)) => {
-                assert_eq!(msg, "AWS KMS");
-            }
-            _ => panic!("Expected UnsupportedType error"),
+        match signer {
+            EvmSigner::AwsKms(_) => {}
+            _ => panic!("Expected AWS KMS signer"),
         }
     }
 
-    #[test]
-    fn test_create_evm_signer_vault_transit() {
+    #[tokio::test]
+    async fn test_create_evm_signer_vault_transit() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
@@ -266,7 +290,7 @@ mod tests {
             }),
         };
 
-        let result = EvmSignerFactory::create_evm_signer(&signer_model);
+        let result = EvmSignerFactory::create_evm_signer(signer_model).await;
 
         match result {
             Err(SignerFactoryError::UnsupportedType(msg)) => {
@@ -276,8 +300,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_evm_signer_turnkey() {
+    #[tokio::test]
+    async fn test_create_evm_signer_turnkey() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::Turnkey(TurnkeySignerConfig {
@@ -289,7 +313,9 @@ mod tests {
             }),
         };
 
-        let result = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let result = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
 
         match result {
             EvmSigner::Turnkey(_) => {}
@@ -297,8 +323,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_evm_signer_google_cloud_kms() {
+    #[tokio::test]
+    async fn test_create_evm_signer_google_cloud_kms() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
             config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
@@ -322,7 +348,7 @@ mod tests {
             }),
         };
 
-        let result = EvmSignerFactory::create_evm_signer(&signer_model);
+        let result = EvmSignerFactory::create_evm_signer(signer_model).await;
 
         match result {
             Err(SignerFactoryError::UnsupportedType(msg)) => {
@@ -341,7 +367,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
 
         assert_eq!(test_key_address(), signer_address);
@@ -356,7 +384,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
 
         assert_eq!(test_key_address(), signer_address);
@@ -371,7 +401,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
 
         assert_eq!(test_key_address(), signer_address);
@@ -386,7 +418,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
 
         assert_eq!(test_key_address(), signer_address);
@@ -405,7 +439,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
 
         assert_eq!(
@@ -423,7 +459,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
         let request = SignDataRequest {
             message: "Test message".to_string(),
         };
@@ -452,7 +490,9 @@ mod tests {
             }),
         };
 
-        let signer = EvmSignerFactory::create_evm_signer(&signer_model).unwrap();
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
 
         let transaction_data = NetworkTransactionData::Evm(EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),

@@ -1,0 +1,72 @@
+---
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080/tcp
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - aws_access_key_id
+      - aws_secret_access_key
+      - aws_session_token
+    environment:
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+      - metrics-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+    depends_on:
+      - redis
+    restart: on-failure:5
+  redis:
+    image: redis:bookworm
+    ports:
+      - 6379:6379/tcp
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
+    networks:
+      - relayer-network
+      - metrics-network
+    restart: on-failure:5
+networks:
+  metrics-network:
+    internal: true
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local
+secrets:
+  api_key:
+    environment: API_KEY
+  webhook_signing_key:
+    environment: WEBHOOK_SIGNING_KEY
+  aws_access_key_id:
+    environment: AWS_ACCESS_KEY_ID
+  aws_secret_access_key:
+    environment: AWS_SECRET_ACCESS_KEY
+  aws_session_token:
+    environment: AWS_SESSION_TOKEN

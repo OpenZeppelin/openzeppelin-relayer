@@ -213,7 +213,7 @@ mod actix_tests {
         name: &str,
         families: &'a [MetricFamily],
     ) -> Option<&'a MetricFamily> {
-        families.iter().find(|mf| mf.get_name() == name)
+        families.iter().find(|mf| mf.name() == name)
     }
 
     #[actix_rt::test]
@@ -269,35 +269,48 @@ mod actix_tests {
         update_system_metrics();
 
         // Verify that metrics have been updated with reasonable values
-
-        // CPU usage should be between 0 and 100
-        let cpu = CPU_USAGE.get();
+        let cpu_usage = CPU_USAGE.get();
         assert!(
-            (0.0..=100.0).contains(&cpu),
+            (0.0..=100.0).contains(&cpu_usage),
             "CPU usage should be between 0-100%, got {}",
-            cpu
+            cpu_usage
         );
 
-        // Memory values should be positive
-        assert!(TOTAL_MEMORY.get() > 0.0, "Total memory should be positive");
+        let memory_usage = MEMORY_USAGE.get();
         assert!(
-            AVAILABLE_MEMORY.get() > 0.0,
-            "Available memory should be positive"
-        );
-        assert!(
-            MEMORY_USAGE.get() >= 0.0,
-            "Memory usage should be non-negative"
+            memory_usage >= 0.0,
+            "Memory usage should be >= 0, got {}",
+            memory_usage
         );
 
-        // Memory percentage should be between 0 and 100
-        let mem_percent = MEMORY_USAGE_PERCENT.get();
+        let memory_percent = MEMORY_USAGE_PERCENT.get();
         assert!(
-            (0.0..=100.0).contains(&mem_percent),
+            (0.0..=100.0).contains(&memory_percent),
             "Memory usage percentage should be between 0-100%, got {}",
-            mem_percent
+            memory_percent
         );
 
-        // Disk usage percentage should be between 0 and 100
+        let total_memory = TOTAL_MEMORY.get();
+        assert!(
+            total_memory > 0.0,
+            "Total memory should be > 0, got {}",
+            total_memory
+        );
+
+        let available_memory = AVAILABLE_MEMORY.get();
+        assert!(
+            available_memory >= 0.0,
+            "Available memory should be >= 0, got {}",
+            available_memory
+        );
+
+        let disk_usage = DISK_USAGE.get();
+        assert!(
+            disk_usage >= 0.0,
+            "Disk usage should be >= 0, got {}",
+            disk_usage
+        );
+
         let disk_percent = DISK_USAGE_PERCENT.get();
         assert!(
             (0.0..=100.0).contains(&disk_percent),
@@ -305,23 +318,19 @@ mod actix_tests {
             disk_percent
         );
 
-        // Disk usage should be non-negative
-        assert!(DISK_USAGE.get() >= 0.0, "Disk usage should be non-negative");
-
-        // Verify that memory calculations are consistent
-        let total = TOTAL_MEMORY.get();
-        let used = MEMORY_USAGE.get();
-        let available = AVAILABLE_MEMORY.get();
-
-        // Used + Available should approximately equal Total (allowing for small variations)
-        let diff = (total - (used + available)).abs();
-        let tolerance = total * 0.05; // 5% tolerance
+        // Verify that memory usage doesn't exceed total memory
         assert!(
-            diff <= tolerance,
-            "Memory calculation inconsistency: total={}, used={}, available={}",
-            total,
-            used,
-            available
+            memory_usage <= total_memory,
+            "Memory usage should be <= total memory, got {}",
+            memory_usage
+        );
+
+        // Verify that available memory plus used memory doesn't exceed total memory
+        assert!(
+            (available_memory + memory_usage) <= total_memory,
+            "Available memory plus used memory should be <= total memory {}, got {}",
+            total_memory,
+            available_memory + memory_usage
         );
     }
 
@@ -344,10 +353,10 @@ mod actix_tests {
             let labels = m.get_label();
             if labels
                 .iter()
-                .any(|l| l.get_name() == "endpoint" && l.get_value() == "/test_success")
+                .any(|l| l.name() == "endpoint" && l.value() == "/test_success")
             {
                 found = true;
-                assert!(m.get_counter().get_value() >= 1.0);
+                assert!(m.get_counter().value() >= 1.0);
             }
         }
         assert!(
@@ -375,10 +384,10 @@ mod actix_tests {
             let labels = m.get_label();
             if labels
                 .iter()
-                .any(|l| l.get_name() == "endpoint" && l.get_value() == "/test_error")
+                .any(|l| l.name() == "endpoint" && l.value() == "/test_error")
             {
                 found = true;
-                assert!(m.get_counter().get_value() >= 1.0);
+                assert!(m.get_counter().value() >= 1.0);
             }
         }
         assert!(

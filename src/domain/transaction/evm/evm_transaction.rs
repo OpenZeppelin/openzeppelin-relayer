@@ -12,9 +12,8 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        is_pending_transaction,
         transaction::{
-            evm::price_calculator::{PriceCalculator, PriceCalculatorTrait},
+            evm::{is_pending_transaction, PriceCalculator, PriceCalculatorTrait},
             Transaction,
         },
         EvmTransactionValidator,
@@ -745,7 +744,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        domain::price_calculator::PriceParams,
+        domain::evm::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
         models::{
             evm::Speed, EvmTransactionData, EvmTransactionRequest, NetworkType,

@@ -8,10 +8,10 @@ use crate::{
     models::{
         AppState, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
         GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, NetworkRepoModel,
-        NotificationRepoModel, RelayerRepoModel, SignerConfig, SignerRepoModel,
+        NotificationRepoModel, PluginModel, RelayerRepoModel, SignerConfig, SignerRepoModel,
         TurnkeySignerConfig, VaultTransitSignerConfig,
     },
-    repositories::Repository,
+    repositories::{PluginRepositoryTrait, Repository},
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
     utils::unsafe_generate_random_private_key,
 };
@@ -21,6 +21,28 @@ use futures::future::try_join_all;
 use oz_keystore::{HashicorpCloudClient, LocalClient};
 use secrets::SecretVec;
 use zeroize::Zeroizing;
+
+/// Process all plugins from the config file and store them in the repository.
+async fn process_plugins<J: JobProducerTrait>(
+    config_file: &Config,
+    app_state: &ThinData<AppState<J>>,
+) -> Result<()> {
+    let plugin_futures = config_file.plugins.iter().map(|plugin| async {
+        let plugin_model =
+            PluginModel::try_from(plugin.clone()).wrap_err("Failed to convert plugin config")?;
+        app_state
+            .plugin_repository
+            .add(plugin_model)
+            .await
+            .wrap_err("Failed to create plugin repository entry")?;
+        Ok::<(), Report>(())
+    });
+
+    try_join_all(plugin_futures)
+        .await
+        .wrap_err("Failed to initialize plugin repository")?;
+    Ok(())
+}
 
 /// Process a signer configuration from the config file and convert it into a `SignerRepoModel`.
 ///
@@ -57,9 +79,12 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                 config: SignerConfig::Local(LocalSignerConfig { raw_key }),
             }
         }
-        SignerFileConfigEnum::AwsKms(_) => SignerRepoModel {
+        SignerFileConfigEnum::AwsKms(aws_kms_config) => SignerRepoModel {
             id: signer.id.clone(),
-            config: SignerConfig::AwsKms(AwsKmsSignerConfig {}),
+            config: SignerConfig::AwsKms(AwsKmsSignerConfig {
+                region: aws_kms_config.region.clone(),
+                key_id: aws_kms_config.key_id.clone(),
+            }),
         },
         SignerFileConfigEnum::Vault(vault_config) => {
             let config = VaultConfig {
@@ -302,6 +327,7 @@ async fn process_relayers<J: JobProducerTrait>(
             .ok_or_else(|| eyre::eyre!("Signer not found"))?;
         let network_type = repo_model.network_type;
         let signer_service = SignerFactory::create_signer(&network_type, signer_model)
+            .await
             .wrap_err("Failed to create signer service")?;
 
         let address = signer_service.address().await?;
@@ -332,6 +358,7 @@ pub async fn process_config_file<J: JobProducerTrait>(
     config_file: Config,
     app_state: ThinData<AppState<J>>,
 ) -> Result<()> {
+    process_plugins(&config_file, &app_state).await?;
     process_signers(&config_file, &app_state).await?;
     process_notifications(&config_file, &app_state).await?;
     process_networks(&config_file, &app_state).await?;
@@ -345,16 +372,16 @@ mod tests {
     use crate::{
         config::{
             AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
-            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, RelayerFileConfig,
-            ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, PluginFileConfig,
+            RelayerFileConfig, ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
             VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
         models::{NetworkType, PlainOrEnvValue, SecretString},
         repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
-            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-            RelayerRepositoryStorage,
+            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
+            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
+            InMemoryTransactionRepository, RelayerRepositoryStorage,
         },
     };
     use serde_json::json;
@@ -393,6 +420,7 @@ mod tests {
             network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
+            plugin_repository: Arc::new(InMemoryPluginRepository::default()),
         }
     }
 
@@ -473,7 +501,10 @@ mod tests {
     async fn test_process_signer_aws_kms() -> Result<()> {
         let signer = SignerFileConfig {
             id: "aws-kms-signer".to_string(),
-            config: SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {}),
+            config: SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {
+                region: Some("us-east-1".to_string()),
+                key_id: "test-key-id".to_string(),
+            }),
         };
 
         let result = process_signer(&signer).await;
@@ -623,6 +654,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: vec![],
         };
 
         // Create app state
@@ -664,6 +696,7 @@ mod tests {
             relayers: vec![],
             notifications,
             networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: vec![],
         };
 
         // Create app state
@@ -692,6 +725,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: vec![],
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -715,6 +749,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
+            plugins: vec![],
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -740,6 +775,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
+            plugins: vec![],
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -770,6 +806,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
+            plugins: vec![],
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -811,6 +848,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
+            plugins: vec![],
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -846,6 +884,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
+            plugins: vec![],
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -884,6 +923,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
+            plugins: vec![],
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -929,6 +969,7 @@ mod tests {
             relayers,
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: vec![],
         };
 
         // Create app state
@@ -946,6 +987,53 @@ mod tests {
         assert_eq!(stored_relayers[0].id, "test-relayer-1");
         assert_eq!(stored_relayers[0].signer_id, "test-signer-1");
         assert!(!stored_relayers[0].address.is_empty()); // Address should be populated
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_plugins() -> Result<()> {
+        // Create test plugins
+        let plugins = vec![
+            PluginFileConfig {
+                id: "test-plugin-1".to_string(),
+                path: "/app/plugins/test.ts".to_string(),
+            },
+            PluginFileConfig {
+                id: "test-plugin-2".to_string(),
+                path: "/app/plugins/test2.ts".to_string(),
+            },
+        ];
+
+        // Create config
+        let config = Config {
+            signers: vec![],
+            relayers: vec![],
+            notifications: vec![],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins,
+        };
+
+        // Create app state
+        let app_state = ThinData(create_test_app_state());
+
+        // Process plugins
+        process_plugins(&config, &app_state).await?;
+
+        // Verify plugins were created
+        let plugin_1 = app_state
+            .plugin_repository
+            .get_by_id("test-plugin-1")
+            .await?;
+        let plugin_2 = app_state
+            .plugin_repository
+            .get_by_id("test-plugin-2")
+            .await?;
+
+        assert!(plugin_1.is_some());
+        assert!(plugin_2.is_some());
+        assert_eq!(plugin_1.unwrap().path, "/app/plugins/test.ts");
+        assert_eq!(plugin_2.unwrap().path, "/app/plugins/test2.ts");
 
         Ok(())
     }
@@ -977,12 +1065,18 @@ mod tests {
             signing_key: None,
         }];
 
+        let plugins = vec![PluginFileConfig {
+            id: "test-plugin-1".to_string(),
+            path: "/app/plugins/test.ts".to_string(),
+        }];
+
         // Create config
         let config = Config {
             signers,
             relayers,
             notifications,
             networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins,
         };
 
         // Create shared repositories
@@ -994,6 +1088,7 @@ mod tests {
         let network_repo = Arc::new(InMemoryNetworkRepository::default());
         let transaction_repo = Arc::new(InMemoryTransactionRepository::default());
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
+        let plugin_repo = Arc::new(InMemoryPluginRepository::default());
 
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1020,6 +1115,7 @@ mod tests {
             transaction_repository: transaction_repo.clone(),
             transaction_counter_store: transaction_counter.clone(),
             job_producer: job_producer.clone(),
+            plugin_repository: plugin_repo.clone(),
         });
 
         // Process the entire config file
@@ -1039,6 +1135,9 @@ mod tests {
         assert_eq!(stored_notifications.len(), 1);
         assert_eq!(stored_notifications[0].id, "test-notification-1");
 
+        let stored_plugin = plugin_repo.get_by_id("test-plugin-1").await?;
+        assert_eq!(stored_plugin.unwrap().path, "/app/plugins/test.ts");
+
         Ok(())
     }
 
@@ -1051,7 +1150,7 @@ mod tests {
             config: SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
             service_account: ServiceAccountConfig {
                 private_key: PlainOrEnvValue::Plain {
-                    value: SecretString::new("-----BEGIN PRIVATE KEY-----\nFAKEKEYDATA\n-----END PRIVATE KEY-----\n"),
+                    value: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                 },
                 client_email: PlainOrEnvValue::Plain {
                     value: SecretString::new("test-service-account@example.com"),

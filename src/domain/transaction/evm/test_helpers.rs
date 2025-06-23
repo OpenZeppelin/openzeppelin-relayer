@@ -4,7 +4,7 @@
 #[cfg(test)]
 pub mod test_utils {
     use crate::{
-        domain::{transaction::evm::EvmRelayerTransaction, MockPriceCalculatorTrait},
+        domain::transaction::evm::{EvmRelayerTransaction, MockPriceCalculatorTrait},
         jobs::MockJobProducerTrait,
         models::{
             evm::Speed, EvmTransactionData, NetworkTransactionData, NetworkType, RelayerEvmPolicy,

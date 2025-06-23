@@ -338,7 +338,8 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
     let token_owner = Keypair::new(); // This will own the token account
     let relayer_keypair = Keypair::new();
 
-    let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC token mint
+    // USDC token mint
+    let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
     let token_mint = Pubkey::from_str(test_token).unwrap();
 
     let source_token_account = get_associated_token_address(&token_owner.pubkey(), &token_mint);
