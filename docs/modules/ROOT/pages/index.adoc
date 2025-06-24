@@ -24,6 +24,7 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 - **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
 - **Docker Support**: Deploy the relayer using Docker for both development and production environments.
+- **Plugins**: Extend the functionality of the relayer with custom logic using TypeScript functions.
 
 
 == Supported Networks
@@ -91,6 +92,7 @@ flowchart TB
         subgraph "API Layer"
             api[API Routes & Controllers]
             middleware[Middleware]
+            plugins[Plugins]
         end
 
         subgraph "Domain Layer"
@@ -133,11 +135,13 @@ flowchart TB
     %% API Layer connections
     api -- "Processes requests" --> middleware
     middleware -- "Validates & routes" --> domain
+    middleware -- "Invokes" --> plugins
 
     %% Domain Layer connections
     domain -- "Uses" --> relayer
     domain -- "Enforces" --> policies
     relayer -- "Processes" --> transaction
+    plugins -- "Interacts with" --> relayer
 
     %% Services Layer connections
     transaction -- "Signs with" --> signer
@@ -165,7 +169,7 @@ flowchart TB
     classDef configClass fill:#fbb,stroke:#333,stroke-width:2px
     classDef externalClass fill:#ddd,stroke:#333,stroke-width:1px
 
-    class api,middleware apiClass
+    class api,middleware,plugins apiClass
     class domain,relayer,policies domainClass
     class repositories,jobs,signer,provider infraClass
     class transaction,vault,webhook,monitoring serviceClass
@@ -199,6 +203,7 @@ openzeppelin-relayer/
 ├── scripts/              # Utility scripts
 ├── examples/             # Configuration examples
 ├── helpers/              # Rust helper scripts
+├── plugins/              # Plugins directory
 └── ... other root files (Cargo.toml, README.md, etc.)
 ```
 
@@ -211,6 +216,7 @@ For detailed information about each directory and its contents, see xref:structu
 
 * Rust 2021 edition
 * Docker (optional, for containerized deployment)
+* Node.js, typescript and ts-node (optional, for plugins)
 
 
 [TIP]
@@ -480,12 +486,12 @@ Copy the example config file and update values according to your needs
 cp config/config.example.json config/config.json
 ----
 
-There are 3 important sections in this file:
+Key sections in this file include:
 
 - Signers: Defines transaction signing methods.
 - Notifications: Sets up status alerts
 - Relayers: Configures networks, notifications channels, policies & singers.
-
+- Plugins: Configures plugins.
 
 ==== 1. Signers
 
@@ -1014,8 +1020,39 @@ When using custom RPC URLs:
 * If a weight is not specified for an endpoint, it defaults to 100.
 ====
 
+==== 4. Plugins
+
+For more information on how to write a plugin, please refer to the xref:plugins.adoc[Plugins] page.
+
+* `plugins` array, containing plugin configurations:
+
+[source,json]
+----
+"plugins": [
+  {
+    "id": "my-plugin",
+    "path": "my-plugin.ts"
+  }
+]
+----
+
+Available configuration fields
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+|id
+|String
+|Unique id for the plugin
+
+|path
+|String
+|Path to the plugin file
+|===
+
+
 [#network_configuration_reference]
-==== 4. Networks
+==== 5. Networks
 
 Networks can be configured in two ways:
 

@@ -47,5 +47,7 @@
         "pubkey": ""
       }
     }
-  ]
+  ],
+  "networks": "./config/networks",
+  "plugins": []
 }

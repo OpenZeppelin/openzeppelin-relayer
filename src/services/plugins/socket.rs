@@ -84,6 +84,7 @@ impl SocketService {
 
         while let Ok(Some(line)) = reader.next_line().await {
             traces.push(line.clone());
+
             let request: Request =
                 serde_json::from_str(&line).map_err(|e| PluginError::PluginError(e.to_string()))?;
 

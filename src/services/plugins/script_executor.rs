@@ -110,6 +110,7 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+
         let result = result.unwrap();
         assert!(result.error.contains("logger"));
     }

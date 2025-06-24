@@ -12,7 +12,7 @@ use stellar_strkey::ed25519::PublicKey;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssetSpec {
     Native,
     Credit4 { code: String, issuer: String },
@@ -107,10 +107,48 @@ mod tests {
             issuer: TEST_PK.to_string(),
         };
         let json = serde_json::to_string(&spec).unwrap();
-        assert!(json.contains("CREDIT4"));
+        assert!(json.contains("credit4"));
         assert!(json.contains("USDC"));
 
         let deserialized: AssetSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec, deserialized);
+    }
+
+    #[test]
+    fn test_asset_spec_json_format() {
+        // Test Native
+        let native = AssetSpec::Native;
+        let native_json = serde_json::to_value(&native).unwrap();
+        assert_eq!(native_json, serde_json::json!({"type": "native"}));
+
+        // Test Credit4
+        let credit4 = AssetSpec::Credit4 {
+            code: "USDC".to_string(),
+            issuer: TEST_PK.to_string(),
+        };
+        let credit4_json = serde_json::to_value(&credit4).unwrap();
+        assert_eq!(
+            credit4_json,
+            serde_json::json!({
+                "type": "credit4",
+                "code": "USDC",
+                "issuer": TEST_PK
+            })
+        );
+
+        // Test Credit12
+        let credit12 = AssetSpec::Credit12 {
+            code: "LONGASSET".to_string(),
+            issuer: TEST_PK.to_string(),
+        };
+        let credit12_json = serde_json::to_value(&credit12).unwrap();
+        assert_eq!(
+            credit12_json,
+            serde_json::json!({
+                "type": "credit12",
+                "code": "LONGASSET",
+                "issuer": TEST_PK
+            })
+        );
     }
 }
