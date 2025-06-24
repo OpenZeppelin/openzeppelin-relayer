@@ -3,37 +3,13 @@
 //! and handling transaction compatibility checks.
 
 use crate::{
-    domain::transaction::evm::price_calculator::PriceCalculatorTrait,
+    domain::transaction::evm::price_calculator::{calculate_min_bump, PriceCalculatorTrait},
     models::{
         EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel, TransactionError, U256,
     },
 };
 
 use super::PriceParams;
-
-/// Safely calculates the minimum required gas price for a replacement transaction.
-/// Uses saturating arithmetic to prevent overflow and maintains precision.
-///
-/// # Arguments
-///
-/// * `base_price` - The original gas price to calculate bump from
-///
-/// # Returns
-///
-/// The minimum required price for replacement, or `u128::MAX` if overflow would occur.
-fn calculate_safe_bump(base_price: u128) -> u128 {
-    // Convert MIN_BUMP_FACTOR to a rational representation to avoid floating point precision issues
-    // MIN_BUMP_FACTOR = 1.1 = 11/10
-    const BUMP_NUMERATOR: u128 = 11;
-    const BUMP_DENOMINATOR: u128 = 10;
-
-    let bumped_price = base_price
-        .saturating_mul(BUMP_NUMERATOR)
-        .saturating_div(BUMP_DENOMINATOR);
-
-    // Ensure we always bump by at least 1 wei to guarantee replacement
-    std::cmp::max(bumped_price, base_price.saturating_add(1))
-}
 
 /// Checks if an EVM transaction data has explicit prices.
 ///
@@ -254,13 +230,13 @@ fn validate_price_bump_requirements(
         (old_evm_data.gas_price, new_evm_data.gas_price)
     {
         // Legacy transaction comparison
-        let min_required = calculate_safe_bump(old_gas_price);
+        let min_required = calculate_min_bump(old_gas_price);
         new_gas_price >= min_required
     } else if let (Some(old_max_fee), Some(new_max_fee)) =
         (old_evm_data.max_fee_per_gas, new_evm_data.max_fee_per_gas)
     {
         // EIP1559 transaction comparison - max_fee_per_gas must meet bump requirements
-        let min_required_max_fee = calculate_safe_bump(old_max_fee);
+        let min_required_max_fee = calculate_min_bump(old_max_fee);
         let max_fee_sufficient = new_max_fee >= min_required_max_fee;
 
         // Check max_priority_fee_per_gas if both transactions have it
@@ -269,7 +245,7 @@ fn validate_price_bump_requirements(
             new_evm_data.max_priority_fee_per_gas,
         ) {
             (Some(old_priority), Some(new_priority)) => {
-                let min_required_priority = calculate_safe_bump(old_priority);
+                let min_required_priority = calculate_min_bump(old_priority);
                 new_priority >= min_required_priority
             }
             _ => {
@@ -337,7 +313,7 @@ pub async fn calculate_replacement_price<PC: PriceCalculatorTrait>(
         if let (Some(old_gas_price), Some(new_gas_price)) =
             (old_evm_data.gas_price, price_params.gas_price)
         {
-            let min_required = calculate_safe_bump(old_gas_price);
+            let min_required = calculate_min_bump(old_gas_price);
             if new_gas_price < min_required {
                 // Market price is too low, use minimum bump
                 price_params.gas_price = Some(min_required);
@@ -355,8 +331,8 @@ pub async fn calculate_replacement_price<PC: PriceCalculatorTrait>(
             old_evm_data.max_priority_fee_per_gas,
             price_params.max_priority_fee_per_gas,
         ) {
-            let min_required = calculate_safe_bump(old_max_fee);
-            let min_required_priority = calculate_safe_bump(old_priority);
+            let min_required = calculate_min_bump(old_max_fee);
+            let min_required_priority = calculate_min_bump(old_priority);
             if new_max_fee < min_required {
                 price_params.max_fee_per_gas = Some(min_required);
             }
@@ -506,20 +482,6 @@ mod tests {
             policy.gas_price_cap = Some(gas_cap);
         }
         relayer
-    }
-
-    #[test]
-    fn test_calculate_safe_bump() {
-        assert_eq!(calculate_safe_bump(10_000_000_000), 11_000_000_000);
-        assert_eq!(calculate_safe_bump(1), 2);
-        assert_eq!(calculate_safe_bump(100_000_000_000), 110_000_000_000);
-
-        let large_value = u128::MAX / 2;
-        let result = calculate_safe_bump(large_value);
-        assert!(result > large_value);
-
-        let max_result = calculate_safe_bump(u128::MAX);
-        assert_eq!(max_result, u128::MAX);
     }
 
     #[test]
@@ -787,7 +749,7 @@ mod tests {
         assert_eq!(price_params.max_fee_per_gas, Some(33_000_000_000));
 
         // Priority fee should also be bumped if old transaction had it
-        let expected_priority_bump = calculate_safe_bump(5_000_000_000); // 5.5 gwei
+        let expected_priority_bump = calculate_min_bump(5_000_000_000); // 5.5 gwei
         let capped_priority = expected_priority_bump.min(33_000_000_000); // Capped at max_fee
         assert_eq!(price_params.max_priority_fee_per_gas, Some(capped_priority));
     }
@@ -993,17 +955,6 @@ mod tests {
         let old_legacy = create_legacy_transaction_data();
         let result = validate_price_bump_requirements(&old_legacy, &new_tx_no_price);
         assert!(result.is_err()); // Should fail because new transaction has no pricing
-    }
-
-    #[test]
-    fn test_calculate_safe_bump_edge_cases() {
-        assert_eq!(calculate_safe_bump(0), 1);
-        assert_eq!(calculate_safe_bump(5), 6);
-        assert_eq!(calculate_safe_bump(10), 11);
-
-        let near_max = u128::MAX - 1000;
-        let result = calculate_safe_bump(near_max);
-        assert!(result >= near_max);
     }
 
     #[test]

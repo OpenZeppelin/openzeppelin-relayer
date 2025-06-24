@@ -74,7 +74,6 @@ const PRECISION: u128 = 1_000_000_000; // 10^9 (similar to Gwei)
 const MINUTE_AND_HALF_MS: u128 = 90000;
 const BASE_FEE_INCREASE_FACTOR_PERCENT: u128 = 125; // 12.5% increase per block (as percentage * 10)
 const MAX_BASE_FEE_MULTIPLIER: u128 = 10 * PRECISION; // 10.0 * PRECISION
-const MIN_BUMP_PERCENT: u128 = 10;
 
 #[derive(Debug, Clone)]
 pub struct PriceParams {
@@ -101,6 +100,30 @@ impl PriceParams {
             }
         }
     }
+}
+
+/// Safely calculates the minimum required gas price for a replacement transaction.
+/// Uses saturating arithmetic to prevent overflow and maintains precision.
+///
+/// # Arguments
+///
+/// * `base_price` - The original gas price to calculate bump from
+///
+/// # Returns
+///
+/// The minimum required price for replacement, or `u128::MAX` if overflow would occur.
+pub fn calculate_min_bump(base_price: u128) -> u128 {
+    // Convert MIN_BUMP_FACTOR to a rational representation to avoid floating point precision issues
+    // MIN_BUMP_FACTOR = 1.1 = 11/10
+    const BUMP_NUMERATOR: u128 = 11;
+    const BUMP_DENOMINATOR: u128 = 10;
+
+    let bumped_price = base_price
+        .saturating_mul(BUMP_NUMERATOR)
+        .saturating_div(BUMP_DENOMINATOR);
+
+    // Ensure we always bump by at least 1 wei to guarantee replacement
+    std::cmp::max(bumped_price, base_price.saturating_add(1))
 }
 
 /// Primary struct for calculating gas prices with an injected `EvmGasPriceServiceTrait`.
@@ -307,8 +330,8 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         let speed = maybe_speed.unwrap_or(&DEFAULT_TRANSACTION_SPEED);
 
         // Calculate the minimum required fees (10% increase over previous values)
-        let min_bump_max_fee = Self::calculate_min_bump(max_fee);
-        let min_bump_max_priority = Self::calculate_min_bump(max_priority_fee);
+        let min_bump_max_fee = calculate_min_bump(max_fee);
+        let min_bump_max_priority = calculate_min_bump(max_priority_fee);
 
         // Get the current market priority fee for the given speed.
         let current_market_priority =
@@ -376,7 +399,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         let speed = maybe_speed.unwrap_or(&Speed::Fast);
 
         // Minimum bump
-        let min_bump_gas_price = Self::calculate_min_bump(gas_price);
+        let min_bump_gas_price = calculate_min_bump(gas_price);
 
         // Current market gas price for chosen speed
         let current_market_price =
@@ -584,10 +607,6 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
                 None,
             ))
         }
-    }
-
-    fn calculate_min_bump(previous_price: u128) -> u128 {
-        (previous_price * (100 + MIN_BUMP_PERCENT)) / 100
     }
 
     fn cap_gas_price(price: u128, cap: u128) -> u128 {
@@ -1529,5 +1548,94 @@ mod tests {
 
         let eip1559_total = price_params.calculate_total_cost(true, gas_limit, value);
         assert_eq!(eip1559_total, value);
+    }
+
+    #[test]
+    fn test_calculate_min_bump_normal_cases() {
+        let base_price = 20_000_000_000u128; // 20 Gwei
+        let expected = 22_000_000_000u128; // 22 Gwei (10% bump)
+        assert_eq!(calculate_min_bump(base_price), expected);
+
+        let base_price = 1_000_000_000u128;
+        let expected = 1_100_000_000u128; // 1.1 Gwei
+        assert_eq!(calculate_min_bump(base_price), expected);
+
+        let base_price = 100_000_000_000u128;
+        let expected = 110_000_000_000u128; // 110 Gwei
+        assert_eq!(calculate_min_bump(base_price), expected);
+    }
+
+    #[test]
+    fn test_calculate_min_bump_edge_cases() {
+        // Test with zero - should return 1 wei (minimum bump)
+        assert_eq!(calculate_min_bump(0), 1);
+
+        // Test with 1 wei - should return at least 2 wei
+        let result = calculate_min_bump(1);
+        assert!(result >= 2);
+
+        // Test with very small values where 10% bump rounds down to 0
+        let base_price = 5u128; // 5 wei
+        let result = calculate_min_bump(base_price);
+        assert!(
+            result > base_price,
+            "Result {} should be greater than base_price {}",
+            result,
+            base_price
+        );
+
+        let base_price = 9u128;
+        let result = calculate_min_bump(base_price);
+        assert_eq!(
+            result, 10u128,
+            "9 wei should bump to 10 wei (minimum 1 wei increase)"
+        );
+    }
+
+    #[test]
+    fn test_calculate_min_bump_large_values() {
+        // Test with large values to ensure no overflow
+        let base_price = u128::MAX / 2;
+        let result = calculate_min_bump(base_price);
+        assert!(result > base_price);
+
+        // Test near maximum value
+        let base_price = u128::MAX - 1000;
+        let result = calculate_min_bump(base_price);
+        // Should not panic and should return a reasonable value
+        assert!(result >= base_price.saturating_add(1));
+    }
+
+    #[test]
+    fn test_calculate_min_bump_overflow_protection() {
+        let base_price = u128::MAX;
+        let result = calculate_min_bump(base_price);
+        assert_eq!(result, u128::MAX);
+
+        let base_price = (u128::MAX / 11) * 10 + 1;
+        let result = calculate_min_bump(base_price);
+        assert!(result >= base_price);
+    }
+
+    #[test]
+    fn test_calculate_min_bump_minimum_increase_guarantee() {
+        // Test that the function always increases by at least 1 wei
+        let test_cases = vec![0, 1, 2, 5, 9, 10, 100, 1000, 10000];
+
+        for base_price in test_cases {
+            let result = calculate_min_bump(base_price);
+            assert!(
+                result > base_price,
+                "calculate_min_bump({}) = {} should be greater than base_price",
+                base_price,
+                result
+            );
+            assert!(
+                result >= base_price.saturating_add(1),
+                "calculate_min_bump({}) = {} should be at least base_price + 1",
+                base_price,
+                result
+            );
+        }
     }
 }
