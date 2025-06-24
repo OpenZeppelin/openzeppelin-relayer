@@ -159,4 +159,11 @@ mod tests {
         let result = result.unwrap();
         assert!(result.success);
     }
+
+    #[tokio::test]
+    async fn test_from_plugin_error_to_string() {
+        let error = PluginError::PluginExecutionError("test-error".to_string());
+        let result: String = error.into();
+        assert_eq!(result, "Plugin execution error: test-error");
+    }
 }
