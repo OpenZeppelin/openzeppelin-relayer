@@ -24,7 +24,7 @@ OpenZeppelin Relayer is a service that provides infrastructure to relay transact
 - **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
 - **Docker Support**: Deploy the relayer using Docker for both development and production environments.
-- **Plugins**: Extend the functionality of the relayer with custom logic using typescript functions.
+- **Plugins**: Extend the functionality of the relayer with custom logic using TypeScript functions.
 
 
 == Supported Networks
