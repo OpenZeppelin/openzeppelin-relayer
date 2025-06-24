@@ -204,29 +204,6 @@ impl GoogleCloudKmsService {
 
         Ok(pem_str.to_string())
     }
-
-    /// Derives a Solana address from a PEM-encoded public key.
-    fn derive_solana_address(pem_str: &str) -> GoogleCloudKmsResult<String> {
-        let pkey =
-            pem::parse(pem_str).map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
-        let content = pkey.contents();
-
-        let mut array = [0u8; 32];
-
-        match content.len() {
-            32 => array.copy_from_slice(content),
-            44 => array.copy_from_slice(&content[12..]),
-            _ => {
-                return Err(GoogleCloudKmsError::Other(format!(
-                    "Unexpected ed25519 public key length: got {} bytes (expected 32 or 44).",
-                    content.len()
-                )));
-            }
-        }
-
-        let solana_address = bs58::encode(array).into_string();
-        Ok(solana_address)
-    }
 }
 
 #[async_trait]
@@ -236,7 +213,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
 
         println!("PEM solana: {}", pem_str);
 
-        Self::derive_solana_address(&pem_str)
+        utils::derive_solana_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)
     }
 
     async fn get_evm_address(&self) -> GoogleCloudKmsResult<String> {
@@ -309,10 +286,10 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     }
 }
 
-impl From<utils::DerError> for GoogleCloudKmsError {
-    fn from(value: utils::DerError) -> Self {
+impl From<utils::AddressDerivationError> for GoogleCloudKmsError {
+    fn from(value: utils::AddressDerivationError) -> Self {
         match value {
-            utils::DerError::ParseError(msg) => GoogleCloudKmsError::ParseError(msg),
+            utils::AddressDerivationError::ParseError(msg) => GoogleCloudKmsError::ParseError(msg),
         }
     }
 }
@@ -371,11 +348,11 @@ mod tests {
     #[test]
     fn test_derive_solana_address() {
         let pem = "not-a-valid-pem";
-        let result = GoogleCloudKmsService::derive_solana_address(pem);
+        let result = utils::derive_solana_address_from_pem(pem);
         assert!(result.is_err());
 
         static VALID_ED25519_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnUV+ReQWxMZ3Z2pC/5aOPPjcc8jzOo0ZgSl7+j4AMLo=\n-----END PUBLIC KEY-----\n";
-        let result = GoogleCloudKmsService::derive_solana_address(VALID_ED25519_PEM);
+        let result = utils::derive_solana_address_from_pem(VALID_ED25519_PEM);
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),

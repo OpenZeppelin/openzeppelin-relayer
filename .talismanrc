@@ -18,10 +18,6 @@ fileignoreconfig:
   checksum: e9a407d55a1444f530ec882340e2cbf54bba0946f56b036efa9b56b2979b57f8
 - filename: examples/evm-aws-kms-signer/docker-compose.yaml
   checksum: c345ea0c72c14b5dd4b7a7efd3c61628ca4bd79459f59669f72f6b746032a4bd
-# We need to ignore this module,
-# since we encode public keys directly for testing
-- filename: src/utils/der.rs
-  checksum: 4f52ea05a294a13bd886800d8195b0c0346498fdf2299055c4316b0610eed9f8
 
 custom_severities:
 - detector: Base64Content
