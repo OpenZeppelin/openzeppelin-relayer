@@ -9,6 +9,7 @@ This guide provides step-by-step instructions for setting up OpenZeppelin Relaye
 * Rust 2021 edition
 * Redis
 * Docker (optional, for containerized deployment)
+* Node.js, typescript and ts-node (optional, for plugins)
 
 == Configuration
 
