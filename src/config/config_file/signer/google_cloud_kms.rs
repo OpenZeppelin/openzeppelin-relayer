@@ -41,6 +41,10 @@ fn default_key_version() -> u32 {
     1
 }
 
+fn default_location() -> String {
+    "global".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceAccountConfig {
@@ -73,6 +77,8 @@ pub struct ServiceAccountConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct KmsKeyConfig {
+    #[serde(default = "default_location")]
+    pub location: String,
     #[validate(length(min = 1, message = "key_ring_id name cannot be empty"))]
     pub key_ring_id: String,
     #[validate(length(min = 1, message = "key_id cannot be empty"))]
@@ -123,6 +129,7 @@ mod tests {
                 universe_domain: "googleapis.com".to_string(),
             },
             key: KmsKeyConfig {
+                location: default_location(),
                 key_ring_id: "ring-1".to_string(),
                 key_id: "key-1".to_string(),
                 key_version: 1,
@@ -155,6 +162,7 @@ mod tests {
                 universe_domain: default_universe_domain(),
             },
             key: KmsKeyConfig {
+                location: default_location(),
                 key_ring_id: "ring-1".to_string(),
                 key_id: "key-1".to_string(),
                 key_version: 1,
@@ -193,6 +201,7 @@ mod tests {
                 universe_domain: default_universe_domain(),
             },
             key: KmsKeyConfig {
+                location: default_location(),
                 key_ring_id: "".to_string(),
                 key_id: "key-1".to_string(),
                 key_version: 1,
@@ -230,6 +239,7 @@ mod tests {
                 universe_domain: default_universe_domain(),
             },
             key: KmsKeyConfig {
+                location: default_location(),
                 key_ring_id: "ring-1".to_string(),
                 key_id: "".to_string(),
                 key_version: 1,
@@ -367,6 +377,7 @@ mod tests {
                 universe_domain: default_universe_domain(),
             },
             key: KmsKeyConfig {
+                location: default_location(),
                 key_ring_id: "ring-1".to_string(),
                 key_id: "key-1".to_string(),
                 key_version: 1,
