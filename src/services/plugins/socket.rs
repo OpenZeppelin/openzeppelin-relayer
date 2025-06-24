@@ -144,8 +144,8 @@ mod tests {
         shutdown_tx.send(()).unwrap();
 
         let result = timeout(Duration::from_millis(100), listen_handle).await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
+        assert!(result.is_ok(), "Listen handle timed out");
+        assert!(result.unwrap().is_ok(), "Listen handle returned error");
     }
 
     #[tokio::test]
@@ -168,7 +168,7 @@ mod tests {
         let state = create_mock_app_state(None, None, None, None).await;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        tokio::spawn(async move {
+        let listen_handle = tokio::spawn(async move {
             service
                 .listen(
                     shutdown_rx,
@@ -195,11 +195,11 @@ mod tests {
 
         client.write_all(request_json.as_bytes()).await.unwrap();
 
-        let mut reader = BufReader::new(client);
-        let mut response = String::new();
+        let mut reader = BufReader::new(&mut client);
+        let mut response_str = String::new();
         let read_result = timeout(
             Duration::from_millis(1000),
-            reader.read_line(&mut response), // This is the correct method
+            reader.read_line(&mut response_str),
         )
         .await;
 
@@ -212,10 +212,24 @@ mod tests {
         assert!(bytes_read > 0, "No data received");
         shutdown_tx.send(()).unwrap();
 
-        let response: Response = serde_json::from_str(&response).unwrap();
+        let response: Response = serde_json::from_str(&response_str).unwrap();
 
-        assert!(response.error.is_none());
-        assert!(response.result.is_some());
-        assert_eq!(response.request_id, request.request_id);
+        assert!(response.error.is_none(), "Error should be none");
+        assert!(response.result.is_some(), "Result should be some");
+        assert_eq!(
+            response.request_id, request.request_id,
+            "Request id mismatch"
+        );
+
+        client.shutdown().await.unwrap();
+
+        let traces = listen_handle.await.unwrap().unwrap();
+
+        assert_eq!(traces.len(), 1);
+        assert_eq!(
+            request_json,
+            traces[0].clone() + "\n",
+            "Request json mismatch with trace"
+        );
     }
 }
