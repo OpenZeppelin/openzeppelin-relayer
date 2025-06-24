@@ -18,6 +18,7 @@ pub trait PluginRunnerTrait {
         &self,
         socket_path: &str,
         script_path: String,
+        payload: String,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<ScriptResult, PluginError>;
 }
@@ -30,6 +31,7 @@ impl PluginRunner {
         &self,
         socket_path: &str,
         script_path: String,
+        payload: String,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<ScriptResult, PluginError> {
         let socket_service = SocketService::new(socket_path)?;
@@ -43,7 +45,7 @@ impl PluginRunner {
         });
 
         let mut script_result =
-            ScriptExecutor::execute_typescript(script_path, socket_path_clone).await?;
+            ScriptExecutor::execute_typescript(script_path, socket_path_clone, payload).await?;
 
         let _ = shutdown_tx.send(());
 
@@ -70,9 +72,10 @@ impl PluginRunnerTrait for PluginRunner {
         &self,
         socket_path: &str,
         script_path: String,
+        payload: String,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<ScriptResult, PluginError> {
-        self.run(socket_path, script_path, state).await
+        self.run(socket_path, script_path, payload, state).await
     }
 }
 
@@ -116,6 +119,7 @@ mod tests {
             .run::<MockJobProducerTrait>(
                 &socket_path.display().to_string(),
                 script_path.display().to_string(),
+                String::new(),
                 Arc::new(web::ThinData(state)),
             )
             .await;
