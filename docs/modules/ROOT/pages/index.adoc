@@ -486,7 +486,7 @@ Copy the example config file and update values according to your needs
 cp config/config.example.json config/config.json
 ----
 
-There are 4 sections in this file:
+Key sections in this file include:
 
 - Signers: Defines transaction signing methods.
 - Notifications: Sets up status alerts
