@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use std::process::Stdio;
 use tokio::process::Command;
 
@@ -17,28 +17,24 @@ impl ScriptExecutor {
     pub async fn execute_typescript(
         script_path: String,
         socket_path: String,
-        payload: String,
+        plugin_params: String
     ) -> Result<ScriptResult, PluginError> {
-        if Command::new("ts-node")
-            .arg("--version")
-            .output()
-            .await
-            .is_err()
-        {
-            return Err(PluginError::SocketError(
-                "ts-node is not installed or not in PATH. Please install it with: npm install -g ts-node".to_string()
-            ));
+        if Command::new("ts-node").arg("--version").output().await.is_err() {
+            return Err(
+                PluginError::SocketError(
+                    "ts-node is not installed or not in PATH. Please install it with: npm install -g ts-node".to_string()
+                )
+            );
         }
 
         let output = Command::new("ts-node")
             .arg(script_path)
             .arg(socket_path)
-            .arg(payload)
+            .arg(plugin_params)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
-            .await
+            .output().await
             .map_err(|e| PluginError::SocketError(format!("Failed to execute script: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -60,7 +56,8 @@ mod tests {
 
     use super::*;
 
-    static TS_CONFIG: &str = r#"
+    static TS_CONFIG: &str =
+        r#"
     {
         "compilerOptions": {
           "target": "es2016",
@@ -87,9 +84,8 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
-            String::new(),
-        )
-        .await;
+            String::new()
+        ).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");
@@ -109,9 +105,8 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
-            String::new(),
-        )
-        .await;
+            String::new()
+        ).await;
 
         assert!(result.is_ok());
         let result = result.unwrap();

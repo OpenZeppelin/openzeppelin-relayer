@@ -30,20 +30,20 @@ type Relayer = {
   ) => Promise<Result<SendTransactionResult>>;
 };
 
-function getPayload() {
-  const payloadArg = process.argv[3];
+function getPluginParams(): unknown {
+  const pluginParams = process.argv[3];
 
-  if (payloadArg) {
+  if (pluginParams) {
     try {
-      return JSON.parse(payloadArg);
+      return JSON.parse(pluginParams);
     } catch (e) {
       throw new Error(`Failed to parse payload: ${e}`);
     }
-  } else return "{}";
+  } else return {};
 }
 
 export async function runPlugin(
-  main: (plugin: Plugin, payload: any) => Promise<void>
+  main: (plugin: Plugin, pluginParams: unknown) => Promise<void>
 ) {
   try {
     // checks if socket path is provided
@@ -56,7 +56,7 @@ export async function runPlugin(
     let plugin = new Plugin(socketPath);
 
     // runs main function
-    await main(plugin, getPayload())
+    await main(plugin, getPluginParams())
       .then(() => plugin.close())
       .catch((error) => {
         console.error(error);
