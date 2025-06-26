@@ -241,20 +241,9 @@ impl NetworkConfiguration for MidnightNetwork {
 
     fn new_provider(
         rpc_urls: Vec<RpcConfig>,
-        _timeout_seconds: u64,
+        timeout_seconds: u64,
     ) -> Result<Self::Provider, ProviderError> {
-        // For Midnight, we need to handle the prover URL separately
-        // For now, we'll use a default local prover URL
-        let network = MidnightNetwork {
-            network: "midnight".to_string(),
-            rpc_urls: rpc_urls.iter().map(|c| c.url.clone()).collect(),
-            explorer_urls: None,
-            average_blocktime_ms: 5000,
-            is_testnet: true,
-            tags: vec![],
-        };
-
-        MidnightProvider::new(network, None)
+        MidnightProvider::new(rpc_urls, timeout_seconds)
     }
 }
 

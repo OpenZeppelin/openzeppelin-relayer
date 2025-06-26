@@ -23,7 +23,7 @@ use crate::{
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
-        EvmSignerFactory, MidnightProvider, MidnightSignerFactory, StellarSignerFactory,
+        EvmSignerFactory, MidnightSignerFactory, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -517,13 +517,10 @@ impl RelayerTransactionFactory {
                 let network = MidnightNetwork::try_from(network_repo)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
-                let midnight_provider = Arc::new(
-                    MidnightProvider::new(
-                        network.clone(),
-                        None, // TODO: Get prover URL from config
-                    )
-                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?,
-                );
+                let midnight_provider = Arc::new(get_network_provider(
+                    &network,
+                    relayer.custom_rpc_urls.clone(),
+                )?);
 
                 Ok(NetworkTransaction::Midnight(MidnightTransaction::new(
                     relayer,
