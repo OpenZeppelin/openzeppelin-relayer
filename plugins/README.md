@@ -9,7 +9,7 @@ Under the hood, the relayer will execute the plugin code in a separate process u
 #### 1. Writing your plugin
 
 ```typescript
-import { Plugin, runPlugin } from "@relayer/plugins";
+import { Plugin, runPlugin } from "./lib/plugin";
 
 type Args = {
   foo: string;
