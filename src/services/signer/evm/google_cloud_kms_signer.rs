@@ -14,6 +14,7 @@ use crate::{
         SignerError,
     },
     services::{DataSignerTrait, GoogleCloudKmsEvmService, GoogleCloudKmsService, Signer},
+    utils::base64_encode,
 };
 
 pub struct GoogleCloudKmsSigner {
@@ -199,7 +200,8 @@ mod tests {
             .and(path_regex(r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*"))
             .and(header_exists("authorization"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEVs/o5+uQbTjL3chynL4wXgUg2R9\nq9UU8I5mEovUf86QZ7kOBIjJwqnzD1omageEHWwHdBO6B+dFabmdT9POxg==\n-----END PUBLIC KEY-----\n"
+                "pem": "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh\nkFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n",
+                "algorithm": "ECDSA_SECP256K1_SHA256"
             })))
             .mount(&mock_server)
             .await;
@@ -212,44 +214,82 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_data() {
+        use alloy::primitives::utils::eip191_message;
+        use k256::ecdsa::{signature::DigestSigner, SigningKey};
+        use k256::pkcs8::EncodePublicKey;
+        use sha3::{Digest, Keccak256};
+
         let mock_server = MockServer::start().await;
 
-        // Mock the public key endpoint
+        // Generate a test keypair
+        let signing_key = SigningKey::from_slice(
+            &hex::decode("c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4")
+                .unwrap(),
+        )
+        .unwrap();
+        let verifying_key = signing_key.verifying_key();
+
+        // Get the public key in PEM format
+        let public_key_der = verifying_key.to_public_key_der().unwrap();
+        let public_key_pem = format!(
+            "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+            base64_encode(public_key_der.as_bytes())
+        );
+
+        // Mock the public key endpoint with our generated public key
         Mock::given(method("GET"))
-            .and(path_regex(r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*"))
+            .and(path_regex(
+                r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*",
+            ))
             .and(header_exists("authorization"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEVs/o5+uQbTjL3chynL4wXgUg2R9\nq9UU8I5mEovUf86QZ7kOBIjJwqnzD1omageEHWwHdBO6B+dFabmdT9POxg==\n-----END PUBLIC KEY-----\n"
+                "pem": public_key_pem,
+                "algorithm": "ECDSA_SECP256K1_SHA256"
             })))
             .mount(&mock_server)
             .await;
 
-        // Mock the sign endpoint
+        // The test message
+        let test_message = "Test message";
+        let eip191_msg = eip191_message(test_message.as_bytes());
+
+        // Sign the message with the private key
+        let (signature, _recovery_id) = signing_key
+            .sign_digest_recoverable(Keccak256::new_with_prefix(&eip191_msg))
+            .unwrap();
+
+        // Convert to DER format for the mock response
+        let der_signature = signature.to_der();
+        let signature_base64 = base64_encode(der_signature.as_bytes());
+
+        // Mock the sign endpoint with the valid signature
         Mock::given(method("POST"))
-            .and(path_regex(r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*:asymmetricSign"))
+            .and(path_regex(
+                r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*:asymmetricSign",
+            ))
             .and(header_exists("authorization"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "signature": "MEUCIQDTlGT7qaa4uhkSTw2ZdyxB7+Vq0z6l+j8fQdmE8qEMwQIgeoMqQPyBPDmW+wB4W3X/NynDwE+lhOHDQJBdEUJbTaA="
+                "signature": signature_base64
             })))
             .mount(&mock_server)
             .await;
 
         let signer = setup_mock_gcp_signer(&mock_server).await;
         let request = SignDataRequest {
-            message: "Test message".to_string(),
+            message: test_message.to_string(),
         };
 
         let result = signer.sign_data(request).await;
 
         assert!(result.is_ok());
-        match result.unwrap() {
-            SignDataResponse::Evm(sig) => {
-                assert_eq!(sig.r.len(), 64); // 32 bytes in hex
-                assert_eq!(sig.s.len(), 64); // 32 bytes in hex
-                assert!(sig.v == 27 || sig.v == 28); // Valid v values
-                assert_eq!(sig.sig.len(), 130); // 65 bytes in hex
-            }
-            _ => panic!("Expected EVM signature"),
+        if let Ok(SignDataResponse::Evm(response)) = result {
+            // Check that we have the expected components
+            assert_eq!(response.r.len(), 64); // 32 bytes hex encoded
+            assert_eq!(response.s.len(), 64); // 32 bytes hex encoded
+            assert!(response.v == 27 || response.v == 28); // Valid v value
+            assert_eq!(response.sig.len(), 130); // 65 bytes hex encoded
+        } else {
+            panic!("Expected EVM response");
         }
     }
 }
