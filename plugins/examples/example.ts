@@ -1,3 +1,4 @@
+import { Speed } from "@openzeppelin/relayer-sdk/dist/src/models/speed";
 import { PluginAPI, runPlugin } from "../lib/plugin";
 
 async function example(api: PluginAPI) {
@@ -12,10 +13,10 @@ async function example(api: PluginAPI) {
      */
     const result = await relayer.sendTransaction({
         to: "0xab5801a7d398351b8be11c439e05c5b3259aec9b",
-        value: "1",
+        value: 1,
         data: "0x",
         gas_limit: 21000,
-        speed: "fast"
+        speed: Speed.FAST,
     });
 
     console.log("Result:", result);

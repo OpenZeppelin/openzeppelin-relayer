@@ -1,20 +1,11 @@
 import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
-
-type SendTransactionPayload = {
-  to: string;
-  value: string;
-  data: string;
-  gas_limit: number;
-  gas_price?: number;
-  speed?: string;
-  max_fee_per_gas?: number;
-  max_priority_fee_per_gas?: number;
-  valid_until?: number;
-};
+import { NetworkTransactionRequest } from "@openzeppelin/relayer-sdk/dist/src/models/network-transaction-request";
 
 type SendTransactionResult = {
-  tx_hash: string;
+  id: string;
+  relayer_id: string;
+  status: string;
 }
 
 type Result<T> = {
@@ -24,7 +15,7 @@ type Result<T> = {
 }
 
 type Relayer = {
-  sendTransaction: (payload: SendTransactionPayload) => Promise<Result<SendTransactionResult>>;
+  sendTransaction: (payload: NetworkTransactionRequest) => Promise<Result<SendTransactionResult>>;
 }
 
 export async function runPlugin(main: (plugin: PluginAPI) => Promise<void>) {
@@ -93,7 +84,7 @@ export class PluginAPI {
 
   useRelayer(relayerId: string): Relayer {
     return {
-      sendTransaction: (payload: SendTransactionPayload) => this._send<SendTransactionResult>(relayerId, "sendTransaction", payload),
+      sendTransaction: (payload: NetworkTransactionRequest) => this._send<SendTransactionResult>(relayerId, "sendTransaction", payload),
     };
   }
 
