@@ -1,5 +1,4 @@
 import net from "node:net";
-import { resolve } from "node:path";
 import { v4 as uuidv4 } from "uuid";
 
 type SendTransactionPayload = {
@@ -28,7 +27,7 @@ type Relayer = {
   sendTransaction: (payload: SendTransactionPayload) => Promise<Result<SendTransactionResult>>;
 }
 
-export async function runPlugin(main: (plugin: Plugin) => Promise<void>) {
+export async function runPlugin(main: (plugin: PluginAPI) => Promise<void>) {
   try {
     // checks if socket path is provided
     let socketPath = process.argv[2];
@@ -37,7 +36,7 @@ export async function runPlugin(main: (plugin: Plugin) => Promise<void>) {
     }
 
     // creates plugin instance
-    let plugin = new Plugin(socketPath);
+    let plugin = new PluginAPI(socketPath);
 
     // runs main function
     await main(plugin)
@@ -57,7 +56,7 @@ export async function runPlugin(main: (plugin: Plugin) => Promise<void>) {
   }
 }
 
-export class Plugin {
+export class PluginAPI {
   socket: net.Socket;
   pending: Map<string, { resolve: (value: any) => void, reject: (reason: any) => void }>;
   private _connectionPromise: Promise<void> | null = null;

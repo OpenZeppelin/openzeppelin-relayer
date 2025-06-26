@@ -1,11 +1,11 @@
-import { Plugin, runPlugin } from "./lib/plugin";
+import { PluginAPI, runPlugin } from "../lib/plugin";
 
-async function example(p: Plugin) {
+async function example(api: PluginAPI) {
     console.log("Plugin started...");
     /**
      * Instances the relayer with the given id.
      */
-    const relayer = p.useRelayer("sepolia-example");
+    const relayer = api.useRelayer("sepolia-example");
 
     /**
      * Sends an arbitrary transaction through the relayer.
