@@ -1,7 +1,7 @@
 use std::num::ParseIntError;
 
 use crate::config::ServerConfig;
-use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
+use crate::models::{EvmNetwork, MidnightNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -15,6 +15,9 @@ pub use solana::*;
 
 mod stellar;
 pub use stellar::*;
+
+mod midnight;
+pub use midnight::*;
 
 mod retry;
 pub use retry::*;
@@ -223,6 +226,24 @@ impl NetworkConfiguration for StellarNetwork {
         timeout_seconds: u64,
     ) -> Result<Self::Provider, ProviderError> {
         StellarProvider::new(rpc_urls, timeout_seconds)
+    }
+}
+
+impl NetworkConfiguration for MidnightNetwork {
+    type Provider = MidnightProvider;
+
+    fn public_rpc_urls(&self) -> Vec<String> {
+        (*self)
+            .public_rpc_urls()
+            .map(|urls| urls.to_vec())
+            .unwrap_or_default()
+    }
+
+    fn new_provider(
+        rpc_urls: Vec<RpcConfig>,
+        timeout_seconds: u64,
+    ) -> Result<Self::Provider, ProviderError> {
+        MidnightProvider::new(rpc_urls, timeout_seconds)
     }
 }
 
