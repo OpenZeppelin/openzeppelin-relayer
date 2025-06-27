@@ -41,7 +41,7 @@ impl SocketService {
         shutdown_rx: oneshot::Receiver<()>,
         state: Arc<web::ThinData<AppState<J>>>,
         relayer_api: Arc<R>,
-    ) -> Result<Vec<String>, PluginError> {
+    ) -> Result<Vec<serde_json::Value>, PluginError> {
         let mut shutdown = shutdown_rx;
 
         let mut traces = Vec::new();
@@ -77,13 +77,15 @@ impl SocketService {
         stream: UnixStream,
         state: Arc<web::ThinData<AppState<J>>>,
         relayer_api: Arc<R>,
-    ) -> Result<Vec<String>, PluginError> {
+    ) -> Result<Vec<serde_json::Value>, PluginError> {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
         let mut traces = Vec::new();
 
         while let Ok(Some(line)) = reader.next_line().await {
-            traces.push(line.clone());
+            let trace: serde_json::Value = serde_json::from_str(&line)
+                .map_err(|e| PluginError::PluginError(format!("Failed to parse trace: {}", e)))?;
+            traces.push(trace);
 
             let request: Request =
                 serde_json::from_str(&line).map_err(|e| PluginError::PluginError(e.to_string()))?;
@@ -226,10 +228,9 @@ mod tests {
         let traces = listen_handle.await.unwrap().unwrap();
 
         assert_eq!(traces.len(), 1);
-        assert_eq!(
-            request_json,
-            traces[0].clone() + "\n",
-            "Request json mismatch with trace"
-        );
+        let expected: serde_json::Value = serde_json::from_str(&request_json).unwrap();
+        let actual: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&traces[0]).unwrap()).unwrap();
+        assert_eq!(expected, actual, "Request json mismatch with trace");
     }
 }

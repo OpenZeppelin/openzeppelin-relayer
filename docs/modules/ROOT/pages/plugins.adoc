@@ -51,7 +51,6 @@ async function myPlugin(api: Plugin, params: MyCustomParams) {
         to: "0x1234567890123456789012345678901234567890",
         value: ethers.parseEther("1"),
     });
-
 }
 
 /// `runPlugin` is the entry point for the plugin.
@@ -101,8 +100,9 @@ Then the plugin will be invoked passing the `params` as the second argument of t
 
 When invoking a plugin, the response will include:
 
-- `stdout`: The standard nodejs output of the plugin (includes `console.log` and `console.error`).
-- `stderr`: The standard nodejs error output of the plugin.
+- `logs`: The logs from the plugin execution.
+- `return_value`: The returned value of the plugin execution.
+- `error`: An error message if the plugin execution failed.
 - `traces`: A list of messages sent between the plugin and the Relayer instance. This includes all the payloads passed through the `api` object.
 
 === Example
@@ -128,7 +128,9 @@ async function myPlugin(api: Plugin, params: MyCustomParams) {
         value: ethers.parseEther("1"),
     });
 
-    console.log("Foo", params.foo);
+    console.log("Foo ", params.foo);
+
+    return `Successfully sent transaction with id: ${tx.id}`;
 }
 
 runPlugin(myPlugin);
@@ -150,7 +152,17 @@ curl -X POST http://localhost:3000/api/v1/plugins/my-plugin/call \
 {
   "success": true,
   "message": "Plugin called successfully",
-  "output": "Hello, world!\nFoo bar\n",
+  "logs": [
+    {
+      "level": "log",
+      "message": "Hello, world!"
+    },
+    {
+      "level": "log",
+      "message": "Foo bar"
+    }
+  ],
+  "return_value": "Successfully sent transaction with id: 1234567890",
   "error": "",
   "traces": [
     {
@@ -165,4 +177,8 @@ curl -X POST http://localhost:3000/api/v1/plugins/my-plugin/call \
 }
 ----
 
-Where the `output` indicates the logs of the plugin, and the `traces` are the messages sent between the plugin and the Relayer instance. The `error` will include the error message if the plugin fails.
+Where:
+- `logs` indicates the terminal logs (console.log, console.error, etc.) of the plugin.
+- `traces` are the messages sent between the plugin and the Relayer instance.
+- `error` will include the error message if the plugin fails.
+- `return_value` will include the returned value of the plugin execution.

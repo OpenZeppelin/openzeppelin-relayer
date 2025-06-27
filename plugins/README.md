@@ -25,6 +25,8 @@ async function myPlugin(plugin: Plugin, args: Args) {
         to: "0x1234567890123456789012345678901234567890",
         value: 1000000000000000000,
     });
+
+    return "done!";
 }
 
 runPlugin(myPlugin);
@@ -71,7 +73,8 @@ curl -X POST http://localhost:8080/plugins/my-plugin/call -d '{ "params": { "foo
 
 Then the response will include:
 
-- `output`: The output of the plugin execution. Including all the logs from the plugin execution.
+- `logs`: The logs from the plugin execution.
+- `return_value`: The returned value of the plugin execution.
 - `error`: An error message if the plugin execution failed.
 - `traces`: A list of payloads that were sent between the plugin and the relayer. e.g. the `sendTransaction` payloads.
 
@@ -79,10 +82,27 @@ Example response:
 
 ```json
 {
-  "output": "Hello, world!",
+  "logs": [
+    {
+      "level": "log",
+      "message": "bar"
+    },
+    {
+      "level": "log",
+      "message": "123"
+    }
+  ],
+  "return_value": "done!",
   "error": null,
   "traces": [
-    "{ \"relayer_id\": \"my-relayer\", \"method\": \"sendTransaction\", \"params\": { \"to\": \"0x1234567890123456789012345678901234567890\", \"value\": \"0x1234567890123456789012345678901234567890\" } }"
+    {
+      "relayer_id": "my-relayer",
+      "method": "sendTransaction",
+      "params": {
+        "to": "0x1234567890123456789012345678901234567890",
+        "value": "0x1234567890123456789012345678901234567890"
+      }
+    }
   ]
 }
 ```

@@ -34,7 +34,8 @@ mod tests {
         HttpResponse::Ok().json(PluginCallResponse {
             success: true,
             message: "Plugin called successfully".to_string(),
-            output: String::from(""),
+            return_value: String::from(""),
+            logs: vec![],
             error: String::from(""),
             traces: Vec::new(),
         })

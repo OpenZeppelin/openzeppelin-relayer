@@ -48,10 +48,11 @@ impl From<PluginError> for String {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PluginCallResponse {
     pub success: bool,
+    pub return_value: String,
     pub message: String,
-    pub output: String,
+    pub logs: Vec<LogEntry>,
     pub error: String,
-    pub traces: Vec<String>,
+    pub traces: Vec<serde_json::Value>,
 }
 
 #[derive(Default)]
@@ -77,7 +78,8 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             Ok(script_result) => Ok(PluginCallResponse {
                 success: true,
                 message: "Plugin called successfully".to_string(),
-                output: script_result.output,
+                return_value: script_result.return_value,
+                logs: script_result.logs,
                 error: script_result.error,
                 traces: script_result.trace,
             }),
@@ -139,8 +141,12 @@ mod tests {
             .expect_run::<MockJobProducerTrait>()
             .returning(|_, _, _| {
                 Ok(ScriptResult {
-                    output: "test-output".to_string(),
+                    logs: vec![LogEntry {
+                        level: LogLevel::Log,
+                        message: "test-log".to_string(),
+                    }],
                     error: "test-error".to_string(),
+                    return_value: "test-result".to_string(),
                     trace: Vec::new(),
                 })
             });
@@ -158,6 +164,7 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.success);
+        assert_eq!(result.return_value, "test-result");
     }
 
     #[tokio::test]
