@@ -6,14 +6,23 @@ settings:
 importers:
   .:
     dependencies:
+<<<<<<< HEAD
+=======
       '@openzeppelin/relayer-sdk':
         specifier: ^0.2.0
         version: 0.2.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.8.3)(utf-8-validate@5.0.10)
+>>>>>>> a8817b6c87c65731232d0a141338f3996aef2510
       '@types/node':
         specifier: ^24.0.3
         version: 24.0.3
       ethers:
         specifier: ^6.14.3
+<<<<<<< HEAD
+        version: 6.14.3
+      uuid:
+        specifier: ^11.1.0
+        version: 11.1.0
+=======
         version: 6.14.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       uuid:
         specifier: ^11.1.0
@@ -22,6 +31,7 @@ importers:
       husky:
         specifier: ^9.1.7
         version: 9.1.7
+>>>>>>> a8817b6c87c65731232d0a141338f3996aef2510
 packages:
   '@actions/exec@1.1.1':
     resolution: {integrity: sha512-+sCcHHbVdk93a0XT19ECtO/gIXoxvdsgQLzb2fE2/5sIZmWQuluYyjPQtrtTHdU1YzTZ7bAPN4sITq2xi1679w==}
@@ -125,12 +135,15 @@ packages:
     resolution: {integrity: sha512-jML7s2NAzMWc//QSJ1a3prpk78cOPchGvXJsC3C6R6PSMoooztvRVQEz89gmBTBY1SPMaqo5teB4uNHPdetShQ==}
   '@types/node@24.0.3':
     resolution: {integrity: sha512-R4I/kzCYAdRLzfiCabn9hxWfbuHS573x+r0dJMkkzThEa7pbrcDWK+9zu3e7aBOouf+rQAciqPFMnxwr0aWgKg==}
+<<<<<<< HEAD
+=======
   '@types/uuid@8.3.4':
     resolution: {integrity: sha512-c/I8ZRb51j+pYGAu5CrFMRxqZ2ke4y2grEBO5AUjgSkSk+qT2Ea+OdWElz/OiMf5MNpn2b17kuVBwZLQJXzihw==}
   '@types/ws@7.4.7':
     resolution: {integrity: sha512-JQbbmxZTZehdc2iszGKs5oC3NFnjeay7mtAWrdt7qNtAVK0g19muApzAy4bm9byz79xa2ZnO/BOBC2R8RC5Lww==}
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+>>>>>>> a8817b6c87c65731232d0a141338f3996aef2510
   aes-js@4.0.0-beta.5:
     resolution: {integrity: sha512-G965FqalsNyrPqgEGON7nIx1e/OVENSgiEIzyC63haUMuvNnwIgIjMs52hlTCKhkBny7A2ORNlfY9Zu+jmGk1Q==}
   agentkeepalive@4.6.0:
@@ -318,6 +331,11 @@ packages:
     resolution: {integrity: sha512-ve2KP6f/JnbPBFyobGHuerC9g1FYGn/F8n1LWTwNxCEzd6IfqTwUQcNXgEtmmQ6DlRrC1hrSrBnCZPokRrDHjw==}
   undici-types@7.8.0:
     resolution: {integrity: sha512-9UJ2xGDvQ43tYyVMpuHlsgApydB8ZKfVYTsLDhXkFL/6gfkp+U8xTGdh8pMJv1SpZna0zxG1DwsKZsreLbXBxw==}
+<<<<<<< HEAD
+  uuid@11.1.0:
+    resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
+    hasBin: true
+=======
   utf-8-validate@5.0.10:
     resolution: {integrity: sha512-Z6czzLq4u8fPOyx7TU6X3dvUZVvoJmxSQ+IcrlmagKhilxlhZgxPK6C5Jqbkw1IDUmFTM+cz9QDnnLTwDz/2gQ==}
     engines: {node: '>=6.14.2'}
@@ -342,6 +360,7 @@ packages:
         optional: true
       utf-8-validate:
         optional: true
+>>>>>>> a8817b6c87c65731232d0a141338f3996aef2510
   ws@8.17.1:
     resolution: {integrity: sha512-6XQFvXTkbfUOZOKKILFG1PDK2NDQs4azKQl26T0YS5CxqWLgXajbPZ+h4gZekJyRqFU8pvnbAbbs/3TgRPy+GQ==}
     engines: {node: '>=10.0.0'}
@@ -519,6 +538,8 @@ snapshots:
   '@types/node@24.0.3':
     dependencies:
       undici-types: 7.8.0
+<<<<<<< HEAD
+=======
   '@types/uuid@8.3.4': {}
   '@types/ws@7.4.7':
     dependencies:
@@ -526,6 +547,7 @@ snapshots:
   '@types/ws@8.18.1':
     dependencies:
       '@types/node': 24.0.3
+>>>>>>> a8817b6c87c65731232d0a141338f3996aef2510
   aes-js@4.0.0-beta.5: {}
   agentkeepalive@4.6.0:
     dependencies:
@@ -712,6 +734,10 @@ snapshots:
   typescript@5.8.3: {}
   undici-types@6.19.8: {}
   undici-types@7.8.0: {}
+<<<<<<< HEAD
+  uuid@11.1.0: {}
+  ws@8.17.1: {}
+=======
   utf-8-validate@5.0.10:
     dependencies:
       node-gyp-build: 4.8.4
@@ -731,3 +757,4 @@ snapshots:
     optionalDependencies:
       bufferutil: 4.0.9
       utf-8-validate: 5.0.10
+>>>>>>> a8817b6c87c65731232d0a141338f3996aef2510
