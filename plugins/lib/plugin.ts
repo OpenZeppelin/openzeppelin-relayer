@@ -1,3 +1,32 @@
+/**
+ * Plugins library.
+ *
+ * This library is used to create plugins for the relayer. Including a set of utilities to simplify
+ * the interaction with the relayer.
+ *
+ * Most important components:
+ * - `PluginAPI`: A class that provides a set of methods exposing the relayer API.
+ * - `runPlugin`: A function that runs the plugin.
+ *  - Handles the parameters passed to the plugin.
+ *  - Creates a socket connection to the relayer server
+ *  - Intercepts the logs, errors and return values.
+ *
+ * Example:
+ * ```ts
+ * import { runPlugin, PluginAPI } from "./lib/plugin";
+ *
+ * async function main(plugin: PluginAPI, args: {
+ *  relayerId: string;
+ *  method: string;
+ *  params: any;
+ * }) {
+ *  const result = await plugin.useRelayer(args.relayerId).sendTransaction(args.params);
+ *  return result;
+ * }
+ *
+ * runPlugin(main);
+ */
+
 import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
 import { NetworkTransactionRequest } from "@openzeppelin/relayer-sdk/dist/src/models/network-transaction-request";

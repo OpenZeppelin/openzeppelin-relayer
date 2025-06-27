@@ -1,3 +1,53 @@
+//! This module is responsible for creating a socket connection to the relayer server.
+//! It is used to send requests to the relayer server and processing the responses.
+//! It also intercepts the logs, errors and return values.
+//!
+//! The socket connection is created using the `UnixListener`.
+//!
+//! 1. Creates a socket connection using the `UnixListener`.
+//! 2. Each request payload is stringified by the client and added as a new line to the socket.
+//! 3. The server reads the requests from the socket and processes them.
+//! 4. The server sends the responses back to the client in the same format. By writing a new line in the socket
+//! 5. When the client sends the socket shutdown signal, the server closes the socket connection.
+//!
+//! Example:
+//! 1. Create a new socket connection using `/tmp/socket.sock`
+//! 2. Client sends request (writes in `/tmp/socket.sock`):
+//! ```
+//! {
+//!   "request_id": "123",
+//!   "relayer_id": "relayer1",
+//!   "method": "sendTransaction",
+//!   "payload": {
+//!     "to": "0x1234567890123456789012345678901234567890",
+//!     "value": "1000000000000000000"
+//!   }
+//! }
+//! ```
+//! 3. Server process the requests, calls the relayer API and sends back the response (writes in `/tmp/socket.sock`):
+//! ```
+//! {
+//!   "request_id": "123",
+//!   "result": {
+//!     "id": "123",
+//!     "status": "success"
+//!   }
+//! }
+//! ```
+//! 4. Client reads the response (reads from `/tmp/socket.sock`):
+//! ```
+//! {
+//!   "request_id": "123",
+//!   "result": {
+//!     "id": "123",
+//!     "status": "success"
+//!   }
+//! }
+//! ```
+//! 5. Once the client finishes the execution, it sends a shutdown signal to the server.
+//! 6. The server closes the socket connection.
+//!
+
 use crate::{jobs::JobProducerTrait, models::AppState};
 use actix_web::web;
 use std::sync::Arc;
@@ -16,6 +66,11 @@ pub struct SocketService {
 }
 
 impl SocketService {
+    /// Creates a new socket service.
+    ///
+    /// # Arguments
+    ///
+    /// * `socket_path` - The path to the socket file.
     pub fn new(socket_path: &str) -> Result<Self, PluginError> {
         // Remove existing socket file if it exists
         let _ = std::fs::remove_file(socket_path);
@@ -33,6 +88,17 @@ impl SocketService {
         &self.socket_path
     }
 
+    /// Listens for incoming connections and processes the requests.
+    ///
+    /// # Arguments
+    ///
+    /// * `shutdown_rx` - A receiver for the shutdown signal.
+    /// * `state` - The application state.
+    /// * `relayer_api` - The relayer API.
+    ///
+    /// # Returns
+    ///
+    /// A vector of traces.
     pub async fn listen<
         J: JobProducerTrait + 'static,
         R: RelayerApiTrait + 'static + Send + Sync,
@@ -70,6 +136,17 @@ impl SocketService {
         Ok(traces)
     }
 
+    /// Handles a new connection.
+    ///
+    /// # Arguments
+    ///
+    /// * `stream` - The stream to the client.
+    /// * `state` - The application state.
+    /// * `relayer_api` - The relayer API.
+    ///
+    /// # Returns
+    ///
+    /// A vector of traces.
     async fn handle_connection<
         J: JobProducerTrait + 'static,
         R: RelayerApiTrait + 'static + Send + Sync,

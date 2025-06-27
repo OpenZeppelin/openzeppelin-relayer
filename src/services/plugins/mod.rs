@@ -45,7 +45,7 @@ impl From<PluginError> for String {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PluginCallResponse {
     pub success: bool,
     pub message: String,

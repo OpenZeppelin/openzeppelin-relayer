@@ -1,3 +1,10 @@
+//! This module is responsible for handling the requests to the relayer API.
+//!
+//! It manages an internal API that mirrors the HTTP external API of the relayer.
+//!
+//! Supported methods:
+//! - `sendTransaction` - sends a transaction to the relayer.
+//!
 use crate::domain::{get_network_relayer, get_relayer_by_id, Relayer};
 use crate::models::{NetworkTransactionRequest, TransactionResponse};
 use crate::{jobs::JobProducerTrait, models::AppState};
