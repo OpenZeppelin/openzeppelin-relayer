@@ -361,4 +361,156 @@ mod tests {
         // Test with empty created_at string
         assert!(!is_transaction_valid("", &valid_until));
     }
+
+    #[test]
+    fn test_is_pending_transaction() {
+        // Test pending status
+        assert!(is_pending_transaction(&TransactionStatus::Pending));
+
+        // Test sent status
+        assert!(is_pending_transaction(&TransactionStatus::Sent));
+
+        // Test submitted status
+        assert!(is_pending_transaction(&TransactionStatus::Submitted));
+
+        // Test non-pending statuses
+        assert!(!is_pending_transaction(&TransactionStatus::Confirmed));
+        assert!(!is_pending_transaction(&TransactionStatus::Failed));
+        assert!(!is_pending_transaction(&TransactionStatus::Canceled));
+        assert!(!is_pending_transaction(&TransactionStatus::Mined));
+        assert!(!is_pending_transaction(&TransactionStatus::Expired));
+    }
+
+    #[test]
+    fn test_get_age_of_sent_at() {
+        let now = Utc::now();
+
+        // Test with valid sent_at timestamp (1 hour ago)
+        let sent_at_time = now - Duration::hours(1);
+        let tx = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Sent,
+            status_reason: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            sent_at: Some(sent_at_time.to_rfc3339()),
+            confirmed_at: None,
+            valid_until: None,
+            network_type: crate::models::NetworkType::Evm,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                from: "0x1234".to_string(),
+                to: Some("0x5678".to_string()),
+                value: U256::from(0u64),
+                data: Some("0x".to_string()),
+                gas_limit: 21000,
+                gas_price: Some(10_000_000_000),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                nonce: Some(42),
+                signature: None,
+                hash: None,
+                speed: Some(Speed::Fast),
+                chain_id: 1,
+                raw: None,
+            }),
+            priced_at: None,
+            hashes: vec![],
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        let age_result = get_age_of_sent_at(&tx);
+        assert!(age_result.is_ok());
+        let age = age_result.unwrap();
+        // Age should be approximately 1 hour (with some tolerance for test execution time)
+        assert!(age.num_minutes() >= 59 && age.num_minutes() <= 61);
+    }
+
+    #[test]
+    fn test_get_age_of_sent_at_missing_sent_at() {
+        let tx = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            sent_at: None, // Missing sent_at
+            confirmed_at: None,
+            valid_until: None,
+            network_type: crate::models::NetworkType::Evm,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                from: "0x1234".to_string(),
+                to: Some("0x5678".to_string()),
+                value: U256::from(0u64),
+                data: Some("0x".to_string()),
+                gas_limit: 21000,
+                gas_price: Some(10_000_000_000),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                nonce: Some(42),
+                signature: None,
+                hash: None,
+                speed: Some(Speed::Fast),
+                chain_id: 1,
+                raw: None,
+            }),
+            priced_at: None,
+            hashes: vec![],
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        let result = get_age_of_sent_at(&tx);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("sent_at time is missing"));
+            }
+            _ => panic!("Expected UnexpectedError for missing sent_at"),
+        }
+    }
+
+    #[test]
+    fn test_get_age_of_sent_at_invalid_timestamp() {
+        let tx = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Sent,
+            status_reason: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            sent_at: Some("invalid-timestamp".to_string()), // Invalid timestamp format
+            confirmed_at: None,
+            valid_until: None,
+            network_type: crate::models::NetworkType::Evm,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                from: "0x1234".to_string(),
+                to: Some("0x5678".to_string()),
+                value: U256::from(0u64),
+                data: Some("0x".to_string()),
+                gas_limit: 21000,
+                gas_price: Some(10_000_000_000),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                nonce: Some(42),
+                signature: None,
+                hash: None,
+                speed: Some(Speed::Fast),
+                chain_id: 1,
+                raw: None,
+            }),
+            priced_at: None,
+            hashes: vec![],
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        let result = get_age_of_sent_at(&tx);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Error parsing sent_at time"));
+            }
+            _ => panic!("Expected UnexpectedError for invalid timestamp"),
+        }
+    }
 }

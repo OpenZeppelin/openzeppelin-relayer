@@ -328,7 +328,8 @@ mod actix_tests {
         // Verify that available memory plus used memory doesn't exceed total memory
         assert!(
             (available_memory + memory_usage) <= total_memory,
-            "Available memory plus used memory should be <= total memory, got {}",
+            "Available memory plus used memory should be <= total memory {}, got {}",
+            total_memory,
             available_memory + memory_usage
         );
     }

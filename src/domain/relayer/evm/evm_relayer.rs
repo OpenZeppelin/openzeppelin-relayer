@@ -32,7 +32,7 @@ use crate::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
     },
-    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
+    jobs::{JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, EvmNetwork,
         JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult,
@@ -197,12 +197,12 @@ where
 }
 
 // Define a concrete type alias for common usage
-pub type DefaultEvmRelayer = EvmRelayer<
+pub type DefaultEvmRelayer<J> = EvmRelayer<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
     InMemoryTransactionRepository,
-    JobProducer,
+    J,
     EvmSigner,
     TransactionCounterService<InMemoryTransactionCounter>,
 >;

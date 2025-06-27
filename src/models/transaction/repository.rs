@@ -1,10 +1,11 @@
 use super::evm::Speed;
 use crate::{
-    domain::{PriceParams, SignTransactionResponseEvm},
+    constants::DEFAULT_TRANSACTION_SPEED,
+    domain::{evm::PriceParams, SignTransactionResponseEvm},
     models::{
-        transaction::stellar::{MemoSpec, OperationSpec},
-        AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
-        RelayerError, RelayerRepoModel, SignerError, StellarNetwork, TransactionError, U256,
+        transaction::request::evm::EvmTransactionRequest, AddressError, EvmNetwork, MemoSpec,
+        NetworkRepoModel, NetworkTransactionRequest, NetworkType, OperationSpec, RelayerError,
+        RelayerRepoModel, SignerError, StellarNetwork, TransactionError, U256,
     },
 };
 use alloy::{
@@ -77,6 +78,11 @@ pub struct TransactionRepoModel {
 }
 
 impl TransactionRepoModel {
+    /// Validates the transaction repository model
+    ///
+    /// # Returns
+    /// * `Ok(())` if the transaction is valid
+    /// * `Err(TransactionError)` if validation fails
     pub fn validate(&self) -> Result<(), TransactionError> {
         Ok(())
     }
@@ -120,7 +126,7 @@ impl NetworkTransactionData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EvmTransactionDataSignature {
     pub r: String,
     pub s: String,
@@ -148,6 +154,54 @@ pub struct EvmTransactionData {
 }
 
 impl EvmTransactionData {
+    /// Creates transaction data for replacement by combining existing transaction data with new request data.
+    ///
+    /// Preserves critical fields like chain_id, from address, and nonce while applying new transaction parameters.
+    /// Pricing fields are cleared and must be calculated separately.
+    ///
+    /// # Arguments
+    /// * `old_data` - The existing transaction data to preserve core fields from
+    /// * `request` - The new transaction request containing updated parameters
+    ///
+    /// # Returns
+    /// New `EvmTransactionData` configured for replacement transaction
+    pub fn for_replacement(old_data: &EvmTransactionData, request: &EvmTransactionRequest) -> Self {
+        Self {
+            // Preserve existing fields from old transaction
+            chain_id: old_data.chain_id,
+            from: old_data.from.clone(),
+            nonce: old_data.nonce, // Preserve original nonce for replacement
+
+            // Apply new fields from request
+            to: request.to.clone(),
+            value: request.value,
+            data: request.data.clone(),
+            gas_limit: request.gas_limit,
+            speed: request
+                .speed
+                .clone()
+                .or_else(|| old_data.speed.clone())
+                .or(Some(DEFAULT_TRANSACTION_SPEED)),
+
+            // Clear pricing fields - these will be calculated later
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+
+            // Reset signing fields
+            signature: None,
+            hash: None,
+            raw: None,
+        }
+    }
+
+    /// Updates the transaction data with calculated price parameters.
+    ///
+    /// # Arguments
+    /// * `price_params` - Calculated pricing parameters containing gas price and EIP-1559 fees
+    ///
+    /// # Returns
+    /// The updated `EvmTransactionData` with pricing information applied
     pub fn with_price_params(mut self, price_params: PriceParams) -> Self {
         self.gas_price = price_params.gas_price;
         self.max_fee_per_gas = price_params.max_fee_per_gas;
@@ -155,14 +209,38 @@ impl EvmTransactionData {
 
         self
     }
+
+    /// Updates the transaction data with an estimated gas limit.
+    ///
+    /// # Arguments
+    /// * `gas_limit` - The estimated gas limit for the transaction
+    ///
+    /// # Returns
+    /// The updated `EvmTransactionData` with the new gas limit
     pub fn with_gas_estimate(mut self, gas_limit: u64) -> Self {
         self.gas_limit = gas_limit;
         self
     }
+
+    /// Updates the transaction data with a specific nonce value.
+    ///
+    /// # Arguments
+    /// * `nonce` - The nonce value to set for the transaction
+    ///
+    /// # Returns
+    /// The updated `EvmTransactionData` with the specified nonce
     pub fn with_nonce(mut self, nonce: u64) -> Self {
         self.nonce = Some(nonce);
         self
     }
+
+    /// Updates the transaction data with signature information from a signed transaction response.
+    ///
+    /// # Arguments
+    /// * `sig` - The signed transaction response containing signature, hash, and raw transaction data
+    ///
+    /// # Returns
+    /// The updated `EvmTransactionData` with signature information applied
     pub fn with_signed_transaction_data(mut self, sig: SignTransactionResponseEvm) -> Self {
         self.signature = Some(sig.signature);
         self.hash = Some(sig.hash);
@@ -260,12 +338,25 @@ pub struct StellarTransactionData {
 }
 
 impl StellarTransactionData {
+    /// Updates the Stellar transaction data with a specific sequence number.
+    ///
+    /// # Arguments
+    /// * `sequence_number` - The sequence number for the Stellar account
+    ///
+    /// # Returns
+    /// The updated `StellarTransactionData` with the specified sequence number
     pub fn with_sequence_number(mut self, sequence_number: i64) -> Self {
         self.sequence_number = Some(sequence_number);
         self
     }
 
-    /// Build an *unsigned* TransactionEnvelope from the current data. Useful for simulation.
+    /// Builds an unsigned Stellar transaction envelope from the current data.
+    ///
+    /// Useful for transaction simulation before signing.
+    ///
+    /// # Returns
+    /// * `Ok(TransactionEnvelope)` containing the unsigned transaction
+    /// * `Err(SignerError)` if the transaction data cannot be converted
     pub fn unsigned_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
         let tx = SorobanTransaction::try_from(self.clone())?;
         Ok(TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -274,7 +365,11 @@ impl StellarTransactionData {
         }))
     }
 
-    /// Build a *signed* TransactionEnvelope using the stored signatures.
+    /// Builds a signed Stellar transaction envelope using the stored signatures.
+    ///
+    /// # Returns
+    /// * `Ok(TransactionEnvelope)` containing the signed transaction with all signatures
+    /// * `Err(SignerError)` if the transaction data cannot be converted or has too many signatures
     pub fn signed_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
         let tx = SorobanTransaction::try_from(self.clone())?;
         let sigs = VecM::try_from(self.signatures.clone())
@@ -285,13 +380,25 @@ impl StellarTransactionData {
         }))
     }
 
-    /// Return a new instance with the given signature appended.
+    /// Updates instance with the given signature appended to the signatures list.
+    ///
+    /// # Arguments
+    /// * `sig` - The decorated signature to append
+    ///
+    /// # Returns
+    /// The updated `StellarTransactionData` with the new signature added
     pub fn attach_signature(mut self, sig: DecoratedSignature) -> Self {
         self.signatures.push(sig);
         self
     }
 
-    /// Return a new instance with the `hash` field populated.
+    /// Updates instance with the transaction hash populated.
+    ///
+    /// # Arguments
+    /// * `hash` - The transaction hash to set
+    ///
+    /// # Returns
+    /// The updated `StellarTransactionData` with the hash field set
     pub fn with_hash(mut self, hash: String) -> Self {
         self.hash = Some(hash);
         self
@@ -466,6 +573,12 @@ impl
 }
 
 impl EvmTransactionData {
+    /// Converts the transaction's 'to' field to an Alloy Address.
+    ///
+    /// # Returns
+    /// * `Ok(Some(AlloyAddress))` if the 'to' field contains a valid address
+    /// * `Ok(None)` if the 'to' field is None or empty (contract creation)
+    /// * `Err(SignerError)` if the address format is invalid
     pub fn to_address(&self) -> Result<Option<AlloyAddress>, SignerError> {
         Ok(match self.to.as_deref().filter(|s| !s.is_empty()) {
             Some(addr_str) => Some(AlloyAddress::from_str(addr_str).map_err(|e| {
@@ -475,6 +588,11 @@ impl EvmTransactionData {
         })
     }
 
+    /// Converts the transaction's data field from hex string to bytes.
+    ///
+    /// # Returns
+    /// * `Ok(Bytes)` containing the decoded transaction data
+    /// * `Err(SignerError)` if the hex string is invalid
     pub fn data_to_bytes(&self) -> Result<Bytes, SignerError> {
         Bytes::from_str(self.data.as_deref().unwrap_or(""))
             .map_err(|e| SignerError::SigningError(format!("Invalid transaction data: {}", e)))
@@ -614,7 +732,15 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 mod tests {
     use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
 
-    use crate::models::AssetSpec;
+    use crate::{
+        config::{
+            EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
+        },
+        models::{
+            AssetSpec, NetworkConfigData, RelayerEvmPolicy, RelayerNetworkPolicy,
+            RelayerSolanaPolicy, RelayerStellarPolicy,
+        },
+    };
 
     use super::*;
 
@@ -927,34 +1053,6 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_evm_tx_data_for_tx_eip1559() {
-        // Create a valid EVM transaction with EIP-1559 fields
-        let mut evm_tx_data = create_sample_evm_tx_data();
-        evm_tx_data.max_fee_per_gas = Some(30_000_000_000);
-        evm_tx_data.max_priority_fee_per_gas = Some(2_000_000_000);
-
-        // Should convert successfully
-        let result = TxEip1559::try_from(evm_tx_data.clone());
-        assert!(result.is_ok());
-        let tx_eip1559 = result.unwrap();
-
-        // Verify fields
-        assert_eq!(tx_eip1559.chain_id, evm_tx_data.chain_id);
-        assert_eq!(tx_eip1559.nonce, evm_tx_data.nonce.unwrap());
-        assert_eq!(tx_eip1559.gas_limit, evm_tx_data.gas_limit);
-        assert_eq!(
-            tx_eip1559.max_fee_per_gas,
-            evm_tx_data.max_fee_per_gas.unwrap()
-        );
-        assert_eq!(
-            tx_eip1559.max_priority_fee_per_gas,
-            evm_tx_data.max_priority_fee_per_gas.unwrap()
-        );
-        assert_eq!(tx_eip1559.value, evm_tx_data.value);
-        assert!(tx_eip1559.access_list.0.is_empty());
-    }
-
-    #[test]
     fn test_try_from_evm_tx_data_for_tx_legacy() {
         // Create a valid EVM transaction with legacy fields
         let evm_tx_data = create_sample_evm_tx_data();
@@ -1056,6 +1154,488 @@ mod tests {
         let tx = test_stellar_tx_data();
         let updated = tx.with_hash("hash123".to_string());
         assert_eq!(updated.hash, Some("hash123".to_string()));
+    }
+
+    #[test]
+    fn test_evm_tx_for_replacement() {
+        let old_data = create_sample_evm_tx_data();
+        let new_request = EvmTransactionRequest {
+            to: Some("0xNewRecipient".to_string()),
+            value: U256::from(2000000000000000000u64), // 2 ETH
+            data: Some("0xNewData".to_string()),
+            gas_limit: 25000,
+            gas_price: Some(30000000000), // 30 Gwei (should be ignored)
+            max_fee_per_gas: Some(40000000000), // Should be ignored
+            max_priority_fee_per_gas: Some(2000000000), // Should be ignored
+            speed: Some(Speed::Fast),
+            valid_until: None,
+        };
+
+        let result = EvmTransactionData::for_replacement(&old_data, &new_request);
+
+        // Should preserve old data fields
+        assert_eq!(result.chain_id, old_data.chain_id);
+        assert_eq!(result.from, old_data.from);
+        assert_eq!(result.nonce, old_data.nonce);
+
+        // Should use new request fields
+        assert_eq!(result.to, new_request.to);
+        assert_eq!(result.value, new_request.value);
+        assert_eq!(result.data, new_request.data);
+        assert_eq!(result.gas_limit, new_request.gas_limit);
+        assert_eq!(result.speed, new_request.speed);
+
+        // Should clear all pricing fields (regardless of what's in the request)
+        assert_eq!(result.gas_price, None);
+        assert_eq!(result.max_fee_per_gas, None);
+        assert_eq!(result.max_priority_fee_per_gas, None);
+
+        // Should reset signing fields
+        assert_eq!(result.signature, None);
+        assert_eq!(result.hash, None);
+        assert_eq!(result.raw, None);
+    }
+
+    #[test]
+    fn test_transaction_repo_model_validate() {
+        let transaction = TransactionRepoModel::default();
+        let result = transaction.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_try_from_network_transaction_request_evm() {
+        use crate::models::{NetworkRepoModel, NetworkType, RelayerRepoModel};
+
+        let evm_request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
+            to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
+            value: U256::from(1000000000000000000u128),
+            data: Some("0x1234".to_string()),
+            gas_limit: 21000,
+            gas_price: Some(20000000000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            speed: Some(Speed::Fast),
+            valid_until: Some("2024-12-31T23:59:59Z".to_string()),
+        });
+
+        let relayer_model = RelayerRepoModel {
+            id: "relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "network-id".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            signer_id: "signer-id".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let network_model = NetworkRepoModel {
+            id: "evm:ethereum".to_string(),
+            name: "ethereum".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(EvmNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "ethereum".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://mainnet.infura.io".to_string()]),
+                    explorer_urls: Some(vec!["https://etherscan.io".to_string()]),
+                    average_blocktime_ms: Some(12000),
+                    is_testnet: Some(false),
+                    tags: Some(vec!["mainnet".to_string()]),
+                },
+                chain_id: Some(1),
+                required_confirmations: Some(12),
+                features: None,
+                symbol: Some("ETH".to_string()),
+            }),
+        };
+
+        let result = TransactionRepoModel::try_from((&evm_request, &relayer_model, &network_model));
+        assert!(result.is_ok());
+        let transaction = result.unwrap();
+
+        assert_eq!(transaction.relayer_id, relayer_model.id);
+        assert_eq!(transaction.status, TransactionStatus::Pending);
+        assert_eq!(transaction.network_type, NetworkType::Evm);
+        assert_eq!(
+            transaction.valid_until,
+            Some("2024-12-31T23:59:59Z".to_string())
+        );
+        assert!(transaction.is_canceled == Some(false));
+
+        if let NetworkTransactionData::Evm(evm_data) = transaction.network_data {
+            assert_eq!(evm_data.from, relayer_model.address);
+            assert_eq!(
+                evm_data.to,
+                Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string())
+            );
+            assert_eq!(evm_data.value, U256::from(1000000000000000000u128));
+            assert_eq!(evm_data.chain_id, 1);
+            assert_eq!(evm_data.gas_limit, 21000);
+            assert_eq!(evm_data.gas_price, Some(20000000000));
+            assert_eq!(evm_data.speed, Some(Speed::Fast));
+        } else {
+            panic!("Expected EVM transaction data");
+        }
+    }
+
+    #[test]
+    fn test_try_from_network_transaction_request_solana() {
+        use crate::models::{
+            NetworkRepoModel, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
+        };
+
+        let solana_request = NetworkTransactionRequest::Solana(
+            crate::models::transaction::request::solana::SolanaTransactionRequest {
+                fee_payer: "fee_payer_address".to_string(),
+                instructions: vec!["instruction1".to_string(), "instruction2".to_string()],
+            },
+        );
+
+        let relayer_model = RelayerRepoModel {
+            id: "relayer-id".to_string(),
+            name: "Test Solana Relayer".to_string(),
+            network: "network-id".to_string(),
+            paused: false,
+            network_type: NetworkType::Solana,
+            signer_id: "signer-id".to_string(),
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default()),
+            address: "solana_address".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let network_model = NetworkRepoModel {
+            id: "solana:mainnet".to_string(),
+            name: "mainnet".to_string(),
+            network_type: NetworkType::Solana,
+            config: NetworkConfigData::Solana(SolanaNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "mainnet".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://api.mainnet-beta.solana.com".to_string()]),
+                    explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
+                    average_blocktime_ms: Some(400),
+                    is_testnet: Some(false),
+                    tags: Some(vec!["mainnet".to_string()]),
+                },
+            }),
+        };
+
+        let result =
+            TransactionRepoModel::try_from((&solana_request, &relayer_model, &network_model));
+        assert!(result.is_ok());
+        let transaction = result.unwrap();
+
+        assert_eq!(transaction.relayer_id, relayer_model.id);
+        assert_eq!(transaction.status, TransactionStatus::Pending);
+        assert_eq!(transaction.network_type, NetworkType::Solana);
+        assert_eq!(transaction.valid_until, None);
+
+        if let NetworkTransactionData::Solana(solana_data) = transaction.network_data {
+            assert_eq!(solana_data.fee_payer, "fee_payer_address");
+            assert_eq!(solana_data.instructions.len(), 2);
+            assert_eq!(solana_data.instructions[0], "instruction1");
+            assert_eq!(solana_data.instructions[1], "instruction2");
+            assert_eq!(solana_data.recent_blockhash, None);
+            assert_eq!(solana_data.hash, None);
+        } else {
+            panic!("Expected Solana transaction data");
+        }
+    }
+
+    #[test]
+    fn test_try_from_network_transaction_request_stellar() {
+        use crate::models::transaction::request::stellar::StellarTransactionRequest;
+        use crate::models::{
+            NetworkRepoModel, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
+        };
+
+        let stellar_request = NetworkTransactionRequest::Stellar(StellarTransactionRequest {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            network: "mainnet".to_string(),
+            operations: vec![OperationSpec::Payment {
+                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }],
+            memo: Some(MemoSpec::Text {
+                value: "Test memo".to_string(),
+            }),
+            valid_until: Some("2024-12-31T23:59:59Z".to_string()),
+        });
+
+        let relayer_model = RelayerRepoModel {
+            id: "relayer-id".to_string(),
+            name: "Test Stellar Relayer".to_string(),
+            network: "network-id".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "signer-id".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default()),
+            address: "stellar_address".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let network_model = NetworkRepoModel {
+            id: "stellar:mainnet".to_string(),
+            name: "mainnet".to_string(),
+            network_type: NetworkType::Stellar,
+            config: NetworkConfigData::Stellar(StellarNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "mainnet".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
+                    explorer_urls: Some(vec!["https://stellarchain.io".to_string()]),
+                    average_blocktime_ms: Some(5000),
+                    is_testnet: Some(false),
+                    tags: Some(vec!["mainnet".to_string()]),
+                },
+                passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
+            }),
+        };
+
+        let result =
+            TransactionRepoModel::try_from((&stellar_request, &relayer_model, &network_model));
+        assert!(result.is_ok());
+        let transaction = result.unwrap();
+
+        assert_eq!(transaction.relayer_id, relayer_model.id);
+        assert_eq!(transaction.status, TransactionStatus::Pending);
+        assert_eq!(transaction.network_type, NetworkType::Stellar);
+        assert_eq!(transaction.valid_until, None);
+
+        if let NetworkTransactionData::Stellar(stellar_data) = transaction.network_data {
+            assert_eq!(
+                stellar_data.source_account,
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+            );
+            assert_eq!(stellar_data.operations.len(), 1);
+            if let OperationSpec::Payment {
+                destination,
+                amount,
+                asset,
+            } = &stellar_data.operations[0]
+            {
+                assert_eq!(
+                    destination,
+                    "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                );
+                assert_eq!(*amount, 1000000);
+                assert_eq!(*asset, AssetSpec::Native);
+            } else {
+                panic!("Expected Payment operation");
+            }
+            assert_eq!(
+                stellar_data.memo,
+                Some(MemoSpec::Text {
+                    value: "Test memo".to_string()
+                })
+            );
+            assert_eq!(
+                stellar_data.valid_until,
+                Some("2024-12-31T23:59:59Z".to_string())
+            );
+            assert_eq!(stellar_data.signatures.len(), 0);
+            assert_eq!(stellar_data.hash, None);
+            assert_eq!(stellar_data.fee, None);
+            assert_eq!(stellar_data.sequence_number, None);
+        } else {
+            panic!("Expected Stellar transaction data");
+        }
+    }
+
+    #[test]
+    fn test_try_from_network_transaction_data_for_tx_eip1559() {
+        // Create a valid EVM transaction with EIP-1559 fields
+        let mut evm_tx_data = create_sample_evm_tx_data();
+        evm_tx_data.max_fee_per_gas = Some(30_000_000_000);
+        evm_tx_data.max_priority_fee_per_gas = Some(2_000_000_000);
+        let network_data = NetworkTransactionData::Evm(evm_tx_data.clone());
+
+        // Should convert successfully
+        let result = TxEip1559::try_from(network_data);
+        assert!(result.is_ok());
+        let tx_eip1559 = result.unwrap();
+
+        // Verify fields
+        assert_eq!(tx_eip1559.chain_id, evm_tx_data.chain_id);
+        assert_eq!(tx_eip1559.nonce, evm_tx_data.nonce.unwrap());
+        assert_eq!(tx_eip1559.gas_limit, evm_tx_data.gas_limit);
+        assert_eq!(
+            tx_eip1559.max_fee_per_gas,
+            evm_tx_data.max_fee_per_gas.unwrap()
+        );
+        assert_eq!(
+            tx_eip1559.max_priority_fee_per_gas,
+            evm_tx_data.max_priority_fee_per_gas.unwrap()
+        );
+        assert_eq!(tx_eip1559.value, evm_tx_data.value);
+        assert!(tx_eip1559.access_list.0.is_empty());
+
+        // Should fail for non-EVM data
+        let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
+            recent_blockhash: None,
+            fee_payer: "test".to_string(),
+            instructions: vec![],
+            hash: None,
+        });
+        assert!(TxEip1559::try_from(solana_data).is_err());
+    }
+
+    #[test]
+    fn test_evm_transaction_data_defaults() {
+        let default_data = EvmTransactionData::default();
+
+        assert_eq!(
+            default_data.from,
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        );
+        assert_eq!(
+            default_data.to,
+            Some("0x70997970C51812dc3A010C7d01b50e0d17dc79C8".to_string())
+        );
+        assert_eq!(default_data.gas_price, Some(20000000000));
+        assert_eq!(default_data.value, U256::from(1000000000000000000u128));
+        assert_eq!(default_data.data, Some("0x".to_string()));
+        assert_eq!(default_data.nonce, Some(1));
+        assert_eq!(default_data.chain_id, 1);
+        assert_eq!(default_data.gas_limit, 21000);
+        assert_eq!(default_data.hash, None);
+        assert_eq!(default_data.signature, None);
+        assert_eq!(default_data.speed, None);
+        assert_eq!(default_data.max_fee_per_gas, None);
+        assert_eq!(default_data.max_priority_fee_per_gas, None);
+        assert_eq!(default_data.raw, None);
+    }
+
+    #[test]
+    fn test_transaction_repo_model_defaults() {
+        let default_model = TransactionRepoModel::default();
+
+        assert_eq!(default_model.id, "00000000-0000-0000-0000-000000000001");
+        assert_eq!(
+            default_model.relayer_id,
+            "00000000-0000-0000-0000-000000000002"
+        );
+        assert_eq!(default_model.status, TransactionStatus::Pending);
+        assert_eq!(default_model.created_at, "2023-01-01T00:00:00Z");
+        assert_eq!(default_model.status_reason, None);
+        assert_eq!(default_model.sent_at, None);
+        assert_eq!(default_model.confirmed_at, None);
+        assert_eq!(default_model.valid_until, None);
+        assert_eq!(default_model.network_type, NetworkType::Evm);
+        assert_eq!(default_model.priced_at, None);
+        assert_eq!(default_model.hashes.len(), 0);
+        assert_eq!(default_model.noop_count, None);
+        assert_eq!(default_model.is_canceled, Some(false));
+    }
+
+    #[test]
+    fn test_evm_tx_for_replacement_with_speed_fallback() {
+        let mut old_data = create_sample_evm_tx_data();
+        old_data.speed = Some(Speed::SafeLow);
+
+        // Request with no speed - should use old data's speed
+        let new_request = EvmTransactionRequest {
+            to: Some("0xNewRecipient".to_string()),
+            value: U256::from(2000000000000000000u64),
+            data: Some("0xNewData".to_string()),
+            gas_limit: 25000,
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            speed: None,
+            valid_until: None,
+        };
+
+        let result = EvmTransactionData::for_replacement(&old_data, &new_request);
+        assert_eq!(result.speed, Some(Speed::SafeLow));
+
+        // Old data with no speed - should use default
+        let mut old_data_no_speed = create_sample_evm_tx_data();
+        old_data_no_speed.speed = None;
+
+        let result2 = EvmTransactionData::for_replacement(&old_data_no_speed, &new_request);
+        assert_eq!(result2.speed, Some(DEFAULT_TRANSACTION_SPEED));
+    }
+
+    #[test]
+    fn test_transaction_status_serialization() {
+        use serde_json;
+
+        // Test serialization of different status values
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Pending).unwrap(),
+            "\"pending\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Sent).unwrap(),
+            "\"sent\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Mined).unwrap(),
+            "\"mined\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Confirmed).unwrap(),
+            "\"confirmed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Canceled).unwrap(),
+            "\"canceled\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Submitted).unwrap(),
+            "\"submitted\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransactionStatus::Expired).unwrap(),
+            "\"expired\""
+        );
+    }
+
+    #[test]
+    fn test_evm_tx_contract_creation() {
+        // Test transaction data for contract creation (no 'to' address)
+        let mut tx_data = create_sample_evm_tx_data();
+        tx_data.to = None;
+
+        let tx_legacy = TxLegacy::try_from(&tx_data).unwrap();
+        assert_eq!(tx_legacy.to, TxKind::Create);
+
+        let tx_eip1559 = TxEip1559::try_from(&tx_data).unwrap();
+        assert_eq!(tx_eip1559.to, TxKind::Create);
+    }
+
+    #[test]
+    fn test_evm_tx_default_values_in_conversion() {
+        // Test conversion with missing nonce and gas price
+        let mut tx_data = create_sample_evm_tx_data();
+        tx_data.nonce = None;
+        tx_data.gas_price = None;
+        tx_data.max_fee_per_gas = None;
+        tx_data.max_priority_fee_per_gas = None;
+
+        let tx_legacy = TxLegacy::try_from(&tx_data).unwrap();
+        assert_eq!(tx_legacy.nonce, 0); // Default nonce
+        assert_eq!(tx_legacy.gas_price, 0); // Default gas price
+
+        let tx_eip1559 = TxEip1559::try_from(&tx_data).unwrap();
+        assert_eq!(tx_eip1559.nonce, 0); // Default nonce
+        assert_eq!(tx_eip1559.max_fee_per_gas, 0); // Default max fee
+        assert_eq!(tx_eip1559.max_priority_fee_per_gas, 0); // Default max priority fee
     }
 
     // Helper function to create test network and relayer models

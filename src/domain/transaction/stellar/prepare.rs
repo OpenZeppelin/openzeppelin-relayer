@@ -7,7 +7,7 @@ use log::{info, warn};
 
 use super::{i64_from_u64, lane_gate, StellarRelayerTransaction};
 use crate::{
-    domain::{needs_simulation, SignTransactionResponse},
+    domain::{stellar::needs_simulation, SignTransactionResponse},
     jobs::{JobProducerTrait, TransactionSend},
     models::{
         NetworkTransactionData, OperationSpec, RelayerRepoModel, TransactionError,
