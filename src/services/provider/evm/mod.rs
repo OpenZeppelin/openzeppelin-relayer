@@ -490,7 +490,11 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
             //         .map_err(|_| TransactionError::InvalidType("Invalid gas
             // limit".to_string()))?, ),
             value: Some(Uint::<256, 4>::from(tx.value)),
-            input: TransactionInput::from(tx.data.clone().unwrap_or("".to_string()).into_bytes()),
+            input: TransactionInput::from(
+                hex::decode(tx.data.clone().unwrap_or("".to_string()).into_bytes()).map_err(
+                    |e| TransactionError::InvalidType(format!("Invalid hex data: {}", e)),
+                )?,
+            ),
             nonce: Some(
                 Uint::<256, 4>::from(tx.nonce.ok_or_else(|| {
                     TransactionError::InvalidType("Nonce must be defined".to_string())
