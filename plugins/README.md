@@ -95,7 +95,14 @@ Example response:
   "return_value": "done!",
   "error": null,
   "traces": [
-    "{ \"relayer_id\": \"my-relayer\", \"method\": \"sendTransaction\", \"params\": { \"to\": \"0x1234567890123456789012345678901234567890\", \"value\": \"0x1234567890123456789012345678901234567890\" } }"
+    {
+      "relayer_id": "my-relayer",
+      "method": "sendTransaction",
+      "params": {
+        "to": "0x1234567890123456789012345678901234567890",
+        "value": "0x1234567890123456789012345678901234567890"
+      }
+    }
   ]
 }
 ```

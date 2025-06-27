@@ -25,7 +25,7 @@ pub struct LogEntry {
 pub struct ScriptResult {
     pub logs: Vec<LogEntry>,
     pub error: String,
-    pub trace: Vec<String>,
+    pub trace: Vec<serde_json::Value>,
     pub return_value: String,
 }
 

@@ -52,7 +52,7 @@ pub struct PluginCallResponse {
     pub message: String,
     pub logs: Vec<LogEntry>,
     pub error: String,
-    pub traces: Vec<String>,
+    pub traces: Vec<serde_json::Value>,
 }
 
 #[derive(Default)]
