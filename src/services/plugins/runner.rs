@@ -80,7 +80,10 @@ impl PluginRunnerTrait for PluginRunner {
 mod tests {
     use std::fs;
 
-    use crate::{jobs::MockJobProducerTrait, utils::mocks::mockutils::create_mock_app_state};
+    use crate::{
+        jobs::MockJobProducerTrait, services::plugins::LogLevel,
+        utils::mocks::mockutils::create_mock_app_state,
+    };
     use tempfile::tempdir;
 
     use super::*;
@@ -105,7 +108,11 @@ mod tests {
         let script_path = temp_dir.path().join("test_run.ts");
         let socket_path = temp_dir.path().join("test_run.sock");
 
-        let content = "console.log('test');";
+        let content = r#"
+            console.log(JSON.stringify({ level: 'log', message: 'test' }));
+            console.log(JSON.stringify({ level: 'error', message: 'test-error' }));
+            console.log(JSON.stringify({ level: 'result', message: 'test-result' }));
+        "#;
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
@@ -121,6 +128,11 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().output, "test\n");
+        let result = result.unwrap();
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "test");
+        assert_eq!(result.logs[1].level, LogLevel::Error);
+        assert_eq!(result.logs[1].message, "test-error");
+        assert_eq!(result.return_value, "test-result");
     }
 }
