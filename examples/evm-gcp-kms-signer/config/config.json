@@ -1,0 +1,85 @@
+{
+  "relayers": [
+    {
+      "id": "sepolia-example",
+      "name": "Sepolia Example",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "gcp-kms-signer-evm",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "gcp-kms-signer-evm",
+      "type": "google_cloud_kms",
+      "config": {
+        "service_account": {
+          "project_id": "your-gcp-project-id",
+          "private_key_id": {
+            "type": "env",
+            "value": "GCP_PRIVATE_KEY_ID"
+          },
+          "private_key": {
+            "type": "env",
+            "value": "GCP_PRIVATE_KEY"
+          },
+          "client_email": {
+            "type": "env",
+            "value": "GCP_CLIENT_EMAIL"
+          },
+          "client_id": "your-client-id"
+        },
+        "key": {
+          "location": "us-west2",
+          "key_ring_id": "your-key-ring",
+          "key_id": "your-key-id",
+          "key_version": 1
+        }
+      }
+    }
+  ],
+  "networks": [
+    {
+      "average_blocktime_ms": 12000,
+      "chain_id": 11155111,
+      "explorer_urls": [
+        "https://api-sepolia.etherscan.io/api",
+        "https://sepolia.etherscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "sepolia",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://sepolia.drpc.org",
+        "https://1rpc.io/sepolia",
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://ethereum-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "tags": [
+        "deprecated"
+      ],
+      "type": "evm"
+    }
+  ],
+  "plugins": []
+}

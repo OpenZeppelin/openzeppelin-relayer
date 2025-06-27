@@ -224,6 +224,7 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 * `basic-example-metrics`: Setup with Prometheus and Grafana metrics
 * `vault-secret-signer`: Using HashiCorp Vault for key management
 * `vault-transit-signer`: Using Vault Transit for secure signing
+* `evm-gcp-kms-signer`: Using Google Cloud KMS for EVM secure signing
 * `evm-turnkey-signer`: Using Turnkey for EVM secure signing
 * `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
 
@@ -699,6 +700,9 @@ Available configuration fields
 |===
 
 `google_cloud_kms` type config:
+
+NOTE: For EVM transaction signing, ensure your Google Cloud KMS key is created with protection level HSM, Asymmetric sign purpose and the algorithm "Elliptic Curve secp256k1 - SHA256 Digest" which provides secp256k1 compatibility required for Ethereum transactions.
+
 [cols="1,1,2"]
 |===
 |Field |Type |Description
@@ -735,6 +739,10 @@ Available configuration fields
 | String
 | The Google Cloud service account client ID.
 
+| key.location
+| String
+| The Google Cloud location (region) where your KMS key ring is located (e.g., "us-west2", "global").
+
 | key.key_ring_id
 | String
 | The KMS key ring ID containing your cryptographic key.
@@ -742,6 +750,10 @@ Available configuration fields
 | key.key_id
 | String
 | The KMS key ID used for signing operations.
+
+| key.key_version
+| Integer
+| The version of the KMS key to use for signing operations. Defaults to 1.
 |===
 
 `aws_kms` type config:
