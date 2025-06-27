@@ -197,10 +197,12 @@ mod tests {
 
         // Mock the public key endpoint
         Mock::given(method("GET"))
-            .and(path_regex(r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*"))
+            .and(path_regex(
+                r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*",
+            ))
             .and(header_exists("authorization"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "pem": "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh\nkFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n",
+                "pem": "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh\nkFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n", // noboost
                 "algorithm": "ECDSA_SECP256K1_SHA256"
             })))
             .mount(&mock_server)
