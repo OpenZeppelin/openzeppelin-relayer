@@ -1,3 +1,11 @@
+//! This module is the orchestrator of the plugin execution.
+//!
+//! 1. Initiates a socket connection to the relayer server - socket.rs
+//! 2. Executes the plugin script - script_executor.rs
+//! 3. Sends the shutdown signal to the relayer server - socket.rs
+//! 4. Waits for the relayer server to finish the execution - socket.rs
+//! 5. Returns the output of the script - script_executor.rs
+//!
 use std::sync::Arc;
 
 use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};

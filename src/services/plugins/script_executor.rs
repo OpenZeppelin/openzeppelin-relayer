@@ -1,3 +1,8 @@
+//! This module is responsible for executing a typescript script.
+//!
+//! 1. Checks if `ts-node` is installed.
+//! 2. Executes the script using the `ts-node` command.
+//! 3. Returns the output and errors of the script.
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use tokio::process::Command;
