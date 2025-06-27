@@ -28,6 +28,7 @@ This relayer service enables interaction with blockchain networks through transa
 - **Configurable Network Policies**: Define and enforce network-specific policies for transaction processing.
 - **Metrics and Observability**: Monitor application performance using Prometheus and Grafana.
 - **Docker Support**: Deploy the relayer using Docker for both development and production environments.
+- **Relayer Plugins**: Extend the relayer functionality through TypeScript functions.
 
 ## Supported networks
 
@@ -95,6 +96,7 @@ flowchart TB
         subgraph "API Layer"
             api[API Routes & Controllers]
             middleware[Middleware]
+            plugins[Relayer Plugins]
         end
 
         subgraph "Domain Layer"
@@ -137,11 +139,13 @@ flowchart TB
     %% API Layer connections
     api -- "Processes requests" --> middleware
     middleware -- "Validates & routes" --> domain
+    middleware -- "Invokes" --> plugins
 
     %% Domain Layer connections
     domain -- "Uses" --> relayer
     domain -- "Enforces" --> policies
     relayer -- "Processes" --> transaction
+    plugins -- "Uses" --> relayer
 
     %% Services Layer connections
     transaction -- "Signs with" --> signer
@@ -169,7 +173,7 @@ flowchart TB
     classDef configClass fill:#fbb,stroke:#333,stroke-width:2px
     classDef externalClass fill:#ddd,stroke:#333,stroke-width:1px
 
-    class api,middleware apiClass
+    class api,middleware,plugins apiClass
     class domain,relayer,policies domainClass
     class repositories,jobs,signer,provider infraClass
     class transaction,vault,webhook,monitoring serviceClass
@@ -195,6 +199,7 @@ openzeppelin-relayer/
 │   ├── models/           # Data structures and types
 │   ├── repositories/     # Configuration storage
 │   ├── services/         # Services logic
+│   ├── plugins/          # Relayer plugins
 │   └── utils/            # Helper functions
 │
 ├── config/               # Configuration files
@@ -212,6 +217,7 @@ openzeppelin-relayer/
 - Rust
 - Redis
 - [Sodium](https://doc.libsodium.org/)
+- [Node.js + Typescript + ts-node](https://nodejs.org/) (v20+) for plugins.
 
 ### Setup
 
@@ -243,6 +249,15 @@ Run the following commands to install pre-commit hooks:
 
 - Install stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
 - Follow steps to install libsodium from the [libsodium installation guide](https://doc.libsodium.org/installation).
+
+### Install Node.js
+
+- Install Node.js from [here](https://nodejs.org/).
+- Install Typescript and ts-node:
+
+  ```bash
+  npm install -g typescript ts-node
+  ```
 
 ### Run Tests
 
@@ -370,6 +385,10 @@ docker run -d \
 `--network relayer-net` attaches Redis to the network you created in step 1.
 
 > Note: Make sure to create a dedicated network for the relayer and Redis containers to communicate. You can create a network using the following command `docker network create relayer-net`.
+
+## Configure a plugin
+
+In order to create and run plugins please follow the [Plugins README](./plugins/README.md) file instructions.
 
 ## Running the relayer locally
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};
-use crate::{jobs::JobProducerTrait, models::AppState};
+use crate::services::plugins::{ RelayerApi, ScriptExecutor, ScriptResult, SocketService };
+use crate::{ jobs::JobProducerTrait, models::AppState };
 
 use super::PluginError;
 use actix_web::web;
@@ -19,7 +19,7 @@ pub trait PluginRunnerTrait {
         socket_path: &str,
         script_path: String,
         payload: String,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J>>>
     ) -> Result<ScriptResult, PluginError>;
 }
 
@@ -32,7 +32,7 @@ impl PluginRunner {
         socket_path: &str,
         script_path: String,
         payload: String,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J>>>
     ) -> Result<ScriptResult, PluginError> {
         let socket_service = SocketService::new(socket_path)?;
         let socket_path_clone = socket_service.socket_path().to_string();
@@ -44,14 +44,17 @@ impl PluginRunner {
             socket_service.listen(shutdown_rx, state, relayer_api).await
         });
 
-        let mut script_result =
-            ScriptExecutor::execute_typescript(script_path, socket_path_clone, payload).await?;
+        let mut script_result = ScriptExecutor::execute_typescript(
+            script_path,
+            socket_path_clone,
+            payload
+        ).await?;
 
         let _ = shutdown_tx.send(());
 
-        let server_handle = server_handle
-            .await
-            .map_err(|e| PluginError::SocketError(e.to_string()))?;
+        let server_handle = server_handle.await.map_err(|e|
+            PluginError::SocketError(e.to_string())
+        )?;
 
         match server_handle {
             Ok(traces) => {
@@ -73,7 +76,7 @@ impl PluginRunnerTrait for PluginRunner {
         socket_path: &str,
         script_path: String,
         payload: String,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J>>>
     ) -> Result<ScriptResult, PluginError> {
         self.run(socket_path, script_path, payload, state).await
     }
@@ -83,12 +86,13 @@ impl PluginRunnerTrait for PluginRunner {
 mod tests {
     use std::fs;
 
-    use crate::{jobs::MockJobProducerTrait, utils::mocks::mockutils::create_mock_app_state};
+    use crate::{ jobs::MockJobProducerTrait, utils::mocks::mockutils::create_mock_app_state };
     use tempfile::tempdir;
 
     use super::*;
 
-    static TS_CONFIG: &str = r#"
+    static TS_CONFIG: &str =
+        r#"
         {
             "compilerOptions": {
               "target": "es2016",
@@ -115,14 +119,12 @@ mod tests {
         let state = create_mock_app_state(None, None, None, None).await;
 
         let plugin_runner = PluginRunner;
-        let result = plugin_runner
-            .run::<MockJobProducerTrait>(
-                &socket_path.display().to_string(),
-                script_path.display().to_string(),
-                String::new(),
-                Arc::new(web::ThinData(state)),
-            )
-            .await;
+        let result = plugin_runner.run::<MockJobProducerTrait>(
+            &socket_path.display().to_string(),
+            script_path.display().to_string(),
+            String::new(),
+            Arc::new(web::ThinData(state))
+        ).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");

@@ -861,6 +861,7 @@ mod tests {
                     universe_domain: "uri".to_string(),
                 },
                 key: KmsKeyConfig {
+                    location: "global".to_string(),
                     key_id: "my-key".to_string(),
                     key_ring_id: "my-keyring".to_string(),
                     key_version: 1,

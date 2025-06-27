@@ -11,6 +11,15 @@
       "policies": {
         "min_balance": 0
       }
+    },
+    {
+      "id": "stellar-example",
+      "name": "Stellar Example",
+      "network": "testnet",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "stellar"
     }
   ],
   "notifications": [
@@ -36,5 +45,7 @@
         }
       }
     }
-  ]
+  ],
+  "networks": "./config/networks",
+  "plugins": []
 }

@@ -32,13 +32,12 @@ services:
       - metrics-network
     volumes:
       - ${CONFIG_DIR:-./config}:/app/config/:ro
+      - ../../config/networks:/app/config/networks
       # Mount logs folder to persist logs
       - ${LOG_DATA_DIR:-./logs}:/app/logs
     depends_on:
       - redis
     restart: on-failure:5
-
-
   redis:
     image: redis:bookworm
     ports:
@@ -47,23 +46,25 @@ services:
       - no-new-privileges
     volumes:
       - redis_data:/data
-    command: [redis-server, --appendonly, yes, --save, '60', '1']
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
     networks:
       - relayer-network
       - metrics-network
     restart: on-failure:5
-
-
 networks:
   metrics-network:
     internal: true
   relayer-network:
     driver: bridge
-
 volumes:
   redis_data:
     driver: local
-
 secrets:
   api_key:
     environment: API_KEY

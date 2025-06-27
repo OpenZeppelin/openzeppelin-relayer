@@ -27,21 +27,25 @@ async fn process_plugins<J: JobProducerTrait>(
     config_file: &Config,
     app_state: &ThinData<AppState<J>>,
 ) -> Result<()> {
-    let plugin_futures = config_file.plugins.iter().map(|plugin| async {
-        let plugin_model =
-            PluginModel::try_from(plugin.clone()).wrap_err("Failed to convert plugin config")?;
-        app_state
-            .plugin_repository
-            .add(plugin_model)
-            .await
-            .wrap_err("Failed to create plugin repository entry")?;
-        Ok::<(), Report>(())
-    });
+    if let Some(plugins) = &config_file.plugins {
+        let plugin_futures = plugins.iter().map(|plugin| async {
+            let plugin_model = PluginModel::try_from(plugin.clone())
+                .wrap_err("Failed to convert plugin config")?;
+            app_state
+                .plugin_repository
+                .add(plugin_model)
+                .await
+                .wrap_err("Failed to create plugin repository entry")?;
+            Ok::<(), Report>(())
+        });
 
-    try_join_all(plugin_futures)
-        .await
-        .wrap_err("Failed to initialize plugin repository")?;
-    Ok(())
+        try_join_all(plugin_futures)
+            .await
+            .wrap_err("Failed to initialize plugin repository")?;
+        Ok(())
+    } else {
+        Ok(())
+    }
 }
 
 /// Process a signer configuration from the config file and convert it into a `SignerRepoModel`.
@@ -206,6 +210,7 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                         .clone(),
                 },
                 key: GoogleCloudKmsSignerKeyConfig {
+                    location: google_cloud_kms_config.key.location.clone(),
                     key_id: google_cloud_kms_config.key.key_id.clone(),
                     key_ring_id: google_cloud_kms_config.key.key_ring_id.clone(),
                     key_version: google_cloud_kms_config.key.key_version,
@@ -654,7 +659,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         // Create app state
@@ -696,7 +701,7 @@ mod tests {
             relayers: vec![],
             notifications,
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         // Create app state
@@ -725,7 +730,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -749,7 +754,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -775,7 +780,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -806,7 +811,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -848,7 +853,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -884,7 +889,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -923,7 +928,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(networks).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         let app_state = ThinData(create_test_app_state());
@@ -969,7 +974,7 @@ mod tests {
             relayers,
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins: vec![],
+            plugins: Some(vec![]),
         };
 
         // Create app state
@@ -1011,7 +1016,7 @@ mod tests {
             relayers: vec![],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins,
+            plugins: Some(plugins),
         };
 
         // Create app state
@@ -1076,7 +1081,7 @@ mod tests {
             relayers,
             notifications,
             networks: NetworksFileConfig::new(vec![]).unwrap(),
-            plugins,
+            plugins: Some(plugins),
         };
 
         // Create shared repositories
@@ -1167,6 +1172,7 @@ mod tests {
                 universe_domain: "googleapis.com".to_string(),
             },
             key: KmsKeyConfig {
+                location: "global".to_string(),
                 key_id: "fake-key-id".to_string(),
                 key_ring_id: "fake-key-ring-id".to_string(),
                 key_version: 1,

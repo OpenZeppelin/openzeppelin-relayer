@@ -337,7 +337,7 @@ where
 mod tests {
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
-        domain::{transaction::evm::EvmRelayerTransaction, MockPriceCalculatorTrait},
+        domain::transaction::evm::{EvmRelayerTransaction, MockPriceCalculatorTrait},
         jobs::MockJobProducerTrait,
         models::{
             evm::Speed, EvmTransactionData, NetworkConfigData, NetworkRepoModel,

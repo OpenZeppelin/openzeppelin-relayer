@@ -10,19 +10,18 @@ use eyre::Result;
 use log::{debug, info, warn};
 use std::sync::Arc;
 
-use super::PriceParams;
 use crate::{
     domain::{
-        is_pending_transaction,
         transaction::{
-            evm::price_calculator::{PriceCalculator, PriceCalculatorTrait},
+            evm::{is_pending_transaction, PriceCalculator, PriceCalculatorTrait},
             Transaction,
         },
         EvmTransactionValidator,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
-        produce_transaction_update_notification_payload, NetworkTransactionData, RelayerRepoModel,
+        produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
+        NetworkTransactionData, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
         TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
@@ -32,6 +31,12 @@ use crate::{
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
 };
+
+use super::PriceParams;
+
+// Import shared test helpers from status module
+
+// Import shared test helpers from test_helpers module
 
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
@@ -226,6 +231,74 @@ where
         }
         Ok(())
     }
+
+    /// Validates that the relayer has sufficient balance for the transaction.
+    ///
+    /// # Arguments
+    ///
+    /// * `total_cost` - The total cost of the transaction (gas + value)
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or a `TransactionError` if insufficient balance.
+    async fn ensure_sufficient_balance(
+        &self,
+        total_cost: crate::models::U256,
+    ) -> Result<(), TransactionError> {
+        EvmTransactionValidator::validate_sufficient_relayer_balance(
+            total_cost,
+            &self.relayer().address,
+            &self.relayer().policies.get_evm_policy(),
+            &self.provider,
+        )
+        .await
+        .map_err(|validation_error| {
+            TransactionError::InsufficientBalance(validation_error.to_string())
+        })
+    }
+
+    /// Signs a transaction data, updates repository with the signed transaction, and optionally sends a resubmit job.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx_id` - The transaction ID to update
+    /// * `evm_data` - The EVM transaction data to sign
+    /// * `send_resubmit` - Whether to send a resubmit job after updating
+    ///
+    /// # Returns
+    ///
+    /// The updated transaction model
+    async fn sign_update_and_notify(
+        &self,
+        tx_id: String,
+        evm_data: EvmTransactionData,
+        send_resubmit: bool,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        // Sign the transaction
+        let sig_result = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Evm(evm_data.clone()))
+            .await?;
+
+        let final_evm_data = evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+
+        // Update the transaction in the repository
+        let updated_tx = self
+            .transaction_repository
+            .update_network_data(tx_id, NetworkTransactionData::Evm(final_evm_data))
+            .await?;
+
+        // Send resubmit job if requested
+        if send_resubmit {
+            self.send_transaction_resubmit_job(&updated_tx).await?;
+        }
+
+        // Send notification
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+
+        Ok(updated_tx)
+    }
 }
 
 #[async_trait]
@@ -286,36 +359,31 @@ where
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
         // Validate the relayer has sufficient balance
-        let balance_validation = EvmTransactionValidator::validate_sufficient_relayer_balance(
-            price_params.total_cost,
-            &self.relayer().address,
-            &self.relayer().policies.get_evm_policy(),
-            &self.provider,
-        )
-        .await;
+        match self
+            .ensure_sufficient_balance(price_params.total_cost)
+            .await
+        {
+            Ok(()) => {}
+            Err(balance_error) => {
+                info!(
+                    "Insufficient balance for transaction {}: {}",
+                    tx.id, balance_error
+                );
 
-        if let Err(validation_error) = balance_validation {
-            info!(
-                "Insufficient balance for transaction {}: {}",
-                tx.id, validation_error
-            );
+                let update = TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Failed),
+                    status_reason: Some(balance_error.to_string()),
+                    ..Default::default()
+                };
 
-            let update = TransactionUpdateRequest {
-                status: Some(TransactionStatus::Failed),
-                status_reason: Some(validation_error.to_string()),
-                ..Default::default()
-            };
+                let updated_tx = self
+                    .transaction_repository
+                    .partial_update(tx.id.clone(), update)
+                    .await?;
 
-            let updated_tx = self
-                .transaction_repository
-                .partial_update(tx.id.clone(), update)
-                .await?;
-
-            let _ = self.send_transaction_update_notification(&updated_tx).await;
-
-            return Err(TransactionError::InsufficientBalance(
-                validation_error.to_string(),
-            ));
+                let _ = self.send_transaction_update_notification(&updated_tx).await;
+                return Err(balance_error);
+            }
         }
 
         // Balance validation passed, continue with normal flow
@@ -432,7 +500,10 @@ where
         // Calculate bumped gas price
         let bumped_price_params = self
             .price_calculator
-            .calculate_bumped_gas_price(&tx, self.relayer())
+            .calculate_bumped_gas_price(
+                &tx.network_data.get_evm_transaction_data()?,
+                self.relayer(),
+            )
             .await?;
 
         if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
@@ -458,48 +529,16 @@ where
         let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
         // Validate the relayer has sufficient balance
-        let balance_validation = EvmTransactionValidator::validate_sufficient_relayer_balance(
-            bumped_price_params.total_cost,
-            &self.relayer().address,
-            &self.relayer().policies.get_evm_policy(),
-            &self.provider,
-        )
-        .await;
+        self.ensure_sufficient_balance(bumped_price_params.total_cost)
+            .await?;
 
-        if let Err(validation_error) = balance_validation {
-            warn!(
-                "Insufficient balance for resubmitting transaction {}: {}",
-                tx.id, validation_error
-            );
-
-            return Err(TransactionError::InsufficientBalance(
-                validation_error.to_string(),
-            ));
-        }
-
-        let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
-            TransactionError::InvalidType("Raw transaction data is missing".to_string())
-        })?;
-
-        self.provider.send_raw_transaction(raw_tx).await?;
-
-        // Track attempt count and hash history
-        let mut hashes = tx.hashes.clone();
-        if let Some(hash) = final_evm_data.hash.clone() {
-            hashes.push(hash);
-        }
-
-        // Update the transaction in the repository
-        let update = TransactionUpdateRequest {
-            network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-            hashes: Some(hashes),
-            priced_at: Some(Utc::now().to_rfc3339()),
-            ..Default::default()
-        };
-
+        // sign, update and notify
         let updated_tx = self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update)
+            .sign_update_and_notify(
+                tx.id.clone(),
+                final_evm_data,
+                true, // send_resubmit = true
+            )
             .await?;
 
         Ok(updated_tx)
@@ -556,20 +595,98 @@ where
         Ok(updated_tx)
     }
 
-    /// Replaces a transaction.
+    /// Replaces a transaction with a new one.
     ///
     /// # Arguments
     ///
-    /// * `tx` - The transaction model to replace.
+    /// * `old_tx` - The transaction model to replace.
+    /// * `new_tx_request` - The new transaction request data.
     ///
     /// # Returns
     ///
-    /// A result containing the transaction model or a `TransactionError`.
+    /// A result containing the updated transaction model or a `TransactionError`.
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        old_tx: TransactionRepoModel,
+        new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        Ok(tx)
+        info!("Replacing transaction: {:?}", old_tx.id);
+
+        // Check if the transaction can be replaced
+        if !is_pending_transaction(&old_tx.status) {
+            return Err(TransactionError::ValidationError(format!(
+                "Cannot replace transaction with status: {:?}",
+                old_tx.status
+            )));
+        }
+
+        // Extract EVM data from both old transaction and new request
+        let old_evm_data = old_tx.network_data.get_evm_transaction_data()?;
+        let new_evm_request = match new_tx_request {
+            NetworkTransactionRequest::Evm(evm_req) => evm_req,
+            _ => {
+                return Err(TransactionError::InvalidType(
+                    "New transaction request must be EVM type".to_string(),
+                ))
+            }
+        };
+
+        let network_repo_model = self
+            .network_repository()
+            .get_by_chain_id(NetworkType::Evm, old_evm_data.chain_id)
+            .await
+            .map_err(|e| {
+                TransactionError::NetworkConfiguration(format!(
+                    "Failed to get network by chain_id {}: {}",
+                    old_evm_data.chain_id, e
+                ))
+            })?
+            .ok_or_else(|| {
+                TransactionError::NetworkConfiguration(format!(
+                    "Network with chain_id {} not found",
+                    old_evm_data.chain_id
+                ))
+            })?;
+
+        let network = EvmNetwork::try_from(network_repo_model).map_err(|e| {
+            TransactionError::NetworkConfiguration(format!(
+                "Failed to convert network model: {}",
+                e
+            ))
+        })?;
+
+        // First, create updated EVM data without price parameters
+        let updated_evm_data = EvmTransactionData::for_replacement(&old_evm_data, &new_evm_request);
+
+        // Then determine pricing strategy and calculate price parameters using the updated data
+        let price_params = super::replacement::determine_replacement_pricing(
+            &old_evm_data,
+            &updated_evm_data,
+            self.relayer(),
+            &self.price_calculator,
+            network.lacks_mempool(),
+        )
+        .await?;
+
+        info!("Replacement price params: {:?}", price_params);
+
+        // Apply the calculated price parameters to the updated EVM data
+        let final_evm_data = updated_evm_data.with_price_params(price_params.clone());
+
+        // Validate the relayer has sufficient balance
+        self.ensure_sufficient_balance(price_params.total_cost)
+            .await?;
+
+        // sign, update and notify
+        let updated_tx = self
+            .sign_update_and_notify(
+                old_tx.id.clone(),
+                final_evm_data,
+                true, // send_resubmit = true
+            )
+            .await?;
+
+        Ok(updated_tx)
     }
 
     /// Signs a transaction.
@@ -624,11 +741,15 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
 >;
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::{
-        domain::price_calculator::PriceParams,
+        domain::evm::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
-        models::{evm::Speed, EvmTransactionData, NetworkType, RelayerNetworkPolicy, U256},
+        models::{
+            evm::Speed, EvmTransactionData, EvmTransactionRequest, NetworkType,
+            RelayerNetworkPolicy, U256,
+        },
         repositories::{
             MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
@@ -652,14 +773,36 @@ mod tests {
 
             async fn calculate_bumped_gas_price(
                 &self,
-                tx: &TransactionRepoModel,
+                tx: &EvmTransactionData,
                 relayer: &RelayerRepoModel,
             ) -> Result<PriceParams, TransactionError>;
         }
     }
 
-    // Helper to create test transactions
-    #[allow(dead_code)]
+    // Helper to create a relayer model with specific configuration for these tests
+    fn create_test_relayer() -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "1".to_string(), // Ethereum Mainnet
+            address: "0xSender".to_string(),
+            paused: false,
+            system_disabled: false,
+            signer_id: "test-signer-id".to_string(),
+            notification_id: Some("test-notification-id".to_string()),
+            policies: RelayerNetworkPolicy::Evm(crate::models::RelayerEvmPolicy {
+                min_balance: 100000000000000000u128, // 0.1 ETH
+                whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
+                gas_price_cap: Some(100000000000), // 100 Gwei
+                eip1559_pricing: Some(false),
+                private_transactions: false,
+            }),
+            network_type: NetworkType::Evm,
+            custom_rpc_urls: None,
+        }
+    }
+
+    // Helper to create test transaction with specific configuration for these tests
     fn create_test_transaction() -> TransactionRepoModel {
         TransactionRepoModel {
             id: "test-tx-id".to_string(),
@@ -691,29 +834,6 @@ mod tests {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
-        }
-    }
-
-    // Helper to create a relayer model
-    fn create_test_relayer() -> RelayerRepoModel {
-        RelayerRepoModel {
-            id: "test-relayer-id".to_string(),
-            name: "Test Relayer".to_string(),
-            network: "1".to_string(), // Ethereum Mainnet
-            address: "0xSender".to_string(),
-            paused: false,
-            system_disabled: false,
-            signer_id: "test-signer-id".to_string(),
-            notification_id: Some("test-notification-id".to_string()),
-            policies: RelayerNetworkPolicy::Evm(crate::models::RelayerEvmPolicy {
-                min_balance: 100000000000000000u128, // 0.1 ETH
-                whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
-                gas_price_cap: Some(100000000000), // 100 Gwei
-                eip1559_pricing: Some(false),
-                private_transactions: false,
-            }),
-            network_type: NetworkType::Evm,
-            custom_rpc_urls: None,
         }
     }
 
@@ -1107,6 +1227,223 @@ mod tests {
             assert!(result.is_err());
             if let Err(TransactionError::ValidationError(msg)) = result {
                 assert!(msg.contains("Cannot cancel transaction with status"));
+            } else {
+                panic!("Expected ValidationError");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_transaction() {
+        // Test Case: Replacing a submitted transaction with new gas price
+        {
+            // Create mocks for all dependencies
+            let mut mock_transaction = MockTransactionRepository::new();
+            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mut mock_provider = MockEvmProviderTrait::new();
+            let mut mock_signer = MockSigner::new();
+            let mut mock_job_producer = MockJobProducerTrait::new();
+            let mut mock_price_calculator = MockPriceCalculator::new();
+            let counter_service = MockTransactionCounterTrait::new();
+
+            // Create test relayer and submitted transaction
+            let relayer = create_test_relayer();
+            let mut test_tx = create_test_transaction();
+            test_tx.status = TransactionStatus::Submitted;
+            test_tx.sent_at = Some(Utc::now().to_rfc3339());
+
+            // Set up price calculator expectations for replacement
+            mock_price_calculator
+                .expect_get_transaction_price_params()
+                .return_once(move |_, _| {
+                    Ok(PriceParams {
+                        gas_price: Some(40000000000), // 40 Gwei (higher than original)
+                        max_fee_per_gas: None,
+                        max_priority_fee_per_gas: None,
+                        is_min_bumped: Some(true),
+                        extra_fee: Some(0),
+                        total_cost: U256::from(2001000000000000000u64), // 2 ETH + gas costs
+                    })
+                });
+
+            // Signer should be called to sign the replacement transaction
+            mock_signer.expect_sign_transaction().returning(|_| {
+                Box::pin(ready(Ok(
+                    crate::domain::relayer::SignTransactionResponse::Evm(
+                        crate::domain::relayer::SignTransactionResponseEvm {
+                            hash: "0xreplacement_hash".to_string(),
+                            signature: crate::models::EvmTransactionDataSignature {
+                                r: "r".to_string(),
+                                s: "s".to_string(),
+                                v: 1,
+                                sig: "0xsignature".to_string(),
+                            },
+                            raw: vec![1, 2, 3],
+                        },
+                    ),
+                )))
+            });
+
+            // Provider balance check should pass
+            mock_provider
+                .expect_get_balance()
+                .with(eq("0xSender"))
+                .returning(|_| Box::pin(ready(Ok(U256::from(3000000000000000000u64)))));
+
+            // Transaction repository should update using update_network_data
+            let test_tx_clone = test_tx.clone();
+            mock_transaction
+                .expect_update_network_data()
+                .returning(move |tx_id, network_data| {
+                    let mut updated_tx = test_tx_clone.clone();
+                    updated_tx.id = tx_id;
+                    updated_tx.network_data = network_data;
+                    Ok(updated_tx)
+                });
+
+            // Job producer expectations
+            mock_job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+            mock_job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+
+            // Network repository expectations for mempool check
+            let mut mock_network = MockNetworkRepository::new();
+            mock_network
+                .expect_get_by_chain_id()
+                .with(eq(NetworkType::Evm), eq(1))
+                .returning(|_, _| {
+                    use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+                    use crate::models::{NetworkConfigData, NetworkRepoModel};
+
+                    let config = EvmNetworkConfig {
+                        common: NetworkConfigCommon {
+                            network: "mainnet".to_string(),
+                            from: None,
+                            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                            explorer_urls: None,
+                            average_blocktime_ms: Some(12000),
+                            is_testnet: Some(false),
+                            tags: Some(vec!["mainnet".to_string()]), // No "no-mempool" tag
+                        },
+                        chain_id: Some(1),
+                        required_confirmations: Some(12),
+                        features: Some(vec!["eip1559".to_string()]),
+                        symbol: Some("ETH".to_string()),
+                    };
+                    Ok(Some(NetworkRepoModel {
+                        id: "evm:mainnet".to_string(),
+                        name: "mainnet".to_string(),
+                        network_type: NetworkType::Evm,
+                        config: NetworkConfigData::Evm(config),
+                    }))
+                });
+
+            // Set up EVM transaction with the mocks
+            let evm_transaction = EvmRelayerTransaction {
+                relayer: relayer.clone(),
+                provider: mock_provider,
+                relayer_repository: Arc::new(mock_relayer),
+                network_repository: Arc::new(mock_network),
+                transaction_repository: Arc::new(mock_transaction),
+                transaction_counter_service: Arc::new(counter_service),
+                job_producer: Arc::new(mock_job_producer),
+                price_calculator: mock_price_calculator,
+                signer: mock_signer,
+            };
+
+            // Create replacement request with speed-based pricing
+            let replacement_request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
+                to: Some("0xNewRecipient".to_string()),
+                value: U256::from(2000000000000000000u64), // 2 ETH
+                data: Some("0xNewData".to_string()),
+                gas_limit: 25000,
+                gas_price: None, // Use speed-based pricing
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                speed: Some(Speed::Fast),
+                valid_until: None,
+            });
+
+            // Call replace_transaction and verify it succeeds
+            let result = evm_transaction
+                .replace_transaction(test_tx.clone(), replacement_request)
+                .await;
+            if let Err(ref e) = result {
+                eprintln!("Replace transaction failed with error: {:?}", e);
+            }
+            assert!(result.is_ok());
+            let replaced_tx = result.unwrap();
+
+            // Verify the replacement was properly processed
+            assert_eq!(replaced_tx.id, "test-tx-id");
+
+            // Verify the network data was properly updated
+            if let NetworkTransactionData::Evm(evm_data) = &replaced_tx.network_data {
+                assert_eq!(evm_data.to, Some("0xNewRecipient".to_string()));
+                assert_eq!(evm_data.value, U256::from(2000000000000000000u64));
+                assert_eq!(evm_data.gas_price, Some(40000000000));
+                assert_eq!(evm_data.gas_limit, 25000);
+                assert!(evm_data.hash.is_some());
+                assert!(evm_data.raw.is_some());
+            } else {
+                panic!("Expected EVM transaction data");
+            }
+        }
+
+        // Test Case: Attempting to replace a confirmed transaction (should fail)
+        {
+            // Create minimal mocks for failure case
+            let mock_transaction = MockTransactionRepository::new();
+            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_provider = MockEvmProviderTrait::new();
+            let mock_signer = MockSigner::new();
+            let mock_job_producer = MockJobProducerTrait::new();
+            let mock_price_calculator = MockPriceCalculator::new();
+            let counter_service = MockTransactionCounterTrait::new();
+
+            // Create test relayer and confirmed transaction
+            let relayer = create_test_relayer();
+            let mut test_tx = create_test_transaction();
+            test_tx.status = TransactionStatus::Confirmed;
+
+            let mock_network = MockNetworkRepository::new();
+
+            // Set up EVM transaction with the mocks
+            let evm_transaction = EvmRelayerTransaction {
+                relayer: relayer.clone(),
+                provider: mock_provider,
+                relayer_repository: Arc::new(mock_relayer),
+                network_repository: Arc::new(mock_network),
+                transaction_repository: Arc::new(mock_transaction),
+                transaction_counter_service: Arc::new(counter_service),
+                job_producer: Arc::new(mock_job_producer),
+                price_calculator: mock_price_calculator,
+                signer: mock_signer,
+            };
+
+            // Create dummy replacement request
+            let replacement_request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
+                to: Some("0xNewRecipient".to_string()),
+                value: U256::from(1000000000000000000u64),
+                data: Some("0xData".to_string()),
+                gas_limit: 21000,
+                gas_price: Some(30000000000),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                speed: Some(Speed::Fast),
+                valid_until: None,
+            });
+
+            // Call replace_transaction and verify it fails
+            let result = evm_transaction
+                .replace_transaction(test_tx.clone(), replacement_request)
+                .await;
+            assert!(result.is_err());
+            if let Err(TransactionError::ValidationError(msg)) = result {
+                assert!(msg.contains("Cannot replace transaction with status"));
             } else {
                 panic!("Expected ValidationError");
             }

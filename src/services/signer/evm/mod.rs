@@ -17,9 +17,11 @@
 //!   └── Turnkey (Turnkey backend)
 //! ```
 mod aws_kms_signer;
+mod google_cloud_kms_signer;
 mod local_signer;
 mod turnkey_signer;
 use aws_kms_signer::*;
+use google_cloud_kms_signer::*;
 use local_signer::*;
 use turnkey_signer::*;
 
@@ -61,6 +63,7 @@ pub enum EvmSigner {
     VaultCloud(LocalSigner),
     Turnkey(TurnkeySigner),
     AwsKms(AwsKmsSigner),
+    GoogleCloudKms(GoogleCloudKmsSigner),
 }
 
 #[async_trait]
@@ -72,6 +75,7 @@ impl Signer for EvmSigner {
             Self::VaultCloud(signer) => signer.address().await,
             Self::Turnkey(signer) => signer.address().await,
             Self::AwsKms(signer) => signer.address().await,
+            Self::GoogleCloudKms(signer) => signer.address().await,
         }
     }
 
@@ -85,6 +89,7 @@ impl Signer for EvmSigner {
             Self::VaultCloud(signer) => signer.sign_transaction(transaction).await,
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
             Self::AwsKms(signer) => signer.sign_transaction(transaction).await,
+            Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -98,6 +103,7 @@ impl DataSignerTrait for EvmSigner {
             Self::VaultCloud(signer) => signer.sign_data(request).await,
             Self::Turnkey(signer) => signer.sign_data(request).await,
             Self::AwsKms(signer) => signer.sign_data(request).await,
+            Self::GoogleCloudKms(signer) => signer.sign_data(request).await,
         }
     }
 
@@ -111,6 +117,7 @@ impl DataSignerTrait for EvmSigner {
             Self::VaultCloud(signer) => signer.sign_typed_data(request).await,
             Self::Turnkey(signer) => signer.sign_typed_data(request).await,
             Self::AwsKms(signer) => signer.sign_typed_data(request).await,
+            Self::GoogleCloudKms(signer) => signer.sign_typed_data(request).await,
         }
     }
 }
@@ -141,10 +148,14 @@ impl EvmSignerFactory {
                 })?;
                 EvmSigner::Turnkey(TurnkeySigner::new(turnkey_service))
             }
-            SignerConfig::GoogleCloudKms(_) => {
-                return Err(SignerFactoryError::UnsupportedType(
-                    "Google Cloud KMS".into(),
-                ));
+            SignerConfig::GoogleCloudKms(ref config) => {
+                let gcp_service = GoogleCloudKmsService::new(config).map_err(|e| {
+                    SignerFactoryError::CreationFailed(format!(
+                        "Google Cloud KMS service error: {}",
+                        e
+                    ))
+                })?;
+                EvmSigner::GoogleCloudKms(GoogleCloudKmsSigner::new(gcp_service))
             }
         };
 
@@ -161,6 +172,7 @@ mod tests {
         SecretString, SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
         U256,
     };
+    use futures;
     use mockall::predicate::*;
     use secrets::SecretVec;
     use std::str::FromStr;
@@ -192,10 +204,7 @@ mod tests {
             .await
             .unwrap();
 
-        match signer {
-            EvmSigner::Local(_) => {}
-            _ => panic!("Expected Local signer"),
-        }
+        assert!(matches!(signer, EvmSigner::Local(_)));
     }
 
     #[tokio::test]
@@ -211,10 +220,7 @@ mod tests {
             .await
             .unwrap();
 
-        match signer {
-            EvmSigner::Local(_) => {}
-            _ => panic!("Expected Local signer"),
-        }
+        assert!(matches!(signer, EvmSigner::Local(_)));
     }
 
     #[tokio::test]
@@ -230,10 +236,7 @@ mod tests {
             .await
             .unwrap();
 
-        match signer {
-            EvmSigner::Local(_) => {}
-            _ => panic!("Expected Local Vault signer"),
-        }
+        assert!(matches!(signer, EvmSigner::Local(_)));
     }
 
     #[tokio::test]
@@ -249,10 +252,7 @@ mod tests {
             .await
             .unwrap();
 
-        match signer {
-            EvmSigner::Local(_) => {}
-            _ => panic!("Expected Local VaultCloud signer"),
-        }
+        assert!(matches!(signer, EvmSigner::Local(_)));
     }
 
     #[tokio::test]
@@ -269,10 +269,7 @@ mod tests {
             .await
             .unwrap();
 
-        match signer {
-            EvmSigner::AwsKms(_) => {}
-            _ => panic!("Expected AWS KMS signer"),
-        }
+        assert!(matches!(signer, EvmSigner::AwsKms(_)));
     }
 
     #[tokio::test]
@@ -292,12 +289,10 @@ mod tests {
 
         let result = EvmSignerFactory::create_evm_signer(signer_model).await;
 
-        match result {
-            Err(SignerFactoryError::UnsupportedType(msg)) => {
-                assert_eq!(msg, "Vault Transit");
-            }
-            _ => panic!("Expected UnsupportedType error"),
-        }
+        assert!(matches!(
+            result,
+            Err(SignerFactoryError::UnsupportedType(_))
+        ));
     }
 
     #[tokio::test]
@@ -309,53 +304,19 @@ mod tests {
                 api_public_key: "api_public_key".to_string(),
                 organization_id: "organization_id".to_string(),
                 private_key_id: "private_key_id".to_string(),
-                public_key: "public_key".to_string(),
+                public_key: "047d3bb8e0317927700cf19fed34e0627367be1390ec247dddf8c239e4b4321a49aea80090e49b206b6a3e577a4f11d721ab063482001ee10db40d6f2963233eec".to_string(),
             }),
         };
 
-        let result = EvmSignerFactory::create_evm_signer(signer_model)
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
             .await
             .unwrap();
+        let signer_address = signer.address().await.unwrap();
 
-        match result {
-            EvmSigner::Turnkey(_) => {}
-            _ => panic!("Expected UnsupportedType error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_create_evm_signer_google_cloud_kms() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
-                service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                    project_id: "project_id".to_string(),
-                    private_key_id: SecretString::new("private_key_id"),
-                    private_key: SecretString::new("private_key"),
-                    client_email: SecretString::new("client_email"),
-                    client_id: "client_id".to_string(),
-                    auth_uri: "auth_uri".to_string(),
-                    token_uri: "token_uri".to_string(),
-                    auth_provider_x509_cert_url: "auth_provider_x509_cert_url".to_string(),
-                    client_x509_cert_url: "client_x509_cert_url".to_string(),
-                    universe_domain: "universe_domain".to_string(),
-                },
-                key: GoogleCloudKmsSignerKeyConfig {
-                    key_id: "id".to_string(),
-                    key_ring_id: "key_ring".to_string(),
-                    key_version: 1,
-                },
-            }),
-        };
-
-        let result = EvmSignerFactory::create_evm_signer(signer_model).await;
-
-        match result {
-            Err(SignerFactoryError::UnsupportedType(msg)) => {
-                assert_eq!(msg, "Google Cloud KMS");
-            }
-            _ => panic!("Expected UnsupportedType error"),
-        }
+        assert_eq!(
+            "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a",
+            signer_address.to_string()
+        );
     }
 
     #[tokio::test]
@@ -470,14 +431,14 @@ mod tests {
 
         assert!(result.is_ok());
 
-        match result.unwrap() {
-            SignDataResponse::Evm(sig) => {
-                assert_eq!(sig.r.len(), 64); // 32 bytes in hex
-                assert_eq!(sig.s.len(), 64); // 32 bytes in hex
-                assert!(sig.v == 27 || sig.v == 28); // Valid v values
-                assert_eq!(sig.sig.len(), 130); // 65 bytes in hex
-            }
-            _ => panic!("Expected EVM signature"),
+        let response = result.unwrap();
+        assert!(matches!(response, SignDataResponse::Evm(_)));
+
+        if let SignDataResponse::Evm(sig) = response {
+            assert_eq!(sig.r.len(), 64); // 32 bytes in hex
+            assert_eq!(sig.s.len(), 64); // 32 bytes in hex
+            assert!(sig.v == 27 || sig.v == 28); // Valid v values
+            assert_eq!(sig.sig.len(), 130); // 65 bytes in hex
         }
     }
 
@@ -517,13 +478,261 @@ mod tests {
 
         let signed_tx = result.unwrap();
 
-        match signed_tx {
-            SignTransactionResponse::Evm(signed_tx) => {
-                assert!(!signed_tx.hash.is_empty());
-                assert!(!signed_tx.raw.is_empty());
-                assert!(!signed_tx.signature.sig.is_empty());
+        assert!(matches!(signed_tx, SignTransactionResponse::Evm(_)));
+
+        if let SignTransactionResponse::Evm(evm_tx) = signed_tx {
+            assert!(!evm_tx.hash.is_empty());
+            assert!(!evm_tx.raw.is_empty());
+            assert!(!evm_tx.signature.sig.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_evm_signer_google_cloud_kms() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                    project_id: "project_id".to_string(),
+                    private_key_id: SecretString::new("private_key_id"),
+                    private_key: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
+                    client_email: SecretString::new("client_email@example.com"),
+                    client_id: "client_id".to_string(),
+                    auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                    token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
+                    client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/client_email%40example.com".to_string(),
+                    universe_domain: "googleapis.com".to_string(),
+                },
+                key: GoogleCloudKmsSignerKeyConfig {
+                    location: "global".to_string(),
+                    key_id: "id".to_string(),
+                    key_ring_id: "key_ring".to_string(),
+                    key_version: 1,
+                },
+            }),
+        };
+
+        let result = EvmSignerFactory::create_evm_signer(signer_model).await;
+
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), EvmSigner::GoogleCloudKms(_)));
+    }
+
+    #[tokio::test]
+    async fn test_sign_data_with_different_message_types() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: test_key_bytes(),
+            }),
+        };
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        // Test with various message types
+        let long_message = "a".repeat(1000);
+        let test_cases = vec![
+            ("Simple message", "Test message"),
+            ("Empty message", ""),
+            ("Unicode message", "🚀 Test message with émojis"),
+            ("Long message", long_message.as_str()),
+            ("JSON message", r#"{"test": "value", "number": 123}"#),
+        ];
+
+        for (name, message) in test_cases {
+            let request = SignDataRequest {
+                message: message.to_string(),
+            };
+
+            let result = signer.sign_data(request).await;
+            assert!(result.is_ok(), "Failed to sign {}", name);
+
+            if let Ok(SignDataResponse::Evm(sig)) = result {
+                assert_eq!(sig.r.len(), 64, "Invalid r length for {}", name);
+                assert_eq!(sig.s.len(), 64, "Invalid s length for {}", name);
+                assert!(sig.v == 27 || sig.v == 28, "Invalid v value for {}", name);
+                assert_eq!(sig.sig.len(), 130, "Invalid signature length for {}", name);
+            } else {
+                panic!("Expected EVM signature for {}", name);
             }
-            _ => panic!("Expected EVM transaction response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_data_with_vault_signer() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Vault(LocalSignerConfig {
+                raw_key: test_key_bytes(),
+            }),
+        };
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        let request = SignDataRequest {
+            message: "Test vault message".to_string(),
+        };
+
+        let result = signer.sign_data(request).await;
+        assert!(result.is_ok());
+
+        if let Ok(SignDataResponse::Evm(sig)) = result {
+            assert_eq!(sig.r.len(), 64);
+            assert_eq!(sig.s.len(), 64);
+            assert!(sig.v == 27 || sig.v == 28);
+            assert_eq!(sig.sig.len(), 130);
+        } else {
+            panic!("Expected successful EVM signature");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_with_vault_cloud_signer() {
+        let signer_model = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::VaultCloud(LocalSignerConfig {
+                raw_key: test_key_bytes(),
+            }),
+        };
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        let transaction_data = NetworkTransactionData::Evm(EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
+            gas_price: Some(20000000000),
+            gas_limit: 21000,
+            nonce: Some(0),
+            value: U256::from(1000000000000000000u64),
+            data: Some("0x".to_string()),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            raw: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            speed: None,
+        });
+
+        let result = signer.sign_transaction(transaction_data).await;
+        assert!(result.is_ok());
+
+        if let Ok(SignTransactionResponse::Evm(evm_tx)) = result {
+            assert!(!evm_tx.hash.is_empty());
+            assert!(!evm_tx.raw.is_empty());
+            assert!(!evm_tx.signature.sig.is_empty());
+        } else {
+            panic!("Expected successful EVM transaction signing");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_address_consistency_across_vault_types() {
+        // Test that different vault types using the same key produce the same address
+        let key_bytes = test_key_bytes();
+
+        let signers = vec![
+            EvmSignerFactory::create_evm_signer(SignerRepoModel {
+                id: "local".to_string(),
+                config: SignerConfig::Local(LocalSignerConfig {
+                    raw_key: key_bytes.clone(),
+                }),
+            })
+            .await
+            .unwrap(),
+            EvmSignerFactory::create_evm_signer(SignerRepoModel {
+                id: "vault".to_string(),
+                config: SignerConfig::Vault(LocalSignerConfig {
+                    raw_key: key_bytes.clone(),
+                }),
+            })
+            .await
+            .unwrap(),
+            EvmSignerFactory::create_evm_signer(SignerRepoModel {
+                id: "vault_cloud".to_string(),
+                config: SignerConfig::VaultCloud(LocalSignerConfig { raw_key: key_bytes }),
+            })
+            .await
+            .unwrap(),
+        ];
+
+        let addresses: Vec<Address> =
+            futures::future::try_join_all(signers.iter().map(|s| s.address()))
+                .await
+                .unwrap();
+
+        // All addresses should be identical since they use the same key
+        assert_eq!(addresses[0], addresses[1]);
+        assert_eq!(addresses[1], addresses[2]);
+        assert_eq!(addresses[0], test_key_address());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_signing_with_different_vault_types() {
+        // Test that different vault configurations can sign transactions correctly
+        let transaction_data = NetworkTransactionData::Evm(EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
+            gas_price: Some(20000000000),
+            gas_limit: 21000,
+            nonce: Some(0),
+            value: U256::from(1000000000000000000u64),
+            data: Some("0x".to_string()),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            raw: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            speed: None,
+        });
+
+        let vault_configs = vec![
+            (
+                "vault",
+                SignerConfig::Vault(LocalSignerConfig {
+                    raw_key: test_key_bytes(),
+                }),
+            ),
+            (
+                "vault_cloud",
+                SignerConfig::VaultCloud(LocalSignerConfig {
+                    raw_key: test_key_bytes(),
+                }),
+            ),
+        ];
+
+        for (name, config) in vault_configs {
+            let signer_model = SignerRepoModel {
+                id: name.to_string(),
+                config,
+            };
+
+            let signer = EvmSignerFactory::create_evm_signer(signer_model)
+                .await
+                .unwrap();
+
+            let result = signer.sign_transaction(transaction_data.clone()).await;
+            assert!(result.is_ok(), "Failed to sign transaction with {}", name);
+
+            if let Ok(SignTransactionResponse::Evm(evm_tx)) = result {
+                assert!(!evm_tx.hash.is_empty(), "Empty hash for {}", name);
+                assert!(!evm_tx.raw.is_empty(), "Empty raw for {}", name);
+                assert!(
+                    !evm_tx.signature.sig.is_empty(),
+                    "Empty signature for {}",
+                    name
+                );
+            } else {
+                panic!("Expected EVM transaction response for {}", name);
+            }
         }
     }
 }

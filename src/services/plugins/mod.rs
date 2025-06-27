@@ -2,13 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::{
-    jobs::JobProducerTrait,
-    models::{AppState, PluginCallRequest},
-};
+use crate::{ jobs::JobProducerTrait, models::{ AppState, PluginCallRequest } };
 use actix_web::web;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -29,14 +26,10 @@ use mockall::automock;
 
 #[derive(Error, Debug, Serialize)]
 pub enum PluginError {
-    #[error("Socket error: {0}")]
-    SocketError(String),
-    #[error("Plugin error: {0}")]
-    PluginError(String),
-    #[error("Relayer error: {0}")]
-    RelayerError(String),
-    #[error("Plugin execution error: {0}")]
-    PluginExecutionError(String),
+    #[error("Socket error: {0}")] SocketError(String),
+    #[error("Plugin error: {0}")] PluginError(String),
+    #[error("Relayer error: {0}")] RelayerError(String),
+    #[error("Plugin execution error: {0}")] PluginExecutionError(String),
 }
 
 impl From<PluginError> for String {
@@ -68,20 +61,21 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J>>>
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
         let payload = plugin_call_request.params.to_string();
         let result = self.runner.run(&socket_path, code_path, payload, state).await;
 
         match result {
-            Ok(script_result) => Ok(PluginCallResponse {
-                success: true,
-                message: "Plugin called successfully".to_string(),
-                output: script_result.output,
-                error: script_result.error,
-                traces: script_result.trace,
-            }),
+            Ok(script_result) =>
+                Ok(PluginCallResponse {
+                    success: true,
+                    message: "Plugin called successfully".to_string(),
+                    output: script_result.output,
+                    error: script_result.error,
+                    traces: script_result.trace,
+                }),
             Err(e) => Err(PluginError::PluginExecutionError(e.to_string())),
         }
     }
@@ -95,7 +89,7 @@ pub trait PluginServiceTrait<J: JobProducerTrait + 'static>: Send + Sync {
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J>>>
     ) -> Result<PluginCallResponse, PluginError>;
 }
 
@@ -109,17 +103,17 @@ impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService<Plug
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J>>>
     ) -> Result<PluginCallResponse, PluginError> {
-        self.call_plugin(code_path, plugin_call_request, state)
-            .await
+        self.call_plugin(code_path, plugin_call_request, state).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        jobs::MockJobProducerTrait, models::PluginModel,
+        jobs::MockJobProducerTrait,
+        models::PluginModel,
         utils::mocks::mockutils::create_mock_app_state,
     };
 
@@ -131,33 +125,41 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
         };
-        let app_state: AppState<MockJobProducerTrait> =
-            create_mock_app_state(None, None, None, Some(vec![plugin])).await;
+        let app_state: AppState<MockJobProducerTrait> = create_mock_app_state(
+            None,
+            None,
+            None,
+            Some(vec![plugin])
+        ).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
-        plugin_runner
-            .expect_run::<MockJobProducerTrait>()
-            .returning(|_, _, _, _| {
-                Ok(ScriptResult {
-                    output: "test-output".to_string(),
-                    error: "test-error".to_string(),
-                    trace: Vec::new(),
-                })
-            });
+        plugin_runner.expect_run::<MockJobProducerTrait>().returning(|_, _, _, _| {
+            Ok(ScriptResult {
+                output: "test-output".to_string(),
+                error: "test-error".to_string(),
+                trace: vec!["test-trace".to_string()],
+            })
+        });
 
-        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
-        let result = plugin_service
-            .call_plugin(
-                "test-plugin".to_string(),
-                PluginCallRequest {
-                    params: serde_json::Value::Null,
-                },
-                Arc::new(web::ThinData(app_state)),
-            )
-            .await;
+        let plugin_service = PluginService::new(plugin_runner);
+
+        let result = plugin_service.call_plugin(
+            "test-plugin".to_string(),
+            PluginCallRequest {
+                params: serde_json::Value::Null,
+            },
+            Arc::new(web::ThinData(app_state))
+        ).await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_from_plugin_error_to_string() {
+        let error = PluginError::PluginExecutionError("test-error".to_string());
+        let result: String = error.into();
+        assert_eq!(result, "Plugin execution error: test-error");
     }
 }

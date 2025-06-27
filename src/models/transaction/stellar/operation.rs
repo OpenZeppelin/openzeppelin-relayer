@@ -1,7 +1,7 @@
 //! Operation types and conversions for Stellar transactions
 
 use crate::models::transaction::stellar::asset::AssetSpec;
-use crate::models::transaction::stellar::host_function::HostFunctionSpec;
+use crate::models::transaction::stellar::host_function::{ContractSource, WasmSource};
 use crate::models::SignerError;
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{
@@ -13,38 +13,50 @@ use std::convert::TryFrom;
 use stellar_strkey::ed25519::{MuxedAccount, PublicKey};
 use utoipa::ToSchema;
 
-/// Simple auth credential types that can be auto-generated
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SimpleAuthCredential {
-    /// Use the transaction source account for authorization
-    SourceAccount,
-    // Future additions:
-    // Address { address: String },
-}
-
 /// Authorization specification for Soroban operations
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthSpec {
-    /// Simple format - auto-generate auth entries based on credential types
-    Simple(Vec<SimpleAuthCredential>),
+    /// No authorization required
+    None,
+
+    /// Use the transaction source account for authorization
+    SourceAccount,
+
+    /// Use specific addresses for authorization
+    Addresses { signers: Vec<String> },
 
     /// Advanced format - provide complete XDR auth entries as base64-encoded strings
-    Xdr(Vec<String>),
+    Xdr { entries: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(tag = "op", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum OperationSpec {
     Payment {
         destination: String,
         amount: i64,
         asset: AssetSpec,
     },
-    InvokeHostFunction {
-        #[serde(flatten)]
-        host_function_spec: HostFunctionSpec,
+    InvokeContract {
+        contract_address: String,
+        function_name: String,
+        args: Vec<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth: Option<AuthSpec>,
+    },
+    CreateContract {
+        source: ContractSource,
+        wasm_hash: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        salt: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        constructor_args: Option<Vec<serde_json::Value>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth: Option<AuthSpec>,
+    },
+    UploadWasm {
+        wasm: WasmSource,
         #[serde(skip_serializing_if = "Option::is_none")]
         auth: Option<AuthSpec>,
     },
@@ -79,54 +91,6 @@ fn create_source_account_auth_entry(
             sub_invocations: VecM::default(),
         },
     }
-}
-
-/// Processes simple auth credentials into authorization entries
-fn process_simple_auth_credentials(
-    credentials: Vec<SimpleAuthCredential>,
-    host_function: &HostFunction,
-) -> Result<Vec<SorobanAuthorizationEntry>, SignerError> {
-    let mut auth_entries = Vec::new();
-
-    for credential in credentials {
-        match credential {
-            SimpleAuthCredential::SourceAccount => {
-                match host_function {
-                    HostFunction::CreateContract(ref create_args) => {
-                        let auth_entry = create_source_account_auth_entry(
-                            SorobanAuthorizedFunction::CreateContractHostFn(create_args.clone()),
-                        );
-                        auth_entries.push(auth_entry);
-                    }
-                    HostFunction::CreateContractV2(ref create_args_v2) => {
-                        let auth_entry = create_source_account_auth_entry(
-                            SorobanAuthorizedFunction::CreateContractV2HostFn(
-                                create_args_v2.clone(),
-                            ),
-                        );
-                        auth_entries.push(auth_entry);
-                    }
-                    HostFunction::InvokeContract(ref invoke_args) => {
-                        let auth_entry = create_source_account_auth_entry(
-                            SorobanAuthorizedFunction::ContractFn(
-                                soroban_rs::xdr::InvokeContractArgs {
-                                    contract_address: invoke_args.contract_address.clone(),
-                                    function_name: invoke_args.function_name.clone(),
-                                    args: invoke_args.args.clone(),
-                                },
-                            ),
-                        );
-                        auth_entries.push(auth_entry);
-                    }
-                    _ => {
-                        // Other operations don't typically need auth
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(auth_entries)
 }
 
 /// Decodes XDR authorization entries from base64 strings
@@ -177,10 +141,15 @@ fn build_auth_vector(
     host_function: &HostFunction,
 ) -> Result<VecM<SorobanAuthorizationEntry, { u32::MAX }>, SignerError> {
     let auth_entries = match auth {
-        Some(AuthSpec::Simple(credentials)) => {
-            process_simple_auth_credentials(credentials, host_function)?
+        Some(AuthSpec::None) => vec![],
+        Some(AuthSpec::SourceAccount) => generate_default_auth_entries(host_function)?,
+        Some(AuthSpec::Addresses { signers: _ }) => {
+            // TODO: Implement address-based auth in the future
+            return Err(SignerError::ConversionError(
+                "Address-based auth not yet implemented".into(),
+            ));
         }
-        Some(AuthSpec::Xdr(xdr_entries)) => decode_xdr_auth_entries(xdr_entries)?,
+        Some(AuthSpec::Xdr { entries }) => decode_xdr_auth_entries(entries)?,
         None => generate_default_auth_entries(host_function)?,
     };
 
@@ -207,13 +176,82 @@ fn convert_payment_operation(
     })
 }
 
-/// Converts InvokeHostFunction operation spec to Operation
-fn convert_invoke_host_function_operation(
-    host_function_spec: HostFunctionSpec,
+/// Converts InvokeContract operation to XDR Operation
+fn convert_invoke_contract_operation(
+    contract_address: String,
+    function_name: String,
+    args: Vec<serde_json::Value>,
     auth: Option<AuthSpec>,
 ) -> Result<Operation, SignerError> {
-    // Convert HostFunctionSpec to HostFunction using the dedicated impl
-    let host_function = HostFunction::try_from(host_function_spec)?;
+    use crate::models::transaction::stellar::host_function::HostFunctionSpec;
+
+    // Create HostFunctionSpec for backward compatibility
+    let spec = HostFunctionSpec::InvokeContract {
+        contract_address,
+        function_name,
+        args,
+    };
+
+    // Convert to HostFunction
+    let host_function = HostFunction::try_from(spec)?;
+
+    // Build authorization vector
+    let auth_vec = build_auth_vector(auth, &host_function)?;
+
+    Ok(Operation {
+        source_account: None,
+        body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+            auth: auth_vec,
+            host_function,
+        }),
+    })
+}
+
+/// Converts CreateContract operation to XDR Operation
+fn convert_create_contract_operation(
+    source: ContractSource,
+    wasm_hash: String,
+    salt: Option<String>,
+    constructor_args: Option<Vec<serde_json::Value>>,
+    auth: Option<AuthSpec>,
+) -> Result<Operation, SignerError> {
+    use crate::models::transaction::stellar::host_function::HostFunctionSpec;
+
+    // Create HostFunctionSpec for backward compatibility
+    let spec = HostFunctionSpec::CreateContract {
+        source,
+        wasm_hash,
+        salt,
+        constructor_args,
+    };
+
+    // Convert to HostFunction
+    let host_function = HostFunction::try_from(spec)?;
+
+    // Build authorization vector
+    let auth_vec = build_auth_vector(auth, &host_function)?;
+
+    Ok(Operation {
+        source_account: None,
+        body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+            auth: auth_vec,
+            host_function,
+        }),
+    })
+}
+
+/// Converts UploadWasm operation to XDR Operation
+fn convert_upload_wasm_operation(
+    wasm: WasmSource,
+    auth: Option<AuthSpec>,
+) -> Result<Operation, SignerError> {
+    use crate::models::transaction::stellar::host_function::HostFunctionSpec;
+
+    // Create HostFunctionSpec for backward compatibility
+    let spec = HostFunctionSpec::UploadWasm { wasm };
+
+    // Convert to HostFunction
+    let host_function = HostFunction::try_from(spec)?;
 
     // Build authorization vector
     let auth_vec = build_auth_vector(auth, &host_function)?;
@@ -238,10 +276,22 @@ impl TryFrom<OperationSpec> for Operation {
                 asset,
             } => convert_payment_operation(destination, amount, asset),
 
-            OperationSpec::InvokeHostFunction {
-                host_function_spec,
+            OperationSpec::InvokeContract {
+                contract_address,
+                function_name,
+                args,
                 auth,
-            } => convert_invoke_host_function_operation(host_function_spec, auth),
+            } => convert_invoke_contract_operation(contract_address, function_name, args, auth),
+
+            OperationSpec::CreateContract {
+                source,
+                wasm_hash,
+                salt,
+                constructor_args,
+                auth,
+            } => convert_create_contract_operation(source, wasm_hash, salt, constructor_args, auth),
+
+            OperationSpec::UploadWasm { wasm, auth } => convert_upload_wasm_operation(wasm, auth),
         }
     }
 }
@@ -303,83 +353,6 @@ mod tests {
                 SorobanCredentials::SourceAccount
             ));
             // Can't directly compare functions due to Clone requirement, but structure is validated
-        }
-    }
-
-    mod process_simple_auth_credentials_tests {
-        use super::*;
-
-        #[test]
-        fn test_create_contract_auth() {
-            let host_function = HostFunction::CreateContract(CreateContractArgs {
-                contract_id_preimage: ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-                    address: ScAddress::Account(AccountId(XdrPublicKey::PublicKeyTypeEd25519(
-                        Uint256([0u8; 32]),
-                    ))),
-                    salt: Uint256([0u8; 32]),
-                }),
-                executable: ContractExecutable::Wasm(Hash([0u8; 32])),
-            });
-
-            let credentials = vec![SimpleAuthCredential::SourceAccount];
-            let result = process_simple_auth_credentials(credentials, &host_function);
-
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap().len(), 1);
-        }
-
-        #[test]
-        fn test_create_contract_v2_auth() {
-            let host_function = HostFunction::CreateContractV2(CreateContractArgsV2 {
-                contract_id_preimage: ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-                    address: ScAddress::Account(AccountId(XdrPublicKey::PublicKeyTypeEd25519(
-                        Uint256([0u8; 32]),
-                    ))),
-                    salt: Uint256([0u8; 32]),
-                }),
-                executable: ContractExecutable::Wasm(Hash([0u8; 32])),
-                constructor_args: VecM::default(),
-            });
-
-            let credentials = vec![SimpleAuthCredential::SourceAccount];
-            let result = process_simple_auth_credentials(credentials, &host_function);
-
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap().len(), 1);
-        }
-
-        #[test]
-        fn test_invoke_contract_auth() {
-            let host_function = HostFunction::InvokeContract(soroban_rs::xdr::InvokeContractArgs {
-                contract_address: ScAddress::Contract(Hash([0u8; 32])),
-                function_name: soroban_rs::xdr::ScSymbol::try_from(b"test".to_vec()).unwrap(),
-                args: VecM::default(),
-            });
-
-            let credentials = vec![SimpleAuthCredential::SourceAccount];
-            let result = process_simple_auth_credentials(credentials, &host_function);
-
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap().len(), 1);
-        }
-
-        #[test]
-        fn test_empty_credentials() {
-            let host_function = HostFunction::CreateContract(CreateContractArgs {
-                contract_id_preimage: ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-                    address: ScAddress::Account(AccountId(XdrPublicKey::PublicKeyTypeEd25519(
-                        Uint256([0u8; 32]),
-                    ))),
-                    salt: Uint256([0u8; 32]),
-                }),
-                executable: ContractExecutable::Wasm(Hash([0u8; 32])),
-            });
-
-            let credentials = vec![];
-            let result = process_simple_auth_credentials(credentials, &host_function);
-
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap().len(), 0);
         }
     }
 
@@ -485,7 +458,7 @@ mod tests {
                 executable: ContractExecutable::Wasm(Hash([0u8; 32])),
             });
 
-            let auth = Some(AuthSpec::Simple(vec![SimpleAuthCredential::SourceAccount]));
+            let auth = Some(AuthSpec::SourceAccount);
             let result = build_auth_vector(auth, &host_function);
 
             assert!(result.is_ok());
@@ -504,7 +477,9 @@ mod tests {
                 executable: ContractExecutable::Wasm(Hash([0u8; 32])),
             });
 
-            let auth = Some(AuthSpec::Xdr(vec!["invalid".to_string()]));
+            let auth = Some(AuthSpec::Xdr {
+                entries: vec!["invalid".to_string()],
+            });
             let result = build_auth_vector(auth, &host_function);
 
             assert!(result.is_err());
@@ -599,35 +574,29 @@ mod tests {
         }
     }
 
-    mod convert_invoke_host_function_operation_tests {
+    mod convert_invoke_contract_operation_tests {
         use super::*;
 
         #[test]
-        fn test_various_host_functions() {
-            let spec = HostFunctionSpec::InvokeContract {
-                contract_address: TEST_CONTRACT.to_string(),
-                function_name: "test".to_string(),
-                args: vec![],
-            };
-
-            let result = convert_invoke_host_function_operation(spec, None);
+        fn test_basic_contract_invocation() {
+            let result = convert_invoke_contract_operation(
+                TEST_CONTRACT.to_string(),
+                "test".to_string(),
+                vec![],
+                None,
+            );
             assert!(result.is_ok());
         }
 
         #[test]
-        fn test_auth_handling() {
-            let spec = HostFunctionSpec::CreateContract {
-                source: ContractSource::Address {
-                    address: TEST_PK.to_string(),
-                },
-                wasm_hash: "0000000000000000000000000000000000000000000000000000000000000001"
-                    .to_string(),
-                salt: None,
-                constructor_args: None,
-            };
-
-            let auth = Some(AuthSpec::Simple(vec![SimpleAuthCredential::SourceAccount]));
-            let result = convert_invoke_host_function_operation(spec, auth);
+        fn test_with_auth() {
+            let auth = Some(AuthSpec::SourceAccount);
+            let result = convert_invoke_contract_operation(
+                TEST_CONTRACT.to_string(),
+                "transfer".to_string(),
+                vec![],
+                auth,
+            );
 
             assert!(result.is_ok());
             if let Operation {
@@ -639,6 +608,22 @@ mod tests {
             } else {
                 panic!("Expected InvokeHostFunction operation");
             }
+        }
+    }
+
+    mod convert_create_contract_operation_tests {
+        use super::*;
+
+        #[test]
+        fn test_create_contract() {
+            let source = ContractSource::Address {
+                address: TEST_PK.to_string(),
+            };
+            let wasm_hash =
+                "0000000000000000000000000000000000000000000000000000000000000001".to_string();
+
+            let result = convert_create_contract_operation(source, wasm_hash, None, None, None);
+            assert!(result.is_ok());
         }
     }
 
@@ -657,13 +642,11 @@ mod tests {
     }
 
     #[test]
-    fn test_invoke_host_function_operation() {
-        let spec = OperationSpec::InvokeHostFunction {
-            host_function_spec: HostFunctionSpec::InvokeContract {
-                contract_address: TEST_CONTRACT.to_string(),
-                function_name: "test".to_string(),
-                args: vec![],
-            },
+    fn test_invoke_contract_operation() {
+        let spec = OperationSpec::InvokeContract {
+            contract_address: TEST_CONTRACT.to_string(),
+            function_name: "test".to_string(),
+            args: vec![],
             auth: None,
         };
 
@@ -684,7 +667,7 @@ mod tests {
         };
         let json = serde_json::to_string(&spec).unwrap();
         assert!(json.contains("payment"));
-        assert!(json.contains("NATIVE"));
+        assert!(json.contains("native"));
 
         let deserialized: OperationSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec, deserialized);
@@ -692,9 +675,8 @@ mod tests {
 
     #[test]
     fn test_auth_spec_serde() {
-        let spec = AuthSpec::Simple(vec![SimpleAuthCredential::SourceAccount]);
+        let spec = AuthSpec::SourceAccount;
         let json = serde_json::to_string(&spec).unwrap();
-        assert!(json.contains("simple"));
         assert!(json.contains("source_account"));
 
         let deserialized: AuthSpec = serde_json::from_str(&json).unwrap();
@@ -702,15 +684,68 @@ mod tests {
     }
 
     #[test]
+    fn test_auth_spec_json_format() {
+        // Test None
+        let none = AuthSpec::None;
+        let none_json = serde_json::to_value(&none).unwrap();
+        assert_eq!(none_json["type"], "none");
+
+        // Test SourceAccount
+        let source = AuthSpec::SourceAccount;
+        let source_json = serde_json::to_value(&source).unwrap();
+        assert_eq!(source_json["type"], "source_account");
+
+        // Test Addresses
+        let addresses = AuthSpec::Addresses {
+            signers: vec![TEST_PK.to_string()],
+        };
+        let addresses_json = serde_json::to_value(&addresses).unwrap();
+        assert_eq!(addresses_json["type"], "addresses");
+        assert!(addresses_json["signers"].is_array());
+
+        // Test Xdr
+        let xdr = AuthSpec::Xdr {
+            entries: vec!["base64data".to_string()],
+        };
+        let xdr_json = serde_json::to_value(&xdr).unwrap();
+        assert_eq!(xdr_json["type"], "xdr");
+        assert!(xdr_json["entries"].is_array());
+    }
+
+    #[test]
+    fn test_operation_spec_json_format() {
+        // Test Payment
+        let payment = OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 1000,
+            asset: AssetSpec::Native,
+        };
+        let payment_json = serde_json::to_value(&payment).unwrap();
+        assert_eq!(payment_json["type"], "payment");
+        assert_eq!(payment_json["asset"]["type"], "native");
+
+        // Test InvokeContract
+        let invoke = OperationSpec::InvokeContract {
+            contract_address: TEST_CONTRACT.to_string(),
+            function_name: "test".to_string(),
+            args: vec![],
+            auth: None,
+        };
+        let invoke_json = serde_json::to_value(&invoke).unwrap();
+        assert_eq!(invoke_json["type"], "invoke_contract");
+        assert_eq!(invoke_json["contract_address"], TEST_CONTRACT);
+        assert_eq!(invoke_json["function_name"], "test");
+        assert!(invoke_json["args"].is_array());
+    }
+
+    #[test]
     fn test_invoke_contract_with_source_account_auth_integration() {
         // Create a realistic InvokeContract operation with source account auth
-        let spec = OperationSpec::InvokeHostFunction {
-            host_function_spec: HostFunctionSpec::InvokeContract {
-                contract_address: TEST_CONTRACT.to_string(),
-                function_name: "transfer".to_string(),
-                args: vec![], // In real scenario, this would contain transfer args
-            },
-            auth: Some(AuthSpec::Simple(vec![SimpleAuthCredential::SourceAccount])),
+        let spec = OperationSpec::InvokeContract {
+            contract_address: TEST_CONTRACT.to_string(),
+            function_name: "transfer".to_string(),
+            args: vec![], // In real scenario, this would contain transfer args
+            auth: Some(AuthSpec::SourceAccount),
         };
 
         // Convert to XDR Operation
@@ -750,12 +785,10 @@ mod tests {
     #[test]
     fn test_invoke_contract_with_none_auth_gets_default() {
         // Create InvokeContract operation with NO auth specified
-        let spec = OperationSpec::InvokeHostFunction {
-            host_function_spec: HostFunctionSpec::InvokeContract {
-                contract_address: TEST_CONTRACT.to_string(),
-                function_name: "mint".to_string(),
-                args: vec![],
-            },
+        let spec = OperationSpec::InvokeContract {
+            contract_address: TEST_CONTRACT.to_string(),
+            function_name: "mint".to_string(),
+            args: vec![],
             auth: None, // No auth specified - should get default source account
         };
 

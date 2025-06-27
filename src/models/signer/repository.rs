@@ -75,6 +75,7 @@ pub struct GoogleCloudKmsSignerServiceAccountConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GoogleCloudKmsSignerKeyConfig {
+    pub location: String,
     pub key_ring_id: String,
     pub key_id: String,
     pub key_version: u32,
@@ -274,6 +275,7 @@ mod tests {
                 universe_domain: "universe_domain".to_string(),
             },
             key: GoogleCloudKmsSignerKeyConfig {
+                location: "global".to_string(),
                 key_ring_id: "key_ring_id".to_string(),
                 key_id: "key_id".to_string(),
                 key_version: 1,
@@ -365,6 +367,7 @@ mod tests {
                 universe_domain: "universe_domain".to_string(),
             },
             key: GoogleCloudKmsSignerKeyConfig {
+                location: "global".to_string(),
                 key_ring_id: "key_ring_id".to_string(),
                 key_id: "key_id".to_string(),
                 key_version: 1,
@@ -438,6 +441,7 @@ mod tests {
                 universe_domain: "universe_domain".to_string(),
             },
             key: GoogleCloudKmsSignerKeyConfig {
+                location: "global".to_string(),
                 key_ring_id: "key_ring_id".to_string(),
                 key_id: "key_id".to_string(),
                 key_version: 1,
@@ -545,6 +549,7 @@ mod tests {
                 universe_domain: "universe_domain".to_string(),
             },
             key: GoogleCloudKmsSignerKeyConfig {
+                location: "global".to_string(),
                 key_ring_id: "key_ring_id".to_string(),
                 key_id: "key_id".to_string(),
                 key_version: 1,

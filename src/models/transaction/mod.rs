@@ -10,5 +10,5 @@ pub use repository::*;
 pub mod stellar;
 pub use stellar::{
     AssetSpec, AuthSpec, ContractSource, DecoratedSignature, HostFunctionSpec, MemoSpec,
-    OperationSpec, SimpleAuthCredential, WasmSource,
+    OperationSpec, WasmSource,
 };
