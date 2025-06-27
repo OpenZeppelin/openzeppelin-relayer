@@ -1,3 +1,11 @@
+//! Google Cloud KMS signer for EVM transactions and data.
+//!
+//! This module implements [`Signer`] and [`DataSignerTrait`] using Google Cloud KMS
+//! to securely sign Ethereum transactions and arbitrary data without exposing private keys.
+//!
+//! Supports both legacy and EIP-1559 transactions, plus EIP-191 data signing.
+//! EIP-712 typed data signing is not yet implemented.
+
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
     primitives::{eip191_hash_message, utils::eip191_message, PrimitiveSignature},
