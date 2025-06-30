@@ -766,8 +766,8 @@ This section outlines how to interact with the Stellar network via the Relayer A
 |Method Name |Required Parameters |Description
 
 |Send Transaction
-|`source_account`, `network`, `operations`
-|Submit a transaction to the Stellar network. Supports payment and InvokeHostFunction operations.
+|`network`, `operations` (or `transaction_xdr`)
+|Submit a transaction to the Stellar network. Supports payment and InvokeHostFunction operations, pre-built XDR transactions, and fee bump transactions.
 
 |Get Transaction Details
 |`transaction_id`
@@ -803,16 +803,27 @@ Submit a transaction to the Stellar network.
 
 Request: `POST http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions`
 
+===== Transaction Input Methods
+
+The relayer supports three ways to submit transactions:
+
+1. **Operations-based**: Build a transaction by specifying the `operations` array (recommended for most use cases)
+2. **Transaction XDR (unsigned)**: Submit a pre-built unsigned transaction using `transaction_xdr` field (advanced use case)
+3. **Transaction XDR (signed) with fee bump**: Submit a signed transaction using `transaction_xdr` with `fee_bump: true` to wrap it in a fee bump transaction (when original fee is too low)
+
 ===== Transaction Structure
 
 **Required fields:**
-- `source_account`: The Stellar account that will be the source of the transaction
 - `network`: The Stellar network ("testnet", "mainnet", etc.)
-- `operations`: Array of operations to execute
+- Either `operations` (array of operations) OR `transaction_xdr` (base64-encoded XDR) - but not both
 
 **Optional fields:**
+- `source_account`: The Stellar account that will be the source of the transaction (defaults to relayer's address)
 - `memo`: Transaction memo (see Memo Types below)
 - `valid_until`: Transaction expiration time (ISO 8601 format)
+- `transaction_xdr`: Pre-built transaction XDR (base64 encoded, signed or unsigned) - mutually exclusive with `operations`
+- `fee_bump`: Boolean flag to request fee-bump wrapper (only valid with signed `transaction_xdr`)
+- `max_fee`: Maximum fee for fee bump transactions in stroops (defaults to 1,000,000 = 0.1 XLM)
 
 ===== Asset Types
 
@@ -887,7 +898,6 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
 --header 'Authorization: Bearer <your_api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
-  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
   "network": "testnet",
   "operations": [
     {
@@ -908,7 +918,6 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
 --header 'Authorization: Bearer <your_api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
-  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
   "network": "testnet",
   "operations": [
     {
@@ -933,7 +942,6 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
 --header 'Authorization: Bearer <your_api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
-  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
   "network": "testnet",
   "operations": [
     {
@@ -958,7 +966,6 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
 --header 'Authorization: Bearer <your_api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
-  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY",
   "network": "testnet",
   "operations": [
     {
@@ -973,6 +980,43 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
 ----
 
 NOTE: WASM can be provided as either `"type": "base64"` or `"type": "hex"` encoding.
+
+**5. Submit Pre-built Unsigned Transaction (XDR):**
+
+For advanced use cases, you can submit a pre-built unsigned transaction as base64-encoded XDR:
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "network": "testnet",
+  "transaction_xdr": "AAAAAgAAAAC0V9YG9Ks6MEexw5yB+FDD8VJwmtv5OU2BwgPN6PpZcwAAAGQCeO4pAAAAAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAACgAAAAAAAAAAAAAAAAAAAAA=",
+  "source_account": "GCRID3RFJXOBEB73FWRYJJ4II5E5UQ413F7LTM4W5KI54NBHQDRUXVLY"
+}'
+----
+
+NOTE: When submitting XDR transactions, the `operations` field is not required. The relayer will parse the transaction from the XDR
+
+**6. Fee Bump Transaction:**
+
+To submit a fee bump transaction for an existing signed transaction:
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <your_api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "network": "testnet",
+  "transaction_xdr": "AAAAAgAAAAC0V9YG9Ks6MEexw5yB+FDD8VJwmtv5OU2BwgPN6PpZcwAAAGQCeO4pAAAAAgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAACgAAAAAAAAAAAAAAAAAAAADN6PpZcwAAAEDtHqNhqC0V8mEZX9xXd4Gw3amGyg/aNTPKUQIH2nipnRps7H3HQTPhPiSzxwvzfXcGAz9H3hXXIkWegqJlEAoN",
+  "fee_bump": true,
+  "max_fee": 1000000
+}'
+----
+
+NOTE: When `fee_bump` is true, the `transaction_xdr` should contain a fully signed transaction (not a fee bump envelope). The relayer will create a fee bump transaction wrapper around it, paying the additional fees up to `max_fee` (in stroops).
 
 Example response:
 [source,json]

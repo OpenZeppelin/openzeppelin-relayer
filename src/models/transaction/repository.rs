@@ -1,10 +1,18 @@
 use super::evm::Speed;
 use crate::{
-    domain::{PriceParams, SignTransactionResponseEvm},
+    domain::{
+        validation::{validate_operations, validate_soroban_memo_restriction},
+        xdr_utils::{is_signed, parse_transaction_xdr},
+        PriceParams, SignTransactionResponseEvm,
+    },
     models::{
-        transaction::stellar::{MemoSpec, OperationSpec},
+        transaction::{
+            request::stellar::StellarTransactionRequest,
+            stellar::{DecoratedSignature, MemoSpec, OperationSpec},
+        },
         AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
-        RelayerError, RelayerRepoModel, SignerError, StellarNetwork, TransactionError, U256,
+        RelayerError, RelayerRepoModel, SignerError, StellarNetwork, StellarValidationError,
+        TransactionError, U256,
     },
 };
 use alloy::{
@@ -20,8 +28,7 @@ use std::{convert::TryFrom, str::FromStr};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
-use crate::models::transaction::stellar::DecoratedSignature;
+use crate::constants::{STELLAR_DEFAULT_MAX_FEE, STELLAR_DEFAULT_TRANSACTION_FEE};
 use soroban_rs::xdr::{
     Transaction as SorobanTransaction, TransactionEnvelope, TransactionV1Envelope, VecM,
 };
@@ -243,12 +250,95 @@ pub struct SolanaTransactionData {
     pub hash: Option<String>,
 }
 
+/// Represents different input types for Stellar transactions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionInput {
+    /// Operations to be built into a transaction
+    Operations(Vec<OperationSpec>),
+    /// Pre-built unsigned XDR that needs signing
+    UnsignedXdr(String),
+    /// Pre-built signed XDR that needs fee-bumping
+    SignedXdr { xdr: String, max_fee: i64 },
+}
+
+impl Default for TransactionInput {
+    fn default() -> Self {
+        TransactionInput::Operations(vec![])
+    }
+}
+
+impl TransactionInput {
+    /// Create a TransactionInput from a StellarTransactionRequest
+    pub fn from_stellar_request(
+        request: &StellarTransactionRequest,
+    ) -> Result<Self, TransactionError> {
+        // Handle XDR mode
+        if let Some(xdr) = &request.transaction_xdr {
+            let envelope = parse_transaction_xdr(xdr, false)
+                .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
+
+            return if request.fee_bump == Some(true) {
+                // Fee bump requires signed XDR
+                if !is_signed(&envelope) {
+                    Err(TransactionError::ValidationError(
+                        "Cannot request fee_bump with unsigned XDR".to_string(),
+                    ))
+                } else {
+                    let max_fee = request.max_fee.unwrap_or(STELLAR_DEFAULT_MAX_FEE);
+                    Ok(TransactionInput::SignedXdr {
+                        xdr: xdr.clone(),
+                        max_fee,
+                    })
+                }
+            } else {
+                // No fee bump - must be unsigned
+                if is_signed(&envelope) {
+                    Err(TransactionError::ValidationError(
+                        StellarValidationError::UnexpectedSignedXdr.to_string(),
+                    ))
+                } else {
+                    Ok(TransactionInput::UnsignedXdr(xdr.clone()))
+                }
+            };
+        }
+
+        // Handle operations mode
+        if let Some(operations) = &request.operations {
+            if operations.is_empty() {
+                return Err(TransactionError::ValidationError(
+                    "Operations must not be empty".to_string(),
+                ));
+            }
+
+            if request.fee_bump == Some(true) {
+                return Err(TransactionError::ValidationError(
+                    "Cannot request fee_bump with operations mode".to_string(),
+                ));
+            }
+
+            // Validate operations
+            validate_operations(operations)
+                .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
+
+            // Validate Soroban memo restriction
+            validate_soroban_memo_restriction(operations, &request.memo)
+                .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
+
+            return Ok(TransactionInput::Operations(operations.clone()));
+        }
+
+        // Neither XDR nor operations provided
+        Err(TransactionError::ValidationError(
+            "Must provide either operations or transaction_xdr".to_string(),
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StellarTransactionData {
     pub source_account: String,
     pub fee: Option<u32>,
     pub sequence_number: Option<i64>,
-    pub operations: Vec<OperationSpec>,
     pub memo: Option<MemoSpec>,
     pub valid_until: Option<String>,
     pub network_passphrase: String,
@@ -257,6 +347,10 @@ pub struct StellarTransactionData {
     pub hash: Option<String>,
     #[serde(skip_serializing, skip_deserializing)]
     pub simulation_transaction_data: Option<String>,
+    #[serde(skip)]
+    pub transaction_input: TransactionInput,
+    #[serde(skip_serializing, skip_deserializing)]
+    pub signed_envelope_xdr: Option<String>,
 }
 
 impl StellarTransactionData {
@@ -265,8 +359,78 @@ impl StellarTransactionData {
         self
     }
 
-    /// Build an *unsigned* TransactionEnvelope from the current data. Useful for simulation.
-    pub fn unsigned_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
+    /// Build an unsigned envelope from any transaction input.
+    ///
+    /// This method always returns an envelope without signatures, suitable for:
+    /// - Transaction simulation
+    /// - Fee calculation
+    /// - Any operation that doesn't require signature verification
+    pub fn build_unsigned_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
+        match &self.transaction_input {
+            TransactionInput::Operations(_) => {
+                // Build from operations without signatures
+                self.build_envelope_from_operations_unsigned()
+            }
+            TransactionInput::UnsignedXdr(xdr) => {
+                // Parse the XDR as-is (already unsigned)
+                self.parse_xdr_envelope(xdr)
+            }
+            TransactionInput::SignedXdr { xdr, .. } => {
+                // Parse the inner transaction (for fee-bump cases)
+                self.parse_xdr_envelope(xdr)
+            }
+        }
+    }
+
+    /// Get the transaction envelope for simulation purposes.
+    ///
+    /// This is a convenience method that delegates to build_unsigned_envelope().
+    /// Used primarily during transaction preparation to simulate Soroban operations
+    /// and determine resource fees.
+    pub fn get_envelope_for_simulation(&self) -> Result<TransactionEnvelope, SignerError> {
+        self.build_unsigned_envelope()
+    }
+
+    /// Build a signed envelope ready for submission to the network.
+    ///
+    /// This method returns a fully signed envelope by:
+    /// 1. Using cached signed_envelope_xdr if available (preferred for performance)
+    /// 2. Otherwise building from components with signatures attached
+    pub fn build_signed_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
+        // If we have a cached signed envelope, use it
+        if let Some(ref xdr) = self.signed_envelope_xdr {
+            return self.parse_xdr_envelope(xdr);
+        }
+
+        // Otherwise, build from components
+        match &self.transaction_input {
+            TransactionInput::Operations(_) => {
+                // Build from operations with signatures
+                self.build_envelope_from_operations_signed()
+            }
+            TransactionInput::UnsignedXdr(xdr) => {
+                // Parse and attach signatures
+                let envelope = self.parse_xdr_envelope(xdr)?;
+                self.attach_signatures_to_envelope(envelope)
+            }
+            TransactionInput::SignedXdr { xdr, .. } => {
+                // Already signed
+                self.parse_xdr_envelope(xdr)
+            }
+        }
+    }
+
+    /// Get the transaction envelope for submission to the network.
+    ///
+    /// This is a convenience method that delegates to build_signed_envelope().
+    /// Used when submitting transactions to the Stellar network after preparation
+    /// and signing are complete.
+    pub fn get_envelope_for_submission(&self) -> Result<TransactionEnvelope, SignerError> {
+        self.build_signed_envelope()
+    }
+
+    // Helper method to build unsigned envelope from operations
+    fn build_envelope_from_operations_unsigned(&self) -> Result<TransactionEnvelope, SignerError> {
         let tx = SorobanTransaction::try_from(self.clone())?;
         Ok(TransactionEnvelope::Tx(TransactionV1Envelope {
             tx,
@@ -274,15 +438,55 @@ impl StellarTransactionData {
         }))
     }
 
-    /// Build a *signed* TransactionEnvelope using the stored signatures.
-    pub fn signed_envelope(&self) -> Result<TransactionEnvelope, SignerError> {
+    // Helper method to build signed envelope from operations
+    fn build_envelope_from_operations_signed(&self) -> Result<TransactionEnvelope, SignerError> {
         let tx = SorobanTransaction::try_from(self.clone())?;
-        let sigs = VecM::try_from(self.signatures.clone())
+        let signatures = VecM::try_from(self.signatures.clone())
             .map_err(|_| SignerError::ConversionError("too many signatures".into()))?;
         Ok(TransactionEnvelope::Tx(TransactionV1Envelope {
             tx,
-            signatures: sigs,
+            signatures,
         }))
+    }
+
+    // Helper method to parse XDR envelope
+    fn parse_xdr_envelope(&self, xdr: &str) -> Result<TransactionEnvelope, SignerError> {
+        use soroban_rs::xdr::{Limits, ReadXdr};
+        TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+            .map_err(|e| SignerError::ConversionError(format!("Invalid XDR: {}", e)))
+    }
+
+    // Helper method to attach signatures to an envelope
+    fn attach_signatures_to_envelope(
+        &self,
+        envelope: TransactionEnvelope,
+    ) -> Result<TransactionEnvelope, SignerError> {
+        use soroban_rs::xdr::{Limits, ReadXdr, WriteXdr};
+
+        // Serialize and re-parse to get a mutable version
+        let envelope_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+            SignerError::ConversionError(format!("Failed to serialize envelope: {}", e))
+        })?;
+
+        let mut envelope = TransactionEnvelope::from_xdr_base64(&envelope_xdr, Limits::none())
+            .map_err(|e| {
+                SignerError::ConversionError(format!("Failed to parse envelope: {}", e))
+            })?;
+
+        let sigs = VecM::try_from(self.signatures.clone())
+            .map_err(|_| SignerError::ConversionError("too many signatures".into()))?;
+
+        match &mut envelope {
+            TransactionEnvelope::Tx(ref mut v1) => v1.signatures = sigs,
+            TransactionEnvelope::TxV0(ref mut v0) => v0.signatures = sigs,
+            TransactionEnvelope::TxFeeBump(_) => {
+                return Err(SignerError::ConversionError(
+                    "Cannot attach signatures to fee-bump transaction directly".into(),
+                ));
+            }
+        }
+
+        Ok(envelope)
     }
 
     /// Return a new instance with the given signature appended.
@@ -301,16 +505,16 @@ impl StellarTransactionData {
     pub fn with_simulation_data(
         mut self,
         sim_response: soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
-    ) -> Result<Self, crate::models::SignerError> {
+        operations_count: u64,
+    ) -> Result<Self, SignerError> {
         use log::info;
 
         // Update fee based on simulation (using soroban-helpers formula)
-        let operations_count = self.operations.len() as u64;
         let inclusion_fee = operations_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
         let resource_fee = sim_response.min_resource_fee;
 
         let updated_fee = u32::try_from(inclusion_fee + resource_fee)
-            .map_err(|_| crate::models::SignerError::ConversionError("Fee too high".to_string()))?
+            .map_err(|_| SignerError::ConversionError("Fee too high".to_string()))?
             .max(STELLAR_DEFAULT_TRANSACTION_FEE);
         self.fee = Some(updated_fee);
 
@@ -400,37 +604,24 @@ impl
                 is_canceled: Some(false),
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => {
+                // Store the source account before consuming the request
                 let source_account = stellar_request.source_account.clone();
-                let operations = stellar_request.operations.clone();
 
-                // Validate Soroban operation exclusivity (InvokeContract, CreateContract, UploadWasm)
-                let has_soroban_operation = operations.iter().any(|op| {
-                    matches!(
-                        op,
-                        OperationSpec::InvokeContract { .. }
-                            | OperationSpec::CreateContract { .. }
-                            | OperationSpec::UploadWasm { .. }
-                    )
-                });
-
-                if has_soroban_operation {
-                    // Check if there's exactly one operation
-                    if operations.len() != 1 {
-                        return Err(RelayerError::PolicyConfigurationError(
-                            "Soroban operations (InvokeContract, CreateContract, UploadWasm) must be exclusive - only one such operation is allowed per transaction and it cannot be mixed with other operations".to_string()
-                        ));
-                    }
-
-                    // Check if memo is None when using InvokeHostFunction
-                    if let Some(ref memo) = stellar_request.memo {
-                        if !matches!(memo, MemoSpec::None) {
-                            return Err(RelayerError::PolicyConfigurationError(
-                                "Memo must be null when using InvokeHostFunction operations"
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                }
+                // Create the TransactionData before consuming the request
+                let stellar_data = StellarTransactionData {
+                    source_account: source_account.unwrap_or_else(|| relayer_model.address.clone()),
+                    memo: stellar_request.memo.clone(),
+                    valid_until: stellar_request.valid_until.clone(),
+                    network_passphrase: StellarNetwork::try_from(network_model.clone())?.passphrase,
+                    signatures: Vec::new(),
+                    hash: None,
+                    fee: None,
+                    sequence_number: None,
+                    simulation_transaction_data: None,
+                    transaction_input: TransactionInput::from_stellar_request(stellar_request)
+                        .map_err(|e| RelayerError::ValidationError(e.to_string()))?,
+                    signed_envelope_xdr: None,
+                };
 
                 Ok(Self {
                     id: Uuid::new_v4().to_string(),
@@ -442,19 +633,7 @@ impl
                     confirmed_at: None,
                     valid_until: None,
                     network_type: NetworkType::Stellar,
-                    network_data: NetworkTransactionData::Stellar(StellarTransactionData {
-                        source_account,
-                        operations,
-                        memo: stellar_request.memo.clone(),
-                        valid_until: stellar_request.valid_until.clone(),
-                        network_passphrase: StellarNetwork::try_from(network_model.clone())?
-                            .passphrase,
-                        signatures: Vec::new(),
-                        hash: None,
-                        fee: None,
-                        sequence_number: None,
-                        simulation_transaction_data: None,
-                    }),
+                    network_data: NetworkTransactionData::Stellar(stellar_data),
                     priced_at: None,
                     hashes: Vec::new(),
                     noop_count: None,
@@ -614,9 +793,12 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 mod tests {
     use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
 
-    use crate::models::AssetSpec;
-
     use super::*;
+    use crate::models::{
+        network::NetworkConfigData,
+        relayer::{RelayerNetworkPolicy, RelayerStellarPolicy},
+        transaction::stellar::AssetSpec,
+    };
 
     #[test]
     fn test_signature_from_bytes() {
@@ -862,17 +1044,10 @@ mod tests {
 
     #[test]
     fn test_network_tx_data_get_stellar_transaction_data() {
-        use crate::models::transaction::stellar::{AssetSpec, MemoSpec, OperationSpec};
-
         let stellar_tx_data = StellarTransactionData {
             source_account: "account123".to_string(),
             fee: Some(100),
             sequence_number: Some(5),
-            operations: vec![OperationSpec::Payment {
-                destination: "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ".to_string(),
-                amount: 100000000, // 10 XLM in stroops
-                asset: AssetSpec::Native,
-            }],
             memo: Some(MemoSpec::Text {
                 value: "Test memo".to_string(),
             }),
@@ -881,6 +1056,12 @@ mod tests {
             signatures: Vec::new(),
             hash: Some("hash123".to_string()),
             simulation_transaction_data: None,
+            transaction_input: TransactionInput::Operations(vec![OperationSpec::Payment {
+                destination: "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ".to_string(),
+                amount: 100000000, // 10 XLM in stroops
+                asset: AssetSpec::Native,
+            }]),
+            signed_envelope_xdr: None,
         };
         let network_data = NetworkTransactionData::Stellar(stellar_tx_data.clone());
 
@@ -987,17 +1168,18 @@ mod tests {
             source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
             fee: Some(100),
             sequence_number: Some(1),
-            operations: vec![OperationSpec::Payment {
-                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
-                amount: 1000,
-                asset: AssetSpec::Native,
-            }],
-            memo: Some(MemoSpec::None),
+            memo: None,
             valid_until: None,
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             signatures: Vec::new(),
             hash: None,
             simulation_transaction_data: None,
+            transaction_input: TransactionInput::Operations(vec![OperationSpec::Payment {
+                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                amount: 1000,
+                asset: AssetSpec::Native,
+            }]),
+            signed_envelope_xdr: None,
         }
     }
 
@@ -1009,9 +1191,9 @@ mod tests {
     }
 
     #[test]
-    fn test_unsigned_envelope() {
+    fn test_get_envelope_for_simulation() {
         let tx = test_stellar_tx_data();
-        let env = tx.unsigned_envelope();
+        let env = tx.get_envelope_for_simulation();
         assert!(env.is_ok());
         let env = env.unwrap();
         // Should be a TransactionV1Envelope with no signatures
@@ -1026,10 +1208,10 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_envelope() {
+    fn test_get_envelope_for_submission() {
         let mut tx = test_stellar_tx_data();
         tx.signatures.push(dummy_signature());
-        let env = tx.signed_envelope();
+        let env = tx.get_envelope_for_submission();
         assert!(env.is_ok());
         let env = env.unwrap();
         match env {
@@ -1062,8 +1244,6 @@ mod tests {
     fn test_models() -> (NetworkRepoModel, RelayerRepoModel) {
         use crate::config::{NetworkConfigCommon, StellarNetworkConfig};
         use crate::constants::DEFAULT_STELLAR_MIN_BALANCE;
-        use crate::models::network::NetworkConfigData;
-        use crate::models::relayer::{RelayerNetworkPolicy, RelayerStellarPolicy};
 
         let network_config = NetworkConfigData::Stellar(StellarNetworkConfig {
             common: NetworkConfigCommon {
@@ -1107,54 +1287,258 @@ mod tests {
     }
 
     #[test]
+    fn test_stellar_xdr_transaction_input_conversion() {
+        let (network_model, relayer_model) = test_models();
+
+        // Test case 1: Operations mode (existing behavior)
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::Payment {
+                destination: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_ok());
+
+        let tx_model = result.unwrap();
+        if let NetworkTransactionData::Stellar(ref stellar_data) = tx_model.network_data {
+            assert!(matches!(
+                stellar_data.transaction_input,
+                TransactionInput::Operations(_)
+            ));
+        } else {
+            panic!("Expected Stellar transaction data");
+        }
+
+        // Test case 2: Unsigned XDR mode
+        // This is a valid unsigned transaction created with stellar CLI
+        let unsigned_xdr = "AAAAAgAAAACige4lTdwSB/sto4SniEdJ2kOa2X65s5bqkd40J4DjSwAAAGQAAHAkAAAADgAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAKKB7iVN3BIH+y2jhKeIR0naQ5rZfrmzluqR3jQngONLAAAAAAAAAAAAD0JAAAAAAAAAAAA=";
+        let stellar_request = StellarTransactionRequest {
+            source_account: None,
+            network: "testnet".to_string(),
+            operations: Some(vec![]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: Some(unsigned_xdr.to_string()),
+            fee_bump: None,
+            max_fee: None,
+        };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_ok());
+
+        let tx_model = result.unwrap();
+        if let NetworkTransactionData::Stellar(ref stellar_data) = tx_model.network_data {
+            assert!(matches!(
+                stellar_data.transaction_input,
+                TransactionInput::UnsignedXdr(_)
+            ));
+        } else {
+            panic!("Expected Stellar transaction data");
+        }
+
+        // Test case 3: Signed XDR with fee_bump
+        // Create a signed XDR by duplicating the test logic from xdr_tests
+        let signed_xdr = {
+            use soroban_rs::xdr::{Limits, TransactionEnvelope, TransactionV1Envelope, WriteXdr};
+            use stellar_strkey::ed25519::PublicKey;
+
+            // Use the same transaction structure but add a dummy signature
+            let source_pk =
+                PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
+                    .unwrap();
+            let dest_pk =
+                PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
+                    .unwrap();
+
+            let payment_op = soroban_rs::xdr::PaymentOp {
+                destination: soroban_rs::xdr::MuxedAccount::Ed25519(soroban_rs::xdr::Uint256(
+                    dest_pk.0,
+                )),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            };
+
+            let operation = soroban_rs::xdr::Operation {
+                source_account: None,
+                body: soroban_rs::xdr::OperationBody::Payment(payment_op),
+            };
+
+            let operations: soroban_rs::xdr::VecM<soroban_rs::xdr::Operation, 100> =
+                vec![operation].try_into().unwrap();
+
+            let tx = soroban_rs::xdr::Transaction {
+                source_account: soroban_rs::xdr::MuxedAccount::Ed25519(soroban_rs::xdr::Uint256(
+                    source_pk.0,
+                )),
+                fee: 100,
+                seq_num: soroban_rs::xdr::SequenceNumber(1),
+                cond: soroban_rs::xdr::Preconditions::None,
+                memo: soroban_rs::xdr::Memo::None,
+                operations,
+                ext: soroban_rs::xdr::TransactionExt::V0,
+            };
+
+            // Add a dummy signature
+            let hint = soroban_rs::xdr::SignatureHint([0; 4]);
+            let sig_bytes: Vec<u8> = vec![0u8; 64];
+            let sig_bytes_m: soroban_rs::xdr::BytesM<64> = sig_bytes.try_into().unwrap();
+            let sig = soroban_rs::xdr::DecoratedSignature {
+                hint,
+                signature: soroban_rs::xdr::Signature(sig_bytes_m),
+            };
+
+            let envelope = TransactionV1Envelope {
+                tx,
+                signatures: vec![sig].try_into().unwrap(),
+            };
+
+            let tx_envelope = TransactionEnvelope::Tx(envelope);
+            tx_envelope.to_xdr_base64(Limits::none()).unwrap()
+        };
+        let stellar_request = StellarTransactionRequest {
+            source_account: None,
+            network: "testnet".to_string(),
+            operations: Some(vec![]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: Some(signed_xdr.to_string()),
+            fee_bump: Some(true),
+            max_fee: Some(20000000),
+        };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_ok());
+
+        let tx_model = result.unwrap();
+        if let NetworkTransactionData::Stellar(ref stellar_data) = tx_model.network_data {
+            match &stellar_data.transaction_input {
+                TransactionInput::SignedXdr { xdr, max_fee } => {
+                    assert_eq!(xdr, &signed_xdr);
+                    assert_eq!(*max_fee, 20000000);
+                }
+                _ => panic!("Expected SignedXdr transaction input"),
+            }
+        } else {
+            panic!("Expected Stellar transaction data");
+        }
+
+        // Test case 4: Signed XDR without fee_bump should fail
+        let stellar_request = StellarTransactionRequest {
+            source_account: None,
+            network: "testnet".to_string(),
+            operations: Some(vec![]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: Some(signed_xdr.clone()),
+            fee_bump: None,
+            max_fee: None,
+        };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Expected unsigned XDR but received signed XDR"));
+
+        // Test case 5: Operations with fee_bump should fail
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::Payment {
+                destination: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string(),
+                amount: 1000000,
+                asset: AssetSpec::Native,
+            }]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: Some(true),
+            max_fee: None,
+        };
+
+        let request = NetworkTransactionRequest::Stellar(stellar_request);
+        let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot request fee_bump with operations mode"));
+    }
+
+    #[test]
     fn test_invoke_host_function_must_be_exclusive() {
         let (network_model, relayer_model) = test_models();
 
         // Test case 1: Single InvokeHostFunction - should succeed
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::InvokeContract {
+                contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
                     .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeContract {
-                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
-                        .to_string(),
-                    function_name: "transfer".to_string(),
-                    args: vec![],
-                    auth: None,
-                }],
-                memo: None,
-                valid_until: None,
-            };
+                function_name: "transfer".to_string(),
+                args: vec![],
+                auth: None,
+            }]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_ok(), "Single InvokeHostFunction should succeed");
 
         // Test case 2: InvokeHostFunction mixed with Payment - should fail
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                    .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![
-                    OperationSpec::Payment {
-                        destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                            .to_string(),
-                        amount: 1000,
-                        asset: AssetSpec::Native,
-                    },
-                    OperationSpec::InvokeContract {
-                        contract_address:
-                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
-                        function_name: "transfer".to_string(),
-                        args: vec![],
-                        auth: None,
-                    },
-                ],
-                memo: None,
-                valid_until: None,
-            };
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![
+                OperationSpec::Payment {
+                    destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                        .to_string(),
+                    amount: 1000,
+                    asset: AssetSpec::Native,
+                },
+                OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "transfer".to_string(),
+                    args: vec![],
+                    auth: None,
+                },
+            ]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
@@ -1164,7 +1548,7 @@ mod tests {
             Err(err) => {
                 let err_str = err.to_string();
                 assert!(
-                    err_str.contains("Soroban operations") && err_str.contains("must be exclusive"),
+                    err_str.contains("Soroban operations must be exclusive"),
                     "Expected error about Soroban operation exclusivity, got: {}",
                     err_str
                 );
@@ -1172,30 +1556,33 @@ mod tests {
         }
 
         // Test case 3: Multiple InvokeHostFunction operations - should fail
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                    .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![
-                    OperationSpec::InvokeContract {
-                        contract_address:
-                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
-                        function_name: "transfer".to_string(),
-                        args: vec![],
-                        auth: None,
-                    },
-                    OperationSpec::InvokeContract {
-                        contract_address:
-                            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA".to_string(),
-                        function_name: "approve".to_string(),
-                        args: vec![],
-                        auth: None,
-                    },
-                ],
-                memo: None,
-                valid_until: None,
-            };
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![
+                OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "transfer".to_string(),
+                    args: vec![],
+                    auth: None,
+                },
+                OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "approve".to_string(),
+                    args: vec![],
+                    auth: None,
+                },
+            ]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
@@ -1205,59 +1592,65 @@ mod tests {
             Err(err) => {
                 let err_str = err.to_string();
                 assert!(
-                    err_str.contains("Soroban operations") && err_str.contains("must be exclusive"),
-                    "Expected error about Soroban operation exclusivity, got: {}",
+                    err_str.contains("Transaction can contain at most one Soroban operation"),
+                    "Expected error about multiple Soroban operations, got: {}",
                     err_str
                 );
             }
         }
 
         // Test case 4: Multiple Payment operations - should succeed
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                    .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![
-                    OperationSpec::Payment {
-                        destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                            .to_string(),
-                        amount: 1000,
-                        asset: AssetSpec::Native,
-                    },
-                    OperationSpec::Payment {
-                        destination: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-                            .to_string(),
-                        amount: 2000,
-                        asset: AssetSpec::Native,
-                    },
-                ],
-                memo: None,
-                valid_until: None,
-            };
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![
+                OperationSpec::Payment {
+                    destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+                        .to_string(),
+                    amount: 1000,
+                    asset: AssetSpec::Native,
+                },
+                OperationSpec::Payment {
+                    destination: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+                        .to_string(),
+                    amount: 2000,
+                    asset: AssetSpec::Native,
+                },
+            ]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_ok(), "Multiple Payment operations should succeed");
 
         // Test case 5: InvokeHostFunction with non-None memo - should fail
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::InvokeContract {
+                contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
                     .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeContract {
-                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
-                        .to_string(),
-                    function_name: "transfer".to_string(),
-                    args: vec![],
-                    auth: None,
-                }],
-                memo: Some(MemoSpec::Text {
-                    value: "This should fail".to_string(),
-                }),
-                valid_until: None,
-            };
+                function_name: "transfer".to_string(),
+                args: vec![],
+                auth: None,
+            }]),
+            memo: Some(MemoSpec::Text {
+                value: "This should fail".to_string(),
+            }),
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
@@ -1267,7 +1660,7 @@ mod tests {
             Err(err) => {
                 let err_str = err.to_string();
                 assert!(
-                    err_str.contains("Memo must be null when using InvokeHostFunction operations"),
+                    err_str.contains("Soroban operations cannot have a memo"),
                     "Expected error about memo restriction, got: {}",
                     err_str
                 );
@@ -1275,21 +1668,24 @@ mod tests {
         }
 
         // Test case 6: InvokeHostFunction with memo None - should succeed
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::InvokeContract {
+                contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
                     .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeContract {
-                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
-                        .to_string(),
-                    function_name: "transfer".to_string(),
-                    args: vec![],
-                    auth: None,
-                }],
-                memo: Some(MemoSpec::None),
-                valid_until: None,
-            };
+                function_name: "transfer".to_string(),
+                args: vec![],
+                auth: None,
+            }]),
+            memo: Some(MemoSpec::None),
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
@@ -1299,21 +1695,24 @@ mod tests {
         );
 
         // Test case 7: InvokeHostFunction with no memo field - should succeed
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::InvokeContract {
+                contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
                     .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![OperationSpec::InvokeContract {
-                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
-                        .to_string(),
-                    function_name: "transfer".to_string(),
-                    args: vec![],
-                    auth: None,
-                }],
-                memo: None,
-                valid_until: None,
-            };
+                function_name: "transfer".to_string(),
+                args: vec![],
+                auth: None,
+            }]),
+            memo: None,
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
@@ -1323,22 +1722,24 @@ mod tests {
         );
 
         // Test case 8: Payment operation with memo - should succeed
-        let stellar_request =
-            crate::models::transaction::request::stellar::StellarTransactionRequest {
-                source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                    .to_string(),
-                network: "testnet".to_string(),
-                operations: vec![OperationSpec::Payment {
-                    destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                        .to_string(),
-                    amount: 1000,
-                    asset: AssetSpec::Native,
-                }],
-                memo: Some(MemoSpec::Text {
-                    value: "Payment memo is allowed".to_string(),
-                }),
-                valid_until: None,
-            };
+        let stellar_request = StellarTransactionRequest {
+            source_account: Some(
+                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            ),
+            network: "testnet".to_string(),
+            operations: Some(vec![OperationSpec::Payment {
+                destination: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+                amount: 1000,
+                asset: AssetSpec::Native,
+            }]),
+            memo: Some(MemoSpec::Text {
+                value: "Payment memo is allowed".to_string(),
+            }),
+            valid_until: None,
+            transaction_xdr: None,
+            fee_bump: None,
+            max_fee: None,
+        };
 
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));

@@ -50,7 +50,7 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let stellar_data = tx.network_data.get_stellar_transaction_data()?;
         let tx_envelope = stellar_data
-            .signed_envelope()
+            .get_envelope_for_submission()
             .map_err(TransactionError::from)?;
 
         let hash = self
@@ -156,7 +156,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_rs::xdr::Hash;
+    use soroban_rs::xdr::{Hash, WriteXdr};
 
     use crate::domain::transaction::stellar::test_helpers::*;
 
@@ -313,6 +313,59 @@ mod tests {
 
             // Should return error but transaction should be marked as failed
             assert!(res.is_err());
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_uses_signed_envelope_xdr() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Create a transaction with signed_envelope_xdr set
+            let mut tx = create_test_transaction(&relayer.id);
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                // Build and store the signed envelope XDR
+                let envelope = data.get_envelope_for_submission().unwrap();
+                let xdr = envelope
+                    .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                    .unwrap();
+                data.signed_envelope_xdr = Some(xdr);
+            }
+
+            // Provider should receive the envelope decoded from signed_envelope_xdr
+            mocks
+                .provider
+                .expect_send_transaction()
+                .returning(|_| Box::pin(async { Ok(Hash([2u8; 32])) }));
+
+            // Update to Submitted
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Submitted))
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Job and notification expectations
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let res = handler.submit_transaction_impl(tx).await.unwrap();
+
+            assert_eq!(res.status, TransactionStatus::Submitted);
         }
 
         #[tokio::test]

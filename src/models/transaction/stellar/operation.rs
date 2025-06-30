@@ -10,7 +10,7 @@ use soroban_rs::xdr::{
     SorobanAuthorizedInvocation, SorobanCredentials, Uint256, VecM,
 };
 use std::convert::TryFrom;
-use stellar_strkey::ed25519::{MuxedAccount, PublicKey};
+use stellar_strkey::{ed25519::MuxedAccount, ed25519::PublicKey};
 use utoipa::ToSchema;
 
 /// Authorization specification for Soroban operations
@@ -334,6 +334,7 @@ mod tests {
 
     mod create_source_account_auth_entry_tests {
         use super::*;
+        use soroban_rs::xdr::Uint256;
 
         #[test]
         fn test_creates_correct_structure() {
@@ -384,6 +385,7 @@ mod tests {
 
     mod generate_default_auth_entries_tests {
         use super::*;
+        use soroban_rs::xdr::Uint256;
 
         #[test]
         fn test_create_contract() {
@@ -445,6 +447,7 @@ mod tests {
 
     mod build_auth_vector_tests {
         use super::*;
+        use soroban_rs::xdr::Uint256;
 
         #[test]
         fn test_simple_auth() {

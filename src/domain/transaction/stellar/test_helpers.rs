@@ -54,14 +54,15 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
     let stellar_tx_data = StellarTransactionData {
         source_account: TEST_PK.to_string(),
         fee: Some(100),
-        sequence_number: None,
-        operations: vec![payment_op(TEST_PK)],
+        sequence_number: Some(1),
         memo: None,
         valid_until: None,
         network_passphrase: "Test SDF Network ; September 2015".to_string(),
         signatures: Vec::new(),
         hash: None,
         simulation_transaction_data: None,
+        transaction_input: crate::models::TransactionInput::Operations(vec![payment_op(TEST_PK)]),
+        signed_envelope_xdr: None,
     };
     TransactionRepoModel {
         id: "tx-1".to_string(),

@@ -248,12 +248,13 @@ mod tests {
                 source_account: "source_account_id".to_string(),
                 fee: Some(100),
                 sequence_number: Some(12345),
-                operations: vec![],
+                transaction_input: crate::models::TransactionInput::Operations(vec![]),
                 network_passphrase: "Test SDF Network ; September 2015".to_string(),
                 memo: None,
                 valid_until: None,
                 signatures: Vec::new(),
                 simulation_transaction_data: None,
+                signed_envelope_xdr: None,
             }),
             valid_until: None,
             network_type: NetworkType::Stellar,
@@ -274,6 +275,59 @@ mod tests {
                 assert_eq!(stellar.source_account, "source_account_id");
                 assert_eq!(stellar.fee, 100);
                 assert_eq!(stellar.sequence_number, 12345);
+            }
+            _ => panic!("Expected StellarTransactionResponse"),
+        }
+    }
+
+    #[test]
+    fn test_stellar_fee_bump_transaction_response() {
+        let now = Utc::now().to_rfc3339();
+        let model = TransactionRepoModel {
+            id: "tx-fee-bump".to_string(),
+            status: TransactionStatus::Confirmed,
+            status_reason: None,
+            created_at: now.clone(),
+            sent_at: Some(now.clone()),
+            confirmed_at: Some(now.clone()),
+            relayer_id: "relayer3".to_string(),
+            priced_at: None,
+            hashes: vec!["fee_bump_hash_456".to_string()],
+            network_data: NetworkTransactionData::Stellar(StellarTransactionData {
+                hash: Some("fee_bump_hash_456".to_string()),
+                source_account: "fee_source_account".to_string(),
+                fee: Some(200),
+                sequence_number: Some(54321),
+                transaction_input: crate::models::TransactionInput::SignedXdr {
+                    xdr: "dummy_xdr".to_string(),
+                    max_fee: 1_000_000,
+                },
+                network_passphrase: "Test SDF Network ; September 2015".to_string(),
+                memo: None,
+                valid_until: None,
+                signatures: Vec::new(),
+                simulation_transaction_data: None,
+                signed_envelope_xdr: None,
+            }),
+            valid_until: None,
+            network_type: NetworkType::Stellar,
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+
+        let response = TransactionResponse::from(model.clone());
+
+        match response {
+            TransactionResponse::Stellar(stellar) => {
+                assert_eq!(stellar.id, model.id);
+                assert_eq!(stellar.hash, Some("fee_bump_hash_456".to_string()));
+                assert_eq!(stellar.status, TransactionStatus::Confirmed);
+                assert_eq!(stellar.created_at, now);
+                assert_eq!(stellar.sent_at, Some(now.clone()));
+                assert_eq!(stellar.confirmed_at, Some(now.clone()));
+                assert_eq!(stellar.source_account, "fee_source_account");
+                assert_eq!(stellar.fee, 200);
+                assert_eq!(stellar.sequence_number, 54321);
             }
             _ => panic!("Expected StellarTransactionResponse"),
         }

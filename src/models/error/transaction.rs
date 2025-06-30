@@ -7,6 +7,7 @@ use crate::{
 use super::{ApiError, RepositoryError, StellarProviderError};
 use eyre::Report;
 use serde::Serialize;
+use soroban_rs::xdr;
 use thiserror::Error;
 
 #[derive(Error, Debug, Serialize)]
@@ -101,6 +102,12 @@ impl From<StellarProviderError> for TransactionError {
                 TransactionError::UnderlyingProvider(ProviderError::NetworkConfiguration(msg))
             }
         }
+    }
+}
+
+impl From<xdr::Error> for TransactionError {
+    fn from(error: xdr::Error) -> Self {
+        TransactionError::ValidationError(format!("XDR error: {}", error))
     }
 }
 
@@ -293,6 +300,24 @@ mod tests {
                 assert!(err.to_string().contains("queue full"));
             }
             _ => panic!("Expected TransactionError::JobProducerError"),
+        }
+    }
+
+    #[test]
+    fn test_xdr_error_conversion() {
+        use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope};
+
+        // Create an XDR error by trying to parse invalid base64
+        let xdr_error =
+            TransactionEnvelope::from_xdr_base64("invalid_base64", Limits::none()).unwrap_err();
+
+        let tx_error = TransactionError::from(xdr_error);
+
+        match tx_error {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("XDR error:"));
+            }
+            _ => panic!("Expected TransactionError::ValidationError"),
         }
     }
 }
