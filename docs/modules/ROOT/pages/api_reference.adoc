@@ -809,8 +809,7 @@ The relayer supports three ways to submit transactions:
 
 1. **Operations-based**: Build a transaction by specifying the `operations` array (recommended for most use cases)
 2. **Transaction XDR (unsigned)**: Submit a pre-built unsigned transaction using `transaction_xdr` field (advanced use case)
-3. **Transaction XDR (signed) with fee bump**: Submit a signed transaction using `transaction_xdr` with `fee_bump: true` to wrap it in a fee bump transaction (when original fee is too low)
-
+3. **Transaction XDR (signed) with fee bump**: Submit a signed transaction using `transaction_xdr` with `fee_bump: true` to wrap it in a fee bump transaction
 ===== Transaction Structure
 
 **Required fields:**
