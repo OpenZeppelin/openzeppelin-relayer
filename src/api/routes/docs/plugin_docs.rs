@@ -1,4 +1,7 @@
-use crate::{models::ApiResponse, services::plugins::PluginCallResponse};
+use crate::{
+    models::{ApiResponse, PluginCallRequest},
+    services::plugins::PluginCallResponse,
+};
 
 /// Calls a plugin method.
 #[utoipa::path(
@@ -12,6 +15,7 @@ use crate::{models::ApiResponse, services::plugins::PluginCallResponse};
     params(
         ("plugin_id" = String, Path, description = "The unique identifier of the plugin")
     ),
+    request_body = PluginCallRequest,
     responses(
         (
             status = 200,
