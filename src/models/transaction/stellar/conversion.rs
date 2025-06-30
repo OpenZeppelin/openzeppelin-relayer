@@ -107,11 +107,14 @@ impl TryFrom<StellarTransactionData> for Transaction {
                     ext,
                 })
             }
-            crate::models::TransactionInput::UnsignedXdr(xdr)
-            | crate::models::TransactionInput::SignedXdr { xdr, .. } => {
-                // For XDR inputs, parse and return the transaction directly
-                Transaction::from_xdr_base64(xdr, Limits::none())
-                    .map_err(|e| SignerError::ConversionError(format!("Invalid XDR: {}", e)))
+            crate::models::TransactionInput::UnsignedXdr(_)
+            | crate::models::TransactionInput::SignedXdr { .. } => {
+                // XDR inputs should not be converted to Transaction
+                // The signer handles TransactionEnvelope XDR directly
+                Err(SignerError::ConversionError(
+                    "XDR inputs should not be converted to Transaction - use envelope directly"
+                        .into(),
+                ))
             }
         }
     }
