@@ -4,6 +4,7 @@ use crate::{
         health, metrics,
     },
     domain, models,
+    services::plugins,
 };
 use utoipa::{
     openapi::security::{Http, HttpAuthScheme, SecurityScheme},
@@ -74,6 +75,7 @@ impl Modify for SecurityAddon {
         domain::SignDataRequest,
         domain::SignTypedDataRequest,
         models::PluginCallRequest,
+        plugins::PluginCallResponse
     ))
 )]
 pub struct ApiDoc;
