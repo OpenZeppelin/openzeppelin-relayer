@@ -41,6 +41,7 @@ impl ScriptExecutor {
     pub async fn execute_typescript(
         script_path: String,
         socket_path: String,
+        script_params: String,
     ) -> Result<ScriptResult, PluginError> {
         if Command::new("ts-node")
             .arg("--version")
@@ -56,6 +57,7 @@ impl ScriptExecutor {
         let output = Command::new("ts-node")
             .arg(script_path)
             .arg(socket_path)
+            .arg(script_params)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -136,6 +138,7 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
+            "{}".to_string(),
         )
         .await;
 
@@ -162,6 +165,7 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
+            "{}".to_string(),
         )
         .await;
 
@@ -189,6 +193,7 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
+            "{}".to_string(),
         )
         .await;
 

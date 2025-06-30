@@ -68,11 +68,15 @@ impl<R: PluginRunnerTrait> PluginService<R> {
     async fn call_plugin<J: JobProducerTrait + 'static>(
         &self,
         code_path: String,
-        _plugin_call_request: PluginCallRequest,
+        plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
-        let result = self.runner.run(&socket_path, code_path, state).await;
+        let script_params = plugin_call_request.params.to_string();
+        let result = self
+            .runner
+            .run(&socket_path, code_path, script_params, state)
+            .await;
 
         match result {
             Ok(script_result) => Ok(PluginCallResponse {
@@ -139,7 +143,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait>()
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,

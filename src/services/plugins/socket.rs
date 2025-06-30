@@ -13,7 +13,7 @@
 //! Example:
 //! 1. Create a new socket connection using `/tmp/socket.sock`
 //! 2. Client sends request (writes in `/tmp/socket.sock`):
-//! ```
+//! ```json
 //! {
 //!   "request_id": "123",
 //!   "relayer_id": "relayer1",
@@ -25,7 +25,7 @@
 //! }
 //! ```
 //! 3. Server process the requests, calls the relayer API and sends back the response (writes in `/tmp/socket.sock`):
-//! ```
+//! ```json
 //! {
 //!   "request_id": "123",
 //!   "result": {
@@ -35,7 +35,7 @@
 //! }
 //! ```
 //! 4. Client reads the response (reads from `/tmp/socket.sock`):
-//! ```
+//! ```json
 //! {
 //!   "request_id": "123",
 //!   "result": {

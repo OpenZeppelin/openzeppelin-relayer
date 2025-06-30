@@ -48,7 +48,19 @@ type Relayer = {
   sendTransaction: (payload: NetworkTransactionRequest) => Promise<Result<SendTransactionResult>>;
 }
 
-export async function runPlugin(main: (plugin: PluginAPI) => Promise<any>) {
+function getPluginParams(): unknown {
+  const pluginParams = process.argv[3];
+
+  if (pluginParams) {
+    try {
+      return JSON.parse(pluginParams);
+    } catch (e) {
+      throw new Error(`Failed to parse payload: ${e}`);
+    }
+  } else return {};
+}
+
+export async function runPlugin(main: (plugin: PluginAPI, pluginParams: unknown) => Promise<any>) {
   const logInterceptor = new LogInterceptor();
 
   try {
@@ -64,8 +76,10 @@ export async function runPlugin(main: (plugin: PluginAPI) => Promise<any>) {
     // Start intercepting logs
     logInterceptor.start();
 
+    const pluginParams = getPluginParams();
+
     // runs main function
-    await main(plugin)
+    await main(plugin, pluginParams)
       .then((result) => {
         // adds return value to the stdout
         logInterceptor.addResult(JSON.stringify(result));
