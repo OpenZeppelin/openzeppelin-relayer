@@ -5279,7 +5279,7 @@ dependencies = [
 
 [[package]]
 name = "openzeppelin-relayer"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "actix-governor",
  "actix-rt",

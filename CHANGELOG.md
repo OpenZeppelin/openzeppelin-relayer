@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.2.0...v0.3.0) (2025-06-30)
+## [1.0.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v0.2.0...v1.0.0) (2025-06-30)
 
 
 ### 🚀 Features
