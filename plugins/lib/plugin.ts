@@ -36,19 +36,35 @@ type SendTransactionResult = {
   id: string;
   relayer_id: string;
   status: string;
-}
+};
 
 type Result<T> = {
   request_id: string;
   result: T;
   error: string | null;
-}
+};
 
 type Relayer = {
-  sendTransaction: (payload: NetworkTransactionRequest) => Promise<Result<SendTransactionResult>>;
+  sendTransaction: (
+    payload: NetworkTransactionRequest
+  ) => Promise<Result<SendTransactionResult>>;
+};
+
+function getPluginParams(): unknown {
+  const pluginParams = process.argv[3];
+
+  if (pluginParams) {
+    try {
+      return JSON.parse(pluginParams);
+    } catch (e) {
+      throw new Error(`Failed to parse payload: ${e}`);
+    }
+  } else return {};
 }
 
-export async function runPlugin(main: (plugin: PluginAPI) => Promise<any>) {
+export async function runPlugin(
+  main: (plugin: PluginAPI, pluginParams: unknown) => Promise<any>
+) {
   const logInterceptor = new LogInterceptor();
 
   try {
@@ -65,7 +81,7 @@ export async function runPlugin(main: (plugin: PluginAPI) => Promise<any>) {
     logInterceptor.start();
 
     // runs main function
-    await main(plugin)
+    await main(plugin, getPluginParams())
       .then((result) => {
         // adds return value to the stdout
         logInterceptor.addResult(JSON.stringify(result));
@@ -75,7 +91,7 @@ export async function runPlugin(main: (plugin: PluginAPI) => Promise<any>) {
         console.error(error);
         // closes socket signaling error
         plugin.closeErrored(error);
-        })
+      })
       .finally(() => {
         plugin.close();
         process.exit(0);
@@ -84,14 +100,17 @@ export async function runPlugin(main: (plugin: PluginAPI) => Promise<any>) {
     // Stop intercepting logs
     logInterceptor.stop();
   } catch (error) {
-      console.error(error);
-      process.exit(1);
+    console.error(error);
+    process.exit(1);
   }
 }
 
 export class PluginAPI {
   socket: net.Socket;
-  pending: Map<string, { resolve: (value: any) => void, reject: (reason: any) => void }>;
+  pending: Map<
+    string,
+    { resolve: (value: any) => void; reject: (reason: any) => void }
+  >;
   private _connectionPromise: Promise<void> | null = null;
   private _connected: boolean = false;
 
@@ -100,39 +119,53 @@ export class PluginAPI {
     this.pending = new Map();
 
     this._connectionPromise = new Promise((resolve, reject) => {
-      this.socket.on('connect', () => {
+      this.socket.on("connect", () => {
         this._connected = true;
         resolve();
       });
 
-      this.socket.on('error', (error) => {
+      this.socket.on("error", (error) => {
         console.error("Socket ERROR:", error);
         reject(error);
       });
     });
 
-    this.socket.on('data', data => {
-      data.toString().split('\n').filter(Boolean).forEach((msg: string) => {
-        const parsed = JSON.parse(msg);
-        const { requestId, result, error } = parsed;
-        const resolver = this.pending.get(requestId);
-        if (resolver) {
-          error ? resolver.reject(error) : resolver.resolve(result);
-          this.pending.delete(requestId);
-        }
-      });
+    this.socket.on("data", (data) => {
+      data
+        .toString()
+        .split("\n")
+        .filter(Boolean)
+        .forEach((msg: string) => {
+          const parsed = JSON.parse(msg);
+          const { requestId, result, error } = parsed;
+          const resolver = this.pending.get(requestId);
+          if (resolver) {
+            error ? resolver.reject(error) : resolver.resolve(result);
+            this.pending.delete(requestId);
+          }
+        });
     });
   }
 
   useRelayer(relayerId: string): Relayer {
     return {
-      sendTransaction: (payload: NetworkTransactionRequest) => this._send<SendTransactionResult>(relayerId, "sendTransaction", payload),
+      sendTransaction: (payload: NetworkTransactionRequest) =>
+        this._send<SendTransactionResult>(
+          relayerId,
+          "sendTransaction",
+          payload
+        ),
     };
   }
 
-  async _send<T>(relayerId: string, method: string, payload: any): Promise<Result<T>> {
+  async _send<T>(
+    relayerId: string,
+    method: string,
+    payload: any
+  ): Promise<Result<T>> {
     const requestId = uuidv4();
-    const message = JSON.stringify({ requestId, relayerId, method, payload }) + "\n";
+    const message =
+      JSON.stringify({ requestId, relayerId, method, payload }) + "\n";
 
     if (!this._connected) {
       await this._connectionPromise;
