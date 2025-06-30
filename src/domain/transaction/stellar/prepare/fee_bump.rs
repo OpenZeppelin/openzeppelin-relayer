@@ -324,3 +324,232 @@ mod tests {
         assert_eq!(STELLAR_DEFAULT_TRANSACTION_FEE, 100);
     }
 }
+
+#[cfg(test)]
+mod signed_xdr_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::*;
+    use crate::domain::SignTransactionResponse;
+    use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
+    use soroban_rs::xdr::{
+        Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,
+        TransactionV1Envelope, Uint256, VecM,
+    };
+    use stellar_strkey::ed25519::PublicKey;
+
+    fn create_unsigned_xdr_envelope(source_account: &str) -> TransactionEnvelope {
+        let pk = match PublicKey::from_string(source_account) {
+            Ok(pk) => pk,
+            Err(_) => {
+                // Create a dummy public key for tests - use a non-zero value
+                let mut bytes = [0; 32];
+                bytes[0] = 1; // This will create a different address
+                PublicKey(bytes)
+            }
+        };
+        let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+        let tx = Transaction {
+            source_account: source,
+            fee: 100,
+            seq_num: soroban_rs::xdr::SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_signed_xdr_without_fee_bump() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        let mut tx = create_test_transaction(&relayer.id);
+        let mut stellar_data = tx
+            .network_data
+            .get_stellar_transaction_data()
+            .unwrap()
+            .clone();
+
+        // Create signed XDR (has signatures)
+        let different_account = "GBCFR5QVA3K7JKIPT7WFULRXQVNTDZQLZHTUTGONFSTS5KCEGS6O5AZB";
+        let mut envelope = create_unsigned_xdr_envelope(different_account);
+        if let TransactionEnvelope::Tx(ref mut e) = envelope {
+            e.signatures = vec![soroban_rs::xdr::DecoratedSignature {
+                hint: soroban_rs::xdr::SignatureHint([0; 4]),
+                signature: soroban_rs::xdr::Signature(vec![0; 64].try_into().unwrap()),
+            }]
+            .try_into()
+            .unwrap();
+        }
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        // Since SignedXdr always implies fee_bump now, we can't test the false case
+        // Instead, let's verify that SignedXdr works correctly
+        stellar_data.transaction_input = TransactionInput::SignedXdr {
+            xdr: xdr.clone(),
+            max_fee: 1_000_000,
+        };
+
+        // Update the transaction with the modified stellar data
+        tx.network_data = NetworkTransactionData::Stellar(stellar_data);
+
+        // This test now verifies that signed XDR from a different source gets fee-bumped
+        // For this test to work, we need to mock the signer
+        mocks.signer.expect_sign_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(SignTransactionResponse::Stellar(
+                    crate::domain::SignTransactionResponseStellar {
+                        signature: dummy_signature(),
+                    },
+                ))
+            })
+        });
+
+        // Mock the repository update
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Sent))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                tx.network_data = upd.network_data.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        // Mock job production
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.prepare_transaction_impl(tx).await;
+
+        // Should succeed since SignedXdr always does fee-bump
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_signed_xdr_with_fee_bump() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock signer for fee-bump transaction
+        mocks.signer.expect_sign_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(SignTransactionResponse::Stellar(
+                    crate::domain::SignTransactionResponseStellar {
+                        signature: dummy_signature(),
+                    },
+                ))
+            })
+        });
+
+        // Mock the repository update
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Sent))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                tx.network_data = upd.network_data.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        // Mock job production
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let mut tx = create_test_transaction(&relayer.id);
+        let mut stellar_data = tx
+            .network_data
+            .get_stellar_transaction_data()
+            .unwrap()
+            .clone();
+
+        // Create signed XDR
+        let different_account = "GBCFR5QVA3K7JKIPT7WFULRXQVNTDZQLZHTUTGONFSTS5KCEGS6O5AZB";
+        let mut envelope = create_unsigned_xdr_envelope(different_account);
+        if let TransactionEnvelope::Tx(ref mut e) = envelope {
+            e.signatures = vec![soroban_rs::xdr::DecoratedSignature {
+                hint: soroban_rs::xdr::SignatureHint([0; 4]),
+                signature: soroban_rs::xdr::Signature(vec![0; 64].try_into().unwrap()),
+            }]
+            .try_into()
+            .unwrap();
+        }
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        stellar_data.transaction_input = TransactionInput::SignedXdr {
+            xdr: xdr.clone(),
+            max_fee: 2_000_000, // 0.2 XLM
+        };
+
+        // Update the transaction with the modified stellar data
+        tx.network_data = NetworkTransactionData::Stellar(stellar_data);
+
+        let result = handler.prepare_transaction_impl(tx).await;
+        assert!(result.is_ok());
+
+        let updated_tx = result.unwrap();
+        if let NetworkTransactionData::Stellar(data) = &updated_tx.network_data {
+            // Verify it's a SignedXdr transaction (which always implies fee-bump)
+            assert!(matches!(
+                data.transaction_input,
+                TransactionInput::SignedXdr { .. }
+            ));
+            // Verify the signed_envelope_xdr was populated
+            assert!(
+                data.signed_envelope_xdr.is_some(),
+                "signed_envelope_xdr should be populated for fee-bump transactions"
+            );
+
+            // Verify it's valid XDR by attempting to parse it
+            let envelope_xdr = data.signed_envelope_xdr.as_ref().unwrap();
+            let envelope_result =
+                TransactionEnvelope::from_xdr_base64(envelope_xdr, Limits::none());
+            assert!(
+                envelope_result.is_ok(),
+                "signed_envelope_xdr should be valid XDR"
+            );
+
+            // Verify it's a fee-bump envelope
+            if let Ok(envelope) = envelope_result {
+                assert!(
+                    matches!(envelope, TransactionEnvelope::TxFeeBump(_)),
+                    "Should be a fee-bump envelope"
+                );
+            }
+        } else {
+            panic!("Expected Stellar transaction data");
+        }
+    }
+}

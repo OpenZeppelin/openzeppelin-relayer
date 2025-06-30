@@ -400,47 +400,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_next_sequence() {
-        use crate::repositories::TransactionCounterTrait;
+        use crate::repositories::MockTransactionCounterTrait;
 
-        // Mock counter service
-        struct MockCounter;
-        impl TransactionCounterTrait for MockCounter {
-            fn get_and_increment(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-            ) -> Result<u64, crate::repositories::TransactionCounterError> {
-                Ok(100)
-            }
+        let mut counter_service = MockTransactionCounterTrait::new();
+        counter_service
+            .expect_get_and_increment()
+            .returning(|_, _| Ok(100));
 
-            fn get(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-            ) -> Result<Option<u64>, crate::repositories::TransactionCounterError> {
-                Ok(Some(100))
-            }
-
-            fn decrement(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-            ) -> Result<u64, crate::repositories::TransactionCounterError> {
-                Ok(99)
-            }
-
-            fn set(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-                _value: u64,
-            ) -> Result<(), crate::repositories::TransactionCounterError> {
-                Ok(())
-            }
-        }
-
-        let counter = MockCounter;
-        let result = get_next_sequence(&counter, "relayer-1", "GTEST");
+        let result = get_next_sequence(&counter_service, "relayer-1", "GTEST");
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 100i64);
@@ -448,47 +415,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_next_sequence_overflow() {
-        use crate::repositories::TransactionCounterTrait;
+        use crate::repositories::MockTransactionCounterTrait;
 
-        // Mock counter service that returns u64::MAX
-        struct MockCounter;
-        impl TransactionCounterTrait for MockCounter {
-            fn get_and_increment(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-            ) -> Result<u64, crate::repositories::TransactionCounterError> {
-                Ok(u64::MAX)
-            }
+        let mut counter_service = MockTransactionCounterTrait::new();
+        counter_service
+            .expect_get_and_increment()
+            .returning(|_, _| Ok(u64::MAX));
 
-            fn get(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-            ) -> Result<Option<u64>, crate::repositories::TransactionCounterError> {
-                Ok(Some(u64::MAX))
-            }
-
-            fn decrement(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-            ) -> Result<u64, crate::repositories::TransactionCounterError> {
-                Ok(u64::MAX - 1)
-            }
-
-            fn set(
-                &self,
-                _relayer_id: &str,
-                _address: &str,
-                _value: u64,
-            ) -> Result<(), crate::repositories::TransactionCounterError> {
-                Ok(())
-            }
-        }
-
-        let counter = MockCounter;
-        let result = get_next_sequence(&counter, "relayer-1", "GTEST");
+        let result = get_next_sequence(&counter_service, "relayer-1", "GTEST");
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -573,5 +507,80 @@ mod tests {
             }
             _ => panic!("Unexpected envelope type"),
         }
+    }
+}
+
+#[cfg(test)]
+mod send_submit_transaction_job_tests {
+    use super::*;
+    use crate::domain::transaction::stellar::test_helpers::*;
+
+    #[tokio::test]
+    async fn send_submit_transaction_job_success() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock successful job production
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .withf(|job, delay| {
+                job.transaction_id == "tx-1" && job.relayer_id == "relayer-1" && delay.is_none()
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+        let tx = create_test_transaction(&relayer.id);
+
+        let result = send_submit_transaction_job(handler.job_producer(), &tx, None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn send_submit_transaction_job_with_delay() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock successful job production with delay
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .withf(|job, delay| {
+                job.transaction_id == "tx-1" && job.relayer_id == "relayer-1" && delay == &Some(30)
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+        let tx = create_test_transaction(&relayer.id);
+
+        let result = send_submit_transaction_job(handler.job_producer(), &tx, Some(30)).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn send_submit_transaction_job_handles_producer_error() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock job producer failure
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(crate::jobs::JobProducerError::QueueError(
+                        "Job queue is full".to_string(),
+                    ))
+                })
+            });
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+        let tx = create_test_transaction(&relayer.id);
+
+        let result = send_submit_transaction_job(handler.job_producer(), &tx, None).await;
+        assert!(result.is_err());
     }
 }

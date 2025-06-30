@@ -513,3 +513,352 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod xdr_transaction_tests {
+    use super::*;
+    use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
+    use crate::domain::transaction::stellar::test_helpers::*;
+    use crate::domain::SignTransactionResponse;
+    use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
+    use soroban_rs::xdr::{
+        Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,
+        TransactionV1Envelope, Uint256, VecM,
+    };
+    use stellar_strkey::ed25519::PublicKey;
+
+    fn create_unsigned_xdr_envelope(source_account: &str) -> TransactionEnvelope {
+        let pk = match PublicKey::from_string(source_account) {
+            Ok(pk) => pk,
+            Err(_) => {
+                // Create a dummy public key for tests - use a non-zero value
+                let mut bytes = [0; 32];
+                bytes[0] = 1; // This will create a different address
+                PublicKey(bytes)
+            }
+        };
+        let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+        let tx = Transaction {
+            source_account: source,
+            fee: 100,
+            seq_num: soroban_rs::xdr::SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_unsigned_xdr_valid_source() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock the counter service to provide a sequence number
+        let expected_sequence = 42i64;
+        mocks
+            .counter
+            .expect_get_and_increment()
+            .returning(move |_, _| Ok(expected_sequence as u64));
+
+        // Mock signer for unsigned XDR
+        mocks
+            .signer
+            .expect_sign_transaction()
+            .withf(move |data| {
+                // Verify that the transaction data has the updated sequence number
+                if let NetworkTransactionData::Stellar(stellar_data) = data {
+                    // Check that the XDR was updated
+                    if let TransactionInput::UnsignedXdr(xdr) = &stellar_data.transaction_input {
+                        // Parse the XDR to verify sequence number
+                        if let Ok(env) = TransactionEnvelope::from_xdr_base64(xdr, Limits::none()) {
+                            match env {
+                                TransactionEnvelope::Tx(e) => e.tx.seq_num.0 == expected_sequence,
+                                TransactionEnvelope::TxV0(e) => e.tx.seq_num.0 == expected_sequence,
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            })
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(SignTransactionResponse::Stellar(
+                        crate::domain::SignTransactionResponseStellar {
+                            signature: dummy_signature(),
+                        },
+                    ))
+                })
+            });
+
+        // Mock the repository update
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Sent))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                tx.network_data = upd.network_data.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        // Mock job production
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let mut tx = create_test_transaction(&relayer.id);
+        let mut stellar_data = tx
+            .network_data
+            .get_stellar_transaction_data()
+            .unwrap()
+            .clone();
+
+        // Create unsigned XDR with relayer as source (with sequence 0)
+        let envelope = create_unsigned_xdr_envelope(&relayer.address);
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        stellar_data.transaction_input = TransactionInput::UnsignedXdr(xdr.clone());
+
+        // Update the transaction with the modified stellar data
+        tx.network_data = NetworkTransactionData::Stellar(stellar_data);
+
+        let result = handler.prepare_transaction_impl(tx).await;
+        assert!(result.is_ok());
+
+        // Verify the resulting transaction has the correct sequence number
+        if let Ok(prepared_tx) = result {
+            if let NetworkTransactionData::Stellar(data) = &prepared_tx.network_data {
+                assert_eq!(data.sequence_number, Some(expected_sequence));
+            } else {
+                panic!("Expected Stellar transaction data");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unsigned_xdr_invalid_source() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock counter service (will be called before validation fails)
+        mocks
+            .counter
+            .expect_get_and_increment()
+            .returning(|_, _| Ok(1));
+
+        // Mock finalize_transaction_state for failure handling
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        // Mock notification for failed transaction
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Mock find_by_status for enqueue_next_pending_transaction
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .returning(|_, _| Ok(vec![])); // No pending transactions
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let mut tx = create_test_transaction(&relayer.id);
+        let mut stellar_data = tx
+            .network_data
+            .get_stellar_transaction_data()
+            .unwrap()
+            .clone();
+
+        // Create unsigned XDR with different source
+        let different_account = "GBCFR5QVA3K7JKIPT7WFULRXQVNTDZQLZHTUTGONFSTS5KCEGS6O5AZB";
+        let envelope = create_unsigned_xdr_envelope(different_account);
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        stellar_data.transaction_input = TransactionInput::UnsignedXdr(xdr.clone());
+
+        // Update the transaction with the modified stellar data
+        tx.network_data = NetworkTransactionData::Stellar(stellar_data);
+
+        let result = handler.prepare_transaction_impl(tx).await;
+        assert!(result.is_err());
+        if let Err(TransactionError::ValidationError(msg)) = result {
+            // The StellarValidationError formats differently - check for the expected/actual pattern
+            assert!(
+                msg.contains("does not match relayer account"),
+                "Error message was: {}",
+                msg
+            );
+        } else {
+            panic!("Expected ValidationError, got {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unsigned_xdr_fee_update() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock the counter service to provide a sequence number
+        let expected_sequence = 42i64;
+        let relayer_id = relayer.id.clone();
+        mocks
+            .counter
+            .expect_get_and_increment()
+            .withf(move |id, _| id == relayer_id)
+            .returning(move |_, _| Ok(expected_sequence as u64));
+
+        // Mock signer that verifies fee was updated
+        mocks
+            .signer
+            .expect_sign_transaction()
+            .withf(move |data| {
+                match data {
+                    NetworkTransactionData::Stellar(stellar_data) => {
+                        // Also verify the fee field is set correctly
+                        if stellar_data.fee != Some(100) {
+                            return false;
+                        }
+
+                        if let TransactionInput::UnsignedXdr(xdr) = &stellar_data.transaction_input
+                        {
+                            if let Ok(env) =
+                                TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
+                            {
+                                match env {
+                                    TransactionEnvelope::Tx(e) => {
+                                        // Verify fee was updated to at least minimum
+                                        e.tx.fee >= STELLAR_DEFAULT_TRANSACTION_FEE
+                                    }
+                                    TransactionEnvelope::TxV0(e) => {
+                                        e.tx.fee >= STELLAR_DEFAULT_TRANSACTION_FEE
+                                    }
+                                    _ => false,
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            })
+            .returning(move |_| {
+                Box::pin(async move {
+                    Ok(SignTransactionResponse::Stellar(
+                        crate::domain::SignTransactionResponseStellar {
+                            signature: crate::models::DecoratedSignature {
+                                hint: soroban_rs::xdr::SignatureHint([0; 4]),
+                                signature: soroban_rs::xdr::Signature(
+                                    vec![1, 2, 3, 4].try_into().unwrap(),
+                                ),
+                            },
+                        },
+                    ))
+                })
+            });
+
+        // Mock repository and job producer
+        mocks.tx_repo.expect_partial_update().returning(|_, _| {
+            let mut tx = create_test_transaction("test");
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signed_envelope_xdr = Some("test-xdr".to_string());
+            }
+            Ok(tx)
+        });
+
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let mut tx = create_test_transaction(&relayer.id);
+        let mut stellar_data = tx
+            .network_data
+            .get_stellar_transaction_data()
+            .unwrap()
+            .clone();
+
+        // Create unsigned XDR with low fee (1 stroop) and a payment operation
+        let mut envelope = create_unsigned_xdr_envelope(&relayer.address);
+
+        // Add a payment operation so fee calculation works
+        let payment_op = soroban_rs::xdr::Operation {
+            source_account: None,
+            body: soroban_rs::xdr::OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                destination: soroban_rs::xdr::MuxedAccount::Ed25519(soroban_rs::xdr::Uint256(
+                    [0; 32],
+                )),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1000000,
+            }),
+        };
+
+        match &mut envelope {
+            TransactionEnvelope::Tx(ref mut e) => {
+                e.tx.fee = 1;
+                e.tx.operations = vec![payment_op].try_into().unwrap();
+            }
+            TransactionEnvelope::TxV0(ref mut e) => {
+                e.tx.fee = 1;
+                e.tx.operations = vec![payment_op].try_into().unwrap();
+            }
+            _ => panic!("Unexpected envelope type"),
+        }
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        stellar_data.transaction_input = TransactionInput::UnsignedXdr(xdr);
+
+        // Update the transaction with the modified stellar data
+        tx.network_data = NetworkTransactionData::Stellar(stellar_data);
+
+        let result = handler.prepare_transaction_impl(tx).await;
+        assert!(
+            result.is_ok(),
+            "Expected successful preparation, got: {:?}",
+            result
+        );
+    }
+}
