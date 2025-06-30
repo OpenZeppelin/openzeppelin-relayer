@@ -132,7 +132,7 @@
 * Plat 6286 write tests for metrics and middleware functions ([#70](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/70)) ([18124fb](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/18124fbbfbc26f300648a7a4050ebf9be72465ac))
 * PLAT-6426 Increase test coverage ([#118](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/118)) ([1fa41f0](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/1fa41f0f225c9d515690738e960073396dce66ce))
 * PLAT-6478 create unit test for use of on relayers dotenv ([#139](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/139)) ([509e166](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/509e1664518823ef3844e52e818707f3371ddbff))
-* plat-6480 allow transfering wrapped sol tokens ([#132](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/132)) ([f04e66a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f04e66a568c877c2a4c5c5378fb6017c2e41d2c6))
+* plat-6480 allow transferring wrapped sol tokens ([#132](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/132)) ([f04e66a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f04e66a568c877c2a4c5c5378fb6017c2e41d2c6))
 
 
 ### 📚 Documentation

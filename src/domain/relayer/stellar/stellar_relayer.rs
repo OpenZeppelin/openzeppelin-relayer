@@ -23,7 +23,8 @@
 use crate::{
     constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
-        next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+        stellar::next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{

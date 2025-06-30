@@ -14,8 +14,8 @@
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, SolanaNetwork, StellarNetwork,
-        TransactionError, TransactionRepoModel,
+        EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel, SignerRepoModel,
+        SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -32,15 +32,17 @@ use eyre::Result;
 use mockall::automock;
 use std::sync::Arc;
 
-mod evm;
-mod solana;
-mod stellar;
-mod util;
+pub mod evm;
+pub mod solana;
+pub mod stellar;
 
-pub use evm::*;
-pub use solana::*;
-pub use stellar::*;
+mod util;
 pub use util::*;
+
+// Explicit re-exports to avoid ambiguous glob re-exports
+pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
+pub use solana::SolanaRelayerTransaction;
+pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
 /// A trait that defines the operations for handling transactions across different networks.
 #[cfg_attr(test, automock)]
@@ -122,14 +124,16 @@ pub trait Transaction {
     ///
     /// # Arguments
     ///
-    /// * `tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `old_tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `new_tx_request` - A `NetworkTransactionRequest` representing the new transaction data.
     ///
     /// # Returns
     ///
     /// A `Result` containing the new `TransactionRepoModel` or a `TransactionError`.
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        old_tx: TransactionRepoModel,
+        new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError>;
 
     /// Signs a transaction.
@@ -275,19 +279,25 @@ impl Transaction for NetworkTransaction {
     ///
     /// # Arguments
     ///
-    /// * `tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `old_tx` - A `TransactionRepoModel` representing the transaction to be replaced.
+    /// * `new_tx_request` - A `NetworkTransactionRequest` representing the new transaction data.
     ///
     /// # Returns
     ///
     /// A `Result` containing the new `TransactionRepoModel` or a `TransactionError`.
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        old_tx: TransactionRepoModel,
+        new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
-            NetworkTransaction::Evm(relayer) => relayer.replace_transaction(tx).await,
+            NetworkTransaction::Evm(relayer) => {
+                relayer.replace_transaction(old_tx, new_tx_request).await
+            }
             NetworkTransaction::Solana(_) => solana_not_supported_transaction(),
-            NetworkTransaction::Stellar(relayer) => relayer.replace_transaction(tx).await,
+            NetworkTransaction::Stellar(relayer) => {
+                relayer.replace_transaction(old_tx, new_tx_request).await
+            }
         }
     }
 
@@ -404,7 +414,7 @@ impl RelayerTransactionFactory {
                 let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
-                let price_calculator = PriceCalculator::new(
+                let price_calculator = evm::PriceCalculator::new(
                     EvmGasPriceService::new(evm_provider.clone(), network),
                     network_extra_fee_calculator,
                 );

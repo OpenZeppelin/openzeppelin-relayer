@@ -343,6 +343,7 @@ mod solana_signer_factory_tests {
                     universe_domain: "universe_domain".to_string(),
                 },
                 key: GoogleCloudKmsSignerKeyConfig {
+                    location: "global".to_string(),
                     key_id: "id".to_string(),
                     key_ring_id: "key_ring".to_string(),
                     key_version: 1,
@@ -493,6 +494,7 @@ mod solana_signer_factory_tests {
                     universe_domain: "universe_domain".to_string(),
                 },
                 key: GoogleCloudKmsSignerKeyConfig {
+                    location: "global".to_string(),
                     key_id: "id".to_string(),
                     key_ring_id: "key_ring".to_string(),
                     key_version: 1,

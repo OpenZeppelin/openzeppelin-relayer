@@ -17,7 +17,7 @@ pub enum PluginMethod {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct Request {
     pub request_id: String,
     pub relayer_id: String,

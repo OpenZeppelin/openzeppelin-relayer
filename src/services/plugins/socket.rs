@@ -41,15 +41,24 @@ impl SocketService {
         shutdown_rx: oneshot::Receiver<()>,
         state: Arc<web::ThinData<AppState<J>>>,
         relayer_api: Arc<R>,
-    ) {
+    ) -> Result<Vec<String>, PluginError> {
         let mut shutdown = shutdown_rx;
+
+        let mut traces = Vec::new();
 
         loop {
             let state = Arc::clone(&state);
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    tokio::spawn(Self::handle_connection::<J, R>(stream, state, relayer_api));
+                    let result = tokio::spawn(Self::handle_connection::<J, R>(stream, state, relayer_api))
+                        .await
+                        .map_err(|e| PluginError::SocketError(e.to_string()))?;
+
+                    match result {
+                        Ok(trace) => traces.extend(trace),
+                        Err(e) => return Err(e),
+                    }
                 }
                 _ = &mut shutdown => {
                     println!("Shutdown signal received. Closing listener.");
@@ -57,6 +66,8 @@ impl SocketService {
                 }
             }
         }
+
+        Ok(traces)
     }
 
     async fn handle_connection<
@@ -66,11 +77,14 @@ impl SocketService {
         stream: UnixStream,
         state: Arc<web::ThinData<AppState<J>>>,
         relayer_api: Arc<R>,
-    ) -> Result<(), PluginError> {
+    ) -> Result<Vec<String>, PluginError> {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
+        let mut traces = Vec::new();
 
         while let Ok(Some(line)) = reader.next_line().await {
+            traces.push(line.clone());
+
             let request: Request =
                 serde_json::from_str(&line).map_err(|e| PluginError::PluginError(e.to_string()))?;
 
@@ -83,7 +97,7 @@ impl SocketService {
             let _ = w.write_all(response_str.as_bytes()).await;
         }
 
-        Ok(())
+        Ok(traces)
     }
 }
 
@@ -130,8 +144,8 @@ mod tests {
         shutdown_tx.send(()).unwrap();
 
         let result = timeout(Duration::from_millis(100), listen_handle).await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
+        assert!(result.is_ok(), "Listen handle timed out");
+        assert!(result.unwrap().is_ok(), "Listen handle returned error");
     }
 
     #[tokio::test]
@@ -154,7 +168,7 @@ mod tests {
         let state = create_mock_app_state(None, None, None, None).await;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        tokio::spawn(async move {
+        let listen_handle = tokio::spawn(async move {
             service
                 .listen(
                     shutdown_rx,
@@ -181,11 +195,11 @@ mod tests {
 
         client.write_all(request_json.as_bytes()).await.unwrap();
 
-        let mut reader = BufReader::new(client);
-        let mut response = String::new();
+        let mut reader = BufReader::new(&mut client);
+        let mut response_str = String::new();
         let read_result = timeout(
             Duration::from_millis(1000),
-            reader.read_line(&mut response), // This is the correct method
+            reader.read_line(&mut response_str),
         )
         .await;
 
@@ -198,10 +212,24 @@ mod tests {
         assert!(bytes_read > 0, "No data received");
         shutdown_tx.send(()).unwrap();
 
-        let response: Response = serde_json::from_str(&response).unwrap();
+        let response: Response = serde_json::from_str(&response_str).unwrap();
 
-        assert!(response.error.is_none());
-        assert!(response.result.is_some());
-        assert_eq!(response.request_id, request.request_id);
+        assert!(response.error.is_none(), "Error should be none");
+        assert!(response.result.is_some(), "Result should be some");
+        assert_eq!(
+            response.request_id, request.request_id,
+            "Request id mismatch"
+        );
+
+        client.shutdown().await.unwrap();
+
+        let traces = listen_handle.await.unwrap().unwrap();
+
+        assert_eq!(traces.len(), 1);
+        assert_eq!(
+            request_json,
+            traces[0].clone() + "\n",
+            "Request json mismatch with trace"
+        );
     }
 }

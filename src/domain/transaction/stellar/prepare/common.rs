@@ -10,7 +10,8 @@ use soroban_rs::{
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{
-        i64_from_u64, update_xdr_fee, update_xdr_sequence, xdr_needs_simulation,
+        stellar::i64_from_u64,
+        xdr_utils::{update_xdr_fee, update_xdr_sequence, xdr_needs_simulation},
         SignTransactionResponse,
     },
     jobs::{JobProducerTrait, TransactionSend},

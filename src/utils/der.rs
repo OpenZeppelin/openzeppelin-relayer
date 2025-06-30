@@ -1,4 +1,7 @@
-//! Derivation of blockchain addresses.
+//! DER (Distinguished Encoding Rules) operations for cryptographic keys.
+//!
+//! This module provides utilities for parsing and extracting information from
+//! DER-encoded cryptographic keys, particularly for ECDSA operations.
 
 use k256::pkcs8::DecodePublicKey;
 
@@ -23,80 +26,37 @@ pub fn extract_public_key_from_der(der: &[u8]) -> Result<[u8; 64], DerError> {
     Ok(array)
 }
 
-/// Derive EVM address from the DER payload.
-pub fn derive_ethereum_address_from_der(der: &[u8]) -> Result<[u8; 20], DerError> {
-    let pub_key = extract_public_key_from_der(der)?;
-
-    let hash = alloy::primitives::keccak256(pub_key);
-
-    // Take the last 20 bytes of the hash
-    let address_bytes = &hash[hash.len() - 20..];
-
-    let mut array = [0u8; 20];
-    array.copy_from_slice(address_bytes);
-
-    Ok(array)
-}
-
-/// Derive EVM address from the PEM string.
-pub fn derive_ethereum_address_from_pem(pem_str: &str) -> Result<[u8; 20], DerError> {
-    let pkey = pem::parse(pem_str).map_err(|e| DerError::ParseError(e.to_string()))?;
-    let der = pkey.contents();
-    derive_ethereum_address_from_der(der)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    static VALID_SECP256K1_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh
-    kFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n";
+    const VALID_SECP256K1_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh\nkFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n"; // noboost
 
     #[test]
-    fn test_derive_ethereum_address_from_pem() {
-        let pem = "not-a-valid-pem";
-        let result = derive_ethereum_address_from_pem(pem);
+    fn test_extract_public_key_from_der_with_invalid_data() {
+        let invalid_der = &[1, 2, 3];
+        let result = extract_public_key_from_der(invalid_der);
         assert!(result.is_err());
 
-        let result = derive_ethereum_address_from_pem(VALID_SECP256K1_PEM);
-        assert!(result.is_ok());
-        assert_eq!(
-            format!("0x{}", hex::encode(result.unwrap())),
-            "0xeeb8861f51b3f3f2204d64bbf7a7eb25e1b4d6cd"
-        );
+        assert!(matches!(result, Err(DerError::ParseError(_))));
     }
 
     #[test]
-    fn test_extract_public_key_from_der() {
-        let der = &[1, 2, 3];
-        let result = extract_public_key_from_der(der);
-        assert!(result.is_err());
-
+    fn test_extract_public_key_from_der_with_valid_secp256k1() {
         let pem = pem::parse(VALID_SECP256K1_PEM).unwrap();
         let der = pem.contents();
         let result = extract_public_key_from_der(der);
 
         assert!(result.is_ok());
+        let public_key = result.unwrap();
+
+        // Verify the public key is 64 bytes
+        assert_eq!(public_key.len(), 64);
+
+        // Verify the expected public key value
         assert_eq!(
-            format!("0x{}", hex::encode(result.unwrap())),
+            format!("0x{}", hex::encode(public_key)),
             "0x8c9689879c1f670be3f1bddb4381988a4a834cb5d6523321905b3d9468f637d075ef3a37ee9e0f4b2f7dac38a8d101cb69da6ca34aed4c90d2212456f4c74ea8"
-        );
-    }
-
-    #[test]
-    fn test_derive_ethereum_address_from_der() {
-        let der = &[1, 2, 3];
-        let result = derive_ethereum_address_from_der(der);
-        assert!(result.is_err());
-
-        let pem = pem::parse(VALID_SECP256K1_PEM).unwrap();
-        let der = pem.contents();
-        let result = derive_ethereum_address_from_der(der);
-
-        assert!(result.is_ok());
-        assert_eq!(
-            format!("0x{}", hex::encode(result.unwrap())),
-            "0xeeb8861f51b3f3f2204d64bbf7a7eb25e1b4d6cd"
         );
     }
 }

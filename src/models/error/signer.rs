@@ -1,7 +1,7 @@
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::services::{AwsKmsError, TurnkeyError, VaultError};
+use crate::services::{AwsKmsError, GoogleCloudKmsError, TurnkeyError, VaultError};
 
 use super::TransactionError;
 
@@ -31,6 +31,9 @@ pub enum SignerError {
 
     #[error("AWS KMS error: {0}")]
     AwsKmsError(#[from] AwsKmsError),
+
+    #[error("Google Cloud KMS error: {0}")]
+    GoogleCloudKmsError(#[from] GoogleCloudKmsError),
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),
@@ -85,6 +88,10 @@ mod tests {
                 SignerError::Configuration("missing parameter".to_string()),
                 "Invalid configuration: missing parameter",
             ),
+            (
+                SignerError::ConversionError("conversion failed".to_string()),
+                "Transaction conversion error: conversion failed",
+            ),
         ];
 
         for (error, expected_message) in test_cases {
@@ -115,6 +122,45 @@ mod tests {
                 assert_eq!(e.to_string(), "Authentication failed: no permission");
             }
             _ => panic!("Expected SignerError::VaultError"),
+        }
+    }
+
+    #[test]
+    fn test_signer_error_from_google_cloud_kms_error() {
+        let gcp_error = GoogleCloudKmsError::ApiError("authentication failed".to_string());
+        let signer_error = SignerError::from(gcp_error);
+
+        match signer_error {
+            SignerError::GoogleCloudKmsError(e) => {
+                assert_eq!(e.to_string(), "KMS API error: authentication failed");
+            }
+            _ => panic!("Expected SignerError::GoogleCloudKmsError"),
+        }
+    }
+
+    #[test]
+    fn test_signer_error_from_turnkey_error() {
+        let turnkey_error = TurnkeyError::AuthenticationFailed("api failure".to_string());
+        let signer_error = SignerError::from(turnkey_error);
+
+        match signer_error {
+            SignerError::TurnkeyError(e) => {
+                assert_eq!(e.to_string(), "Authentication failed: api failure");
+            }
+            _ => panic!("Expected SignerError::TurnkeyError"),
+        }
+    }
+
+    #[test]
+    fn test_signer_error_from_aws_kms_error() {
+        let aws_error = AwsKmsError::ConfigError("invalid credentials".to_string());
+        let signer_error = SignerError::from(aws_error);
+
+        match signer_error {
+            SignerError::AwsKmsError(e) => {
+                assert_eq!(e.to_string(), "AWS KMS config error: invalid credentials");
+            }
+            _ => panic!("Expected SignerError::AwsKmsError"),
         }
     }
 

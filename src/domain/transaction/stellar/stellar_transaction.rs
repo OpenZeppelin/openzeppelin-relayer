@@ -7,8 +7,9 @@ use crate::{
     domain::transaction::Transaction,
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
-        produce_transaction_update_notification_payload, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload, NetworkTransactionRequest,
+        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
+        TransactionUpdateRequest,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -250,9 +251,10 @@ where
 
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        _old_tx: TransactionRepoModel,
+        _new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        Ok(tx)
+        Ok(_old_tx)
     }
 
     async fn sign_transaction(

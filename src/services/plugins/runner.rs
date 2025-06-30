@@ -39,14 +39,26 @@ impl PluginRunner {
 
         let server_handle = tokio::spawn(async move {
             let relayer_api = Arc::new(RelayerApi);
-            socket_service.listen(shutdown_rx, state, relayer_api).await;
+            socket_service.listen(shutdown_rx, state, relayer_api).await
         });
 
-        let script_result =
+        let mut script_result =
             ScriptExecutor::execute_typescript(script_path, socket_path_clone).await?;
 
         let _ = shutdown_tx.send(());
-        let _ = server_handle.await;
+
+        let server_handle = server_handle
+            .await
+            .map_err(|e| PluginError::SocketError(e.to_string()))?;
+
+        match server_handle {
+            Ok(traces) => {
+                script_result.trace = traces;
+            }
+            Err(e) => {
+                return Err(PluginError::SocketError(e.to_string()));
+            }
+        }
 
         Ok(script_result)
     }
@@ -107,8 +119,6 @@ mod tests {
                 Arc::new(web::ThinData(state)),
             )
             .await;
-
-        println!("Result: {:#?}", result);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().output, "test\n");

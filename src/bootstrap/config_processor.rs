@@ -210,6 +210,7 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
                         .clone(),
                 },
                 key: GoogleCloudKmsSignerKeyConfig {
+                    location: google_cloud_kms_config.key.location.clone(),
                     key_id: google_cloud_kms_config.key.key_id.clone(),
                     key_ring_id: google_cloud_kms_config.key.key_ring_id.clone(),
                     key_version: google_cloud_kms_config.key.key_version,
@@ -1171,6 +1172,7 @@ mod tests {
                 universe_domain: "googleapis.com".to_string(),
             },
             key: KmsKeyConfig {
+                location: "global".to_string(),
                 key_id: "fake-key-id".to_string(),
                 key_ring_id: "fake-key-ring-id".to_string(),
                 key_version: 1,

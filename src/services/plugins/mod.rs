@@ -35,6 +35,14 @@ pub enum PluginError {
     PluginError(String),
     #[error("Relayer error: {0}")]
     RelayerError(String),
+    #[error("Plugin execution error: {0}")]
+    PluginExecutionError(String),
+}
+
+impl From<PluginError> for String {
+    fn from(error: PluginError) -> Self {
+        error.to_string()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,6 +51,7 @@ pub struct PluginCallResponse {
     pub message: String,
     pub output: String,
     pub error: String,
+    pub traces: Vec<String>,
 }
 
 #[derive(Default)]
@@ -62,14 +71,18 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
-        let result = self.runner.run(&socket_path, code_path, state).await?;
+        let result = self.runner.run(&socket_path, code_path, state).await;
 
-        Ok(PluginCallResponse {
-            success: true,
-            message: "Plugin called successfully".to_string(),
-            output: result.output,
-            error: result.error,
-        })
+        match result {
+            Ok(script_result) => Ok(PluginCallResponse {
+                success: true,
+                message: "Plugin called successfully".to_string(),
+                output: script_result.output,
+                error: script_result.error,
+                traces: script_result.trace,
+            }),
+            Err(e) => Err(PluginError::PluginExecutionError(e.to_string())),
+        }
     }
 }
 
@@ -128,6 +141,7 @@ mod tests {
                 Ok(ScriptResult {
                     output: "test-output".to_string(),
                     error: "test-error".to_string(),
+                    trace: Vec::new(),
                 })
             });
 
@@ -144,5 +158,12 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_from_plugin_error_to_string() {
+        let error = PluginError::PluginExecutionError("test-error".to_string());
+        let result: String = error.into();
+        assert_eq!(result, "Plugin execution error: test-error");
     }
 }

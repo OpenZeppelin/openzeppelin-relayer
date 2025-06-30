@@ -126,10 +126,11 @@ async fn cancel_transaction(
 #[put("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn replace_transaction(
     path: web::Path<TransactionPath>,
+    req: web::Json<serde_json::Value>,
     data: web::ThinData<AppState<JobProducer>>,
 ) -> impl Responder {
     let path = path.into_inner();
-    relayer::replace_transaction(path.relayer_id, path.transaction_id, data).await
+    relayer::replace_transaction(path.relayer_id, path.transaction_id, req.into_inner(), data).await
 }
 
 /// Signs data using the specified relayer.
@@ -188,28 +189,122 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 mod tests {
     use super::*;
     use crate::{
-        jobs::{JobProducer, Queue},
+        config::{EvmNetworkConfig, NetworkConfigCommon},
+        jobs::MockJobProducerTrait,
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage,
+            InMemoryTransactionRepository, RelayerRepositoryStorage, Repository,
         },
     };
     use actix_web::{http::StatusCode, test, App};
     use std::sync::Arc;
 
     // Simple mock for AppState
-    async fn get_test_app_state() -> AppState<JobProducer> {
+    async fn get_test_app_state() -> AppState<MockJobProducerTrait> {
+        let relayer_repo = Arc::new(RelayerRepositoryStorage::in_memory(
+            InMemoryRelayerRepository::new(),
+        ));
+        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
+        let signer_repo = Arc::new(InMemorySignerRepository::new());
+        let network_repo = Arc::new(InMemoryNetworkRepository::new());
+
+        // Create test entities so routes don't return 404
+
+        // Create test network configuration first
+        let test_network = crate::models::NetworkRepoModel {
+            id: "evm:ethereum".to_string(),
+            name: "ethereum".to_string(),
+            network_type: crate::models::NetworkType::Evm,
+            config: crate::models::NetworkConfigData::Evm(EvmNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "ethereum".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(12000),
+                    is_testnet: Some(false),
+                    tags: None,
+                },
+                chain_id: Some(1),
+                required_confirmations: Some(12),
+                features: None,
+                symbol: Some("ETH".to_string()),
+            }),
+        };
+        network_repo.create(test_network).await.unwrap();
+
+        // Create test signer first
+        let test_signer = crate::models::SignerRepoModel {
+            id: "test-signer".to_string(),
+            config: crate::models::SignerConfig::Test(crate::models::LocalSignerConfig {
+                raw_key: secrets::SecretVec::new(32, |v| v.copy_from_slice(&[0u8; 32])),
+            }),
+        };
+        signer_repo.create(test_signer).await.unwrap();
+
+        // Create test relayer
+        let test_relayer = crate::models::RelayerRepoModel {
+            id: "test-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "ethereum".to_string(),
+            network_type: crate::models::NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            address: "0x1234567890123456789012345678901234567890".to_string(),
+            paused: false,
+            system_disabled: false,
+            policies: crate::models::RelayerNetworkPolicy::Evm(
+                crate::models::RelayerEvmPolicy::default(),
+            ),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+        relayer_repo.create(test_relayer).await.unwrap();
+
+        // Create test transaction
+        let test_transaction = crate::models::TransactionRepoModel {
+            id: "tx-123".to_string(),
+            relayer_id: "test-id".to_string(),
+            status: crate::models::TransactionStatus::Pending,
+            status_reason: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_data: crate::models::NetworkTransactionData::Evm(
+                crate::models::EvmTransactionData {
+                    gas_price: Some(20000000000u128),
+                    gas_limit: 21000u64,
+                    nonce: Some(1u64),
+                    value: crate::models::U256::from(0u64),
+                    data: Some("0x".to_string()),
+                    from: "0x1234567890123456789012345678901234567890".to_string(),
+                    to: Some("0x9876543210987654321098765432109876543210".to_string()),
+                    chain_id: 1u64,
+                    hash: Some("0xabcdef".to_string()),
+                    signature: None,
+                    speed: None,
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    raw: None,
+                },
+            ),
+            priced_at: None,
+            hashes: vec!["0xabcdef".to_string()],
+            network_type: crate::models::NetworkType::Evm,
+            noop_count: None,
+            is_canceled: Some(false),
+        };
+        transaction_repo.create(test_transaction).await.unwrap();
+
         AppState {
-            relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
-                InMemoryRelayerRepository::new(),
-            )),
-            transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
-            signer_repository: Arc::new(InMemorySignerRepository::new()),
+            relayer_repository: relayer_repo,
+            transaction_repository: transaction_repo,
+            signer_repository: signer_repo,
             notification_repository: Arc::new(InMemoryNotificationRepository::new()),
-            network_repository: Arc::new(InMemoryNetworkRepository::new()),
+            network_repository: network_repo,
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
-            job_producer: Arc::new(JobProducer::new(Queue::setup().await.unwrap())),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }
     }
@@ -219,7 +314,7 @@ mod tests {
         // Create a test app with our routes
         let app = test::init_service(
             App::new()
-                .app_data(web::Data::new(get_test_app_state()))
+                .app_data(web::Data::new(get_test_app_state().await))
                 .configure(init),
         )
         .await;
@@ -241,7 +336,7 @@ mod tests {
         // Test PATCH /relayers/{id}
         let req = test::TestRequest::patch()
             .uri("/relayers/test-id")
-            .set_json(serde_json::json!({}))
+            .set_json(serde_json::json!({"paused": false}))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -306,6 +401,7 @@ mod tests {
         // Test PUT /relayers/{id}/transactions/{tx_id}
         let req = test::TestRequest::put()
             .uri("/relayers/test-id/transactions/tx-123")
+            .set_json(serde_json::json!({}))
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);

@@ -36,6 +36,7 @@ mod tests {
             message: "Plugin called successfully".to_string(),
             output: String::from(""),
             error: String::from(""),
+            traces: Vec::new(),
         })
     }
 
