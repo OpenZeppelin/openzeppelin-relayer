@@ -236,11 +236,48 @@ impl NetworkFileLoader {
 }
 
 /// Represents the source of network configurations for deserialization.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum NetworksSource {
     List(Vec<NetworkFileConfig>),
     Path(String),
+}
+
+impl Default for NetworksSource {
+    fn default() -> Self {
+        NetworksSource::Path("./config/networks".to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for NetworksSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+        use serde_json::Value;
+
+        // First try to deserialize as a generic Value to determine the type
+        let value = Value::deserialize(deserializer)?;
+
+        match value {
+            Value::Null => Ok(NetworksSource::default()),
+            Value::String(s) => {
+                if s.is_empty() {
+                    Ok(NetworksSource::default())
+                } else {
+                    Ok(NetworksSource::Path(s))
+                }
+            }
+            Value::Array(arr) => {
+                let networks: Vec<NetworkFileConfig> = serde_json::from_value(Value::Array(arr))
+                    .map_err(|e| {
+                        de::Error::custom(format!("Failed to deserialize network array: {}", e))
+                    })?;
+                Ok(NetworksSource::List(networks))
+            }
+            _ => Err(de::Error::custom("Expected an array, string, or null")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1087,5 +1124,80 @@ mod tests {
             result.unwrap_err(),
             ConfigFileError::InvalidFormat(_)
         ));
+    }
+
+    #[test]
+    fn test_networks_source_default() {
+        let default_source = NetworksSource::default();
+        match default_source {
+            NetworksSource::Path(path) => {
+                assert_eq!(path, "./config/networks");
+            }
+            _ => panic!("Default should be a Path variant"),
+        }
+    }
+
+    #[test]
+    fn test_networks_source_deserialize_null() {
+        let json = r#"null"#;
+        let result: Result<NetworksSource, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            NetworksSource::Path(path) => {
+                assert_eq!(path, "./config/networks");
+            }
+            _ => panic!("Expected default Path variant"),
+        }
+    }
+
+    #[test]
+    fn test_networks_source_deserialize_empty_string() {
+        let json = r#""""#;
+        let result: Result<NetworksSource, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            NetworksSource::Path(path) => {
+                assert_eq!(path, "./config/networks");
+            }
+            _ => panic!("Expected default Path variant"),
+        }
+    }
+
+    #[test]
+    fn test_networks_source_deserialize_valid_path() {
+        let json = r#""/custom/path""#;
+        let result: Result<NetworksSource, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            NetworksSource::Path(path) => {
+                assert_eq!(path, "/custom/path");
+            }
+            _ => panic!("Expected Path variant"),
+        }
+    }
+
+    #[test]
+    fn test_networks_source_deserialize_array() {
+        let json = r#"[{"type": "evm", "network": "test", "chain_id": 1, "rpc_urls": ["http://localhost:8545"], "symbol": "ETH", "required_confirmations": 1}]"#;
+        let result: Result<NetworksSource, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            NetworksSource::List(networks) => {
+                assert_eq!(networks.len(), 1);
+                assert_eq!(networks[0].network_name(), "test");
+            }
+            _ => panic!("Expected List variant"),
+        }
+    }
+
+    #[test]
+    fn test_networks_source_deserialize_invalid_type() {
+        let json = r#"42"#;
+        let result: Result<NetworksSource, _> = serde_json::from_str(json);
+        assert!(result.is_err());
     }
 }

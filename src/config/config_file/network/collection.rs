@@ -32,13 +32,16 @@ pub struct NetworksFileConfig {
 /// Custom deserialization logic for `NetworksFileConfig`.
 ///
 /// This allows `NetworksFileConfig` to be created from either a direct list of network
-/// configurations or a path string pointing to a directory of configuration files.
+/// configurations, a path string pointing to a directory of configuration files, or null/missing
+/// for the default path ("./config/networks").
 impl<'de> Deserialize<'de> for NetworksFileConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let source = NetworksSource::deserialize(deserializer)?;
+        // Use Option to handle missing fields gracefully
+        let source_option: Option<NetworksSource> = Option::deserialize(deserializer)?;
+        let source = source_option.unwrap_or_default();
 
         let final_networks =
             NetworkFileLoader::load_from_source(source).map_err(de::Error::custom)?;
@@ -1149,5 +1152,16 @@ mod tests {
 
         let network_large_index = config.get(100);
         assert!(network_large_index.is_none());
+    }
+
+    #[test]
+    fn test_networks_source_default() {
+        let default_source = NetworksSource::default();
+        match default_source {
+            NetworksSource::Path(path) => {
+                assert_eq!(path, "./config/networks");
+            }
+            _ => panic!("Default should be a Path variant"),
+        }
     }
 }

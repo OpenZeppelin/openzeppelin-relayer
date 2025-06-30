@@ -881,7 +881,7 @@ mod tests {
         }
         "#;
         let result: Result<Config, _> = serde_json::from_str(config_str);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     use std::fs::File;

@@ -32,6 +32,22 @@ Networks are defined in JSON configuration files, allowing you to:
 
 == Configuration Methods
 
+=== Default Network Configuration
+
+If no `networks` field is specified in your `config.json`, the relayer will automatically load network configurations from the `./config/networks` directory. This is the default behavior.
+
+[source,json]
+----
+{
+  "relayers": [...],
+  "notifications": [...],
+  "signers": [...]
+  // No "networks" field - defaults to "./config/networks"
+}
+----
+
+IMPORTANT: Once you specify a `networks` field in your configuration, the default `./config/networks` directory will **not** be loaded automatically. If you want to use files from that directory, you must explicitly specify the path `"./config/networks"`.
+
 You can configure networks in two ways:
 
 === Method 1: Separate JSON Files
@@ -47,6 +63,8 @@ Specify the path to network configuration files in your main `config.json`:
   "networks": "./config/networks"  // Path to directory or file
 }
 ----
+
+NOTE: This is the same as the default behavior, but explicitly specified. You can also point to a different directory or file path.
 
 Each JSON file **must** contain a top-level `networks` array:
 
@@ -69,7 +87,7 @@ networks/
 
 === Method 2: Direct Configuration
 
-Define networks directly in your main `config.json`:
+Define networks directly in your main `config.json` instead of using separate files:
 
 [source,json]
 ----
@@ -87,6 +105,8 @@ Define networks directly in your main `config.json`:
   ]
 }
 ----
+
+When using this method, the default `./config/networks` directory is ignored, and only the networks defined in this array will be available.
 
 == Network Field Reference
 
