@@ -7,6 +7,10 @@ on:
         description: Long form commit SHA to create release branch from
         required: true
         type: string
+      version:
+        description: Version to release/tag. If the version is v1.0.0, input should be 1.0.0
+        required: true
+        type: string
 permissions:
   contents: write
   pull-requests: write
@@ -34,38 +38,31 @@ jobs:
           echo "Valid commit SHA: $INPUT_COMMIT_SHA"
         env:
           INPUT_COMMIT_SHA: ${{ github.event.inputs.commit_sha }}
+      - name: Validate version input
+        run: |
+          if [[ ! "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format: $INPUT_VERSION. Please provide a version in the format X.Y.Z."
+            exit 1
+          fi
+          echo "Valid version: $INPUT_VERSION"
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
       - name: Checkout repository at commit SHA
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           ref: ${{ github.event.inputs.commit_sha }}
           fetch-depth: 0
           token: ${{ steps.gh-app-token.outputs.token }}
-      - name: Get version from Cargo.toml
-        id: get_version
-        run: |
-          # Extract the version from manifest.json
-          version=$(jq -r '.[ "."]' .github/release-please/manifest.json)
-          if [ -z "$version" ]; then
-            echo "Error: Version not found in manifest.json"
-            exit 1
-          fi
-          echo "Version found: $version"
-          # Get current version
-          IFS='.' read -r major minor patch <<< "$version"
-          new_minor=$((minor + 1))
-          new_version="${major}.${new_minor}.0"
-          echo "New version: $new_version"
-          echo "version=$new_version" >> $GITHUB_OUTPUT
       - name: Set release branch name
         id: set_branch
         run: |
-          branch="release-v${{ steps.get_version.outputs.version }}"
+          branch="release-v${{ github.event.inputs.version }}"
           echo "release_branch=$branch" >> $GITHUB_ENV
           echo "Release branch will be: $branch"
       - name: Check if release branch exists
         id: check_branch
         run: |
-          branch="release-v${{ steps.get_version.outputs.version }}"
+          branch="release-v${{ github.event.inputs.version }}"
           if git ls-remote --exit-code --heads origin "$branch" > /dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
@@ -75,7 +72,7 @@ jobs:
         id: update_branch
         shell: bash
         run: |-
-          branch="release-v${{ steps.get_version.outputs.version }}"
+          branch="release-v${{ github.event.inputs.version }}"
           commit_sha="${{ github.event.inputs.commit_sha }}"
           echo "branch=$branch" >> $GITHUB_OUTPUT
           if [ "${{ steps.check_branch.outputs.exists }}" == "true" ]; then
