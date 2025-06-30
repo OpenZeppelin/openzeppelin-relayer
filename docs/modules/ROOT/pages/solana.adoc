@@ -55,7 +55,7 @@ Example Solana network configurations:
 }
 ----
 
-For detailed network configuration options, see the main documentation's Network Configuration Reference section.
+For detailed network configuration options, see the xref:network_configuration.adoc[Network Configuration] guide.
 
 == Supported Signers
 

@@ -1,5 +1,35 @@
+/**
+ * Plugins library.
+ *
+ * This library is used to create plugins for the relayer. Including a set of utilities to simplify
+ * the interaction with the relayer.
+ *
+ * Most important components:
+ * - `PluginAPI`: A class that provides a set of methods exposing the relayer API.
+ * - `runPlugin`: A function that runs the plugin.
+ *  - Handles the parameters passed to the plugin.
+ *  - Creates a socket connection to the relayer server
+ *  - Intercepts the logs, errors and return values.
+ *
+ * Example:
+ * ```ts
+ * import { runPlugin, PluginAPI } from "./lib/plugin";
+ *
+ * async function main(plugin: PluginAPI, args: {
+ *  relayerId: string;
+ *  method: string;
+ *  params: any;
+ * }) {
+ *  const result = await plugin.useRelayer(args.relayerId).sendTransaction(args.params);
+ *  return result;
+ * }
+ *
+ * runPlugin(main);
+ */
+
 import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
+import { LogInterceptor } from "./logger";
 import { NetworkTransactionRequest } from "@openzeppelin/relayer-sdk/dist/src/models/network-transaction-request";
 
 type SendTransactionResult = {
@@ -18,7 +48,9 @@ type Relayer = {
   sendTransaction: (payload: NetworkTransactionRequest) => Promise<Result<SendTransactionResult>>;
 }
 
-export async function runPlugin(main: (plugin: PluginAPI) => Promise<void>) {
+export async function runPlugin(main: (plugin: PluginAPI) => Promise<any>) {
+  const logInterceptor = new LogInterceptor();
+
   try {
     // checks if socket path is provided
     let socketPath = process.argv[2];
@@ -29,9 +61,16 @@ export async function runPlugin(main: (plugin: PluginAPI) => Promise<void>) {
     // creates plugin instance
     let plugin = new PluginAPI(socketPath);
 
+    // Start intercepting logs
+    logInterceptor.start();
+
     // runs main function
     await main(plugin)
-      .then(() => plugin.close())
+      .then((result) => {
+        // adds return value to the stdout
+        logInterceptor.addResult(JSON.stringify(result));
+        plugin.close();
+      })
       .catch((error) => {
         console.error(error);
         // closes socket signaling error
@@ -41,6 +80,9 @@ export async function runPlugin(main: (plugin: PluginAPI) => Promise<void>) {
         plugin.close();
         process.exit(0);
       });
+
+    // Stop intercepting logs
+    logInterceptor.stop();
   } catch (error) {
       console.error(error);
       process.exit(1);

@@ -1,5 +1,8 @@
 * xref:index.adoc[User Documentation]
 * xref:quickstart.adoc[Quickstart]
+* xref:configuration.adoc[Configuration]
+** xref:signers.adoc[Signers]
+** xref:network_configuration.adoc[Network Configuration]
 * link:https://openzeppelin-relayer.netlify.app/api_docs.html[API Reference^]
 * xref:structure.adoc[Project Structure]
 * xref:roadmap.adoc[Project Roadmap]

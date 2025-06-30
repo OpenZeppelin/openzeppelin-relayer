@@ -33,8 +33,8 @@ This relayer service enables interaction with blockchain networks through transa
 ## Supported networks
 
 - Solana
-- EVM (🚧 Partial support)
-- Stellar (🚧 Partial support)
+- EVM
+- Stellar
 
 > For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/roadmap).
 

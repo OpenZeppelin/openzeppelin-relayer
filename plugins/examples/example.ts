@@ -19,8 +19,10 @@ async function example(api: PluginAPI) {
         speed: Speed.FAST,
     });
 
-    console.log("Result:", result);
+    return result;
 }
 
-// This is the entry point for the plugin
+/**
+ * This is the entry point for the plugin
+ */
 runPlugin(example)
