@@ -10,7 +10,7 @@ Networks are defined in JSON configuration files, allowing you to:
 
 * Configure **any EVM-compatible network** (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
 * Set up **Solana networks** (mainnet-beta, devnet, testnet, custom RPC endpoints)
-* Configure **Stellar networks** (Pubnet, Testnet, custom networks) - Partial support
+* Configure **Stellar networks** (Pubnet, Testnet, custom networks)
 * Create **custom network configurations** with specific RPC endpoints, chain IDs, and network parameters
 * Use **inheritance** to create network variants without duplicating configuration
 
@@ -27,7 +27,7 @@ Networks are defined in JSON configuration files, allowing you to:
 |Solana blockchain networks. Supports all Solana clusters and custom RPC endpoints.
 
 |`stellar`
-|Stellar blockchain networks (Partial support). Supports Stellar Public Network and Testnet.
+|Stellar blockchain networks. Supports Stellar Public Network and Testnet.
 |===
 
 == Configuration Methods
