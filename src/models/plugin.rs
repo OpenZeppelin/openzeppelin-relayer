@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 #[derive(Debug, Clone)]
 pub struct PluginModel {
@@ -8,7 +9,7 @@ pub struct PluginModel {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PluginCallRequest {
     /// Plugin parameters
     pub params: serde_json::Value,
