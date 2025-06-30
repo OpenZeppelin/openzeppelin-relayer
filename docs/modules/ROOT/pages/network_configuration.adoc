@@ -193,18 +193,18 @@ These tags help the relayer:
 
 |`chain_id`
 |number
-|Yes
-|Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon)
+|Yes*
+|Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon) (*Required for base networks, optional for inherited)
 
 |`required_confirmations`
 |number
-|Yes
-|Number of block confirmations before considering a transaction final
+|Yes*
+|Number of block confirmations before considering a transaction final (*Required for base networks, optional for inherited)
 
 |`symbol`
 |string
-|Yes
-|Native currency symbol (e.g., "ETH", "MATIC", "BNB")
+|Yes*
+|Native currency symbol (e.g., "ETH", "MATIC", "BNB") (*Required for base networks, optional for inherited)
 
 |`features`
 |array[string]
@@ -243,7 +243,7 @@ Currently, Solana networks use only the common fields. Additional Solana-specifi
 |`passphrase`
 |string
 |No
-|Network passphrase for transaction signing and network identification
+|Network passphrase for transaction signing and network identification (optional for all networks, including base networks)
 |===
 
 ==== Example: Stellar Network Configuration
