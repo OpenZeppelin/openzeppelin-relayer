@@ -63,7 +63,7 @@ function getPluginParams(): unknown {
 }
 
 export async function runPlugin(
-  main: (plugin: PluginAPI, pluginParams: unknown) => Promise<any>
+  main: (plugin: PluginAPI, pluginParams: any) => Promise<any>
 ) {
   const logInterceptor = new LogInterceptor();
 
