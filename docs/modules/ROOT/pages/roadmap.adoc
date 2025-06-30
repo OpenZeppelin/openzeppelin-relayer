@@ -74,7 +74,7 @@ This roadmap represents our current plans and is subject to change. We will upda
 === Stellar (🏗️ In Progress)
 
 ==== Current Status
-* Supports payment and InvokeHostFunction operations, pre-built XDR transactions, and fee bump transactions, 
+* Supports payment and InvokeHostFunction operations, pre-built XDR transactions, and fee bump transactions,
 * Advanced transaction status logic
 * Stellar-specific endpoints
 * Expanded signer support
