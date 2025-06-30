@@ -53,13 +53,13 @@ The following table shows which signer types are compatible with each network ty
 |✅ Supported
 
 |`vault`
-|❌ Not supported
-|❌ Not supported
+|✅ Supported
+|✅ Supported
 |❌ Not supported
 
 |`vault_cloud`
-|❌ Not supported
-|❌ Not supported
+|✅ Supported
+|✅ Supported
 |❌ Not supported
 
 |`vault_transit`
