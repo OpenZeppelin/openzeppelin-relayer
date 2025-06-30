@@ -2,7 +2,7 @@ use crate::{models::ApiResponse, services::plugins::PluginCallResponse};
 
 /// Calls a plugin method.
 #[utoipa::path(
-    get,
+    post,
     path = "/api/v1/plugins/{plugin_id}/call",
     tag = "Plugins",
     operation_id = "callPlugin",
