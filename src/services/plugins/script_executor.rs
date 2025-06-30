@@ -3,7 +3,7 @@
 //! 1. Checks if `ts-node` is installed.
 //! 2. Executes the script using the `ts-node` command.
 //! 3. Returns the output and errors of the script.
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use tokio::process::Command;
 use utoipa::ToSchema;
@@ -41,9 +41,14 @@ impl ScriptExecutor {
     pub async fn execute_typescript(
         script_path: String,
         socket_path: String,
-        plugin_params: String
+        plugin_params: String,
     ) -> Result<ScriptResult, PluginError> {
-        if Command::new("ts-node").arg("--version").output().await.is_err() {
+        if Command::new("ts-node")
+            .arg("--version")
+            .output()
+            .await
+            .is_err()
+        {
             return Err(
                 PluginError::SocketError(
                     "ts-node is not installed or not in PATH. Please install it with: npm install -g ts-node".to_string()
@@ -58,18 +63,15 @@ impl ScriptExecutor {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output().await
+            .output()
+            .await
             .map_err(|e| PluginError::SocketError(format!("Failed to execute script: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        let (logs, return_value) = Self::parse_logs(
-            stdout
-                .lines()
-                .map(|l| l.to_string())
-                .collect()
-        )?;
+        let (logs, return_value) =
+            Self::parse_logs(stdout.lines().map(|l| l.to_string()).collect())?;
 
         Ok(ScriptResult {
             logs,
@@ -84,11 +86,9 @@ impl ScriptExecutor {
         let mut return_value = String::new();
 
         for log in logs {
-            let log: LogEntry = serde_json
-                ::from_str(&log)
-                .map_err(|e| {
-                    PluginError::PluginExecutionError(format!("Failed to parse log: {}", e))
-                })?;
+            let log: LogEntry = serde_json::from_str(&log).map_err(|e| {
+                PluginError::PluginExecutionError(format!("Failed to parse log: {}", e))
+            })?;
 
             if log.level == LogLevel::Result {
                 return_value = log.message;
@@ -109,8 +109,7 @@ mod tests {
 
     use super::*;
 
-    static TS_CONFIG: &str =
-        r#"
+    static TS_CONFIG: &str = r#"
     {
         "compilerOptions": {
           "target": "es2016",
@@ -130,8 +129,7 @@ mod tests {
         let script_path = temp_dir.path().join("test_execute_typescript.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
-        let content =
-            r#"
+        let content = r#"
             console.log(JSON.stringify({ level: 'log', message: 'test' }));
             console.log(JSON.stringify({ level: 'info', message: 'test-info' }));
             console.log(JSON.stringify({ level: 'result', message: 'test-result' }));
@@ -142,8 +140,9 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
-            String::new()
-        ).await;
+            String::new(),
+        )
+        .await;
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -168,8 +167,9 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
-            String::new()
-        ).await;
+            String::new(),
+        )
+        .await;
 
         assert!(result.is_ok());
 
@@ -184,8 +184,7 @@ mod tests {
         let script_path = temp_dir.path().join("test_execute_typescript.ts");
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
-        let invalid_content =
-            r#"
+        let invalid_content = r#"
             console.log({ level: 'log', message: 'test' });
             console.log({ level: 'info', message: 'test-info' });
             console.log({ level: 'result', message: 'test-result' });
@@ -196,10 +195,15 @@ mod tests {
         let result = ScriptExecutor::execute_typescript(
             script_path.display().to_string(),
             socket_path.display().to_string(),
-            String::new()
-        ).await;
+            String::new(),
+        )
+        .await;
 
         assert!(result.is_err());
-        assert!(result.err().unwrap().to_string().contains("Failed to parse log"));
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Failed to parse log"));
     }
 }
