@@ -84,6 +84,7 @@ This roadmap represents our current plans and is subject to change. We will upda
 
 
 ==== Upcoming Features
+* Relayer security policies: Transaction amount limits, destination whitelisting, time bound and limit operations
 * Hosted signers
 * Full CRUD API support
 
