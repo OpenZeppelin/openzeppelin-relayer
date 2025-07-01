@@ -7,7 +7,7 @@ OpenZeppelin Relayer supports plugins to extend the functionality of the relayer
 
 Plugins are `TypeScript` functions running in the Relayer server that can include any arbitrary logic defined by the Relayer operator.
 
-It also includes a simple `Plugin` library to interact with the Relayer, allowing to send transactions, and
+It also includes a simple `PluginAPI` library to interact with the Relayer, allowing to send transactions, and
 is extensible to support new features in the future.
 
 == Configuration
@@ -30,7 +30,10 @@ The plugin code must include the following structure:
 [source,typescript]
 ----
 /// Required imports.
-import { runPlugin, Plugin } from "./lib/plugin";
+import { runPlugin, PluginAPI } from "./lib/plugin";
+
+/// Additional imports.
+import { ethers } from "ethers";
 
 /// Here you can define custom params that will be included as part
 /// of the request when the plugin is invoked.
@@ -40,7 +43,7 @@ type MyCustomParams = {
 }
 
 /// The plugin function body.
-async function myPlugin(api: Plugin, params: MyCustomParams) {
+async function myPlugin(api: PluginAPI, params: MyCustomParams) {
     // You can use the `params` to access the custom params passed to the plugin.
     console.log(params.foo);
     console.log(params.bar);
@@ -103,7 +106,7 @@ When invoking a plugin, the response will include:
 - `logs`: The logs from the plugin execution.
 - `return_value`: The returned value of the plugin execution.
 - `error`: An error message if the plugin execution failed.
-- `traces`: A list of messages sent between the plugin and the Relayer instance. This includes all the payloads passed through the `api` object.
+- `traces`: A list of messages sent between the plugin and the Relayer instance. This includes all the payloads passed through the `PluginAPI` object.
 
 === Example
 
