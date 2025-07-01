@@ -65,6 +65,12 @@ pub trait MidnightProviderTrait: Send + Sync {
 
     /// Performs a health check by attempting to get the latest block number.
     async fn health_check(&self) -> Result<bool, ProviderError>;
+
+    /// Gets the nonce for an address.
+    ///
+    /// # Arguments
+    /// * `address` - The address to query the nonce for
+    async fn get_nonce(&self, address: &str) -> Result<u64, ProviderError>;
 }
 
 impl MidnightProvider {
@@ -179,12 +185,13 @@ impl MidnightProvider {
             operation_name,
             Self::is_retriable_error,
             Self::should_mark_provider_failed,
-            |url| {
-                // Block on the async initialization since retry_rpc_call expects sync
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current()
-                        .block_on(async { self.initialize_provider(url).await })
-                })
+            {
+                let self_clone = self.clone();
+                move |url: &str| {
+                    let self_clone = self_clone.clone();
+                    let url = url.to_string();
+                    async move { self_clone.initialize_provider(&url).await }
+                }
             },
             operation,
             Some(self.retry_config.clone()),
@@ -206,6 +213,14 @@ impl MidnightProviderTrait for MidnightProvider {
             // TODO: Implement balance query from wallet state by iterating coins after indexer sync
             log::warn!("get_balance not yet implemented for Midnight provider");
             Ok(U256::from(0))
+        })
+        .await
+    }
+
+    async fn get_nonce(&self, _address: &str) -> Result<u64, ProviderError> {
+        self.retry_rpc_call("get_nonce", move |_api| async move {
+            log::warn!("get_nonce not yet implemented for Midnight provider");
+            Ok(0)
         })
         .await
     }
