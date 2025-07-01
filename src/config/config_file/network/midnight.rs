@@ -6,6 +6,12 @@ use super::common::NetworkConfigCommon;
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IndexerUrls {
+    pub http: String,
+    pub ws: String,
+}
+
 /// Configuration specific to Midnight networks.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -14,10 +20,10 @@ pub struct MidnightNetworkConfig {
     #[serde(flatten)]
     pub common: NetworkConfigCommon,
     // Midnight-specific fields
-    pub indexer_url: String,              // URL for the indexer server
-    pub prover_url: Option<String>,       // URL for the prover server
+    pub indexer_urls: IndexerUrls, // URL for the indexer server (ws, http)
+    pub prover_url: Option<String>, // URL for the prover server
     pub commitment_tree_ttl: Option<u64>, // How long to cache Merkle roots
-    pub network_id: Option<String>,       // mainnet, testnet, devnet
+    pub network_id: Option<String>, // mainnet, testnet, devnet
 }
 
 impl MidnightNetworkConfig {
@@ -36,7 +42,7 @@ impl MidnightNetworkConfig {
     pub fn merge_with_parent(&self, parent: &Self) -> Self {
         Self {
             common: self.common.merge_with_parent(&parent.common),
-            indexer_url: self.indexer_url.clone(),
+            indexer_urls: self.indexer_urls.clone(),
             prover_url: self.prover_url.clone().or(parent.prover_url.clone()),
             commitment_tree_ttl: self.commitment_tree_ttl.or(parent.commitment_tree_ttl),
             network_id: self.network_id.clone().or(parent.network_id.clone()),

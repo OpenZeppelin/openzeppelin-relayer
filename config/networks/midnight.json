@@ -9,6 +9,10 @@
       "explorer_urls": [
         "https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.testnet-02.midnight.network#/explorer"
       ],
+      "indexer_urls": {
+        "ws": "wss://indexer.testnet-02.midnight.network/api/v1/graphql/ws",
+        "http": "https://indexer.testnet-02.midnight.network/api/v1/graphql"
+      },
       "average_blocktime_ms": 6000,
       "is_testnet": true
     }

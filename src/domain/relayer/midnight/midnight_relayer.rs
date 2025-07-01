@@ -407,7 +407,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        config::{MidnightNetworkConfig, NetworkConfigCommon},
+        config::{network::IndexerUrls, MidnightNetworkConfig, NetworkConfigCommon},
         constants::MIDNIGHT_SMALLEST_UNIT_NAME,
         jobs::MockJobProducerTrait,
         models::{
@@ -473,7 +473,10 @@ mod tests {
                     prover_url: Some("https://prover.midnight.network".to_string()),
                     commitment_tree_ttl: Some(60),
                     network_id: Some("testnet".to_string()),
-                    indexer_url: "https://indexer.midnight.network".to_string(),
+                    indexer_urls: IndexerUrls {
+                        http: "https://indexer.midnight.network".to_string(),
+                        ws: "wss://indexer.midnight.network".to_string(),
+                    },
                 }),
             };
 
