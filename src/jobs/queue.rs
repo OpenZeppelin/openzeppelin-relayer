@@ -6,7 +6,9 @@
 //! - Transaction status checks
 //! - Notifications
 //! - Solana swap requests
-use apalis_redis::{Config, RedisStorage};
+use std::sync::Arc;
+
+use apalis_redis::{Config, ConnectionManager, RedisStorage};
 use color_eyre::{eyre, Result};
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -31,7 +33,14 @@ pub struct Queue {
 impl Queue {
     async fn storage<T: Serialize + for<'de> Deserialize<'de>>(
         namespace: &str,
+        shared: Arc<ConnectionManager>,
     ) -> Result<RedisStorage<T>> {
+        let config = Config::default().set_namespace(namespace);
+
+        Ok(RedisStorage::new_with_config((*shared).clone(), config))
+    }
+
+    pub async fn setup() -> Result<Self> {
         let redis_url = ServerConfig::from_env().redis_url.clone();
         let redis_connection_timeout_ms = ServerConfig::from_env().redis_connection_timeout_ms;
         let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
@@ -44,19 +53,24 @@ impl Queue {
                 return Err(eyre::eyre!("Timed out after {} milliseconds while connecting to Redis at {}", redis_connection_timeout_ms, redis_url));
             }
         };
-        let config = Config::default().set_namespace(namespace);
 
-        Ok(RedisStorage::new_with_config(conn, config))
-    }
-
-    pub async fn setup() -> Result<Self> {
+        let shared = Arc::new(conn);
         Ok(Self {
-            transaction_request_queue: Self::storage("transaction_request_queue").await?,
-            transaction_submission_queue: Self::storage("transaction_submission_queue").await?,
-            transaction_status_queue: Self::storage("transaction_status_queue").await?,
-            notification_queue: Self::storage("notification_queue").await?,
-            solana_token_swap_request_queue: Self::storage("solana_token_swap_request_queue")
+            transaction_request_queue: Self::storage("transaction_request_queue", shared.clone())
                 .await?,
+            transaction_submission_queue: Self::storage(
+                "transaction_submission_queue",
+                shared.clone(),
+            )
+            .await?,
+            transaction_status_queue: Self::storage("transaction_status_queue", shared.clone())
+                .await?,
+            notification_queue: Self::storage("notification_queue", shared.clone()).await?,
+            solana_token_swap_request_queue: Self::storage(
+                "solana_token_swap_request_queue",
+                shared.clone(),
+            )
+            .await?,
         })
     }
 }

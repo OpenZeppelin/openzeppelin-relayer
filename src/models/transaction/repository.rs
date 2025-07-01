@@ -26,6 +26,7 @@ use alloy::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, str::FromStr};
+use strum::Display;
 
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -35,7 +36,7 @@ use soroban_rs::xdr::{
     Transaction as SorobanTransaction, TransactionEnvelope, TransactionV1Envelope, VecM,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema, Display)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Canceled,

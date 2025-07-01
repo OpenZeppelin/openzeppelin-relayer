@@ -15,21 +15,15 @@ const TX_IDS_SET: &str = "transaction:ids";
 const RELAYER_INDEX_PREFIX: &str = "transaction:relayer:";
 const STATUS_INDEX_PREFIX: &str = "transaction:status:";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RedisTransactionRepository {
     pub client: Arc<ConnectionManager>,
 }
 
 impl RedisTransactionRepository {
-    pub async fn new(redis_url: &str) -> Result<Self, RepositoryError> {
-        let client =
-            redis::Client::open(redis_url).map_err(|e| RepositoryError::Other(e.to_string()))?;
-        let manager = client
-            .get_tokio_connection_manager()
-            .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+    pub async fn new(connection_manager: Arc<ConnectionManager>) -> Result<Self, RepositoryError> {
         Ok(Self {
-            client: Arc::new(manager),
+            client: connection_manager,
         })
     }
 
@@ -41,10 +35,12 @@ impl RedisTransactionRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_key = format!("{}{}", RELAYER_INDEX_PREFIX, tx.relayer_id);
         let status_key = format!("{}{}", STATUS_INDEX_PREFIX, tx.status.to_string());
-        conn.sadd(relayer_key, &tx.id)
+        let _: () = conn
+            .sadd(relayer_key, &tx.id)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
-        conn.sadd(status_key, &tx.id)
+        let _: () = conn
+            .sadd(status_key, &tx.id)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
         Ok(())
@@ -54,10 +50,12 @@ impl RedisTransactionRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_key = format!("{}{}", RELAYER_INDEX_PREFIX, tx.relayer_id);
         let status_key = format!("{}{}", STATUS_INDEX_PREFIX, tx.status.to_string());
-        conn.srem(relayer_key, &tx.id)
+        let _: () = conn
+            .srem(relayer_key, &tx.id)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
-        conn.srem(status_key, &tx.id)
+        let _: () = conn
+            .srem(status_key, &tx.id)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
         Ok(())
@@ -287,7 +285,7 @@ impl TransactionRepository for RedisTransactionRepository {
     ) -> Result<TransactionRepoModel, RepositoryError> {
         let mut tx = self.get_by_id(tx_id.clone()).await?;
         let old_status = tx.status.clone();
-        tx.status = status;
+        tx.status = status.clone();
         self.update(tx_id.clone(), tx.clone()).await?;
         let mut conn = self.client.as_ref().clone();
         let old_status_key = format!("{}{}", STATUS_INDEX_PREFIX, old_status.to_string());
@@ -303,34 +301,102 @@ impl TransactionRepository for RedisTransactionRepository {
 
     async fn partial_update(
         &self,
-        _tx_id: String,
-        _update: TransactionUpdateRequest,
+        tx_id: String,
+        update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        // TODO: Implement partial_update
-        unimplemented!("Implement partial_update for RedisTransactionRepository");
+        let key = Self::tx_key(&tx_id);
+        let mut conn = self.client.as_ref().clone();
+
+        // Use Redis transaction for atomicity
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Get current transaction
+        let value: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+
+        let mut tx: TransactionRepoModel = match value {
+            Some(json) => {
+                serde_json::from_str(&json).map_err(|e| RepositoryError::Other(e.to_string()))?
+            }
+            None => {
+                return Err(RepositoryError::NotFound(format!(
+                    "Transaction with ID {} not found",
+                    tx_id
+                )))
+            }
+        };
+
+        // Apply partial updates
+        if let Some(status) = update.status {
+            tx.status = status;
+        }
+        if let Some(status_reason) = update.status_reason {
+            tx.status_reason = Some(status_reason);
+        }
+        if let Some(sent_at) = update.sent_at {
+            tx.sent_at = Some(sent_at);
+        }
+        if let Some(confirmed_at) = update.confirmed_at {
+            tx.confirmed_at = Some(confirmed_at);
+        }
+        if let Some(network_data) = update.network_data {
+            tx.network_data = network_data;
+        }
+        if let Some(hashes) = update.hashes {
+            tx.hashes = hashes;
+        }
+        if let Some(is_canceled) = update.is_canceled {
+            tx.is_canceled = Some(is_canceled);
+        }
+
+        // Serialize and update atomically
+        let value =
+            serde_json::to_string(&tx).map_err(|e| RepositoryError::Other(e.to_string()))?;
+
+        pipe.set(&key, value);
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+
+        Ok(tx)
     }
+
     async fn update_network_data(
         &self,
-        _tx_id: String,
-        _network_data: NetworkTransactionData,
+        tx_id: String,
+        network_data: NetworkTransactionData,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        // TODO: Implement update_network_data
-        unimplemented!("Implement update_network_data for RedisTransactionRepository");
+        let update = TransactionUpdateRequest {
+            network_data: Some(network_data),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
     }
+
     async fn set_sent_at(
         &self,
-        _tx_id: String,
-        _sent_at: String,
+        tx_id: String,
+        sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        // TODO: Implement set_sent_at
-        unimplemented!("Implement set_sent_at for RedisTransactionRepository");
+        let update = TransactionUpdateRequest {
+            sent_at: Some(sent_at),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
     }
+
     async fn set_confirmed_at(
         &self,
-        _tx_id: String,
-        _confirmed_at: String,
+        tx_id: String,
+        confirmed_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        // TODO: Implement set_confirmed_at
-        unimplemented!("Implement set_confirmed_at for RedisTransactionRepository");
+        let update = TransactionUpdateRequest {
+            confirmed_at: Some(confirmed_at),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
     }
 }
