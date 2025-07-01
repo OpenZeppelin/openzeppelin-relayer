@@ -6,9 +6,8 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Result;
 use solana_client::rpc_client::RpcClient;
-use solana_sdk::{
-    hash::Hash, message::Message, pubkey::Pubkey, system_instruction, transaction::Transaction,
-};
+use solana_sdk::{hash::Hash, message::Message, pubkey::Pubkey, transaction::Transaction};
+use solana_system_interface::instruction;
 use spl_token::instruction as token_instruction;
 use std::str::FromStr;
 
@@ -57,7 +56,7 @@ fn create_sol_transfer(
     amount: u64,
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Result<Transaction> {
-    let ix = system_instruction::transfer(payer, recipient, amount);
+    let ix = instruction::transfer(payer, recipient, amount);
     let mut message = Message::new(&[ix], Some(payer));
     message.recent_blockhash = recent_blockhash;
     Ok(Transaction::new_unsigned(message))
@@ -69,7 +68,7 @@ fn create_large_sol_transfer(
     amount: u64,
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Result<Transaction> {
-    let ix = system_instruction::transfer(payer, recipient, amount);
+    let ix = instruction::transfer(payer, recipient, amount);
     let mut message = Message::new(&[ix], Some(payer));
     message.recent_blockhash = recent_blockhash;
     Ok(Transaction::new_unsigned(message))
@@ -81,9 +80,9 @@ fn create_multi_instruction_tx(
     recent_blockhash: solana_sdk::hash::Hash,
 ) -> Result<Transaction> {
     let instructions = vec![
-        system_instruction::transfer(payer, recipient, 1_000_000),
-        system_instruction::transfer(payer, recipient, 2_000_000),
-        system_instruction::transfer(payer, recipient, 3_000_000),
+        instruction::transfer(payer, recipient, 1_000_000),
+        instruction::transfer(payer, recipient, 2_000_000),
+        instruction::transfer(payer, recipient, 3_000_000),
     ];
     let mut message = Message::new(&instructions, Some(payer));
     message.recent_blockhash = recent_blockhash;

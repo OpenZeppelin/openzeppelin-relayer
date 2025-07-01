@@ -18,8 +18,9 @@ use log::info;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
     commitment_config::CommitmentConfig, pubkey::Pubkey, system_instruction::SystemInstruction,
-    system_program, transaction::Transaction,
+    transaction::Transaction,
 };
+use solana_system_interface::program;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -269,7 +270,7 @@ impl SolanaTransactionValidator {
 
             // Check if the instruction comes from the System Program (native SOL transfers)
             #[allow(clippy::collapsible_match)]
-            if program_id == system_program::id() {
+            if program_id == program::id() {
                 if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
                     if let SystemInstruction::Transfer { .. } = system_ix {
                         // In a system transfer instruction, the first account is the source and the
@@ -567,8 +568,8 @@ mod tests {
         message::Message,
         program_pack::Pack,
         signature::{Keypair, Signer},
-        system_instruction, system_program,
     };
+    use solana_system_interface::{instruction, program};
     use spl_token::{instruction as token_instruction, state::Account};
 
     fn setup_token_transfer_test(
@@ -666,7 +667,7 @@ mod tests {
 
     fn create_test_transaction(fee_payer: &Pubkey) -> Transaction {
         let recipient = Pubkey::new_unique();
-        let instruction = system_instruction::transfer(fee_payer, &recipient, 1000);
+        let instruction = instruction::transfer(fee_payer, &recipient, 1000);
         let message = Message::new(&[instruction], Some(fee_payer));
         Transaction::new_unsigned(message)
     }
@@ -807,7 +808,7 @@ mod tests {
         let payer = Keypair::new();
         let tx = create_test_transaction(&payer.pubkey());
         let policy = RelayerSolanaPolicy {
-            allowed_programs: Some(vec![system_program::id().to_string()]),
+            allowed_programs: Some(vec![program::id().to_string()]),
             ..Default::default()
         };
 
@@ -851,13 +852,13 @@ mod tests {
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
 
-        let ix1 = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
-        let ix2 = system_instruction::transfer(&payer.pubkey(), &recipient, 2000);
+        let ix1 = instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix2 = instruction::transfer(&payer.pubkey(), &recipient, 2000);
         let message = Message::new(&[ix1, ix2], Some(&payer.pubkey()));
         let tx = Transaction::new_unsigned(message);
 
         let policy = RelayerSolanaPolicy {
-            allowed_programs: Some(vec![system_program::id().to_string()]),
+            allowed_programs: Some(vec![program::id().to_string()]),
             ..Default::default()
         };
 
@@ -870,7 +871,7 @@ mod tests {
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
 
-        let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&payer.pubkey()));
         let tx = Transaction::new_unsigned(message);
 
@@ -878,7 +879,7 @@ mod tests {
             allowed_accounts: Some(vec![
                 payer.pubkey().to_string(),
                 recipient.to_string(),
-                system_program::id().to_string(),
+                program::id().to_string(),
             ]),
             ..Default::default()
         };
@@ -924,10 +925,7 @@ mod tests {
         let tx = create_test_transaction(&payer.pubkey());
 
         let policy = RelayerSolanaPolicy {
-            allowed_accounts: Some(vec![
-                payer.pubkey().to_string(),
-                system_program::id().to_string(),
-            ]),
+            allowed_accounts: Some(vec![payer.pubkey().to_string(), program::id().to_string()]),
             ..Default::default()
         };
 
@@ -958,7 +956,7 @@ mod tests {
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
 
-        let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&payer.pubkey()));
         let tx = Transaction::new_unsigned(message);
 
@@ -993,7 +991,7 @@ mod tests {
         let tx = create_test_transaction(&payer.pubkey());
 
         let policy = RelayerSolanaPolicy {
-            disallowed_accounts: Some(vec![system_program::id().to_string()]),
+            disallowed_accounts: Some(vec![program::id().to_string()]),
             ..Default::default()
         };
 
@@ -1042,7 +1040,7 @@ mod tests {
 
         let large_data = vec![0u8; 1000];
         let ix = Instruction::new_with_bytes(
-            system_program::id(),
+            program::id(),
             &large_data,
             vec![
                 AccountMeta::new(payer.pubkey(), true),
@@ -1070,8 +1068,8 @@ mod tests {
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
 
-        let ix1 = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
-        let ix2 = system_instruction::transfer(&payer.pubkey(), &recipient, 2000);
+        let ix1 = instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix2 = instruction::transfer(&payer.pubkey(), &recipient, 2000);
         let message = Message::new(&[ix1, ix2], Some(&payer.pubkey()));
         let tx = Transaction::new_unsigned(message);
 
@@ -1101,6 +1099,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 };
                 Box::pin(async { Ok(simulation_result) })
             });

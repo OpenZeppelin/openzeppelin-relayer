@@ -5338,6 +5338,7 @@ dependencies = [
  "simplelog",
  "solana-client",
  "solana-sdk",
+ "solana-system-interface",
  "soroban-rs",
  "spl-associated-token-account",
  "spl-token 8.0.0",

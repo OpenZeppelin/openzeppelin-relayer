@@ -36,9 +36,9 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::Signature,
     system_instruction::SystemInstruction,
-    system_program,
     transaction::Transaction,
 };
+use solana_system_interface::program;
 
 use spl_token::{amount_to_ui_amount, state::Account};
 
@@ -225,7 +225,7 @@ where
 
             // Check if the instruction comes from the System Program (native SOL transfers)
             #[allow(clippy::collapsible_match)]
-            if program_id == system_program::id() {
+            if program_id == program::id() {
                 if let Ok(system_ix) = bincode::deserialize::<SystemInstruction>(&ix.data) {
                     if let SystemInstruction::Transfer { lamports } = system_ix {
                         // In a system transfer instruction, the first account is the source and the
@@ -709,7 +709,7 @@ where
             let program_id = transaction.message.account_keys[ix.program_id_index as usize];
 
             // Check if it's system program
-            if program_id == system_program::id() {
+            if program_id == program::id() {
                 if let Ok(SystemInstruction::Transfer { lamports }) =
                     bincode::deserialize::<SystemInstruction>(&ix.data)
                 {
@@ -898,8 +898,8 @@ mod tests {
         instruction::AccountMeta,
         signature::{Keypair, Signature},
         signer::Signer,
-        system_instruction,
     };
+    use solana_system_interface::instruction;
     use spl_associated_token_account::{
         get_associated_token_address, instruction::create_associated_token_account,
     };
@@ -910,7 +910,7 @@ mod tests {
             setup_test_context();
         let relayer_pubkey = Pubkey::from_str(&relayer.address).unwrap();
         let recipient = Pubkey::new_unique();
-        let instruction = system_instruction::transfer(&relayer_pubkey, &recipient, 1000);
+        let instruction = instruction::transfer(&relayer_pubkey, &recipient, 1000);
         let message = Message::new(&[instruction], Some(&relayer_pubkey));
         let transaction = Transaction::new_unsigned(message);
         signer.expect_sign().returning(move |_| {
@@ -1067,7 +1067,7 @@ mod tests {
         // Create simple transfer transaction
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
 
@@ -1211,8 +1211,7 @@ mod tests {
 
         let recipient = Pubkey::new_unique();
         let transfer_amount = 1_000_000;
-        let ix =
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, transfer_amount);
+        let ix = instruction::transfer(&relayer_keypair.pubkey(), &recipient, transfer_amount);
         let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
         let transaction = Transaction::new_unsigned(message);
 
@@ -1248,8 +1247,8 @@ mod tests {
         let amount2 = 2_000_000;
 
         let instructions = vec![
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient1, amount1),
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient2, amount2),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient1, amount1),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient2, amount2),
         ];
 
         let message = Message::new(&instructions, Some(&relayer_keypair.pubkey()));
@@ -1287,8 +1286,8 @@ mod tests {
         let other_amount = 2_000_000;
 
         let instructions = vec![
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, relayer_amount),
-            system_instruction::transfer(&other_keypair.pubkey(), &recipient, other_amount),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient, relayer_amount),
+            instruction::transfer(&other_keypair.pubkey(), &recipient, other_amount),
         ];
 
         let message = Message::new(&instructions, Some(&relayer_keypair.pubkey()));
@@ -1374,7 +1373,7 @@ mod tests {
             Arc::new(job_producer),
         );
 
-        let instructions = vec![system_instruction::transfer(
+        let instructions = vec![instruction::transfer(
             &relayer_keypair.pubkey(),
             &recipient,
             amount,
@@ -1422,8 +1421,8 @@ mod tests {
         let recipient2 = Pubkey::new_unique();
 
         let instructions = vec![
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient1, 1000),
-            system_instruction::transfer(&relayer_keypair.pubkey(), &recipient2, 2000),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient1, 1000),
+            instruction::transfer(&relayer_keypair.pubkey(), &recipient2, 2000),
         ];
 
         let result = rpc.create_and_sign_transaction(instructions).await;
@@ -1781,7 +1780,7 @@ mod tests {
         let recipient = Pubkey::new_unique();
         let amount = 1_000_000;
 
-        let transfer_ix = system_instruction::transfer(&payer.pubkey(), &recipient, amount);
+        let transfer_ix = instruction::transfer(&payer.pubkey(), &recipient, amount);
 
         let message = Message::new(&[transfer_ix.clone()], Some(&payer.pubkey()));
 
@@ -1792,7 +1791,7 @@ mod tests {
             &message.account_keys,
             &message.header,
         );
-        assert_eq!(converted_ix.program_id, system_program::id());
+        assert_eq!(converted_ix.program_id, program::id());
 
         let decoded_ix = bincode::deserialize::<SystemInstruction>(&converted_ix.data).unwrap();
         match decoded_ix {
@@ -1998,7 +1997,7 @@ mod tests {
             Arc::new(job_producer),
         );
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&user_pubkey, &recipient, 1000);
+        let ix = instruction::transfer(&user_pubkey, &recipient, 1000);
         let message = Message::new(&[ix], Some(&user_pubkey));
         let transaction = Transaction::new_unsigned(message);
 
@@ -2030,7 +2029,7 @@ mod tests {
             let program_idx = ix.program_id_index as usize;
 
             if program_idx < modified_tx.message.account_keys.len()
-                && modified_tx.message.account_keys[program_idx] == system_program::id()
+                && modified_tx.message.account_keys[program_idx] == program::id()
             {
                 if let Ok(SystemInstruction::Transfer { lamports }) = bincode::deserialize(&ix.data)
                 {
@@ -2111,7 +2110,7 @@ mod tests {
         );
 
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&relayer_keypair.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&relayer_keypair.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
         let transaction = Transaction::new_unsigned(message);
 
@@ -2216,7 +2215,7 @@ mod tests {
         );
         // Create a simple transaction from user
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&user_pubkey, &recipient, 1000);
+        let ix = instruction::transfer(&user_pubkey, &recipient, 1000);
         let message = Message::new(&[ix], Some(&user_pubkey));
         let transaction = Transaction::new_unsigned(message);
 
@@ -2262,10 +2261,10 @@ mod tests {
         let fee_amount = 5000;
 
         let payment_ix =
-            system_instruction::transfer(&payer.pubkey(), &relayer_keypair.pubkey(), fee_amount);
+            instruction::transfer(&payer.pubkey(), &relayer_keypair.pubkey(), fee_amount);
 
         let recipient = Pubkey::new_unique();
-        let regular_ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let regular_ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
 
         let message = Message::new(&[payment_ix, regular_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -2297,11 +2296,8 @@ mod tests {
         let required_amount = 5000;
 
         // Create SOL transfer to relayer instruction
-        let payment_ix = system_instruction::transfer(
-            &payer.pubkey(),
-            &relayer_keypair.pubkey(),
-            payment_amount,
-        );
+        let payment_ix =
+            instruction::transfer(&payer.pubkey(), &relayer_keypair.pubkey(), payment_amount);
 
         let message = Message::new(&[payment_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
@@ -2470,7 +2466,7 @@ mod tests {
         let payer = Keypair::new();
         let recipient = Pubkey::new_unique();
 
-        let regular_ix = system_instruction::transfer(&payer.pubkey(), &recipient, 1000);
+        let regular_ix = instruction::transfer(&payer.pubkey(), &recipient, 1000);
 
         let message = Message::new(&[regular_ix], Some(&payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
