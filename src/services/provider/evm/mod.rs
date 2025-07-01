@@ -241,9 +241,13 @@ impl EvmProvider {
             operation_name,
             Self::is_retriable_error,
             Self::should_mark_provider_failed,
-            |url| match self.initialize_provider(url) {
-                Ok(provider) => Ok(provider),
-                Err(e) => Err(e),
+            {
+                let self_clone = self.clone();
+                move |url: &str| {
+                    let self_clone = self_clone.clone();
+                    let url = url.to_string();
+                    async move { self_clone.initialize_provider(&url) }
+                }
             },
             operation,
             Some(self.retry_config.clone()),
