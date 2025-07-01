@@ -35,6 +35,8 @@ pub struct ServerConfig {
     pub provider_retry_max_delay_ms: u64,
     /// Maximum number of failovers (switching to different providers).
     pub provider_max_failovers: u8,
+    /// The backend to use for the transaction repository (e.g., "redis", "inmemory").
+    pub transaction_repo_backend: String,
 }
 
 impl ServerConfig {
@@ -133,6 +135,8 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
                 .unwrap_or(3),
+            transaction_repo_backend: env::var("TRANSACTION_REPO_BACKEND")
+                .unwrap_or_else(|_| "redis".to_string()),
         }
     }
 }
@@ -167,6 +171,7 @@ mod tests {
         env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
         env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
         env::remove_var("PROVIDER_MAX_FAILOVERS");
+        env::remove_var("TRANSACTION_REPO_BACKEND");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -200,6 +205,7 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 100);
         assert_eq!(config.provider_retry_max_delay_ms, 2000);
         assert_eq!(config.provider_max_failovers, 3);
+        assert_eq!(config.transaction_repo_backend, "redis");
     }
 
     #[test]
@@ -221,6 +227,7 @@ mod tests {
         env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "invalid");
         env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "invalid");
         env::set_var("PROVIDER_MAX_FAILOVERS", "invalid");
+        env::set_var("TRANSACTION_REPO_BACKEND", "invalid");
         let config = ServerConfig::from_env();
 
         // Should fall back to defaults when parsing fails
@@ -234,6 +241,7 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 100);
         assert_eq!(config.provider_retry_max_delay_ms, 2000);
         assert_eq!(config.provider_max_failovers, 3);
+        assert_eq!(config.transaction_repo_backend, "redis");
     }
 
     #[test]
@@ -259,6 +267,7 @@ mod tests {
         env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
         env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "3000");
         env::set_var("PROVIDER_MAX_FAILOVERS", "4");
+        env::set_var("TRANSACTION_REPO_BACKEND", "inmemory");
         let config = ServerConfig::from_env();
 
         assert_eq!(config.host, "127.0.0.1");
@@ -278,6 +287,7 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 200);
         assert_eq!(config.provider_retry_max_delay_ms, 3000);
         assert_eq!(config.provider_max_failovers, 4);
+        assert_eq!(config.transaction_repo_backend, "inmemory");
     }
 
     #[test]
