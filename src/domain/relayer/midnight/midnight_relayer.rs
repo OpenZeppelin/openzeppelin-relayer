@@ -473,6 +473,7 @@ mod tests {
                     prover_url: Some("https://prover.midnight.network".to_string()),
                     commitment_tree_ttl: Some(60),
                     network_id: Some("testnet".to_string()),
+                    indexer_url: "https://indexer.midnight.network".to_string(),
                 }),
             };
 

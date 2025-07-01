@@ -165,6 +165,7 @@ pub fn create_midnight_network(network: &str) -> MidnightNetworkConfig {
             is_testnet: Some(true),
             tags: Some(vec!["stellar".to_string()]),
         },
+        indexer_url: "https://indexer.midnight.network".to_string(),
         prover_url: None,
         commitment_tree_ttl: None,
         network_id: None,
@@ -183,6 +184,7 @@ pub fn create_midnight_network_with_parent(network: &str, parent: &str) -> Midni
             is_testnet: None,                 // Will inherit from parent
             tags: None,                       // Will inherit from parent
         },
+        indexer_url: "https://indexer.midnight.network".to_string(),
         prover_url: None,
         commitment_tree_ttl: None,
         network_id: None,
