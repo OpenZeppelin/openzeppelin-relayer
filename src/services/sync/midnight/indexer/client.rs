@@ -5,7 +5,7 @@
 //! It supports wallet session management, real-time subscriptions to wallet and block events,
 //! and GraphQL query execution. All methods are async and designed for use with Tokio.
 
-use crate::services::midnight::indexer::types::*;
+use crate::{config::network::IndexerUrls, services::midnight::indexer::types::*};
 
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info};
@@ -37,7 +37,7 @@ impl MidnightIndexerClient {
     ///
     /// # Returns
     /// A new `MidnightIndexerClient` instance.
-    pub fn new(http_url: String, ws_url: String) -> Self {
+    pub fn new(indexer_urls: IndexerUrls) -> Self {
         let http_client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -45,8 +45,8 @@ impl MidnightIndexerClient {
 
         Self {
             http_client,
-            http_url,
-            ws_url,
+            http_url: indexer_urls.http,
+            ws_url: indexer_urls.ws,
         }
     }
 

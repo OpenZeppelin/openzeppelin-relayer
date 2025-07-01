@@ -6,7 +6,7 @@ use super::common::NetworkConfigCommon;
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct IndexerUrls {
     pub http: String,
     pub ws: String,

@@ -9,14 +9,17 @@
 //! that share common interfaces for transaction handling and monitoring.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use utoipa::ToSchema;
 
 #[cfg(test)]
 use mockall::automock;
 
 use crate::{
-    domain::relayer::midnight::{DefaultMidnightRelayer, MidnightRelayerDependencies},
+    domain::{
+        relayer::midnight::{DefaultMidnightRelayer, MidnightRelayerDependencies},
+        to_midnight_network_id,
+    },
     jobs::JobProducer,
     models::{
         DecoratedSignature, EvmNetwork, EvmTransactionDataSignature, MidnightNetwork,
@@ -350,7 +353,8 @@ impl RelayerFactoryTrait for RelayerFactory {
 
                 let network = EvmNetwork::try_from(network_repo)?;
 
-                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
+                let evm_provider =
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone(), None)?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
@@ -399,7 +403,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let network = StellarNetwork::try_from(network_repo)?;
 
                 let stellar_provider =
-                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone(), None)
                         .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
 
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
@@ -436,9 +440,21 @@ impl RelayerFactoryTrait for RelayerFactory {
                     })?;
 
                 let network = MidnightNetwork::try_from(network_repo)?;
+                let indexer_urls = network.indexer_urls.clone();
+                let metadata = HashMap::from([
+                    (
+                        "network".to_string(),
+                        format!("{:?}", to_midnight_network_id(&relayer.network)),
+                    ),
+                    ("http".to_string(), indexer_urls.http),
+                    ("ws".to_string(), indexer_urls.ws),
+                ]);
 
-                let midnight_provider =
-                    get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
+                let midnight_provider = get_network_provider(
+                    &network,
+                    relayer.custom_rpc_urls.clone(),
+                    Some(&metadata),
+                )?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),

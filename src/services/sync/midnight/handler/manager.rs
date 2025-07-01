@@ -121,12 +121,12 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
     ///
     /// This method initializes all services and selects the sync strategy based on the provided options.
     pub fn new(
-        indexer_client: MidnightIndexerClient,
-        context: Arc<LedgerContext<DefaultDB>>,
-        seed: WalletSeed,
+        indexer_client: &MidnightIndexerClient,
+        seed: &WalletSeed,
         network: NetworkId,
     ) -> Result<Self, SyncError> {
-        let wallet = context.wallet_from_seed(seed);
+        let context = Arc::new(LedgerContext::new_from_wallet_seeds(&[*seed]));
+        let wallet = context.wallet_from_seed(*seed);
         let viewing_key = derive_viewing_key(&wallet, network)?;
 
         let config = SyncConfig {
@@ -139,7 +139,7 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
 
         Ok(Self {
             context,
-            seed,
+            seed: *seed,
             strategy,
             network,
         })
@@ -231,5 +231,9 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
 
         info!("Wallet synchronization completed successfully");
         Ok(())
+    }
+
+    pub fn get_context(&self) -> Arc<LedgerContext<DefaultDB>> {
+        Arc::clone(&self.context)
     }
 }

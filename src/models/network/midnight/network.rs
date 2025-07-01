@@ -1,4 +1,7 @@
-use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
+use crate::{
+    config::network::IndexerUrls,
+    models::{NetworkConfigData, NetworkRepoModel, RepositoryError},
+};
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +19,10 @@ pub struct MidnightNetwork {
     pub is_testnet: bool,
     /// List of arbitrary tags for categorizing or filtering networks.
     pub tags: Vec<String>,
-    // TODO: Add Midnight specific fields
+    /// List of Indexer endpoint URLs for connecting to the network.
+    pub indexer_urls: IndexerUrls,
+    /// URL of the prover server for generating proofs.
+    pub prover_url: String,
 }
 
 impl TryFrom<NetworkRepoModel> for MidnightNetwork {
@@ -55,6 +61,8 @@ impl TryFrom<NetworkRepoModel> for MidnightNetwork {
                     average_blocktime_ms,
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),
+                    indexer_urls: midnight_config.indexer_urls.clone(),
+                    prover_url: midnight_config.prover_url.clone().unwrap_or_default(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(

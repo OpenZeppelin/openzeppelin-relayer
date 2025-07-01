@@ -41,7 +41,7 @@ impl Default for SyncConfig {
 #[async_trait::async_trait]
 pub trait SyncStrategy: Send + Sync {
     /// Create a new sync strategy.
-    fn new(indexer_client: MidnightIndexerClient, config: Option<SyncConfig>) -> Self;
+    fn new(indexer_client: &MidnightIndexerClient, config: Option<SyncConfig>) -> Self;
 
     /// Execute the sync strategy from the given start height.
     ///
@@ -92,9 +92,9 @@ impl QuickSyncStrategy {
 #[async_trait::async_trait]
 impl SyncStrategy for QuickSyncStrategy {
     /// Create a new relevant transaction sync strategy.
-    fn new(indexer_client: MidnightIndexerClient, config: Option<SyncConfig>) -> Self {
+    fn new(indexer_client: &MidnightIndexerClient, config: Option<SyncConfig>) -> Self {
         Self {
-            indexer_client,
+            indexer_client: indexer_client.clone(),
             config,
         }
     }
@@ -195,9 +195,9 @@ pub struct FullSyncStrategy {
 
 #[async_trait::async_trait]
 impl SyncStrategy for FullSyncStrategy {
-    fn new(indexer_client: MidnightIndexerClient, _config: Option<SyncConfig>) -> Self {
+    fn new(indexer_client: &MidnightIndexerClient, _config: Option<SyncConfig>) -> Self {
         Self {
-            _indexer_client: indexer_client,
+            _indexer_client: indexer_client.clone(),
         }
     }
 

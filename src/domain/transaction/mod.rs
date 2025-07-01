@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use eyre::Result;
 #[cfg(test)]
 use mockall::automock;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 mod evm;
 mod midnight;
@@ -413,7 +413,8 @@ impl RelayerTransactionFactory {
                 let network = EvmNetwork::try_from(network_repo)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
-                let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
+                let evm_provider =
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone(), None)?;
                 let signer_service = EvmSignerFactory::create_evm_signer(&signer)?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
@@ -455,6 +456,7 @@ impl RelayerTransactionFactory {
                 let solana_provider = Arc::new(get_network_provider(
                     &network,
                     relayer.custom_rpc_urls.clone(),
+                    None,
                 )?);
 
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
@@ -485,7 +487,7 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let stellar_provider =
-                    get_network_provider(&network, relayer.custom_rpc_urls.clone())
+                    get_network_provider(&network, relayer.custom_rpc_urls.clone(), None)
                         .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
@@ -517,9 +519,17 @@ impl RelayerTransactionFactory {
                 let network = MidnightNetwork::try_from(network_repo)
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
+                let network_id = to_midnight_network_id(&relayer.network);
+                let indexer_urls = network.indexer_urls.clone();
+
                 let midnight_provider = Arc::new(get_network_provider(
                     &network,
                     relayer.custom_rpc_urls.clone(),
+                    Some(&HashMap::from([
+                        ("network".to_string(), format!("{:?}", network_id)),
+                        ("http".to_string(), indexer_urls.http),
+                        ("ws".to_string(), indexer_urls.ws),
+                    ])),
                 )?);
 
                 Ok(NetworkTransaction::Midnight(MidnightTransaction::new(

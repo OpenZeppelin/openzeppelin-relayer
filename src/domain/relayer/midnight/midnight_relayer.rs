@@ -276,13 +276,16 @@ where
     }
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
-        let balance = self
-            .provider
-            .get_balance(&self.relayer.address)
-            .await
-            .map_err(|e| {
-                RelayerError::ProviderError(format!("Failed to fetch account for balance: {}", e))
-            })?;
+        // let balance = self
+        //     .provider
+        //     .get_balance(&self.relayer.address)
+        //     .await
+        //     .map_err(|e| {
+        //         RelayerError::ProviderError(format!("Failed to fetch account for balance: {}", e))
+        //     })?;
+
+        // TODO: find way to pass context and seed to relayer
+        let balance = 0;
 
         let balance_u128 = balance
             .to_string()

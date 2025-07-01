@@ -3,16 +3,24 @@
 //! This module provides the core transaction handling logic for Midnight network transactions.
 
 use crate::{
-    domain::Transaction,
+    // constants::MIDNIGHT_DECIMALS,
+    domain::{to_midnight_network_id, MidnightTransactionBuilder, Transaction},
     jobs::{JobProducer, JobProducerTrait},
     models::{MidnightNetwork, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage, Repository, TransactionCounterTrait, TransactionRepository,
     },
-    services::{MidnightProvider, MidnightProviderTrait, MidnightSigner, Signer},
+    services::{
+        midnight::handler::{QuickSyncStrategy, SyncManager},
+        remote_prover::RemoteProofServer,
+        MidnightProvider, MidnightProviderTrait, MidnightSigner, MidnightSignerTrait,
+    },
 };
 use async_trait::async_trait;
+use log::info;
+use midnight_node_ledger_helpers::DefaultDB;
+use rand::Rng;
 use std::sync::Arc;
 
 #[allow(dead_code)]
@@ -23,7 +31,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: MidnightSignerTrait,
     C: TransactionCounterTrait,
 {
     relayer: RelayerRepoModel,
@@ -43,7 +51,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: MidnightSignerTrait,
     C: TransactionCounterTrait,
 {
     /// Creates a new `MidnightTransaction`.
@@ -117,7 +125,7 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: MidnightSignerTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
 {
     async fn prepare_transaction(
@@ -129,6 +137,205 @@ where
         // 2. Request proofs from prover server
         // 3. Construct the full transaction
         // 4. Update transaction data with proof request IDs
+
+        let wallet_seed = self.signer.wallet_seed();
+
+        let indexer_client = self.provider.get_indexer_client();
+
+        // TODO: We should probably move this up one level
+        // This still requires `MIDNIGHT_LEDGER_TEST_STATIC_DIR` environment variable to be set (limitation by LedgerContext test resolver)
+        // We should check with the Midnight team if we can use a different constructor for LedgerContext
+        let mut sync_manager = SyncManager::<QuickSyncStrategy>::new(
+            indexer_client,
+            wallet_seed,
+            to_midnight_network_id(&self.network.network),
+        )
+        .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        sync_manager
+            .sync(0)
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        let context = sync_manager.get_context();
+
+        let balance = self.provider.get_balance(wallet_seed, &context).await?;
+
+        info!("Balance: {}", balance);
+
+        // Create proof provider
+        let proof_provider = Box::new(RemoteProofServer::new(
+            self.network.prover_url.clone(),
+            to_midnight_network_id(&self.network.network),
+        ));
+
+        // Generate cryptographically secure random seed with timestamp for uniqueness
+        let mut rng_seed = [0u8; 32];
+        rand::rng().fill(&mut rng_seed);
+
+        // Mix in current timestamp to ensure uniqueness across transaction attempts
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        let timestamp_bytes = timestamp.to_le_bytes();
+
+        // XOR the first 8 bytes of the seed with timestamp for uniqueness
+        for (i, &byte) in timestamp_bytes.iter().enumerate() {
+            rng_seed[i] ^= byte;
+        }
+
+        // #[allow(clippy::identity_op)]
+        // let amount = 1 * 10u128.pow(MIDNIGHT_DECIMALS); // 1 tDUST
+
+        // // Calculate transaction fees first to validate total requirement
+        // let estimated_fee =
+        // 	midnight_node_ledger_helpers::Wallet::<MidnightDefaultDB>::calculate_fee(1, 1);
+        // let total_required = amount + estimated_fee;
+
+        // Calculate fee based on transaction structure
+        // For now, assume 2 outputs (recipient + change) in most cases
+        // Note: The Wallet::calculate_fee method seems to overestimate fees significantly
+        // Based on the error, actual fee for 1 input, 2 outputs is ~60,855 dust
+        // let actual_fee = 61000u128; // Conservative estimate for 1 input, 2 outputs (observed: 60,855)
+        // let total_required = amount + actual_fee;
+
+        // // Validate total amount including fees
+        // if total_required > available_utxo_value {
+        // 	return Err(TransactionError::InsufficientBalance(format!(
+        // 		"Requested {} tDUST + {} tDUST fee = {} tDUST total, but only {} tDUST available",
+        // 		format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 		format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 		format_token_amount(total_required, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 		format_token_amount(available_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	)));
+        // }
+        // info!(
+        // 	"Amount validated successfully (including {} tDUST fee)",
+        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
+        // );
+
+        // // First, find the actual UTXO that will be spent to get its exact value
+        // let from_wallet = context.wallet_from_seed(from_wallet_seed);
+
+        // // Create a temporary input_info to find the minimum UTXO
+        // let temp_input_info = InputInfo::<WalletSeed> {
+        // 	origin: from_wallet_seed,
+        // 	token_type,
+        // 	value: amount + actual_fee, // Minimum amount needed including fees
+        // };
+
+        // // Find the actual UTXO that will be selected
+        // let selected_coin = temp_input_info.min_match_coin(&from_wallet.state);
+        // let actual_utxo_value = selected_coin.value;
+
+        // debug!("Selected UTXO details:");
+        // debug!(
+        // 	"   - Value: {} tDUST",
+        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS)
+        // );
+        // debug!("   - Type: {:?}", selected_coin.type_);
+        // debug!("   - Nonce: {:?}", selected_coin.nonce);
+
+        // // Debug: Check the mt_index
+        // if let Some((_, qualified_coin_sp)) = from_wallet
+        // 	.state
+        // 	.coins
+        // 	.iter()
+        // 	.find(|(_, coin_sp)| coin_sp.nonce == selected_coin.nonce)
+        // {
+        // 	debug!("   - MT Index: {}", qualified_coin_sp.mt_index);
+        // 	debug!(
+        // 		"   - Wallet state first_free: {}",
+        // 		from_wallet.state.first_free
+        // 	);
+        // }
+
+        // // Verify the selected UTXO has sufficient value
+        // if actual_utxo_value < amount + actual_fee {
+        // 	error!(
+        // 	"Selected UTXO value {} tDUST is insufficient for amount {} tDUST + fee {} tDUST = {} tDUST",
+        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(amount + actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
+        // );
+        // 	return Err(TransactionError::InsufficientBalance(format!(
+        // 	"Selected UTXO value {} tDUST is insufficient for transaction amount {} tDUST + fee {} tDUST = {} tDUST",
+        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(amount + actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
+        // )));
+        // }
+
+        // debug!(
+        // 	"Found UTXO with value: {} tDUST (requested minimum: {} tDUST including {} tDUST fee)",
+        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(amount + actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
+        // );
+
+        // // Now create the actual input_info with the exact UTXO value that will be spent
+        // // This ensures the zero-knowledge proof references the correct UTXO
+        // let input_info = InputInfo::<WalletSeed> {
+        // 	origin: from_wallet_seed,
+        // 	token_type,
+        // 	value: actual_utxo_value, // Use the exact value of the selected UTXO
+        // };
+
+        // debug!(
+        // 	"Input info: {{origin: {:?}, token_type: {:?}, value: {} tDUST (actual UTXO value)}}",
+        // 	hex::encode(from_wallet_seed.0),
+        // 	token_type,
+        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
+        // );
+
+        // // Create output to recipient
+        // let recipient_output = OutputInfo::<WalletSeed> {
+        // 	destination: to_wallet_seed,
+        // 	token_type,
+        // 	value: amount,
+        // };
+
+        // debug!(
+        // 	"Recipient output: {{destination: {:?}, token_type: {:?}, value: {} tDUST}}",
+        // 	hex::encode(to_wallet_seed.0),
+        // 	token_type,
+        // 	format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS)
+        // );
+
+        // // Create the guaranteed offer with input and outputs
+        // let mut offer = OfferInfo::default();
+        // offer.inputs.push(Box::new(input_info));
+        // offer.outputs.push(Box::new(recipient_output));
+
+        // // Calculate change and create change output if needed
+        // // This ensures the indexer recognizes the transaction as relevant to the sender
+        // let change_amount = actual_utxo_value.saturating_sub(amount + actual_fee);
+        // if change_amount > 0 {
+        // 	let change_output = OutputInfo::<WalletSeed> {
+        // 		destination: from_wallet_seed, // Send change back to sender
+        // 		token_type,
+        // 		value: change_amount,
+        // 	};
+        // 	offer.outputs.push(Box::new(change_output));
+        // 	debug!(
+        // 		"Change output: {{destination: self, token_type: {:?}, value: {} tDUST}}",
+        // 		token_type,
+        // 		format_token_amount(change_amount, transaction::MIDNIGHT_TOKEN_DECIMALS)
+        // 	);
+        // } else {
+        // 	debug!("No change output needed (exact amount)");
+        // }
+
+        let _transaction = MidnightTransactionBuilder::<DefaultDB>::new()
+			.with_context(context)
+			.with_proof_provider(proof_provider)
+			.with_rng_seed(rng_seed)
+			// .with_guaranteed_offer(offer)
+			.build()
+			.await?;
 
         log::debug!("Preparing Midnight transaction: {}", tx.id);
 
