@@ -791,6 +791,7 @@ fn doc_cancel_transaction() {}
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
         ("transaction_id" = String, Path, description = "The unique identifier of the transaction")
     ),
+    request_body = NetworkTransactionRequest,
     responses(
         (status = 200, description = "Relayer transaction replaced successfully", body = ApiResponse<TransactionResponse>),
         (

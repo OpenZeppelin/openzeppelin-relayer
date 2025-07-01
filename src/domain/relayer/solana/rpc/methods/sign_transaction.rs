@@ -165,8 +165,8 @@ mod tests {
         program_pack::Pack,
         signature::{Keypair, Signature},
         signer::Signer,
-        system_instruction,
     };
+    use solana_system_interface::instruction;
     use spl_token::state::Account;
 
     #[tokio::test]
@@ -203,6 +203,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -351,6 +352,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -417,6 +419,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -570,6 +573,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -660,6 +664,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -714,6 +719,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -773,6 +779,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -813,7 +820,7 @@ mod tests {
         // Create transaction with different fee payer
         let wrong_fee_payer = Keypair::new();
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&wrong_fee_payer.pubkey())); // Different fee payer
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction)
@@ -891,6 +898,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -947,6 +955,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -1014,6 +1023,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });

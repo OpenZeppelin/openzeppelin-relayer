@@ -30,6 +30,7 @@ use solana_sdk::{
 };
 use std::str::FromStr;
 
+use super::{utils::FeeQuote, *};
 use crate::{
     models::{
         EncodedSerializedTransaction, PrepareTransactionRequestParams, PrepareTransactionResult,
@@ -37,8 +38,6 @@ use crate::{
     },
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
-
-use super::{utils::FeeQuote, *};
 
 impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
 where
@@ -230,6 +229,7 @@ mod tests {
 
     use std::str::FromStr;
 
+    use super::*;
     use crate::{
         constants::WRAPPED_SOL_MINT,
         models::{
@@ -238,12 +238,10 @@ mod tests {
         },
         services::{QuoteResponse, RoutePlan, SwapInfo},
     };
-
-    use super::*;
     use solana_sdk::{
         hash::Hash, message::Message, program_pack::Pack, signature::Keypair, signer::Signer,
-        system_instruction,
     };
+    use solana_system_interface::instruction;
     use spl_associated_token_account::get_associated_token_address;
     use spl_token::state::Account;
 
@@ -296,6 +294,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -472,6 +471,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -554,6 +554,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -597,7 +598,7 @@ mod tests {
         // Create transaction with different fee payer
         let wrong_fee_payer = Keypair::new();
         let recipient = Pubkey::new_unique();
-        let ix = system_instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
+        let ix = instruction::transfer(&wrong_fee_payer.pubkey(), &recipient, 1000);
         let message = Message::new(&[ix], Some(&wrong_fee_payer.pubkey()));
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
@@ -628,6 +629,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -706,12 +708,13 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
 
         // Create test transaction
-        let ix = system_instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 1000);
+        let ix = instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 1000);
         let message = Message::new(&[ix], Some(&relayer_keypair.pubkey()));
         let transaction = Transaction::new_unsigned(message);
         let encoded_tx = EncodedSerializedTransaction::try_from(&transaction).unwrap();
@@ -802,6 +805,7 @@ mod tests {
                     return_data: None,
                     inner_instructions: None,
                     replacement_blockhash: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
