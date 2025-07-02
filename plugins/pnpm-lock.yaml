@@ -7,8 +7,8 @@ importers:
   .:
     dependencies:
       '@openzeppelin/relayer-sdk':
-        specifier: ^0.2.0
-        version: 0.2.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.8.3)(utf-8-validate@5.0.10)
+        specifier: 1.1.0-rc.0
+        version: 1.1.0-rc.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.8.3)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^24.0.3
         version: 24.0.3
@@ -43,8 +43,8 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
-  '@openzeppelin/relayer-sdk@0.2.0':
-    resolution: {integrity: sha512-3aVIyCo0tdkO/OXuI2L8NiGyLBSSBdMXBlUknCvFGkJKY+ZoBQHEZ0MeOZnwsdZGNLv3s5udblrRoWrZ0XRLbQ==}
+  '@openzeppelin/relayer-sdk@1.1.0-rc.0':
+    resolution: {integrity: sha512-G/Z3dRqQBjzhdz8vlR7OSMSt46wJ7BZ+LC76mD1XqbsIOXcOSsZ/hwU0gobCRfYghNK0zu7Tzm0Y0JtZneukPg==}
     engines: {node: 22.14.0, npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
   '@solana/buffer-layout-utils@0.2.0':
     resolution: {integrity: sha512-szG4sxgJGktbuZYDg2FfNmkMi0DYQoVjN2h7ta1W1hPrwzarcFLBq9UpX1UjNXsNpT9dn+chgprtWGioUAr4/g==}
@@ -368,7 +368,7 @@ snapshots:
       '@noble/hashes': 1.8.0
   '@noble/hashes@1.3.2': {}
   '@noble/hashes@1.8.0': {}
-  ? '@openzeppelin/relayer-sdk@0.2.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.8.3)(utf-8-validate@5.0.10)'
+  ? '@openzeppelin/relayer-sdk@1.1.0-rc.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.8.3)(utf-8-validate@5.0.10)'
   : dependencies:
       '@actions/exec': 1.1.1
       '@solana/spl-token': 0.4.13(@solana/web3.js@1.98.2(bufferutil@4.0.9)(typescript@5.8.3)(utf-8-validate@5.0.10))(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.8.3)(utf-8-validate@5.0.10)
