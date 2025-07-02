@@ -3,12 +3,13 @@
 //! This module contains functions for initializing the application state,
 //! including setting up repositories, job queues, and other necessary components.
 use crate::{
+    config::ServerConfig,
     jobs::{self, Queue},
     models::{AppState, DefaultAppState},
     repositories::{
         InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
         InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        RelayerRepositoryStorage, TransactionRepositoryType,
     },
 };
 use actix_web::web;
@@ -26,11 +27,18 @@ use std::sync::Arc;
 /// Returns error if:
 /// - Repository initialization fails
 /// - Configuration loading fails
-pub async fn initialize_app_state() -> Result<web::ThinData<DefaultAppState>> {
+pub async fn initialize_app_state(
+    server_config: Arc<ServerConfig>,
+) -> Result<web::ThinData<DefaultAppState>> {
     let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
         InMemoryRelayerRepository::new(),
     ));
-    let transaction_repository = Arc::new(InMemoryTransactionRepository::new());
+
+    let transaction_repository = Arc::new(
+        TransactionRepositoryType::Redis
+            .create_repository(&server_config)
+            .await,
+    );
     let signer_repository = Arc::new(InMemorySignerRepository::new());
     let notification_repository = Arc::new(InMemoryNotificationRepository::new());
     let network_repository = Arc::new(InMemoryNetworkRepository::new());

@@ -25,8 +25,8 @@ use crate::{
         SolanaNetwork, TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionRepository,
-        RelayerRepository, RelayerRepositoryStorage, Repository,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, RelayerRepository,
+        RelayerRepositoryStorage, Repository, TransactionRepositoryImpl,
     },
     services::{
         JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
@@ -74,7 +74,7 @@ where
 
 pub type DefaultSolanaRelayer<J> = SolanaRelayer<
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryTransactionRepository,
+    TransactionRepositoryImpl,
     J,
     SolanaSigner,
     JupiterService,

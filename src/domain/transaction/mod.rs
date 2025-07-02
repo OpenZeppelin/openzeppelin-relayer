@@ -19,7 +19,7 @@ use crate::{
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryTransactionRepository, RelayerRepositoryStorage, TransactionRepositoryImpl,
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
@@ -389,7 +389,7 @@ impl RelayerTransactionFactory {
         signer: SignerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         network_repository: Arc<InMemoryNetworkRepository>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_repository: Arc<TransactionRepositoryImpl>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError> {

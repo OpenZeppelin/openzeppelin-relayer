@@ -6,9 +6,10 @@ use crate::models::{
 };
 use crate::repositories::{PaginatedResult, Repository, TransactionRepository};
 use async_trait::async_trait;
-use log::{warn, error};
+use log::{error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use std::fmt;
 use std::sync::Arc;
 
 const TX_KEY_PREFIX: &str = "tx:";
@@ -23,7 +24,7 @@ pub struct RedisTransactionRepository {
 }
 
 impl RedisTransactionRepository {
-    pub async fn new(connection_manager: Arc<ConnectionManager>) -> Result<Self, RepositoryError> {
+    pub fn new(connection_manager: Arc<ConnectionManager>) -> Result<Self, RepositoryError> {
         Ok(Self {
             client: connection_manager,
         })
@@ -38,7 +39,12 @@ impl RedisTransactionRepository {
     }
 
     fn relayer_status_key(relayer_id: &str, status: &TransactionStatus) -> String {
-        format!("{}{}:{}", RELAYER_STATUS_INDEX_PREFIX, relayer_id, status.to_string())
+        format!(
+            "{}{}:{}",
+            RELAYER_STATUS_INDEX_PREFIX,
+            relayer_id,
+            status.to_string()
+        )
     }
 
     fn relayer_nonce_key(relayer_id: &str, nonce: u64) -> String {
@@ -46,14 +52,17 @@ impl RedisTransactionRepository {
     }
 
     // Batch fetch transactions by IDs - more efficient than individual gets
-    async fn get_transactions_by_ids(&self, ids: &[String]) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
+    async fn get_transactions_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
 
         let mut conn = self.client.as_ref().clone();
         let keys: Vec<String> = ids.iter().map(|id| Self::tx_key(id)).collect();
-        
+
         let values: Vec<Option<String>> = conn
             .mget(&keys)
             .await
@@ -76,7 +85,7 @@ impl RedisTransactionRepository {
                 }
             }
         }
-        
+
         Ok(transactions)
     }
 
@@ -99,7 +108,12 @@ impl RedisTransactionRepository {
         pipe.sadd(&new_status_key, &tx.id);
 
         // Handle nonce index
-        if let Some(nonce) = tx.network_data.get_evm_transaction_data().ok().and_then(|tx_data| tx_data.nonce) {
+        if let Some(nonce) = tx
+            .network_data
+            .get_evm_transaction_data()
+            .ok()
+            .and_then(|tx_data| tx_data.nonce)
+        {
             let nonce_key = Self::relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.sadd(&nonce_key, &tx.id);
         }
@@ -112,8 +126,17 @@ impl RedisTransactionRepository {
             }
 
             // Handle nonce index cleanup
-            if let Some(old_nonce) = old.network_data.get_evm_transaction_data().ok().and_then(|tx_data| tx_data.nonce) {
-                let new_nonce = tx.network_data.get_evm_transaction_data().ok().and_then(|tx_data| tx_data.nonce);
+            if let Some(old_nonce) = old
+                .network_data
+                .get_evm_transaction_data()
+                .ok()
+                .and_then(|tx_data| tx_data.nonce)
+            {
+                let new_nonce = tx
+                    .network_data
+                    .get_evm_transaction_data()
+                    .ok()
+                    .and_then(|tx_data| tx_data.nonce);
                 if Some(old_nonce) != new_nonce {
                     let old_nonce_key = Self::relayer_nonce_key(&old.relayer_id, old_nonce);
                     pipe.srem(&old_nonce_key, &tx.id);
@@ -135,12 +158,17 @@ impl RedisTransactionRepository {
 
         let relayer_key = Self::relayer_key(&tx.relayer_id);
         let status_key = Self::relayer_status_key(&tx.relayer_id, &tx.status);
-        
+
         pipe.srem(&relayer_key, &tx.id);
         pipe.srem(&status_key, &tx.id);
 
-          // Remove nonce index if exists
-        if let Some(nonce) = tx.network_data.get_evm_transaction_data().ok().and_then(|tx_data| tx_data.nonce) {
+        // Remove nonce index if exists
+        if let Some(nonce) = tx
+            .network_data
+            .get_evm_transaction_data()
+            .ok()
+            .and_then(|tx_data| tx_data.nonce)
+        {
             let nonce_key = Self::relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.srem(&nonce_key, &tx.id);
         }
@@ -153,6 +181,14 @@ impl RedisTransactionRepository {
     }
 }
 
+impl fmt::Debug for RedisTransactionRepository {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RedisTransactionRepository")
+            .field("client", &"<ConnectionManager>")
+            .finish()
+    }
+}
+
 #[async_trait]
 impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     async fn create(
@@ -161,18 +197,16 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     ) -> Result<TransactionRepoModel, RepositoryError> {
         let key = Self::tx_key(&entity.id);
         let mut conn = self.client.as_ref().clone();
-        
+
         let value =
             serde_json::to_string(&entity).map_err(|e| RepositoryError::Other(e.to_string()))?;
 
         // Use atomic pipeline for consistency
         let mut pipe = redis::pipe();
         pipe.atomic();
-        
+
         // Check existence and create atomically using SET NX
-        let result: Result<String, redis::RedisError> = conn
-            .set_nx(&key, &value)
-            .await;
+        let result: Result<String, redis::RedisError> = conn.set_nx(&key, &value).await;
 
         match result {
             Ok(_) => {
@@ -181,16 +215,14 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
                 pipe.exec_async(&mut conn)
                     .await
                     .map_err(|e| RepositoryError::Other(e.to_string()))?;
-                
+
                 self.update_indexes_atomic(&entity, None).await?;
                 Ok(entity)
             }
-            Err(_) => {
-                Err(RepositoryError::ConstraintViolation(format!(
-                    "Transaction with ID {} already exists",
-                    entity.id
-                )))
-            }
+            Err(_) => Err(RepositoryError::ConstraintViolation(format!(
+                "Transaction with ID {} already exists",
+                entity.id
+            ))),
         }
     }
 
@@ -201,7 +233,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .get(&key)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
-        
+
         match value {
             Some(json) => {
                 serde_json::from_str(&json).map_err(|e| RepositoryError::Other(e.to_string()))
@@ -219,7 +251,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .smembers(TX_IDS_SET)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
-        
+
         self.get_transactions_by_ids(&ids).await
     }
 
@@ -232,14 +264,14 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .smembers(TX_IDS_SET)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
-        
+
         let total = total_ids.len() as u64;
         let start = ((query.page - 1) * query.per_page) as usize;
         let end = (start + query.per_page as usize).min(total_ids.len());
-        
+
         let page_ids = &total_ids[start..end];
         let items = self.get_transactions_by_ids(page_ids).await?;
-        
+
         Ok(PaginatedResult {
             items,
             total,
@@ -255,10 +287,10 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     ) -> Result<TransactionRepoModel, RepositoryError> {
         // Get the old transaction for index cleanup
         let old_tx = self.get_by_id(id.clone()).await?;
-        
+
         let key = Self::tx_key(&id);
         let mut conn = self.client.as_ref().clone();
-        
+
         let value =
             serde_json::to_string(&entity).map_err(|e| RepositoryError::Other(e.to_string()))?;
 
@@ -275,16 +307,16 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
         // Get transaction first for index cleanup
         let tx = self.get_by_id(id.clone()).await?;
-        
+
         let key = Self::tx_key(&id);
         let mut conn = self.client.as_ref().clone();
-        
+
         // Use atomic pipeline
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.del(&key);
         pipe.srem(TX_IDS_SET, &id);
-        
+
         pipe.exec_async(&mut conn)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
@@ -316,14 +348,14 @@ impl TransactionRepository for RedisTransactionRepository {
             .smembers(relayer_key)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
-        
+
         let total = ids.len() as u64;
         let start = ((query.page - 1) * query.per_page) as usize;
         let end = (start + query.per_page as usize).min(ids.len());
-        
+
         let page_ids = &ids[start..end];
         let items = self.get_transactions_by_ids(page_ids).await?;
-        
+
         Ok(PaginatedResult {
             items,
             total,
@@ -339,7 +371,7 @@ impl TransactionRepository for RedisTransactionRepository {
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
         let mut all_ids = Vec::new();
-        
+
         // Collect IDs from all status sets
         for status in statuses {
             let status_key = Self::relayer_status_key(relayer_id, status);
@@ -349,11 +381,11 @@ impl TransactionRepository for RedisTransactionRepository {
                 .map_err(|e| RepositoryError::Other(e.to_string()))?;
             all_ids.extend(ids);
         }
-        
+
         // Remove duplicates and batch fetch
         all_ids.sort();
         all_ids.dedup();
-        
+
         self.get_transactions_by_ids(&all_ids).await
     }
 
@@ -364,13 +396,13 @@ impl TransactionRepository for RedisTransactionRepository {
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
         let nonce_key = Self::relayer_nonce_key(relayer_id, nonce);
-        
+
         // Get all transaction IDs with this nonce for this relayer
         let tx_ids: Vec<String> = conn
             .smembers(nonce_key)
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
-        
+
         match tx_ids.len() {
             0 => Ok(None),
             1 => {
@@ -379,7 +411,10 @@ impl TransactionRepository for RedisTransactionRepository {
                     Ok(tx) => Ok(Some(tx)),
                     Err(RepositoryError::NotFound(_)) => {
                         // Transaction was deleted but index wasn't cleaned up
-                        warn!("Stale nonce index found for relayer {} nonce {}", relayer_id, nonce);
+                        warn!(
+                            "Stale nonce index found for relayer {} nonce {}",
+                            relayer_id, nonce
+                        );
                         Ok(None)
                     }
                     Err(e) => Err(e),
@@ -388,8 +423,11 @@ impl TransactionRepository for RedisTransactionRepository {
             _ => {
                 // Multiple transactions with same nonce - this might be valid in some scenarios
                 // (e.g., failed transaction retries) but let's return the first valid one
-                warn!("Multiple transactions found for relayer {} nonce {}: {:?}", relayer_id, nonce, tx_ids);
-                
+                warn!(
+                    "Multiple transactions found for relayer {} nonce {}: {:?}",
+                    relayer_id, nonce, tx_ids
+                );
+
                 for tx_id in tx_ids {
                     match self.get_by_id(tx_id).await {
                         Ok(tx) => return Ok(Some(tx)),
@@ -449,7 +487,7 @@ impl TransactionRepository for RedisTransactionRepository {
         // Update transaction and indexes atomically
         let key = Self::tx_key(&tx_id);
         let mut conn = self.client.as_ref().clone();
-        
+
         let value =
             serde_json::to_string(&tx).map_err(|e| RepositoryError::Other(e.to_string()))?;
 

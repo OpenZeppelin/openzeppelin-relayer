@@ -8,7 +8,7 @@ use crate::{
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryRelayerRepository, RelayerRepositoryStorage, TransactionRepositoryImpl,
     },
     services::SolanaProvider,
 };
@@ -18,7 +18,7 @@ pub struct SolanaRelayerTransaction {
     relayer: RelayerRepoModel,
     provider: Arc<SolanaProvider>,
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-    transaction_repository: Arc<InMemoryTransactionRepository>,
+    transaction_repository: Arc<TransactionRepositoryImpl>,
     job_producer: Arc<JobProducer>,
 }
 
@@ -28,7 +28,7 @@ impl SolanaRelayerTransaction {
         relayer: RelayerRepoModel,
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         provider: Arc<SolanaProvider>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
+        transaction_repository: Arc<TransactionRepositoryImpl>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {

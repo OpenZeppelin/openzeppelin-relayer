@@ -35,8 +35,8 @@ use crate::{
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository, TransactionRepository,
+        NetworkRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
+        TransactionRepository, TransactionRepositoryImpl,
     },
     services::{
         StellarProvider, StellarProviderTrait, TransactionCounterService,
@@ -128,7 +128,7 @@ pub type DefaultStellarRelayer<J> = StellarRelayer<
     StellarProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
-    InMemoryTransactionRepository,
+    TransactionRepositoryImpl,
     J,
     TransactionCounterService<InMemoryTransactionCounter>,
 >;

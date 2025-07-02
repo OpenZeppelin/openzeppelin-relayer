@@ -18,8 +18,8 @@ use crate::{
     jobs::JobProducerTrait,
     models::{NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel, SolanaNetwork},
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, RelayerRepositoryStorage,
+        TransactionRepositoryImpl,
     },
     services::{get_network_provider, JupiterService, SolanaSignerFactory},
 };
@@ -30,7 +30,7 @@ pub async fn create_solana_relayer<J: JobProducerTrait + 'static>(
     signer: SignerRepoModel,
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     network_repository: Arc<InMemoryNetworkRepository>,
-    transaction_repository: Arc<InMemoryTransactionRepository>,
+    transaction_repository: Arc<TransactionRepositoryImpl>,
     job_producer: Arc<J>,
 ) -> Result<DefaultSolanaRelayer<J>, RelayerError> {
     let network_repo = network_repository

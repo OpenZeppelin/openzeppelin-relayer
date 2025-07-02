@@ -386,7 +386,7 @@ mod tests {
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage,
+            InMemoryTransactionRepository, RelayerRepositoryStorage, TransactionRepositoryImpl,
         },
     };
     use serde_json::json;
@@ -419,7 +419,9 @@ mod tests {
             relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
                 InMemoryRelayerRepository::default(),
             )),
-            transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
+            transaction_repository: Arc::new(TransactionRepositoryImpl::InMemory(
+                InMemoryTransactionRepository::default(),
+            )),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
             network_repository: Arc::new(InMemoryNetworkRepository::default()),

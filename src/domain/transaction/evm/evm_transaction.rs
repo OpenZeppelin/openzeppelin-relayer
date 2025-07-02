@@ -27,7 +27,7 @@ use crate::{
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
         NetworkRepository, RelayerRepositoryStorage, Repository, TransactionCounterTrait,
-        TransactionRepository,
+        TransactionRepository, TransactionRepositoryImpl,
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
 };
@@ -733,7 +733,7 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
-    crate::repositories::transaction::InMemoryTransactionRepository,
+    TransactionRepositoryImpl,
     JobProducer,
     EvmSigner,
     InMemoryTransactionCounter,

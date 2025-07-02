@@ -41,8 +41,8 @@ use crate::{
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository, TransactionRepository,
+        NetworkRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
+        TransactionRepository, TransactionRepositoryImpl,
     },
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
@@ -201,7 +201,7 @@ pub type DefaultEvmRelayer<J> = EvmRelayer<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
-    InMemoryTransactionRepository,
+    TransactionRepositoryImpl,
     J,
     EvmSigner,
     TransactionCounterService<InMemoryTransactionCounter>,

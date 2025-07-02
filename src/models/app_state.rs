@@ -8,7 +8,7 @@ use crate::{
     repositories::{
         InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
         InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        RelayerRepositoryStorage, TransactionRepositoryImpl,
     },
 };
 
@@ -19,7 +19,7 @@ pub struct AppState<J: JobProducerTrait> {
     /// Repository for managing relayer data.
     pub relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     /// Repository for managing transaction data.
-    pub transaction_repository: Arc<InMemoryTransactionRepository>,
+    pub transaction_repository: Arc<TransactionRepositoryImpl>,
     /// Repository for managing signer data.
     pub signer_repository: Arc<InMemorySignerRepository>,
     /// Repository for managing notification data.
@@ -50,8 +50,8 @@ impl<J: JobProducerTrait> AppState<J> {
     ///
     /// # Returns
     ///
-    /// An `Arc` pointing to the `InMemoryTransactionRepository`.
-    pub fn transaction_repository(&self) -> Arc<InMemoryTransactionRepository> {
+    /// An `Arc` pointing to the `Arc<TransactionRepositoryImpl>`.
+    pub fn transaction_repository(&self) -> Arc<TransactionRepositoryImpl> {
         Arc::clone(&self.transaction_repository)
     }
 
@@ -112,7 +112,10 @@ impl<J: JobProducerTrait> AppState<J> {
 
 #[cfg(test)]
 mod tests {
-    use crate::jobs::MockJobProducerTrait;
+    use crate::{
+        jobs::MockJobProducerTrait,
+        repositories::{InMemoryTransactionRepository, TransactionRepositoryType},
+    };
 
     use super::*;
     use std::sync::Arc;
@@ -142,7 +145,9 @@ mod tests {
             relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
                 InMemoryRelayerRepository::default(),
             )),
-            transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
+            transaction_repository: Arc::new(TransactionRepositoryImpl::InMemory(
+                InMemoryTransactionRepository::default(),
+            )),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
             network_repository: Arc::new(InMemoryNetworkRepository::default()),

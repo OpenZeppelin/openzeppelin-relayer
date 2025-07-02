@@ -12,8 +12,8 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage, Repository, TransactionCounterTrait, TransactionRepository,
+        InMemoryRelayerRepository, InMemoryTransactionCounter, RelayerRepositoryStorage,
+        Repository, TransactionCounterTrait, TransactionRepository, TransactionRepositoryImpl,
     },
     services::{Signer, StellarProvider, StellarProviderTrait, StellarSigner},
 };
@@ -274,7 +274,7 @@ where
 
 pub type DefaultStellarTransaction = StellarRelayerTransaction<
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryTransactionRepository,
+    TransactionRepositoryImpl,
     JobProducer,
     StellarSigner,
     StellarProvider,
