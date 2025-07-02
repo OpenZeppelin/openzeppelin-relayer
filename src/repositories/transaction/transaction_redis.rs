@@ -12,43 +12,55 @@ use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 
-const TX_KEY_PREFIX: &str = "tx:";
+const TX_KEY_PREFIX: &str = "tx";
 const TX_IDS_SET: &str = "tx:ids";
-const RELAYER_INDEX_PREFIX: &str = "tx:relayer:";
-const RELAYER_STATUS_INDEX_PREFIX: &str = "tx:relayer:status:";
-const NONCE_INDEX_PREFIX: &str = "tx:relayer:nonce:";
+const RELAYER_INDEX_PREFIX: &str = "tx:relayer";
+const RELAYER_STATUS_INDEX_PREFIX: &str = "tx:relayer:status";
+const NONCE_INDEX_PREFIX: &str = "tx:relayer:nonce";
 
 #[derive(Clone)]
 pub struct RedisTransactionRepository {
     pub client: Arc<ConnectionManager>,
+    pub key_prefix: String,
 }
 
 impl RedisTransactionRepository {
-    pub fn new(connection_manager: Arc<ConnectionManager>) -> Result<Self, RepositoryError> {
+    pub fn new(
+        connection_manager: Arc<ConnectionManager>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
         Ok(Self {
             client: connection_manager,
+            key_prefix,
         })
     }
 
-    fn tx_key(id: &str) -> String {
-        format!("{}{}", TX_KEY_PREFIX, id)
+    fn tx_key(&self, id: &str) -> String {
+        format!("{}:{}:{}", self.key_prefix, TX_KEY_PREFIX, id)
     }
 
-    fn relayer_key(relayer_id: &str) -> String {
-        format!("{}{}", RELAYER_INDEX_PREFIX, relayer_id)
-    }
-
-    fn relayer_status_key(relayer_id: &str, status: &TransactionStatus) -> String {
+    fn relayer_key(&self, relayer_id: &str) -> String {
         format!(
-            "{}{}:{}",
+            "{}:{}:{}",
+            self.key_prefix, RELAYER_INDEX_PREFIX, relayer_id
+        )
+    }
+
+    fn relayer_status_key(&self, relayer_id: &str, status: &TransactionStatus) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.key_prefix,
             RELAYER_STATUS_INDEX_PREFIX,
             relayer_id,
             status.to_string()
         )
     }
 
-    fn relayer_nonce_key(relayer_id: &str, nonce: u64) -> String {
-        format!("{}{}:{}", NONCE_INDEX_PREFIX, relayer_id, nonce)
+    fn relayer_nonce_key(&self, relayer_id: &str, nonce: u64) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.key_prefix, NONCE_INDEX_PREFIX, relayer_id, nonce
+        )
     }
 
     // Batch fetch transactions by IDs - more efficient than individual gets
@@ -61,7 +73,7 @@ impl RedisTransactionRepository {
         }
 
         let mut conn = self.client.as_ref().clone();
-        let keys: Vec<String> = ids.iter().map(|id| Self::tx_key(id)).collect();
+        let keys: Vec<String> = ids.iter().map(|id| self.tx_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
             .mget(&keys)
@@ -89,6 +101,32 @@ impl RedisTransactionRepository {
         Ok(transactions)
     }
 
+    // Helper to extract nonce with better error handling
+    fn extract_nonce(&self, network_data: &NetworkTransactionData) -> Option<u64> {
+        network_data
+            .get_evm_transaction_data()
+            .ok()
+            .and_then(|tx_data| tx_data.nonce)
+    }
+
+    // Optimized serialization with error context
+    fn serialize_transaction(&self, tx: &TransactionRepoModel) -> Result<String, RepositoryError> {
+        serde_json::to_string(tx).map_err(|e| {
+            RepositoryError::Other(format!("Serialization failed for tx {}: {}", tx.id, e))
+        })
+    }
+
+    // Optimized deserialization with error context
+    fn deserialize_transaction(
+        &self,
+        json: &str,
+        tx_id: &str,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        serde_json::from_str(json).map_err(|e| {
+            RepositoryError::Other(format!("Deserialization failed for tx {}: {}", tx_id, e))
+        })
+    }
+
     // Atomic index management
     async fn update_indexes_atomic(
         &self,
@@ -100,11 +138,11 @@ impl RedisTransactionRepository {
         pipe.atomic();
 
         // Always add to relayer index
-        let relayer_key = Self::relayer_key(&tx.relayer_id);
+        let relayer_key = self.relayer_key(&tx.relayer_id);
         pipe.sadd(&relayer_key, &tx.id);
 
         // Handle status index updates
-        let new_status_key = Self::relayer_status_key(&tx.relayer_id, &tx.status);
+        let new_status_key = self.relayer_status_key(&tx.relayer_id, &tx.status);
         pipe.sadd(&new_status_key, &tx.id);
 
         // Handle nonce index
@@ -114,14 +152,14 @@ impl RedisTransactionRepository {
             .ok()
             .and_then(|tx_data| tx_data.nonce)
         {
-            let nonce_key = Self::relayer_nonce_key(&tx.relayer_id, nonce);
+            let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.sadd(&nonce_key, &tx.id);
         }
 
         // Remove old indexes if updating
         if let Some(old) = old_tx {
             if old.status != tx.status {
-                let old_status_key = Self::relayer_status_key(&old.relayer_id, &old.status);
+                let old_status_key = self.relayer_status_key(&old.relayer_id, &old.status);
                 pipe.srem(&old_status_key, &tx.id);
             }
 
@@ -138,7 +176,7 @@ impl RedisTransactionRepository {
                     .ok()
                     .and_then(|tx_data| tx_data.nonce);
                 if Some(old_nonce) != new_nonce {
-                    let old_nonce_key = Self::relayer_nonce_key(&old.relayer_id, old_nonce);
+                    let old_nonce_key = self.relayer_nonce_key(&old.relayer_id, old_nonce);
                     pipe.srem(&old_nonce_key, &tx.id);
                 }
             }
@@ -156,8 +194,8 @@ impl RedisTransactionRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
 
-        let relayer_key = Self::relayer_key(&tx.relayer_id);
-        let status_key = Self::relayer_status_key(&tx.relayer_id, &tx.status);
+        let relayer_key = self.relayer_key(&tx.relayer_id);
+        let status_key = self.relayer_status_key(&tx.relayer_id, &tx.status);
 
         pipe.srem(&relayer_key, &tx.id);
         pipe.srem(&status_key, &tx.id);
@@ -169,7 +207,7 @@ impl RedisTransactionRepository {
             .ok()
             .and_then(|tx_data| tx_data.nonce)
         {
-            let nonce_key = Self::relayer_nonce_key(&tx.relayer_id, nonce);
+            let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.srem(&nonce_key, &tx.id);
         }
 
@@ -195,7 +233,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         &self,
         entity: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let key = Self::tx_key(&entity.id);
+        let key = self.tx_key(&entity.id);
         let mut conn = self.client.as_ref().clone();
 
         let value =
@@ -227,7 +265,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError> {
-        let key = Self::tx_key(&id);
+        let key = self.tx_key(&id);
         let mut conn = self.client.as_ref().clone();
         let value: Option<String> = conn
             .get(&key)
@@ -288,7 +326,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         // Get the old transaction for index cleanup
         let old_tx = self.get_by_id(id.clone()).await?;
 
-        let key = Self::tx_key(&id);
+        let key = self.tx_key(&id);
         let mut conn = self.client.as_ref().clone();
 
         let value =
@@ -308,7 +346,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         // Get transaction first for index cleanup
         let tx = self.get_by_id(id.clone()).await?;
 
-        let key = Self::tx_key(&id);
+        let key = self.tx_key(&id);
         let mut conn = self.client.as_ref().clone();
 
         // Use atomic pipeline
@@ -343,7 +381,7 @@ impl TransactionRepository for RedisTransactionRepository {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
-        let relayer_key = Self::relayer_key(relayer_id);
+        let relayer_key = self.relayer_key(relayer_id);
         let ids: Vec<String> = conn
             .smembers(relayer_key)
             .await
@@ -374,7 +412,7 @@ impl TransactionRepository for RedisTransactionRepository {
 
         // Collect IDs from all status sets
         for status in statuses {
-            let status_key = Self::relayer_status_key(relayer_id, status);
+            let status_key = self.relayer_status_key(relayer_id, status);
             let ids: Vec<String> = conn
                 .smembers(status_key)
                 .await
@@ -395,7 +433,7 @@ impl TransactionRepository for RedisTransactionRepository {
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
-        let nonce_key = Self::relayer_nonce_key(relayer_id, nonce);
+        let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
 
         // Get all transaction IDs with this nonce for this relayer
         let tx_ids: Vec<String> = conn
@@ -485,7 +523,7 @@ impl TransactionRepository for RedisTransactionRepository {
         }
 
         // Update transaction and indexes atomically
-        let key = Self::tx_key(&tx_id);
+        let key = self.tx_key(&tx_id);
         let mut conn = self.client.as_ref().clone();
 
         let value =

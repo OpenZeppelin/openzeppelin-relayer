@@ -105,6 +105,12 @@ This table lists the environment variables and their default values.
 | `<timeout in milliseconds>`
 | Connection timeout for Redis in milliseconds.
 
+| `REDIS_KEY_PREFIX`
+| `oz-relayer`
+| `string`
+| Redis key prefix
+
+
 | `RPC_TIMEOUT_MS`
 | `10000`
 | `<timeout in milliseconds>`
@@ -159,6 +165,7 @@ METRICS_ENABLED=true
 METRICS_PORT=8081
 REDIS_URL=redis://localhost:6379
 REDIS_CONNECTION_TIMEOUT_MS=10000
+REDIS_KEY_PREFIX=oz-relayer
 RPC_TIMEOUT_MS=10000
 PROVIDER_MAX_RETRIES=3
 PROVIDER_RETRY_BASE_DELAY_MS=100

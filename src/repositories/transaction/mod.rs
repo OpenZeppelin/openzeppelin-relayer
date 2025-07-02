@@ -132,8 +132,11 @@ impl TransactionRepositoryType {
                     .await
                     .expect("Failed to create Redis connection manager");
                 TransactionRepositoryImpl::Redis(
-                    RedisTransactionRepository::new(Arc::new(connection_manager))
-                        .expect("Failed to create Redis transaction repository"),
+                    RedisTransactionRepository::new(
+                        Arc::new(connection_manager),
+                        config.redis_key_prefix.clone(),
+                    )
+                    .expect("Failed to create Redis transaction repository"),
                 )
             }
         }

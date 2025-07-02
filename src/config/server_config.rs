@@ -25,6 +25,8 @@ pub struct ServerConfig {
     pub enable_swagger: bool,
     /// The number of seconds to wait for a Redis connection.
     pub redis_connection_timeout_ms: u64,
+    /// The prefix for the Redis key.
+    pub redis_key_prefix: String,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -113,6 +115,8 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse()
                 .unwrap_or(10000),
+            redis_key_prefix: env::var("REDIS_KEY_PREFIX")
+                .unwrap_or_else(|_| "oz-relayer".to_string()),
             rpc_timeout_ms: env::var("RPC_TIMEOUT_MS")
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse()
