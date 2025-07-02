@@ -1093,7 +1093,9 @@ mod tests {
         ));
         let notification_repo = Arc::new(InMemoryNotificationRepository::default());
         let network_repo = Arc::new(InMemoryNetworkRepository::default());
-        let transaction_repo = Arc::new(InMemoryTransactionRepository::default());
+        let transaction_repo = Arc::new(TransactionRepositoryImpl::InMemory(
+            InMemoryTransactionRepository::new(),
+        ));
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
         let plugin_repo = Arc::new(InMemoryPluginRepository::default());
 

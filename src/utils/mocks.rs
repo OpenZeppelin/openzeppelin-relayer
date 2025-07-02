@@ -17,7 +17,7 @@ pub mod mockutils {
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
             InMemoryTransactionRepository, PluginRepositoryTrait, RelayerRepositoryStorage,
-            Repository,
+            Repository, TransactionRepositoryImpl,
         },
     };
 
@@ -135,7 +135,9 @@ pub mod mockutils {
 
         AppState {
             relayer_repository,
-            transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
+            transaction_repository: Arc::new(TransactionRepositoryImpl::InMemory(
+                InMemoryTransactionRepository::new(),
+            )),
             signer_repository,
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
             network_repository,

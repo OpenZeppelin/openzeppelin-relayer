@@ -146,7 +146,7 @@ mod tests {
                 InMemoryRelayerRepository::default(),
             )),
             transaction_repository: Arc::new(TransactionRepositoryImpl::InMemory(
-                InMemoryTransactionRepository::default(),
+                InMemoryTransactionRepository::new(),
             )),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),

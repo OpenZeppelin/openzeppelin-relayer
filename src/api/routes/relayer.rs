@@ -195,6 +195,7 @@ mod tests {
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
             InMemoryTransactionRepository, RelayerRepositoryStorage, Repository,
+            TransactionRepositoryImpl,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -205,7 +206,9 @@ mod tests {
         let relayer_repo = Arc::new(RelayerRepositoryStorage::in_memory(
             InMemoryRelayerRepository::new(),
         ));
-        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
+        let transaction_repo = Arc::new(TransactionRepositoryImpl::InMemory(
+            InMemoryTransactionRepository::new(),
+        ));
         let signer_repo = Arc::new(InMemorySignerRepository::new());
         let network_repo = Arc::new(InMemoryNetworkRepository::new());
 
