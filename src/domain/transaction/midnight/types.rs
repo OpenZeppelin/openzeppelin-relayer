@@ -10,8 +10,9 @@ use midnight_ledger_prototype::{
 
 use midnight_node_ledger_helpers::{
     CoinInfo, CoinPublicKey, ContractAction, ContractAddress, ContractCalls, ContractDeploy,
-    EncryptionPublicKey, HashOutput, Input, IntentInfo, Offer, Output, ProofPreimage, Proofish,
-    SecretKeys, TokenType, Transaction, TransactionResult, Transcript, Transient, DB, NATIVE_TOKEN,
+    EncryptionPublicKey, HashOutput, Input, IntentInfo, NetworkId, Offer, Output, ProofPreimage,
+    Proofish, SecretKeys, TokenType, Transaction, TransactionResult, Transcript, Transient, DB,
+    NATIVE_TOKEN,
 };
 
 // Wrapper types for Midnight ZSwap types
@@ -230,3 +231,12 @@ pub struct MidnightProofResponse {
 // Constants
 pub const SEGMENT_GUARANTEED: SegmentId = 0;
 pub const DUST_TOKEN_TYPE: TokenType = NATIVE_TOKEN;
+
+pub fn to_midnight_network_id(network: &str) -> NetworkId {
+    match network.to_lowercase().as_str() {
+        "devnet" => NetworkId::DevNet,
+        "testnet" => NetworkId::TestNet,
+        "mainnet" => NetworkId::MainNet,
+        _ => NetworkId::Undeployed,
+    }
+}

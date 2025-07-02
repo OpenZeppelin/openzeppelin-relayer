@@ -14,6 +14,12 @@ use crate::{
 
 use super::DataSignerTrait;
 
+/// Trait for Midnight-specific signer functionality
+pub trait MidnightSignerTrait: Signer {
+    /// Get a reference to the wallet seed
+    fn wallet_seed(&self) -> &midnight_node_ledger_helpers::WalletSeed;
+}
+
 pub enum MidnightSigner {
     Local(LocalSigner),
     Vault(LocalSigner),
@@ -34,6 +40,14 @@ impl Signer for MidnightSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.sign_transaction(tx).await,
+        }
+    }
+}
+
+impl MidnightSignerTrait for MidnightSigner {
+    fn wallet_seed(&self) -> &midnight_node_ledger_helpers::WalletSeed {
+        match self {
+            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.wallet_seed(),
         }
     }
 }

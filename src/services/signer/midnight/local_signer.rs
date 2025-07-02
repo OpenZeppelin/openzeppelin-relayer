@@ -14,32 +14,54 @@ use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;
 use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use eyre::Result;
+use midnight_node_ledger_helpers::WalletSeed;
 use sha2::{Digest, Sha256};
 use std::convert::TryInto;
 
+/// Local signer that stores the wallet seed in memory.
+///
+/// # Security Considerations
+/// The wallet seed is stored as a plain value in memory. In production environments,
+/// consider using hardware security modules or secure enclaves for key storage.
 pub struct LocalSigner {
-    // local_signer_client: SorobanSigner,
+    wallet_seed: WalletSeed,
 }
 
 impl LocalSigner {
-    pub fn new(_signer_model: &SignerRepoModel) -> Result<Self, SignerError> {
-        // let config = signer_model
-        //     .config
-        //     .get_local()
-        //     .ok_or_else(|| SignerError::Configuration("Local config not found".into()))?;
+    pub fn new(signer_model: &SignerRepoModel) -> Result<Self, SignerError> {
+        let config = signer_model
+            .config
+            .get_local()
+            .ok_or_else(|| SignerError::Configuration("Local config not found".into()))?;
 
-        // let local_signer_client = {
-        //     let key_slice = config.raw_key.borrow();
+        let key_slice = config.raw_key.borrow();
 
-        //     let key_bytes: [u8; 32] = <[u8; 32]>::try_from(&key_slice[..])
-        //         .map_err(|_| SignerError::Configuration("Private key must be 32 bytes".into()))?;
+        if key_slice.len() != 32 {
+            return Err(SignerError::Configuration(
+                "Private key must be 32 bytes".into(),
+            ));
+        }
 
-        //     SorobanSigner::new(SigningKey::from_bytes(&key_bytes))
-        // };
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(&key_slice);
 
-        Ok(Self {
-            // local_signer_client,
-        })
+        let wallet_seed = WalletSeed::from(key_bytes);
+
+        // Clear the temporary key_bytes
+        key_bytes.iter_mut().for_each(|b| *b = 0);
+
+        Ok(Self { wallet_seed })
+    }
+
+    /// Returns a reference to the wallet seed.
+    ///
+    /// # Security Note
+    /// This returns a reference to sensitive cryptographic material.
+    /// Avoid dereferencing (*) unless absolutely necessary, as it creates
+    /// copies in memory that could be exposed. Consider using secure
+    /// key storage solutions in production environments.
+    pub fn wallet_seed(&self) -> &WalletSeed {
+        &self.wallet_seed
     }
 }
 
@@ -77,9 +99,12 @@ impl Signer for LocalSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{
-        EvmTransactionData, LocalSignerConfig, MidnightNetwork, MidnightTransactionData,
-        SignerConfig,
+    use crate::{
+        config::network::IndexerUrls,
+        models::{
+            EvmTransactionData, LocalSignerConfig, MidnightNetwork, MidnightTransactionData,
+            SignerConfig,
+        },
     };
     use secrets::SecretVec;
 
@@ -91,6 +116,11 @@ mod tests {
             average_blocktime_ms: 5000,
             is_testnet: true,
             tags: vec![],
+            indexer_urls: IndexerUrls {
+                http: "https://indexer.testnet.midnight.org".to_string(),
+                ws: "wss://indexer.testnet.midnight.org".to_string(),
+            },
+            prover_url: "http://localhost:6300".to_string(),
         }
     }
 
