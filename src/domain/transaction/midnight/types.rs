@@ -10,9 +10,9 @@ use midnight_ledger_prototype::{
 
 use midnight_node_ledger_helpers::{
     CoinInfo, CoinPublicKey, ContractAction, ContractAddress, ContractCalls, ContractDeploy,
-    EncryptionPublicKey, HashOutput, Input, IntentInfo, NetworkId, Offer, Output, ProofPreimage,
-    Proofish, SecretKeys, TokenType, Transaction, TransactionResult, Transcript, Transient, DB,
-    NATIVE_TOKEN,
+    EncryptionPublicKey, HashOutput, Input, InputInfo, IntentInfo, NetworkId, Offer, OfferInfo,
+    Output, OutputInfo, ProofPreimage, Proofish, SecretKeys, TokenType, Transaction,
+    TransactionResult, Transcript, Transient, DB, NATIVE_TOKEN,
 };
 
 // Wrapper types for Midnight ZSwap types
@@ -178,6 +178,9 @@ pub type MidnightNullifier = Nullifier;
 pub type MidnightCommitment = Commitment;
 pub type MidnightTokenType = TokenType;
 pub type MidnightCoinInfo = CoinInfo;
+pub type MidnightInputInfo<D> = InputInfo<D>;
+pub type MidnightOutputInfo<D> = OutputInfo<D>;
+pub type MidnightOfferInfo<D> = OfferInfo<D>;
 
 // Segment ID type
 pub type SegmentId = u16;

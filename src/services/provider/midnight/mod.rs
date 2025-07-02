@@ -13,6 +13,8 @@ use midnight_node_ledger_helpers::{
     serialize, DefaultDB, LedgerContext, NetworkId, Proof, Transaction, WalletSeed, NATIVE_TOKEN,
 };
 use midnight_node_res::subxt_metadata::api as mn_meta;
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use subxt::{OnlineClient, PolkadotConfig};
 
 use super::rpc_selector::RpcSelector;
@@ -25,6 +27,13 @@ use crate::services::midnight::indexer::MidnightIndexerClient;
 use mockall::automock;
 
 use super::ProviderError;
+
+/// Response structure for transaction submission
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransactionSubmissionResult {
+    pub tx_hash: String,
+    pub block_hash: Option<String>,
+}
 
 /// Provider implementation for Midnight blockchain networks.
 ///
@@ -172,11 +181,22 @@ impl MidnightProvider {
         &self,
         url: &str,
     ) -> Result<OnlineClient<PolkadotConfig>, ProviderError> {
-        OnlineClient::<PolkadotConfig>::from_url(url)
-            .await
-            .map_err(|e| {
-                ProviderError::NetworkConfiguration(format!("Failed to connect to {}: {}", url, e))
-            })
+        // Apply timeout to the connection attempt
+        let timeout_duration = std::time::Duration::from_secs(self.timeout_seconds);
+
+        match tokio::time::timeout(
+            timeout_duration,
+            OnlineClient::<PolkadotConfig>::from_url(url),
+        )
+        .await
+        {
+            Ok(Ok(client)) => Ok(client),
+            Ok(Err(e)) => Err(ProviderError::NetworkConfiguration(format!(
+                "Failed to connect to {}: {}",
+                url, e
+            ))),
+            Err(_) => Err(ProviderError::Timeout),
+        }
     }
 
     /// Helper method to retry RPC calls with exponential backoff
@@ -192,13 +212,6 @@ impl MidnightProvider {
         Fut: std::future::Future<Output = Result<T, ProviderError>>,
     {
         // Classify which errors should be retried
-
-        log::debug!(
-            "Starting RPC operation '{}' with timeout: {}s",
-            operation_name,
-            self.timeout_seconds
-        );
-
         retry_rpc_call(
             &self.selector,
             operation_name,
@@ -296,9 +309,7 @@ impl MidnightProviderTrait for MidnightProvider {
 
                 // Check if validation result indicates success
                 match validation_result {
-                    subxt::tx::ValidationResult::Valid(_) => {
-                        // Transaction is valid, proceed with submission
-                    }
+                    subxt::tx::ValidationResult::Valid(_) => {}
                     subxt::tx::ValidationResult::Invalid(e) => {
                         return Err(ProviderError::Other(format!(
                             "Transaction validation failed: {:?}",
@@ -313,12 +324,78 @@ impl MidnightProviderTrait for MidnightProvider {
                     }
                 }
 
-                let _tx_progress = unsigned_extrinsic.submit_and_watch().await.map_err(|e| {
-                    ProviderError::Other(format!("Failed to submit transaction: {}", e))
-                })?;
+                let submit_result = tokio::time::timeout(
+                    Duration::from_secs(30), // 30 second timeout for submission
+                    unsigned_extrinsic.submit_and_watch(),
+                )
+                .await;
 
-                // TODO: Track and apply successful transaction to wallet state
-                Ok(tx_hash_string)
+                match submit_result {
+                    Ok(Ok(mut tx_progress)) => {
+                        // Wait for the transaction to be included in a block
+                        let mut block_hash = None;
+                        while let Some(status) = tx_progress.next().await {
+                            match status {
+                                Ok(subxt::tx::TxStatus::InBestBlock(block_ref)) => {
+                                    block_hash = Some(format!(
+                                        "0x{}",
+                                        hex::encode(block_ref.block_hash().as_bytes())
+                                    ));
+
+                                    // Check if the transaction succeeded in the block
+                                    if let Err(e) = block_ref.wait_for_success().await {
+                                        return Err(ProviderError::Other(format!(
+                                            "Transaction failed in block: {:?}",
+                                            e
+                                        )));
+                                    }
+                                    break;
+                                }
+                                Ok(subxt::tx::TxStatus::InFinalizedBlock(block_ref)) => {
+                                    // If we somehow get finalized before best block, use this
+                                    block_hash = Some(format!(
+                                        "0x{}",
+                                        hex::encode(block_ref.block_hash().as_bytes())
+                                    ));
+
+                                    // Check if the transaction succeeded in the block
+                                    if let Err(e) = block_ref.wait_for_success().await {
+                                        return Err(ProviderError::Other(format!(
+                                            "Transaction failed in finalized block: {:?}",
+                                            e
+                                        )));
+                                    }
+                                    break;
+                                }
+                                Ok(_other_status) => {}
+                                Err(e) => {
+                                    return Err(ProviderError::Other(format!(
+                                        "Error waiting for transaction inclusion: {:?}",
+                                        e
+                                    )));
+                                }
+                            }
+                        }
+
+                        // Create result struct and serialize to JSON
+                        let result = TransactionSubmissionResult {
+                            tx_hash: tx_hash_string,
+                            block_hash,
+                        };
+
+                        // Serialize to JSON string
+                        let json_result = serde_json::to_string(&result).map_err(|e| {
+                            ProviderError::Other(format!("Failed to serialize result: {}", e))
+                        })?;
+
+                        Ok(json_result)
+                    }
+                    Ok(Err(e)) => Err(ProviderError::Other(format!(
+                        "Failed to submit transaction: {}",
+                        e
+                    ))),
+                    Err(_) => Err(ProviderError::Timeout),
+                }
             }
         })
         .await

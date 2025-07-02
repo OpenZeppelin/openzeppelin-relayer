@@ -125,7 +125,16 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
         seed: &WalletSeed,
         network: NetworkId,
     ) -> Result<Self, SyncError> {
-        let context = Arc::new(LedgerContext::new_from_wallet_seeds(&[*seed]));
+        // Temporarily add random destination seed to the context until Midnight fixes this
+        // mn_shield-addr_test1cx5yug2suxqec6pzzfgwrg90crcvlk6ktlvg52eczkrw426suglqxqzl5ad0jpxv4mtdc0kpyswfjdjjqs8zh0fu0kupaha382r3py8wwqm03l5k
+        // TODO: Remove this once Midnight fixes this
+        let destination_seed =
+            WalletSeed::from("8e0622a9987a7bef7b6a1417c693172b79e75f2308fe3ae9cc897f6108e3a067");
+
+        let context = Arc::new(LedgerContext::new_from_wallet_seeds(&[
+            *seed,
+            destination_seed,
+        ]));
         let wallet = context.wallet_from_seed(*seed);
         let viewing_key = derive_viewing_key(&wallet, network)?;
 

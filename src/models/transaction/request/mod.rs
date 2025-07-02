@@ -7,7 +7,7 @@ use crate::models::{ApiError, NetworkType, RelayerRepoModel};
 use serde::Serialize;
 
 pub use evm::EvmTransactionRequest;
-pub use midnight::MidnightTransactionRequest;
+pub use midnight::{MidnightOfferRequest, MidnightTransactionRequest};
 pub use solana::SolanaTransactionRequest;
 pub use stellar::StellarTransactionRequest;
 use utoipa::ToSchema;

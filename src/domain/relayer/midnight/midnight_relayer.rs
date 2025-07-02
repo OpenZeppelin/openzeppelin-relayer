@@ -544,9 +544,8 @@ mod tests {
                         is_testnet: Some(true),
                         tags: None,
                     },
-                    prover_url: Some("https://prover.midnight.network".to_string()),
+                    prover_url: "https://prover.midnight.network".to_string(),
                     commitment_tree_ttl: Some(60),
-                    network_id: Some("testnet".to_string()),
                     indexer_urls: IndexerUrls {
                         http: "https://indexer.midnight.network".to_string(),
                         ws: "wss://indexer.midnight.network".to_string(),

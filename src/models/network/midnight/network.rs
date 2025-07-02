@@ -62,7 +62,7 @@ impl TryFrom<NetworkRepoModel> for MidnightNetwork {
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),
                     indexer_urls: midnight_config.indexer_urls.clone(),
-                    prover_url: midnight_config.prover_url.clone().unwrap_or_default(),
+                    prover_url: midnight_config.prover_url.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(
