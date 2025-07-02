@@ -30,16 +30,17 @@ use crate::{
     models::{
         produce_relayer_disabled_payload, MidnightNetwork, MidnightRpcResult, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, TransactionRepoModel, TransactionStatus,
+        RepositoryError, SignerRepoModel, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository, TransactionRepository,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemorySignerRepository,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, NetworkRepository,
+        RelayerRepository, RelayerRepositoryStorage, Repository, TransactionRepository,
     },
     services::{
-        MidnightProvider, MidnightProviderTrait, TransactionCounterService,
-        TransactionCounterServiceTrait,
+        sync::midnight::handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
+        MidnightProvider, MidnightProviderTrait, MidnightSignerFactory, MidnightSignerTrait,
+        TransactionCounterService, TransactionCounterServiceTrait,
     },
 };
 use async_trait::async_trait;
@@ -50,28 +51,34 @@ use std::sync::Arc;
 use crate::domain::relayer::{Relayer, RelayerError};
 
 /// Dependencies container for `MidnightRelayer` construction.
-pub struct MidnightRelayerDependencies<R, N, T, J, C>
+pub struct MidnightRelayerDependencies<R, N, T, J, C, S, SR>
 where
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
     N: NetworkRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
+    S: SyncManagerTrait + Send + Sync,
+    SR: Repository<SignerRepoModel, String> + Send + Sync,
 {
     pub relayer_repository: Arc<R>,
     pub network_repository: Arc<N>,
     pub transaction_repository: Arc<T>,
+    pub signer_repository: Arc<SR>,
     pub transaction_counter_service: Arc<C>,
+    pub sync_service: Arc<S>,
     pub job_producer: Arc<J>,
 }
 
-impl<R, N, T, J, C> MidnightRelayerDependencies<R, N, T, J, C>
+impl<R, N, T, J, C, S, SR> MidnightRelayerDependencies<R, N, T, J, C, S, SR>
 where
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
     N: NetworkRepository + Send + Sync,
     T: Repository<TransactionRepoModel, String> + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
+    S: SyncManagerTrait + Send + Sync,
+    SR: Repository<SignerRepoModel, String> + Send + Sync,
 {
     /// Creates a new dependencies container for `MidnightRelayer`.
     ///
@@ -80,7 +87,9 @@ where
     /// * `relayer_repository` - Repository for managing relayer model persistence
     /// * `network_repository` - Repository for accessing network configuration data (RPC URLs, chain settings)
     /// * `transaction_repository` - Repository for storing and retrieving transaction models
+    /// * `signer_repository` - Repository for accessing signer configurations
     /// * `transaction_counter_service` - Service for managing sequence numbers to ensure proper transaction ordering
+    /// * `sync_service` - Service for syncing wallet state with the blockchain
     /// * `job_producer` - Service for creating background jobs for transaction processing and notifications
     ///
     /// # Returns
@@ -90,21 +99,25 @@ where
         relayer_repository: Arc<R>,
         network_repository: Arc<N>,
         transaction_repository: Arc<T>,
+        signer_repository: Arc<SR>,
         transaction_counter_service: Arc<C>,
+        sync_service: Arc<S>,
         job_producer: Arc<J>,
     ) -> Self {
         Self {
             relayer_repository,
             network_repository,
             transaction_repository,
+            signer_repository,
             transaction_counter_service,
+            sync_service,
             job_producer,
         }
     }
 }
 
 #[allow(dead_code)]
-pub struct MidnightRelayer<P, R, N, T, J, C>
+pub struct MidnightRelayer<P, R, N, T, J, C, S, SR>
 where
     P: MidnightProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
@@ -112,6 +125,8 @@ where
     T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
+    S: SyncManagerTrait + Send + Sync,
+    SR: Repository<SignerRepoModel, String> + Send + Sync,
 {
     relayer: RelayerRepoModel,
     network: MidnightNetwork,
@@ -119,7 +134,9 @@ where
     relayer_repository: Arc<R>,
     network_repository: Arc<N>,
     transaction_repository: Arc<T>,
+    signer_repository: Arc<SR>,
     transaction_counter_service: Arc<C>,
+    sync_service: Arc<S>,
     job_producer: Arc<J>,
 }
 
@@ -130,9 +147,11 @@ pub type DefaultMidnightRelayer = MidnightRelayer<
     InMemoryTransactionRepository,
     JobProducer,
     TransactionCounterService<InMemoryTransactionCounter>,
+    SyncManager<QuickSyncStrategy>,
+    InMemorySignerRepository,
 >;
 
-impl<P, R, N, T, J, C> MidnightRelayer<P, R, N, T, J, C>
+impl<P, R, N, T, J, C, S, SR> MidnightRelayer<P, R, N, T, J, C, S, SR>
 where
     P: MidnightProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
@@ -140,6 +159,8 @@ where
     T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
+    S: SyncManagerTrait + Send + Sync,
+    SR: Repository<SignerRepoModel, String> + Send + Sync,
 {
     /// Creates a new `MidnightRelayer` instance.
     ///
@@ -161,7 +182,7 @@ where
     pub async fn new(
         relayer: RelayerRepoModel,
         provider: P,
-        dependencies: MidnightRelayerDependencies<R, N, T, J, C>,
+        dependencies: MidnightRelayerDependencies<R, N, T, J, C, S, SR>,
     ) -> Result<Self, RelayerError> {
         let network_repo = dependencies
             .network_repository
@@ -182,7 +203,9 @@ where
             relayer_repository: dependencies.relayer_repository,
             network_repository: dependencies.network_repository,
             transaction_repository: dependencies.transaction_repository,
+            signer_repository: dependencies.signer_repository,
             transaction_counter_service: dependencies.transaction_counter_service,
+            sync_service: dependencies.sync_service,
             job_producer: dependencies.job_producer,
         })
     }
@@ -234,7 +257,7 @@ where
 }
 
 #[async_trait]
-impl<P, R, N, T, J, C> Relayer for MidnightRelayer<P, R, N, T, J, C>
+impl<P, R, N, T, J, C, S, SR> Relayer for MidnightRelayer<P, R, N, T, J, C, S, SR>
 where
     P: MidnightProviderTrait + Send + Sync,
     R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
@@ -242,6 +265,8 @@ where
     T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
+    S: SyncManagerTrait + Send + Sync,
+    SR: Repository<SignerRepoModel, String> + Send + Sync,
 {
     async fn process_transaction_request(
         &self,
@@ -276,16 +301,26 @@ where
     }
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
-        // let balance = self
-        //     .provider
-        //     .get_balance(&self.relayer.address)
-        //     .await
-        //     .map_err(|e| {
-        //         RelayerError::ProviderError(format!("Failed to fetch account for balance: {}", e))
-        //     })?;
+        // Get the ledger context from the sync service
+        let context = self.sync_service.get_context();
 
-        // TODO: find way to pass context and seed to relayer
-        let balance = 0;
+        // Get the signer to access the wallet seed
+        let signer_model = self
+            .signer_repository
+            .get_by_id(self.relayer.signer_id.clone())
+            .await
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to get signer: {}", e)))?;
+
+        let midnight_signer = MidnightSignerFactory::create_midnight_signer(&signer_model)
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to create signer: {}", e)))?;
+
+        let wallet_seed = midnight_signer.wallet_seed();
+
+        let balance = self
+            .provider
+            .get_balance(wallet_seed, &context)
+            .await
+            .map_err(|e| RelayerError::ProviderError(format!("Failed to fetch balance: {}", e)))?;
 
         let balance_u128 = balance
             .to_string()
@@ -414,27 +449,55 @@ mod tests {
         constants::MIDNIGHT_SMALLEST_UNIT_NAME,
         jobs::MockJobProducerTrait,
         models::{
-            NetworkConfigData, NetworkRepoModel, NetworkType, RelayerMidnightPolicy,
-            RelayerNetworkPolicy, RelayerRepoModel,
+            LocalSignerConfig, NetworkConfigData, NetworkRepoModel, NetworkType,
+            RelayerMidnightPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfig,
+            SignerRepoModel,
         },
         repositories::{
-            InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
+            InMemoryNetworkRepository, InMemorySignerRepository, MockRelayerRepository,
+            MockTransactionRepository,
         },
         services::{MockMidnightProviderTrait, MockTransactionCounterServiceTrait, ProviderError},
     };
-    use mockall::predicate::*;
+    use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
+    use mockall::{mock, predicate::*};
+    use secrets::SecretVec;
     use std::future::ready;
     use std::sync::Arc;
+
+    // Mock for SyncManagerTrait - using a simple pointer cast for testing
+    mock! {
+        pub SyncManager {}
+
+        #[async_trait]
+        impl SyncManagerTrait for SyncManager {
+            async fn sync(&mut self, start_height: u64) -> Result<(), crate::services::midnight::SyncError>;
+            fn get_context(&self) -> Arc<LedgerContext<DefaultDB>>;
+        }
+    }
 
     /// Test context structure to manage test dependencies
     struct TestCtx {
         relayer_model: RelayerRepoModel,
         network_repository: Arc<InMemoryNetworkRepository>,
+        signer_repository: Arc<InMemorySignerRepository>,
+        signer_model: SignerRepoModel,
     }
 
     impl Default for TestCtx {
         fn default() -> Self {
             let network_repository = Arc::new(InMemoryNetworkRepository::new());
+            let signer_repository = Arc::new(InMemorySignerRepository::new());
+
+            // Create a 32-byte test key
+            let signer_model = SignerRepoModel {
+                id: "signer-id".to_string(),
+                config: SignerConfig::Test(LocalSignerConfig {
+                    raw_key: SecretVec::new(32, |buffer| {
+                        buffer[0] = 1; // Make it non-zero
+                    }),
+                }),
+            };
 
             let relayer_model = RelayerRepoModel {
                 id: "test-relayer-id".to_string(),
@@ -453,12 +516,20 @@ mod tests {
             TestCtx {
                 relayer_model,
                 network_repository,
+                signer_repository,
+                signer_model,
             }
         }
     }
 
     impl TestCtx {
         async fn setup_network(&self) {
+            // Store the signer in repository
+            self.signer_repository
+                .create(self.signer_model.clone())
+                .await
+                .unwrap();
+
             let test_network = NetworkRepoModel {
                 id: "midnight:testnet".to_string(),
                 name: "testnet".to_string(),
@@ -485,6 +556,16 @@ mod tests {
 
             self.network_repository.create(test_network).await.unwrap();
         }
+
+        fn create_mock_sync_manager() -> MockSyncManager {
+            let mut sync_manager = MockSyncManager::new();
+            // Note: This requires MIDNIGHT_LEDGER_TEST_STATIC_DIR=/path/to/midnightntwrk/midnight-node/static/contracts
+            // to be set in the environment when running tests
+            let wallet_seed = WalletSeed::from([1u8; 32]);
+            let context = Arc::new(LedgerContext::new_from_wallet_seeds(&[wallet_seed]));
+            sync_manager.expect_get_context().return_const(context);
+            sync_manager
+        }
     }
 
     #[tokio::test]
@@ -505,6 +586,7 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
+        let sync_manager = TestCtx::create_mock_sync_manager();
 
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
@@ -513,7 +595,9 @@ mod tests {
                 Arc::new(relayer_repo),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo),
+                ctx.signer_repository.clone(),
                 Arc::new(counter),
+                Arc::new(sync_manager),
                 Arc::new(job_producer),
             ),
         )
@@ -538,6 +622,7 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
+        let sync_manager = TestCtx::create_mock_sync_manager();
 
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
@@ -546,7 +631,9 @@ mod tests {
                 Arc::new(relayer_repo),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo),
+                ctx.signer_repository.clone(),
                 Arc::new(counter),
+                Arc::new(sync_manager),
                 Arc::new(job_producer),
             ),
         )
@@ -576,6 +663,7 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let tx_repo = MockTransactionRepository::new();
         let counter = MockTransactionCounterServiceTrait::new();
+        let sync_manager = TestCtx::create_mock_sync_manager();
 
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
@@ -584,7 +672,9 @@ mod tests {
                 Arc::new(relayer_repo),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo),
+                ctx.signer_repository.clone(),
                 Arc::new(counter),
+                Arc::new(sync_manager),
                 Arc::new(job_producer),
             ),
         )
@@ -609,8 +699,13 @@ mod tests {
 
         provider_mock
             .expect_get_nonce()
-            .times(2)
+            .times(1)
             .returning(|_| Box::pin(ready(Ok(12345))));
+
+        provider_mock
+            .expect_get_balance()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(crate::models::U256::from(10000000u128)))));
 
         tx_repo_mock
             .expect_find_by_status()
@@ -638,6 +733,8 @@ mod tests {
             })
             .once();
 
+        let sync_manager = TestCtx::create_mock_sync_manager();
+
         let midnight_relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider_mock,
@@ -645,7 +742,9 @@ mod tests {
                 Arc::new(relayer_repo_mock),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo_mock),
+                ctx.signer_repository.clone(),
                 Arc::new(counter_mock),
+                Arc::new(sync_manager),
                 Arc::new(job_producer_mock),
             ),
         )
@@ -695,6 +794,8 @@ mod tests {
                 Box::pin(async { Err(ProviderError::Other("Midnight provider down".to_string())) })
             });
 
+        let sync_manager = TestCtx::create_mock_sync_manager();
+
         let midnight_relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider_mock,
@@ -702,7 +803,9 @@ mod tests {
                 Arc::new(relayer_repo_mock),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo_mock),
+                ctx.signer_repository.clone(),
                 Arc::new(counter_mock),
+                Arc::new(sync_manager),
                 Arc::new(job_producer_mock),
             ),
         )
@@ -713,7 +816,7 @@ mod tests {
         assert!(result.is_err());
         match result.err().unwrap() {
             RelayerError::ProviderError(msg) => {
-                assert!(msg.contains("Failed to get nonce"))
+                assert!(msg.contains("Failed to get account details"))
             }
             _ => panic!("Expected ProviderError for get_account failure"),
         }
@@ -725,17 +828,17 @@ mod tests {
         ctx.setup_network().await;
         let relayer_model = ctx.relayer_model.clone();
         let mut provider = MockMidnightProviderTrait::new();
-        let expected_balance = 100_000_000i64; // 10 XLM in stroops
+        let expected_balance = 100_000_000u128;
 
-        provider
-            .expect_get_nonce()
-            .with(eq(relayer_model.address.clone()))
-            .returning(|_| Box::pin(async { Ok(5) }));
+        provider.expect_get_balance().returning(move |_, _| {
+            Box::pin(async move { Ok(crate::models::U256::from(expected_balance)) })
+        });
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let sync_manager = TestCtx::create_mock_sync_manager();
 
         let relayer = MidnightRelayer::new(
             relayer_model,
@@ -744,7 +847,9 @@ mod tests {
                 relayer_repo,
                 ctx.network_repository.clone(),
                 tx_repo,
+                ctx.signer_repository.clone(),
                 counter,
+                Arc::new(sync_manager),
                 job_producer,
             ),
         )
@@ -754,7 +859,7 @@ mod tests {
         let result = relayer.get_balance().await;
         assert!(result.is_ok());
         let balance_response = result.unwrap();
-        assert_eq!(balance_response.balance, expected_balance as u128);
+        assert_eq!(balance_response.balance, expected_balance);
         assert_eq!(balance_response.unit, MIDNIGHT_SMALLEST_UNIT_NAME);
     }
 
@@ -765,17 +870,15 @@ mod tests {
         let relayer_model = ctx.relayer_model.clone();
         let mut provider = MockMidnightProviderTrait::new();
 
-        provider
-            .expect_get_nonce()
-            .with(eq(relayer_model.address.clone()))
-            .returning(|_| {
-                Box::pin(async { Err(ProviderError::Other("provider failed".to_string())) })
-            });
+        provider.expect_get_balance().returning(|_, _| {
+            Box::pin(async { Err(ProviderError::Other("provider failed".to_string())) })
+        });
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let sync_manager = TestCtx::create_mock_sync_manager();
 
         let relayer = MidnightRelayer::new(
             relayer_model,
@@ -784,7 +887,9 @@ mod tests {
                 relayer_repo,
                 ctx.network_repository.clone(),
                 tx_repo,
+                ctx.signer_repository.clone(),
                 counter,
+                Arc::new(sync_manager),
                 job_producer,
             ),
         )
@@ -795,7 +900,7 @@ mod tests {
         assert!(result.is_err());
         match result.err().unwrap() {
             RelayerError::ProviderError(msg) => {
-                assert!(msg.contains("Failed to fetch account for balance: provider failed"));
+                assert!(msg.contains("Failed to fetch balance") && msg.contains("provider failed"));
             }
             _ => panic!("Unexpected error type"),
         }

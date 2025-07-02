@@ -28,10 +28,15 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemorySignerRepository,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
-    services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
+    services::{
+        get_network_provider,
+        sync::midnight::handler::{QuickSyncStrategy, SyncManager},
+        EvmSignerFactory, MidnightProvider, MidnightProviderTrait, MidnightSignerFactory,
+        MidnightSignerTrait, TransactionCounterService,
+    },
 };
 
 use async_trait::async_trait;
@@ -312,6 +317,7 @@ impl Relayer for NetworkRelayer {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait RelayerFactoryTrait {
     async fn create_relayer(
         relayer: RelayerRepoModel,
@@ -319,6 +325,7 @@ pub trait RelayerFactoryTrait {
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        signer_repository: Arc<InMemorySignerRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
@@ -334,6 +341,7 @@ impl RelayerFactoryTrait for RelayerFactory {
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
+        signer_repository: Arc<InMemorySignerRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
@@ -450,21 +458,54 @@ impl RelayerFactoryTrait for RelayerFactory {
                     ("ws".to_string(), indexer_urls.ws),
                 ]);
 
-                let midnight_provider = get_network_provider(
+                let midnight_provider: MidnightProvider = get_network_provider(
                     &network,
                     relayer.custom_rpc_urls.clone(),
                     Some(&metadata),
                 )?;
+
+                // Create the Midnight signer to get the wallet seed
+                let midnight_signer = MidnightSignerFactory::create_midnight_signer(&signer)
+                    .map_err(|e| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Failed to create signer: {}",
+                            e
+                        ))
+                    })?;
+                let wallet_seed = midnight_signer.wallet_seed();
+
+                // Get the indexer client from provider
+                let indexer_client = midnight_provider.get_indexer_client();
+
+                // Convert network to NetworkId for sync manager
+                let network_id = to_midnight_network_id(&relayer.network);
+
+                // Create the sync manager
+                let sync_manager = Arc::new(
+                    SyncManager::<QuickSyncStrategy>::new(indexer_client, wallet_seed, network_id)
+                        .map_err(|e| {
+                            RelayerError::NetworkConfiguration(format!(
+                                "Failed to create sync manager: {}",
+                                e
+                            ))
+                        })?,
+                );
+
+                // Signer repository is passed from the factory
+
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
                     transaction_counter_store,
                 ));
+
                 let dependencies = MidnightRelayerDependencies::new(
                     relayer_repository,
                     networks_repository,
                     transaction_repository,
+                    signer_repository,
                     transaction_counter_service,
+                    sync_manager,
                     job_producer,
                 );
                 let relayer =

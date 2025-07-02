@@ -237,3 +237,14 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
         Arc::clone(&self.context)
     }
 }
+
+#[async_trait::async_trait]
+impl<S: SyncStrategy + Sync + Send> super::SyncManagerTrait for SyncManager<S> {
+    async fn sync(&mut self, start_height: u64) -> Result<(), SyncError> {
+        self.sync(start_height).await
+    }
+
+    fn get_context(&self) -> Arc<LedgerContext<DefaultDB>> {
+        self.get_context()
+    }
+}
