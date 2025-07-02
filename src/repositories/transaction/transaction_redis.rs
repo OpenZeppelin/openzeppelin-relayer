@@ -1,4 +1,4 @@
-//! Improved Redis-backed implementation of the TransactionRepository.
+//! Improved Redis-backed implementation of the TransactionRepository with enhanced error handling.
 
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
@@ -6,9 +6,9 @@ use crate::models::{
 };
 use crate::repositories::{PaginatedResult, Repository, TransactionRepository};
 use async_trait::async_trait;
-use log::{error, warn};
+use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, RedisError};
 use std::fmt;
 use std::sync::Arc;
 
@@ -29,6 +29,12 @@ impl RedisTransactionRepository {
         connection_manager: Arc<ConnectionManager>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
+        if key_prefix.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Redis key prefix cannot be empty".to_string(),
+            ));
+        }
+
         Ok(Self {
             client: connection_manager,
             key_prefix,
@@ -37,6 +43,10 @@ impl RedisTransactionRepository {
 
     fn tx_key(&self, id: &str) -> String {
         format!("{}:{}:{}", self.key_prefix, TX_KEY_PREFIX, id)
+    }
+
+    fn tx_ids_set(&self) -> String {
+        format!("{}:{}", self.key_prefix, TX_IDS_SET)
     }
 
     fn relayer_key(&self, relayer_id: &str) -> String {
@@ -63,32 +73,72 @@ impl RedisTransactionRepository {
         )
     }
 
-    // Batch fetch transactions by IDs - more efficient than individual gets
+    /// Convert Redis errors to appropriate RepositoryError types
+    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
+        match error.kind() {
+            redis::ErrorKind::IoError => {
+                error!("Redis IO error in {}: {}", context, error);
+                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
+            }
+            redis::ErrorKind::AuthenticationFailed => {
+                error!("Redis authentication failed in {}: {}", context, error);
+                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
+            }
+            redis::ErrorKind::TypeError => {
+                error!("Redis type error in {}: {}", context, error);
+                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
+            }
+            redis::ErrorKind::ExecAbortError => {
+                warn!("Redis transaction aborted in {}: {}", context, error);
+                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
+            }
+            redis::ErrorKind::BusyLoadingError => {
+                warn!("Redis busy loading in {}: {}", context, error);
+                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
+            }
+            redis::ErrorKind::NoScriptError => {
+                error!("Redis script error in {}: {}", context, error);
+                RepositoryError::Other(format!("Redis script error: {}", error))
+            }
+            _ => {
+                error!("Unexpected Redis error in {}: {}", context, error);
+                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
+            }
+        }
+    }
+
+    /// Batch fetch transactions by IDs
     async fn get_transactions_by_ids(
         &self,
         ids: &[String],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         if ids.is_empty() {
+            debug!("No transaction IDs provided for batch fetch");
             return Ok(vec![]);
         }
 
         let mut conn = self.client.as_ref().clone();
         let keys: Vec<String> = ids.iter().map(|id| self.tx_key(id)).collect();
 
+        debug!("Batch fetching {} transactions", ids.len());
+
         let values: Vec<Option<String>> = conn
             .mget(&keys)
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "batch_fetch_transactions"))?;
 
         let mut transactions = Vec::new();
+        let mut failed_count = 0;
+
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match serde_json::from_str::<TransactionRepoModel>(&json) {
+                    match self.deserialize_transaction(&json, &ids[i]) {
                         Ok(tx) => transactions.push(tx),
                         Err(e) => {
+                            failed_count += 1;
                             error!("Failed to deserialize transaction {}: {}", ids[i], e);
-                            // Continue processing other transactions instead of failing completely
+                            // Continue processing other transactions
                         }
                     }
                 }
@@ -98,37 +148,59 @@ impl RedisTransactionRepository {
             }
         }
 
+        if failed_count > 0 {
+            warn!(
+                "Failed to deserialize {} out of {} transactions in batch",
+                failed_count,
+                ids.len()
+            );
+        }
+
+        debug!("Successfully fetched {} transactions", transactions.len());
         Ok(transactions)
     }
 
-    // Helper to extract nonce with better error handling
+    /// Extract nonce with better error context
     fn extract_nonce(&self, network_data: &NetworkTransactionData) -> Option<u64> {
-        network_data
-            .get_evm_transaction_data()
-            .ok()
-            .and_then(|tx_data| tx_data.nonce)
+        match network_data.get_evm_transaction_data() {
+            Ok(tx_data) => tx_data.nonce,
+            Err(_) => {
+                debug!("No EVM transaction data available for nonce extraction");
+                None
+            }
+        }
     }
 
-    // Optimized serialization with error context
+    /// Serialize transaction with detailed error context
     fn serialize_transaction(&self, tx: &TransactionRepoModel) -> Result<String, RepositoryError> {
         serde_json::to_string(tx).map_err(|e| {
-            RepositoryError::Other(format!("Serialization failed for tx {}: {}", tx.id, e))
+            error!("Serialization failed for transaction {}: {}", tx.id, e);
+            RepositoryError::InvalidData(format!(
+                "Failed to serialize transaction {} (relayer: {}): {}",
+                tx.id, tx.relayer_id, e
+            ))
         })
     }
 
-    // Optimized deserialization with error context
+    /// Deserialize transaction with detailed error context
     fn deserialize_transaction(
         &self,
         json: &str,
         tx_id: &str,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         serde_json::from_str(json).map_err(|e| {
-            RepositoryError::Other(format!("Deserialization failed for tx {}: {}", tx_id, e))
+            error!("Deserialization failed for transaction {}: {}", tx_id, e);
+            RepositoryError::InvalidData(format!(
+                "Failed to deserialize transaction {}: {} (JSON length: {})",
+                tx_id,
+                e,
+                json.len()
+            ))
         })
     }
 
-    // Atomic index management
-    async fn update_indexes_atomic(
+    /// Update indexes atomically with comprehensive error handling
+    async fn update_indexes(
         &self,
         tx: &TransactionRepoModel,
         old_tx: Option<&TransactionRepoModel>,
@@ -136,6 +208,8 @@ impl RedisTransactionRepository {
         let mut conn = self.client.as_ref().clone();
         let mut pipe = redis::pipe();
         pipe.atomic();
+
+        debug!("Updating indexes for transaction {}", tx.id);
 
         // Always add to relayer index
         let relayer_key = self.relayer_key(&tx.relayer_id);
@@ -146,14 +220,10 @@ impl RedisTransactionRepository {
         pipe.sadd(&new_status_key, &tx.id);
 
         // Handle nonce index
-        if let Some(nonce) = tx
-            .network_data
-            .get_evm_transaction_data()
-            .ok()
-            .and_then(|tx_data| tx_data.nonce)
-        {
+        if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.sadd(&nonce_key, &tx.id);
+            debug!("Added nonce index for tx {} with nonce {}", tx.id, nonce);
         }
 
         // Remove old indexes if updating
@@ -161,38 +231,46 @@ impl RedisTransactionRepository {
             if old.status != tx.status {
                 let old_status_key = self.relayer_status_key(&old.relayer_id, &old.status);
                 pipe.srem(&old_status_key, &tx.id);
+                debug!(
+                    "Removing old status index for tx {} (status: {} -> {})",
+                    tx.id, old.status, tx.status
+                );
             }
 
             // Handle nonce index cleanup
-            if let Some(old_nonce) = old
-                .network_data
-                .get_evm_transaction_data()
-                .ok()
-                .and_then(|tx_data| tx_data.nonce)
-            {
-                let new_nonce = tx
-                    .network_data
-                    .get_evm_transaction_data()
-                    .ok()
-                    .and_then(|tx_data| tx_data.nonce);
+            if let Some(old_nonce) = self.extract_nonce(&old.network_data) {
+                let new_nonce = self.extract_nonce(&tx.network_data);
                 if Some(old_nonce) != new_nonce {
                     let old_nonce_key = self.relayer_nonce_key(&old.relayer_id, old_nonce);
                     pipe.srem(&old_nonce_key, &tx.id);
+                    debug!(
+                        "Removing old nonce index for tx {} (nonce: {} -> {:?})",
+                        tx.id, old_nonce, new_nonce
+                    );
                 }
             }
         }
 
-        pipe.exec_async(&mut conn)
-            .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+        // Execute all operations in a single pipeline
+        pipe.exec_async(&mut conn).await.map_err(|e| {
+            error!(
+                "Index update pipeline failed for transaction {}: {}",
+                tx.id, e
+            );
+            self.map_redis_error(e, &format!("update_indexes_for_tx_{}", tx.id))
+        })?;
 
+        debug!("Successfully updated indexes for transaction {}", tx.id);
         Ok(())
     }
 
+    /// Remove all indexes with error recovery
     async fn remove_all_indexes(&self, tx: &TransactionRepoModel) -> Result<(), RepositoryError> {
         let mut conn = self.client.as_ref().clone();
         let mut pipe = redis::pipe();
         pipe.atomic();
+
+        debug!("Removing all indexes for transaction {}", tx.id);
 
         let relayer_key = self.relayer_key(&tx.relayer_id);
         let status_key = self.relayer_status_key(&tx.relayer_id, &tx.status);
@@ -201,20 +279,18 @@ impl RedisTransactionRepository {
         pipe.srem(&status_key, &tx.id);
 
         // Remove nonce index if exists
-        if let Some(nonce) = tx
-            .network_data
-            .get_evm_transaction_data()
-            .ok()
-            .and_then(|tx_data| tx_data.nonce)
-        {
+        if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.srem(&nonce_key, &tx.id);
+            debug!("Removing nonce index for tx {} with nonce {}", tx.id, nonce);
         }
 
-        pipe.exec_async(&mut conn)
-            .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+        pipe.exec_async(&mut conn).await.map_err(|e| {
+            error!("Index removal failed for transaction {}: {}", tx.id, e);
+            self.map_redis_error(e, &format!("remove_indexes_for_tx_{}", tx.id))
+        })?;
 
+        debug!("Successfully removed all indexes for transaction {}", tx.id);
         Ok(())
     }
 }
@@ -223,6 +299,7 @@ impl fmt::Debug for RedisTransactionRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisTransactionRepository")
             .field("client", &"<ConnectionManager>")
+            .field("key_prefix", &self.key_prefix)
             .finish()
     }
 }
@@ -236,59 +313,90 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let key = self.tx_key(&entity.id);
         let mut conn = self.client.as_ref().clone();
 
-        let value =
-            serde_json::to_string(&entity).map_err(|e| RepositoryError::Other(e.to_string()))?;
+        debug!("Creating transaction with ID: {}", entity.id);
+
+        let value = self.serialize_transaction(&entity)?;
+
+        // Check if transaction already exists
+        let exists: bool = conn
+            .exists(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "check_transaction_exists"))?;
+
+        if exists {
+            return Err(RepositoryError::ConstraintViolation(format!(
+                "Transaction with ID {} already exists",
+                entity.id
+            )));
+        }
 
         // Use atomic pipeline for consistency
         let mut pipe = redis::pipe();
         pipe.atomic();
+        pipe.set(&key, &value);
+        pipe.sadd(self.tx_ids_set(), &entity.id);
 
-        // Check existence and create atomically using SET NX
-        let result: Result<String, redis::RedisError> = conn.set_nx(&key, &value).await;
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "create_transaction"))?;
 
-        match result {
-            Ok(_) => {
-                // Transaction was created, now update indexes
-                pipe.sadd(TX_IDS_SET, &entity.id);
-                pipe.exec_async(&mut conn)
-                    .await
-                    .map_err(|e| RepositoryError::Other(e.to_string()))?;
-
-                self.update_indexes_atomic(&entity, None).await?;
-                Ok(entity)
-            }
-            Err(_) => Err(RepositoryError::ConstraintViolation(format!(
-                "Transaction with ID {} already exists",
-                entity.id
-            ))),
+        // Update indexes separately to handle partial failures gracefully
+        if let Err(e) = self.update_indexes(&entity, None).await {
+            error!(
+                "Failed to update indexes for new transaction {}: {}",
+                entity.id, e
+            );
+            return Err(e);
         }
+
+        debug!("Successfully created transaction {}", entity.id);
+        Ok(entity)
     }
 
     async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError> {
+        if id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Transaction ID cannot be empty".to_string(),
+            ));
+        }
+
         let key = self.tx_key(&id);
         let mut conn = self.client.as_ref().clone();
+
+        debug!("Fetching transaction with ID: {}", id);
+
         let value: Option<String> = conn
             .get(&key)
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "get_transaction_by_id"))?;
 
         match value {
             Some(json) => {
-                serde_json::from_str(&json).map_err(|e| RepositoryError::Other(e.to_string()))
+                let tx = self.deserialize_transaction(&json, &id)?;
+                debug!("Successfully fetched transaction {}", id);
+                Ok(tx)
             }
-            None => Err(RepositoryError::NotFound(format!(
-                "Transaction with ID {} not found",
-                id
-            ))),
+            None => {
+                debug!("Transaction {} not found", id);
+                Err(RepositoryError::NotFound(format!(
+                    "Transaction with ID {} not found",
+                    id
+                )))
+            }
         }
     }
 
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
+
+        debug!("Fetching all transaction IDs");
+
         let ids: Vec<String> = conn
-            .smembers(TX_IDS_SET)
+            .smembers(self.tx_ids_set())
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "list_all_transaction_ids"))?;
+
+        debug!("Found {} transaction IDs", ids.len());
 
         self.get_transactions_by_ids(&ids).await
     }
@@ -297,18 +405,49 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         &self,
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        if query.per_page == 0 {
+            return Err(RepositoryError::InvalidData(
+                "per_page must be greater than 0".to_string(),
+            ));
+        }
+
         let mut conn = self.client.as_ref().clone();
+
+        debug!(
+            "Fetching paginated transactions (page: {}, per_page: {})",
+            query.page, query.per_page
+        );
+
         let total_ids: Vec<String> = conn
-            .smembers(TX_IDS_SET)
+            .smembers(self.tx_ids_set())
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "list_paginated_transaction_ids"))?;
 
         let total = total_ids.len() as u64;
         let start = ((query.page - 1) * query.per_page) as usize;
         let end = (start + query.per_page as usize).min(total_ids.len());
 
+        if start >= total_ids.len() {
+            debug!(
+                "Page {} is beyond available data (total: {})",
+                query.page, total
+            );
+            return Ok(PaginatedResult {
+                items: vec![],
+                total,
+                page: query.page,
+                per_page: query.per_page,
+            });
+        }
+
         let page_ids = &total_ids[start..end];
         let items = self.get_transactions_by_ids(page_ids).await?;
+
+        debug!(
+            "Successfully fetched {} transactions for page {}",
+            items.len(),
+            query.page
+        );
 
         Ok(PaginatedResult {
             items,
@@ -323,26 +462,44 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         id: String,
         entity: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
+        if id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Transaction ID cannot be empty".to_string(),
+            ));
+        }
+
+        debug!("Updating transaction with ID: {}", id);
+
         // Get the old transaction for index cleanup
         let old_tx = self.get_by_id(id.clone()).await?;
 
         let key = self.tx_key(&id);
         let mut conn = self.client.as_ref().clone();
 
-        let value =
-            serde_json::to_string(&entity).map_err(|e| RepositoryError::Other(e.to_string()))?;
+        let value = self.serialize_transaction(&entity)?;
 
-        // Update atomically
+        // Update transaction
         let _: () = conn
             .set(&key, value)
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "update_transaction"))?;
 
-        self.update_indexes_atomic(&entity, Some(&old_tx)).await?;
+        // Update indexes
+        self.update_indexes(&entity, Some(&old_tx)).await?;
+
+        debug!("Successfully updated transaction {}", id);
         Ok(entity)
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
+        if id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Transaction ID cannot be empty".to_string(),
+            ));
+        }
+
+        debug!("Deleting transaction with ID: {}", id);
+
         // Get transaction first for index cleanup
         let tx = self.get_by_id(id.clone()).await?;
 
@@ -353,22 +510,36 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.del(&key);
-        pipe.srem(TX_IDS_SET, &id);
+        pipe.srem(self.tx_ids_set(), &id);
 
         pipe.exec_async(&mut conn)
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "delete_transaction"))?;
 
-        self.remove_all_indexes(&tx).await?;
+        // Remove indexes (log errors but don't fail the delete)
+        if let Err(e) = self.remove_all_indexes(&tx).await {
+            error!(
+                "Failed to remove indexes for deleted transaction {}: {}",
+                id, e
+            );
+            // Could consider this a warning rather than an error since the main data is deleted
+        }
+
+        debug!("Successfully deleted transaction {}", id);
         Ok(())
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
+
+        debug!("Counting transactions");
+
         let count: usize = conn
-            .scard(TX_IDS_SET)
+            .scard(self.tx_ids_set())
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "count_transactions"))?;
+
+        debug!("Transaction count: {}", count);
         Ok(count)
     }
 }
@@ -534,7 +705,7 @@ impl TransactionRepository for RedisTransactionRepository {
             .await
             .map_err(|e| RepositoryError::Other(e.to_string()))?;
 
-        self.update_indexes_atomic(&tx, Some(&old_tx)).await?;
+        self.update_indexes(&tx, Some(&old_tx)).await?;
         Ok(tx)
     }
 
