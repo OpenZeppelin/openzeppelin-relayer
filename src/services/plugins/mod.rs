@@ -137,6 +137,7 @@ impl<
 mod tests {
     use crate::{
         jobs::MockJobProducerTrait, models::PluginModel,
+        repositories::InMemoryTransactionRepository,
         utils::mocks::mockutils::create_mock_app_state,
     };
 
@@ -148,13 +149,13 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
         };
-        let app_state: AppState<MockJobProducerTrait> =
+        let app_state: AppState<MockJobProducerTrait, InMemoryTransactionRepository> =
             create_mock_app_state(None, None, None, Some(vec![plugin])).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait>()
+            .expect_run::<MockJobProducerTrait, InMemoryTransactionRepository>()
             .returning(|_, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {

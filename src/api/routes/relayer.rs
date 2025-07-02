@@ -190,11 +190,11 @@ mod tests {
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
+        models::AppState,
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, MockTransactionRepository, RelayerRepositoryStorage,
-            Repository, TransactionRepositoryImpl,
+            InMemoryTransactionRepository, RelayerRepositoryStorage, Repository,
         },
     };
     use actix_web::{http::StatusCode, test, App};

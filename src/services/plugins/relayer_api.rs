@@ -42,6 +42,7 @@ pub struct Response {
 }
 
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub trait RelayerApiTrait<
     J: JobProducerTrait + 'static,
     T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,

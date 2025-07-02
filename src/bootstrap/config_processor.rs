@@ -404,8 +404,7 @@ mod tests {
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, MockTransactionRepository, RelayerRepositoryStorage,
-            TransactionRepositoryImpl,
+            InMemoryTransactionRepository, RelayerRepositoryStorage, TransactionRepositoryImpl,
         },
     };
     use serde_json::json;

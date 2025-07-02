@@ -107,8 +107,8 @@ mod tests {
     use std::fs;
 
     use crate::{
-        jobs::MockJobProducerTrait, services::plugins::LogLevel,
-        utils::mocks::mockutils::create_mock_app_state,
+        jobs::MockJobProducerTrait, repositories::InMemoryTransactionRepository,
+        services::plugins::LogLevel, utils::mocks::mockutils::create_mock_app_state,
     };
     use tempfile::tempdir;
 
@@ -146,7 +146,7 @@ mod tests {
 
         let plugin_runner = PluginRunner;
         let result = plugin_runner
-            .run::<MockJobProducerTrait>(
+            .run::<MockJobProducerTrait, InMemoryTransactionRepository>(
                 &socket_path.display().to_string(),
                 script_path.display().to_string(),
                 "{ \"test\": \"test\" }".to_string(),

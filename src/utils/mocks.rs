@@ -17,7 +17,7 @@ pub mod mockutils {
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
             InMemoryTransactionRepository, PluginRepositoryTrait, RelayerRepositoryStorage,
-            Repository, TransactionRepositoryImpl,
+            Repository,
         },
     };
 

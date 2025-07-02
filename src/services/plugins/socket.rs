@@ -189,8 +189,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        jobs::MockJobProducerTrait,
-        services::plugins::{PluginMethod, Response},
+        services::plugins::{MockRelayerApiTrait, PluginMethod, Response},
         utils::mocks::mockutils::{create_mock_app_state, create_mock_evm_transaction_request},
     };
 
@@ -238,13 +237,15 @@ mod tests {
 
         let mut mock_relayer = MockRelayerApiTrait::default();
 
-        mock_relayer
-            .expect_handle_request::<MockJobProducerTrait>()
-            .returning(|_, _| Response {
-                request_id: "test".to_string(),
-                result: Some(serde_json::json!("test")),
-                error: None,
-            });
+        mock_relayer.expect_handle_request().returning(|_, _| {
+            Box::pin(async move {
+                Response {
+                    request_id: "test".to_string(),
+                    result: Some(serde_json::json!("test")),
+                    error: None,
+                }
+            })
+        });
 
         let service = SocketService::new(socket_path.to_str().unwrap()).unwrap();
 

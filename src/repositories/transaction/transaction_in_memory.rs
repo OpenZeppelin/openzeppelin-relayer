@@ -16,9 +16,24 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
+}
+
+impl Clone for InMemoryTransactionRepository {
+    fn clone(&self) -> Self {
+        // Try to get the current data, or use empty HashMap if lock fails
+        let data = self
+            .store
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
+        Self {
+            store: Mutex::new(data),
+        }
+    }
 }
 
 impl InMemoryTransactionRepository {
