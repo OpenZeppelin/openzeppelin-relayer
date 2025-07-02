@@ -1,7 +1,7 @@
 import { Speed } from "@openzeppelin/relayer-sdk/dist/src/models/speed";
 import { PluginAPI, runPlugin } from "../lib/plugin";
 
-export async function example(api: PluginAPI) {
+async function example(api: PluginAPI) {
     console.log("Plugin started...");
     /**
      * Instances the relayer with the given id.
