@@ -4,8 +4,7 @@
 //! properly configured and ready for operation.
 use crate::{
     domain::{get_network_relayer, Relayer},
-    jobs::JobProducer,
-    models::AppState,
+    models::DefaultAppState,
     repositories::Repository,
 };
 use actix_web::web::ThinData;
@@ -16,7 +15,7 @@ use log::info;
 
 async fn initialize_relayer(
     relayer_id: String,
-    app_state: ThinData<AppState<JobProducer>>,
+    app_state: ThinData<DefaultAppState>,
 ) -> Result<()> {
     let relayer_service = get_network_relayer(relayer_id.clone(), &app_state).await?;
 
@@ -27,7 +26,7 @@ async fn initialize_relayer(
     Ok::<(), Report>(())
 }
 
-pub async fn initialize_relayers(app_state: ThinData<AppState<JobProducer>>) -> Result<()> {
+pub async fn initialize_relayers(app_state: ThinData<DefaultAppState>) -> Result<()> {
     let relayers = app_state.relayer_repository.list_all().await?;
 
     let relayer_futures = relayers.iter().map(|relayer| {

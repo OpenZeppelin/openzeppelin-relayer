@@ -112,7 +112,7 @@ pub enum TransactionRepositoryType {
 }
 
 /// Enum wrapper for different transaction repository implementations
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TransactionRepositoryImpl {
     InMemory(InMemoryTransactionRepository),
     Redis(RedisTransactionRepository),

@@ -8,8 +8,12 @@
 //!
 use std::sync::Arc;
 
+use crate::repositories::{Repository, TransactionRepository};
 use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};
-use crate::{jobs::JobProducerTrait, models::AppState};
+use crate::{
+    jobs::JobProducerTrait,
+    models::{AppState, TransactionRepoModel},
+};
 
 use super::PluginError;
 use actix_web::web;
@@ -22,12 +26,15 @@ use mockall::automock;
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait PluginRunnerTrait {
-    async fn run<J: JobProducerTrait + 'static>(
+    async fn run<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    >(
         &self,
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
     ) -> Result<ScriptResult, PluginError>;
 }
 
@@ -35,12 +42,15 @@ pub trait PluginRunnerTrait {
 pub struct PluginRunner;
 
 impl PluginRunner {
-    async fn run<J: JobProducerTrait + 'static>(
+    async fn run<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    >(
         &self,
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
     ) -> Result<ScriptResult, PluginError> {
         let socket_service = SocketService::new(socket_path)?;
         let socket_path_clone = socket_service.socket_path().to_string();
@@ -77,12 +87,15 @@ impl PluginRunner {
 
 #[async_trait]
 impl PluginRunnerTrait for PluginRunner {
-    async fn run<J: JobProducerTrait + 'static>(
+    async fn run<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    >(
         &self,
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
     ) -> Result<ScriptResult, PluginError> {
         self.run(socket_path, script_path, script_params, state)
             .await

@@ -16,7 +16,7 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
 }

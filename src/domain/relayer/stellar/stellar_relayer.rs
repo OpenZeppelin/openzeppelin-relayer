@@ -36,7 +36,7 @@ use crate::{
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
         NetworkRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
-        TransactionRepository, TransactionRepositoryImpl,
+        TransactionRepository,
     },
     services::{
         StellarProvider, StellarProviderTrait, TransactionCounterService,
@@ -124,11 +124,11 @@ where
     job_producer: Arc<J>,
 }
 
-pub type DefaultStellarRelayer<J> = StellarRelayer<
+pub type DefaultStellarRelayer<J, T> = StellarRelayer<
     StellarProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
-    TransactionRepositoryImpl,
+    T,
     J,
     TransactionCounterService<InMemoryTransactionCounter>,
 >;

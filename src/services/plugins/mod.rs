@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use crate::{
     jobs::JobProducerTrait,
-    models::{AppState, PluginCallRequest},
+    models::{AppState, PluginCallRequest, TransactionRepoModel},
+    repositories::{Repository, TransactionRepository},
 };
 use actix_web::web;
 use async_trait::async_trait;
@@ -65,11 +66,14 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         Self { runner }
     }
 
-    async fn call_plugin<J: JobProducerTrait + 'static>(
+    async fn call_plugin<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    >(
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
         let script_params = plugin_call_request.params.to_string();
@@ -94,18 +98,26 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait PluginServiceTrait<J: JobProducerTrait + 'static>: Send + Sync {
+pub trait PluginServiceTrait<
+    J: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+>: Send + Sync
+{
     fn new(runner: PluginRunner) -> Self;
     async fn call_plugin(
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
     ) -> Result<PluginCallResponse, PluginError>;
 }
 
 #[async_trait]
-impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService<PluginRunner> {
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    > PluginServiceTrait<J, T> for PluginService<PluginRunner>
+{
     fn new(runner: PluginRunner) -> Self {
         Self::new(runner)
     }
@@ -114,7 +126,7 @@ impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService<Plug
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         self.call_plugin(code_path, plugin_call_request, state)
             .await

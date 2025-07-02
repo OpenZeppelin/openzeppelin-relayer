@@ -3,8 +3,7 @@
 //! The routes are integrated with the Actix-web framework and interact with the plugin controller.
 use crate::{
     api::controllers::plugin,
-    jobs::JobProducer,
-    models::{AppState, PluginCallRequest},
+    models::{DefaultAppState, PluginCallRequest},
 };
 use actix_web::{post, web, Responder};
 
@@ -13,7 +12,7 @@ use actix_web::{post, web, Responder};
 async fn plugin_call(
     plugin_id: web::Path<String>,
     req: web::Json<PluginCallRequest>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     plugin::call_plugin(plugin_id.into_inner(), req.into_inner(), data).await
 }

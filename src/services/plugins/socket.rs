@@ -48,6 +48,8 @@
 //! 6. The server closes the socket connection.
 //!
 
+use crate::models::TransactionRepoModel;
+use crate::repositories::{Repository, TransactionRepository};
 use crate::{jobs::JobProducerTrait, models::AppState};
 use actix_web::web;
 use std::sync::Arc;
@@ -101,11 +103,12 @@ impl SocketService {
     /// A vector of traces.
     pub async fn listen<
         J: JobProducerTrait + 'static,
-        R: RelayerApiTrait + 'static + Send + Sync,
+        R: RelayerApiTrait<J, T> + 'static + Send + Sync,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     >(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
         relayer_api: Arc<R>,
     ) -> Result<Vec<serde_json::Value>, PluginError> {
         let mut shutdown = shutdown_rx;
@@ -117,7 +120,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    let result = tokio::spawn(Self::handle_connection::<J, R>(stream, state, relayer_api))
+                    let result = tokio::spawn(Self::handle_connection::<J, R, T>(stream, state, relayer_api))
                         .await
                         .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
@@ -149,10 +152,11 @@ impl SocketService {
     /// A vector of traces.
     async fn handle_connection<
         J: JobProducerTrait + 'static,
-        R: RelayerApiTrait + 'static + Send + Sync,
+        R: RelayerApiTrait<J, T> + 'static + Send + Sync,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     >(
         stream: UnixStream,
-        state: Arc<web::ThinData<AppState<J>>>,
+        state: Arc<web::ThinData<AppState<J, T>>>,
         relayer_api: Arc<R>,
     ) -> Result<Vec<serde_json::Value>, PluginError> {
         let (r, mut w) = stream.into_split();
@@ -186,7 +190,7 @@ mod tests {
 
     use crate::{
         jobs::MockJobProducerTrait,
-        services::plugins::{MockRelayerApiTrait, PluginMethod, Response},
+        services::plugins::{PluginMethod, Response},
         utils::mocks::mockutils::{create_mock_app_state, create_mock_evm_transaction_request},
     };
 

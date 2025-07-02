@@ -5,21 +5,25 @@ use std::sync::Arc;
 
 use crate::{
     jobs::{JobProducer, JobProducerTrait},
+    models::TransactionRepoModel,
     repositories::{
         InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
         InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        RelayerRepositoryStorage, TransactionRepositoryImpl,
+        RelayerRepositoryStorage, Repository, TransactionRepository, TransactionRepositoryImpl,
     },
 };
 
 /// Represents the application state, holding various repositories and services
 /// required for the application's operation.
 #[derive(Clone, Debug)]
-pub struct AppState<J: JobProducerTrait> {
+pub struct AppState<
+    J: JobProducerTrait,
+    T: TransactionRepository + Repository<TransactionRepoModel, String>,
+> {
     /// Repository for managing relayer data.
     pub relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     /// Repository for managing transaction data.
-    pub transaction_repository: Arc<TransactionRepositoryImpl>,
+    pub transaction_repository: Arc<T>,
     /// Repository for managing signer data.
     pub signer_repository: Arc<InMemorySignerRepository>,
     /// Repository for managing notification data.
@@ -34,9 +38,11 @@ pub struct AppState<J: JobProducerTrait> {
     pub plugin_repository: Arc<InMemoryPluginRepository>,
 }
 
-pub type DefaultAppState = AppState<JobProducer>;
+pub type DefaultAppState = AppState<JobProducer, TransactionRepositoryImpl>;
 
-impl<J: JobProducerTrait> AppState<J> {
+impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoModel, String>>
+    AppState<J, T>
+{
     /// Returns a clone of the relayer repository.
     ///
     /// # Returns
@@ -51,7 +57,7 @@ impl<J: JobProducerTrait> AppState<J> {
     /// # Returns
     ///
     /// An `Arc` pointing to the `Arc<TransactionRepositoryImpl>`.
-    pub fn transaction_repository(&self) -> Arc<TransactionRepositoryImpl> {
+    pub fn transaction_repository(&self) -> Arc<T> {
         Arc::clone(&self.transaction_repository)
     }
 
@@ -112,15 +118,12 @@ impl<J: JobProducerTrait> AppState<J> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        jobs::MockJobProducerTrait,
-        repositories::{InMemoryTransactionRepository, TransactionRepositoryType},
-    };
+    use crate::{jobs::MockJobProducerTrait, repositories::InMemoryTransactionRepository};
 
     use super::*;
     use std::sync::Arc;
 
-    fn create_test_app_state() -> AppState<MockJobProducerTrait> {
+    fn create_test_app_state() -> AppState<MockJobProducerTrait, InMemoryTransactionRepository> {
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
 
@@ -145,9 +148,7 @@ mod tests {
             relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
                 InMemoryRelayerRepository::default(),
             )),
-            transaction_repository: Arc::new(TransactionRepositoryImpl::InMemory(
-                InMemoryTransactionRepository::new(),
-            )),
+            transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
             network_repository: Arc::new(InMemoryNetworkRepository::default()),

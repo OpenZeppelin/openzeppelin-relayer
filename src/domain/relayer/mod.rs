@@ -24,6 +24,7 @@ use crate::{
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
         RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
     },
+    repositories::{Repository, TransactionRepository},
     services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
 };
 
@@ -201,14 +202,21 @@ pub trait SolanaRelayerTrait {
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
-pub enum NetworkRelayer<J: JobProducerTrait + 'static> {
-    Evm(DefaultEvmRelayer<J>),
-    Solana(DefaultSolanaRelayer<J>),
-    Stellar(DefaultStellarRelayer<J>),
+pub enum NetworkRelayer<
+    J: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+> {
+    Evm(DefaultEvmRelayer<J, T>),
+    Solana(DefaultSolanaRelayer<J, T>),
+    Stellar(DefaultStellarRelayer<J, T>),
 }
 
 #[async_trait]
-impl<J: JobProducerTrait + 'static> Relayer for NetworkRelayer<J> {
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+    > Relayer for NetworkRelayer<J, T>
+{
     async fn process_transaction_request(
         &self,
         tx_request: NetworkTransactionRequest,
@@ -296,23 +304,31 @@ impl<J: JobProducerTrait + 'static> Relayer for NetworkRelayer<J> {
 }
 
 #[async_trait]
-pub trait RelayerFactoryTrait<J: JobProducerTrait + 'static> {
+pub trait RelayerFactoryTrait<
+    J: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+>
+{
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J>>,
-    ) -> Result<NetworkRelayer<J>, RelayerError>;
+        state: &ThinData<AppState<J, T>>,
+    ) -> Result<NetworkRelayer<J, T>, RelayerError>;
 }
 
 pub struct RelayerFactory;
 
 #[async_trait]
-impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+    > RelayerFactoryTrait<J, T> for RelayerFactory
+{
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J>>,
-    ) -> Result<NetworkRelayer<J>, RelayerError> {
+        state: &ThinData<AppState<J, T>>,
+    ) -> Result<NetworkRelayer<J, T>, RelayerError> {
         match relayer.network_type {
             NetworkType::Evm => {
                 let network_repo = state
@@ -389,7 +405,7 @@ impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
                     state.transaction_counter_store(),
                 ));
 
-                let relayer = DefaultStellarRelayer::<J>::new(
+                let relayer = DefaultStellarRelayer::<J, T>::new(
                     relayer,
                     stellar_provider,
                     stellar::StellarRelayerDependencies::new(

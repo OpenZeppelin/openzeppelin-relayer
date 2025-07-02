@@ -42,7 +42,7 @@ use crate::{
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
         NetworkRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
-        TransactionRepository, TransactionRepositoryImpl,
+        TransactionRepository,
     },
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
@@ -197,11 +197,11 @@ where
 }
 
 // Define a concrete type alias for common usage
-pub type DefaultEvmRelayer<J> = EvmRelayer<
+pub type DefaultEvmRelayer<J, T> = EvmRelayer<
     EvmProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
-    TransactionRepositoryImpl,
+    T,
     J,
     EvmSigner,
     TransactionCounterService<InMemoryTransactionCounter>,

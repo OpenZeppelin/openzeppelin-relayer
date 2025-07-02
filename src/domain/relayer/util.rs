@@ -16,8 +16,8 @@ use actix_web::web::ThinData;
 use crate::{
     domain::{RelayerFactory, RelayerFactoryTrait},
     jobs::JobProducerTrait,
-    models::{ApiError, AppState, RelayerError, RelayerRepoModel},
-    repositories::Repository,
+    models::{ApiError, AppState, RelayerError, RelayerRepoModel, TransactionRepoModel},
+    repositories::{Repository, TransactionRepository},
 };
 
 use super::NetworkRelayer;
@@ -33,12 +33,13 @@ use super::NetworkRelayer;
 ///
 /// * `Result<RelayerRepoModel, ApiError>` - Returns a `RelayerRepoModel` on success, or an
 ///   `ApiError` on failure.
-pub async fn get_relayer_by_id<P>(
+pub async fn get_relayer_by_id<P, T>(
     relayer_id: String,
-    state: &ThinData<AppState<P>>,
+    state: &ThinData<AppState<P, T>>,
 ) -> Result<RelayerRepoModel, ApiError>
 where
     P: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String>,
 {
     state
         .relayer_repository
@@ -58,10 +59,13 @@ where
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer<P: JobProducerTrait + 'static>(
+pub async fn get_network_relayer<
+    P: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+>(
     relayer_id: String,
-    state: &ThinData<AppState<P>>,
-) -> Result<NetworkRelayer<P>, ApiError> {
+    state: &ThinData<AppState<P, T>>,
+) -> Result<NetworkRelayer<P, T>, ApiError> {
     let relayer_model = get_relayer_by_id(relayer_id, state).await?;
     let signer_model = state
         .signer_repository
@@ -84,10 +88,13 @@ pub async fn get_network_relayer<P: JobProducerTrait + 'static>(
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer_by_model<P: JobProducerTrait + 'static>(
+pub async fn get_network_relayer_by_model<
+    P: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+>(
     relayer_model: RelayerRepoModel,
-    state: &ThinData<AppState<P>>,
-) -> Result<NetworkRelayer<P>, ApiError> {
+    state: &ThinData<AppState<P, T>>,
+) -> Result<NetworkRelayer<P, T>, ApiError> {
     let signer_model = state
         .signer_repository
         .get_by_id(relayer_model.signer_id.clone())

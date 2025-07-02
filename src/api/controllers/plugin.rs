@@ -4,7 +4,8 @@
 //! - Calling plugins
 use crate::{
     jobs::JobProducerTrait,
-    models::{ApiError, ApiResponse, AppState, PluginCallRequest},
+    models::{ApiError, ApiResponse, AppState, PluginCallRequest, TransactionRepoModel},
+    repositories::{Repository, TransactionRepository},
     services::plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
 };
 use actix_web::{web, HttpResponse};
@@ -22,10 +23,13 @@ use std::sync::Arc;
 /// # Returns
 ///
 /// The result of the plugin call.
-pub async fn call_plugin<J: JobProducerTrait + 'static>(
+pub async fn call_plugin<
+    J: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+>(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
-    state: web::ThinData<AppState<J>>,
+    state: web::ThinData<AppState<J, T>>,
 ) -> Result<HttpResponse, ApiError> {
     let plugin = state
         .plugin_repository

@@ -80,7 +80,7 @@ pub mod mockutils {
         signers: Option<Vec<SignerRepoModel>>,
         networks: Option<Vec<NetworkRepoModel>>,
         plugins: Option<Vec<PluginModel>>,
-    ) -> AppState<MockJobProducerTrait> {
+    ) -> AppState<MockJobProducerTrait, InMemoryTransactionRepository> {
         let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
             InMemoryRelayerRepository::default(),
         ));
@@ -135,9 +135,7 @@ pub mod mockutils {
 
         AppState {
             relayer_repository,
-            transaction_repository: Arc::new(TransactionRepositoryImpl::InMemory(
-                InMemoryTransactionRepository::new(),
-            )),
+            transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
             signer_repository,
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
             network_repository,

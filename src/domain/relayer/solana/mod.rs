@@ -16,23 +16,29 @@ pub use token::*;
 
 use crate::{
     jobs::JobProducerTrait,
-    models::{NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel, SolanaNetwork},
+    models::{
+        NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel, SolanaNetwork,
+        TransactionRepoModel,
+    },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, RelayerRepositoryStorage,
-        TransactionRepositoryImpl,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, RelayerRepositoryStorage, Repository,
+        TransactionRepository,
     },
     services::{get_network_provider, JupiterService, SolanaSignerFactory},
 };
 
 /// Function to create a Solana relayer instance
-pub async fn create_solana_relayer<J: JobProducerTrait + 'static>(
+pub async fn create_solana_relayer<
+    J: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+>(
     relayer: RelayerRepoModel,
     signer: SignerRepoModel,
     relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
     network_repository: Arc<InMemoryNetworkRepository>,
-    transaction_repository: Arc<TransactionRepositoryImpl>,
+    transaction_repository: Arc<T>,
     job_producer: Arc<J>,
-) -> Result<DefaultSolanaRelayer<J>, RelayerError> {
+) -> Result<DefaultSolanaRelayer<J, T>, RelayerError> {
     let network_repo = network_repository
         .get(NetworkType::Solana, &relayer.network)
         .await
@@ -64,7 +70,7 @@ pub async fn create_solana_relayer<J: JobProducerTrait + 'static>(
         jupiter_service.clone(),
     )?;
 
-    let relayer = DefaultSolanaRelayer::<J>::new(
+    let relayer = DefaultSolanaRelayer::<J, T>::new(
         relayer,
         signer_service,
         relayer_repository,
