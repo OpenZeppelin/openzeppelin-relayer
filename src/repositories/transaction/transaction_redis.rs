@@ -126,7 +126,6 @@ impl RedisTransactionRepository {
 
         let mut conn = self.client.as_ref().clone();
 
-        // First get relayer IDs for each transaction
         let reverse_keys: Vec<String> = ids.iter().map(|id| self.tx_to_relayer_key(id)).collect();
 
         debug!("Fetching relayer IDs for {} transactions", ids.len());
@@ -136,7 +135,6 @@ impl RedisTransactionRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "batch_fetch_relayer_ids"))?;
 
-        // Now get the actual transaction data
         let mut tx_keys = Vec::new();
         let mut valid_ids = Vec::new();
 
@@ -197,7 +195,7 @@ impl RedisTransactionRepository {
         Ok(transactions)
     }
 
-    /// Extract nonce with better error context
+    /// Extract nonce from EVM transaction data
     fn extract_nonce(&self, network_data: &NetworkTransactionData) -> Option<u64> {
         match network_data.get_evm_transaction_data() {
             Ok(tx_data) => tx_data.nonce,
@@ -256,7 +254,6 @@ impl RedisTransactionRepository {
         let new_status_key = self.relayer_status_key(&tx.relayer_id, &tx.status);
         pipe.sadd(&new_status_key, &tx.id);
 
-        // Handle nonce index - use SET instead of SADD for single value
         if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.set(&nonce_key, &tx.id);
@@ -404,7 +401,6 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         debug!("Fetching transaction with ID: {}", id);
 
-        // First get the relayer ID from reverse lookup
         let reverse_key = self.tx_to_relayer_key(&id);
         let relayer_id: Option<String> = conn
             .get(&reverse_key)
@@ -422,7 +418,6 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             }
         };
 
-        // Now get the actual transaction data
         let key = self.tx_key(&relayer_id, &id);
         let value: Option<String> = conn
             .get(&key)
@@ -634,7 +629,6 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let reverse_key = self.tx_to_relayer_key(&id);
         let mut conn = self.client.as_ref().clone();
 
-        // Use atomic pipeline
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.del(&key);
@@ -650,7 +644,6 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
                 "Failed to remove indexes for deleted transaction {}: {}",
                 id, e
             );
-            // Could consider this a warning rather than an error since the main data is deleted
         }
 
         debug!("Successfully deleted transaction {}", id);
