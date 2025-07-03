@@ -171,7 +171,6 @@ mod tests {
         env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
         env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
         env::remove_var("PROVIDER_MAX_FAILOVERS");
-        env::remove_var("TRANSACTION_REPO_BACKEND");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -226,7 +225,6 @@ mod tests {
         env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "invalid");
         env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "invalid");
         env::set_var("PROVIDER_MAX_FAILOVERS", "invalid");
-        env::set_var("TRANSACTION_REPO_BACKEND", "invalid");
         let config = ServerConfig::from_env();
 
         // Should fall back to defaults when parsing fails
@@ -265,7 +263,6 @@ mod tests {
         env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
         env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "3000");
         env::set_var("PROVIDER_MAX_FAILOVERS", "4");
-        env::set_var("TRANSACTION_REPO_BACKEND", "inmemory");
         let config = ServerConfig::from_env();
 
         assert_eq!(config.host, "127.0.0.1");

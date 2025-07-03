@@ -1,4 +1,4 @@
-//! Improved Redis-backed implementation of the TransactionRepository with enhanced error handling.
+//! Redis-backed implementation of the TransactionRepository.
 
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
@@ -12,11 +12,12 @@ use redis::{AsyncCommands, RedisError};
 use std::fmt;
 use std::sync::Arc;
 
-const TX_KEY_PREFIX: &str = "tx";
-const TX_IDS_SET: &str = "tx:ids";
-const RELAYER_INDEX_PREFIX: &str = "tx:relayer";
-const RELAYER_STATUS_INDEX_PREFIX: &str = "tx:relayer:status";
-const NONCE_INDEX_PREFIX: &str = "tx:relayer:nonce";
+const RELAYER_PREFIX: &str = "relayer";
+const TX_PREFIX: &str = "tx";
+const STATUS_PREFIX: &str = "status";
+const NONCE_PREFIX: &str = "nonce";
+const TX_TO_RELAYER_PREFIX: &str = "tx_to_relayer";
+const RELAYER_LIST_KEY: &str = "relayer_list";
 
 #[derive(Clone)]
 pub struct RedisTransactionRepository {
@@ -41,36 +42,42 @@ impl RedisTransactionRepository {
         })
     }
 
-    fn tx_key(&self, id: &str) -> String {
-        format!("{}:{}:{}", self.key_prefix, TX_KEY_PREFIX, id)
-    }
-
-    fn tx_ids_set(&self) -> String {
-        format!("{}:{}", self.key_prefix, TX_IDS_SET)
-    }
-
-    fn relayer_key(&self, relayer_id: &str) -> String {
+    /// Generate key for transaction data: relayer:{relayer_id}:tx:{tx_id}
+    fn tx_key(&self, relayer_id: &str, tx_id: &str) -> String {
         format!(
-            "{}:{}:{}",
-            self.key_prefix, RELAYER_INDEX_PREFIX, relayer_id
+            "{}:{}:{}:{}:{}",
+            self.key_prefix, RELAYER_PREFIX, relayer_id, TX_PREFIX, tx_id
         )
     }
 
+    /// Generate key for reverse lookup: tx_to_relayer:{tx_id}
+    fn tx_to_relayer_key(&self, tx_id: &str) -> String {
+        format!("{}:{}:{}", self.key_prefix, TX_TO_RELAYER_PREFIX, tx_id)
+    }
+
+    /// Generate key for relayer status index: relayer:{relayer_id}:status:{status}
     fn relayer_status_key(&self, relayer_id: &str, status: &TransactionStatus) -> String {
         format!(
-            "{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}",
             self.key_prefix,
-            RELAYER_STATUS_INDEX_PREFIX,
+            RELAYER_PREFIX,
             relayer_id,
+            STATUS_PREFIX,
             status.to_string()
         )
     }
 
+    /// Generate key for relayer nonce index: relayer:{relayer_id}:nonce:{nonce}
     fn relayer_nonce_key(&self, relayer_id: &str, nonce: u64) -> String {
         format!(
-            "{}:{}:{}:{}",
-            self.key_prefix, NONCE_INDEX_PREFIX, relayer_id, nonce
+            "{}:{}:{}:{}:{}",
+            self.key_prefix, RELAYER_PREFIX, relayer_id, NONCE_PREFIX, nonce
         )
+    }
+
+    /// Generate key for relayer list: relayer_list (set of all relayer IDs)
+    fn relayer_list_key(&self) -> String {
+        format!("{}:{}", self.key_prefix, RELAYER_LIST_KEY)
     }
 
     /// Convert Redis errors to appropriate RepositoryError types
@@ -107,7 +114,7 @@ impl RedisTransactionRepository {
         }
     }
 
-    /// Batch fetch transactions by IDs
+    /// Batch fetch transactions by IDs using reverse lookup
     async fn get_transactions_by_ids(
         &self,
         ids: &[String],
@@ -118,12 +125,42 @@ impl RedisTransactionRepository {
         }
 
         let mut conn = self.client.as_ref().clone();
-        let keys: Vec<String> = ids.iter().map(|id| self.tx_key(id)).collect();
 
-        debug!("Batch fetching {} transactions", ids.len());
+        // First get relayer IDs for each transaction
+        let reverse_keys: Vec<String> = ids.iter().map(|id| self.tx_to_relayer_key(id)).collect();
+
+        debug!("Fetching relayer IDs for {} transactions", ids.len());
+
+        let relayer_ids: Vec<Option<String>> = conn
+            .mget(&reverse_keys)
+            .await
+            .map_err(|e| self.map_redis_error(e, "batch_fetch_relayer_ids"))?;
+
+        // Now get the actual transaction data
+        let mut tx_keys = Vec::new();
+        let mut valid_ids = Vec::new();
+
+        for (i, relayer_id) in relayer_ids.into_iter().enumerate() {
+            match relayer_id {
+                Some(relayer_id) => {
+                    tx_keys.push(self.tx_key(&relayer_id, &ids[i]));
+                    valid_ids.push(ids[i].clone());
+                }
+                None => {
+                    warn!("No relayer found for transaction {}", ids[i]);
+                }
+            }
+        }
+
+        if tx_keys.is_empty() {
+            debug!("No valid transactions found for batch fetch");
+            return Ok(vec![]);
+        }
+
+        debug!("Batch fetching {} transaction data", tx_keys.len());
 
         let values: Vec<Option<String>> = conn
-            .mget(&keys)
+            .mget(&tx_keys)
             .await
             .map_err(|e| self.map_redis_error(e, "batch_fetch_transactions"))?;
 
@@ -133,17 +170,17 @@ impl RedisTransactionRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_transaction(&json, &ids[i]) {
+                    match self.deserialize_transaction(&json, &valid_ids[i]) {
                         Ok(tx) => transactions.push(tx),
                         Err(e) => {
                             failed_count += 1;
-                            error!("Failed to deserialize transaction {}: {}", ids[i], e);
+                            error!("Failed to deserialize transaction {}: {}", valid_ids[i], e);
                             // Continue processing other transactions
                         }
                     }
                 }
                 None => {
-                    warn!("Transaction {} not found in batch fetch", ids[i]);
+                    warn!("Transaction {} not found in batch fetch", valid_ids[i]);
                 }
             }
         }
@@ -152,7 +189,7 @@ impl RedisTransactionRepository {
             warn!(
                 "Failed to deserialize {} out of {} transactions in batch",
                 failed_count,
-                ids.len()
+                valid_ids.len()
             );
         }
 
@@ -211,18 +248,18 @@ impl RedisTransactionRepository {
 
         debug!("Updating indexes for transaction {}", tx.id);
 
-        // Always add to relayer index
-        let relayer_key = self.relayer_key(&tx.relayer_id);
-        pipe.sadd(&relayer_key, &tx.id);
+        // Add relayer to the global relayer list
+        let relayer_list_key = self.relayer_list_key();
+        pipe.sadd(&relayer_list_key, &tx.relayer_id);
 
         // Handle status index updates
         let new_status_key = self.relayer_status_key(&tx.relayer_id, &tx.status);
         pipe.sadd(&new_status_key, &tx.id);
 
-        // Handle nonce index
+        // Handle nonce index - use SET instead of SADD for single value
         if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
-            pipe.sadd(&nonce_key, &tx.id);
+            pipe.set(&nonce_key, &tx.id);
             debug!("Added nonce index for tx {} with nonce {}", tx.id, nonce);
         }
 
@@ -242,7 +279,7 @@ impl RedisTransactionRepository {
                 let new_nonce = self.extract_nonce(&tx.network_data);
                 if Some(old_nonce) != new_nonce {
                     let old_nonce_key = self.relayer_nonce_key(&old.relayer_id, old_nonce);
-                    pipe.srem(&old_nonce_key, &tx.id);
+                    pipe.del(&old_nonce_key);
                     debug!(
                         "Removing old nonce index for tx {} (nonce: {} -> {:?})",
                         tx.id, old_nonce, new_nonce
@@ -272,18 +309,20 @@ impl RedisTransactionRepository {
 
         debug!("Removing all indexes for transaction {}", tx.id);
 
-        let relayer_key = self.relayer_key(&tx.relayer_id);
+        // Remove from status index
         let status_key = self.relayer_status_key(&tx.relayer_id, &tx.status);
-
-        pipe.srem(&relayer_key, &tx.id);
         pipe.srem(&status_key, &tx.id);
 
         // Remove nonce index if exists
         if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
-            pipe.srem(&nonce_key, &tx.id);
+            pipe.del(&nonce_key);
             debug!("Removing nonce index for tx {} with nonce {}", tx.id, nonce);
         }
+
+        // Remove reverse lookup
+        let reverse_key = self.tx_to_relayer_key(&tx.id);
+        pipe.del(&reverse_key);
 
         pipe.exec_async(&mut conn).await.map_err(|e| {
             error!("Index removal failed for transaction {}: {}", tx.id, e);
@@ -310,20 +349,21 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         &self,
         entity: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let key = self.tx_key(&entity.id);
+        let key = self.tx_key(&entity.relayer_id, &entity.id);
+        let reverse_key = self.tx_to_relayer_key(&entity.id);
         let mut conn = self.client.as_ref().clone();
 
         debug!("Creating transaction with ID: {}", entity.id);
 
         let value = self.serialize_transaction(&entity)?;
 
-        // Check if transaction already exists
-        let exists: bool = conn
-            .exists(&key)
+        // Check if transaction already exists by checking reverse lookup
+        let existing: Option<String> = conn
+            .get(&reverse_key)
             .await
-            .map_err(|e| self.map_redis_error(e, "check_transaction_exists"))?;
+            .map_err(|e| self.map_redis_error(e, "create_transaction_check"))?;
 
-        if exists {
+        if existing.is_some() {
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Transaction with ID {} already exists",
                 entity.id
@@ -334,7 +374,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.set(&key, &value);
-        pipe.sadd(self.tx_ids_set(), &entity.id);
+        pipe.set(&reverse_key, &entity.relayer_id);
 
         pipe.exec_async(&mut conn)
             .await
@@ -360,11 +400,30 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        let key = self.tx_key(&id);
         let mut conn = self.client.as_ref().clone();
 
         debug!("Fetching transaction with ID: {}", id);
 
+        // First get the relayer ID from reverse lookup
+        let reverse_key = self.tx_to_relayer_key(&id);
+        let relayer_id: Option<String> = conn
+            .get(&reverse_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_transaction_reverse_lookup"))?;
+
+        let relayer_id = match relayer_id {
+            Some(relayer_id) => relayer_id,
+            None => {
+                debug!("Transaction {} not found (no reverse lookup)", id);
+                return Err(RepositoryError::NotFound(format!(
+                    "Transaction with ID {} not found",
+                    id
+                )));
+            }
+        };
+
+        // Now get the actual transaction data
+        let key = self.tx_key(&relayer_id, &id);
         let value: Option<String> = conn
             .get(&key)
             .await
@@ -391,14 +450,49 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         debug!("Fetching all transaction IDs");
 
-        let ids: Vec<String> = conn
-            .smembers(self.tx_ids_set())
+        // Get all relayer IDs
+        let relayer_list_key = self.relayer_list_key();
+        let relayer_ids: Vec<String> = conn
+            .smembers(&relayer_list_key)
             .await
-            .map_err(|e| self.map_redis_error(e, "list_all_transaction_ids"))?;
+            .map_err(|e| self.map_redis_error(e, "list_all_relayer_ids"))?;
 
-        debug!("Found {} transaction IDs", ids.len());
+        debug!("Found {} relayers", relayer_ids.len());
 
-        self.get_transactions_by_ids(&ids).await
+        // Collect all transaction IDs from all relayers
+        let mut all_tx_ids = Vec::new();
+        for relayer_id in relayer_ids {
+            let pattern = format!(
+                "{}:{}:{}:{}:*",
+                self.key_prefix, RELAYER_PREFIX, relayer_id, TX_PREFIX
+            );
+            let mut cursor = 0;
+            loop {
+                let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                    .cursor_arg(cursor)
+                    .arg("MATCH")
+                    .arg(&pattern)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "list_all_scan_keys"))?;
+
+                // Extract transaction IDs from keys
+                for key in keys {
+                    if let Some(tx_id) = key.split(':').last() {
+                        all_tx_ids.push(tx_id.to_string());
+                    }
+                }
+
+                cursor = next_cursor;
+                if cursor == 0 {
+                    break;
+                }
+            }
+        }
+
+        debug!("Found {} transaction IDs", all_tx_ids.len());
+
+        self.get_transactions_by_ids(&all_tx_ids).await
     }
 
     async fn list_paginated(
@@ -418,16 +512,49 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             query.page, query.per_page
         );
 
-        let total_ids: Vec<String> = conn
-            .smembers(self.tx_ids_set())
+        // Get all relayer IDs
+        let relayer_list_key = self.relayer_list_key();
+        let relayer_ids: Vec<String> = conn
+            .smembers(&relayer_list_key)
             .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_transaction_ids"))?;
+            .map_err(|e| self.map_redis_error(e, "list_paginated_relayer_ids"))?;
 
-        let total = total_ids.len() as u64;
+        // Collect all transaction IDs from all relayers
+        let mut all_tx_ids = Vec::new();
+        for relayer_id in relayer_ids {
+            let pattern = format!(
+                "{}:{}:{}:{}:*",
+                self.key_prefix, RELAYER_PREFIX, relayer_id, TX_PREFIX
+            );
+            let mut cursor = 0;
+            loop {
+                let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                    .cursor_arg(cursor)
+                    .arg("MATCH")
+                    .arg(&pattern)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "list_paginated_scan_keys"))?;
+
+                // Extract transaction IDs from keys
+                for key in keys {
+                    if let Some(tx_id) = key.split(':').last() {
+                        all_tx_ids.push(tx_id.to_string());
+                    }
+                }
+
+                cursor = next_cursor;
+                if cursor == 0 {
+                    break;
+                }
+            }
+        }
+
+        let total = all_tx_ids.len() as u64;
         let start = ((query.page - 1) * query.per_page) as usize;
-        let end = (start + query.per_page as usize).min(total_ids.len());
+        let end = (start + query.per_page as usize).min(all_tx_ids.len());
 
-        if start >= total_ids.len() {
+        if start >= all_tx_ids.len() {
             debug!(
                 "Page {} is beyond available data (total: {})",
                 query.page, total
@@ -440,7 +567,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             });
         }
 
-        let page_ids = &total_ids[start..end];
+        let page_ids = &all_tx_ids[start..end];
         let items = self.get_transactions_by_ids(page_ids).await?;
 
         debug!(
@@ -473,7 +600,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         // Get the old transaction for index cleanup
         let old_tx = self.get_by_id(id.clone()).await?;
 
-        let key = self.tx_key(&id);
+        let key = self.tx_key(&entity.relayer_id, &id);
         let mut conn = self.client.as_ref().clone();
 
         let value = self.serialize_transaction(&entity)?;
@@ -503,14 +630,15 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         // Get transaction first for index cleanup
         let tx = self.get_by_id(id.clone()).await?;
 
-        let key = self.tx_key(&id);
+        let key = self.tx_key(&tx.relayer_id, &id);
+        let reverse_key = self.tx_to_relayer_key(&id);
         let mut conn = self.client.as_ref().clone();
 
         // Use atomic pipeline
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.del(&key);
-        pipe.srem(self.tx_ids_set(), &id);
+        pipe.del(&reverse_key);
 
         pipe.exec_async(&mut conn)
             .await
@@ -534,13 +662,41 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         debug!("Counting transactions");
 
-        let count: usize = conn
-            .scard(self.tx_ids_set())
+        // Get all relayer IDs
+        let relayer_list_key = self.relayer_list_key();
+        let relayer_ids: Vec<String> = conn
+            .smembers(&relayer_list_key)
             .await
-            .map_err(|e| self.map_redis_error(e, "count_transactions"))?;
+            .map_err(|e| self.map_redis_error(e, "count_relayer_ids"))?;
 
-        debug!("Transaction count: {}", count);
-        Ok(count)
+        // Count transactions across all relayers
+        let mut total_count = 0;
+        for relayer_id in relayer_ids {
+            let pattern = format!(
+                "{}:{}:{}:{}:*",
+                self.key_prefix, RELAYER_PREFIX, relayer_id, TX_PREFIX
+            );
+            let mut cursor = 0;
+            loop {
+                let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                    .cursor_arg(cursor)
+                    .arg("MATCH")
+                    .arg(&pattern)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "count_scan_keys"))?;
+
+                total_count += keys.len();
+
+                cursor = next_cursor;
+                if cursor == 0 {
+                    break;
+                }
+            }
+        }
+
+        debug!("Transaction count: {}", total_count);
+        Ok(total_count)
     }
 }
 
@@ -552,17 +708,42 @@ impl TransactionRepository for RedisTransactionRepository {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
-        let relayer_key = self.relayer_key(relayer_id);
-        let ids: Vec<String> = conn
-            .smembers(relayer_key)
-            .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
 
-        let total = ids.len() as u64;
+        // Scan for all transaction keys for this relayer
+        let pattern = format!(
+            "{}:{}:{}:{}:*",
+            self.key_prefix, RELAYER_PREFIX, relayer_id, TX_PREFIX
+        );
+        let mut all_tx_ids = Vec::new();
+        let mut cursor = 0;
+
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .cursor_arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "find_by_relayer_id_scan"))?;
+
+            // Extract transaction IDs from keys
+            for key in keys {
+                if let Some(tx_id) = key.split(':').last() {
+                    all_tx_ids.push(tx_id.to_string());
+                }
+            }
+
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        let total = all_tx_ids.len() as u64;
         let start = ((query.page - 1) * query.per_page) as usize;
-        let end = (start + query.per_page as usize).min(ids.len());
+        let end = (start + query.per_page as usize).min(all_tx_ids.len());
 
-        let page_ids = &ids[start..end];
+        let page_ids = &all_tx_ids[start..end];
         let items = self.get_transactions_by_ids(page_ids).await?;
 
         Ok(PaginatedResult {
@@ -587,7 +768,8 @@ impl TransactionRepository for RedisTransactionRepository {
             let ids: Vec<String> = conn
                 .smembers(status_key)
                 .await
-                .map_err(|e| RepositoryError::Other(e.to_string()))?;
+                .map_err(|e| self.map_redis_error(e, "find_by_status"))?;
+
             all_ids.extend(ids);
         }
 
@@ -606,17 +788,15 @@ impl TransactionRepository for RedisTransactionRepository {
         let mut conn = self.client.as_ref().clone();
         let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
 
-        // Get all transaction IDs with this nonce for this relayer
-        let tx_ids: Vec<String> = conn
-            .smembers(nonce_key)
+        // Get transaction ID with this nonce for this relayer (should be single value)
+        let tx_id: Option<String> = conn
+            .get(nonce_key)
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "find_by_nonce"))?;
 
-        match tx_ids.len() {
-            0 => Ok(None),
-            1 => {
-                // Single transaction found - the normal case
-                match self.get_by_id(tx_ids[0].clone()).await {
+        match tx_id {
+            Some(tx_id) => {
+                match self.get_by_id(tx_id.clone()).await {
                     Ok(tx) => Ok(Some(tx)),
                     Err(RepositoryError::NotFound(_)) => {
                         // Transaction was deleted but index wasn't cleaned up
@@ -629,23 +809,7 @@ impl TransactionRepository for RedisTransactionRepository {
                     Err(e) => Err(e),
                 }
             }
-            _ => {
-                // Multiple transactions with same nonce - this might be valid in some scenarios
-                // (e.g., failed transaction retries) but let's return the first valid one
-                warn!(
-                    "Multiple transactions found for relayer {} nonce {}: {:?}",
-                    relayer_id, nonce, tx_ids
-                );
-
-                for tx_id in tx_ids {
-                    match self.get_by_id(tx_id).await {
-                        Ok(tx) => return Ok(Some(tx)),
-                        Err(RepositoryError::NotFound(_)) => continue,
-                        Err(e) => return Err(e),
-                    }
-                }
-                Ok(None)
-            }
+            None => Ok(None),
         }
     }
 
@@ -694,16 +858,15 @@ impl TransactionRepository for RedisTransactionRepository {
         }
 
         // Update transaction and indexes atomically
-        let key = self.tx_key(&tx_id);
+        let key = self.tx_key(&tx.relayer_id, &tx_id);
         let mut conn = self.client.as_ref().clone();
 
-        let value =
-            serde_json::to_string(&tx).map_err(|e| RepositoryError::Other(e.to_string()))?;
+        let value = self.serialize_transaction(&tx)?;
 
         let _: () = conn
             .set(&key, value)
             .await
-            .map_err(|e| RepositoryError::Other(e.to_string()))?;
+            .map_err(|e| self.map_redis_error(e, "partial_update"))?;
 
         self.update_indexes(&tx, Some(&old_tx)).await?;
         Ok(tx)
@@ -743,5 +906,645 @@ impl TransactionRepository for RedisTransactionRepository {
             ..Default::default()
         };
         self.partial_update(tx_id, update).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
+    use alloy::primitives::U256;
+    use redis::Client;
+    use std::str::FromStr;
+    use tokio;
+    use uuid::Uuid;
+
+    // Helper function to create test transactions
+    fn create_test_transaction(id: &str) -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: id.to_string(),
+            relayer_id: "relayer-1".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+            sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+            confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+            valid_until: None,
+            network_type: NetworkType::Evm,
+            priced_at: None,
+            hashes: vec![],
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                gas_price: Some(1000000000),
+                gas_limit: 21000,
+                nonce: Some(1),
+                value: U256::from_str("1000000000000000000").unwrap(),
+                data: Some("0x".to_string()),
+                from: "0xSender".to_string(),
+                to: Some("0xRecipient".to_string()),
+                chain_id: 1,
+                signature: None,
+                hash: Some(format!("0x{}", id)),
+                speed: Some(Speed::Fast),
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                raw: None,
+            }),
+            noop_count: None,
+            is_canceled: Some(false),
+        }
+    }
+
+    fn create_test_transaction_with_relayer(id: &str, relayer_id: &str) -> TransactionRepoModel {
+        let mut tx = create_test_transaction(id);
+        tx.relayer_id = relayer_id.to_string();
+        tx
+    }
+
+    fn create_test_transaction_with_status(
+        id: &str,
+        relayer_id: &str,
+        status: TransactionStatus,
+    ) -> TransactionRepoModel {
+        let mut tx = create_test_transaction_with_relayer(id, relayer_id);
+        tx.status = status;
+        tx
+    }
+
+    fn create_test_transaction_with_nonce(
+        id: &str,
+        nonce: u64,
+        relayer_id: &str,
+    ) -> TransactionRepoModel {
+        let mut tx = create_test_transaction_with_relayer(id, relayer_id);
+        if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+            evm_data.nonce = Some(nonce);
+        }
+        tx
+    }
+
+    async fn setup_test_repo() -> RedisTransactionRepository {
+        // Use a mock Redis URL - in real integration tests, this would connect to a test Redis instance
+        let redis_url = std::env::var("REDIS_TEST_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
+        let client = Client::open(redis_url).expect("Failed to create Redis client");
+        let connection_manager = ConnectionManager::new(client)
+            .await
+            .expect("Failed to create connection manager");
+
+        RedisTransactionRepository::new(Arc::new(connection_manager), "test_prefix".to_string())
+            .expect("Failed to create RedisTransactionRepository")
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_new_repository_creation() {
+        let repo = setup_test_repo().await;
+        assert_eq!(repo.key_prefix, "test_prefix");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_new_repository_empty_prefix_fails() {
+        let redis_url = std::env::var("REDIS_TEST_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let client = Client::open(redis_url).expect("Failed to create Redis client");
+        let connection_manager = ConnectionManager::new(client)
+            .await
+            .expect("Failed to create connection manager");
+
+        let result = RedisTransactionRepository::new(Arc::new(connection_manager), "".to_string());
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_key_generation() {
+        let repo = setup_test_repo().await;
+
+        assert_eq!(
+            repo.tx_key("relayer-1", "test-id"),
+            "test_prefix:relayer:relayer-1:tx:test-id"
+        );
+        assert_eq!(
+            repo.tx_to_relayer_key("test-id"),
+            "test_prefix:tx_to_relayer:test-id"
+        );
+        assert_eq!(repo.relayer_list_key(), "test_prefix:relayer_list");
+        assert_eq!(
+            repo.relayer_status_key("relayer-1", &TransactionStatus::Pending),
+            "test_prefix:relayer:relayer-1:status:Pending"
+        );
+        assert_eq!(
+            repo.relayer_nonce_key("relayer-1", 42),
+            "test_prefix:relayer:relayer-1:nonce:42"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_serialize_deserialize_transaction() {
+        let repo = setup_test_repo().await;
+        let tx = create_test_transaction("test-1");
+
+        let serialized = repo
+            .serialize_transaction(&tx)
+            .expect("Serialization should succeed");
+        let deserialized = repo
+            .deserialize_transaction(&serialized, "test-1")
+            .expect("Deserialization should succeed");
+
+        assert_eq!(tx.id, deserialized.id);
+        assert_eq!(tx.relayer_id, deserialized.relayer_id);
+        assert_eq!(tx.status, deserialized.status);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_extract_nonce() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_with_nonce = create_test_transaction_with_nonce(&random_id, 42, &relayer_id);
+
+        let nonce = repo.extract_nonce(&tx_with_nonce.network_data);
+        assert_eq!(nonce, Some(42));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_create_transaction() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        let result = repo.create(tx.clone()).await.unwrap();
+        assert_eq!(result.id, tx.id);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_transaction() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx.clone()).await.unwrap();
+        let stored = repo.get_by_id(random_id.to_string()).await.unwrap();
+        assert_eq!(stored.id, tx.id);
+        assert_eq!(stored.relayer_id, tx.relayer_id);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_transaction() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let mut tx = create_test_transaction(&random_id);
+
+        repo.create(tx.clone()).await.unwrap();
+        tx.status = TransactionStatus::Confirmed;
+
+        let updated = repo.update(random_id.to_string(), tx).await.unwrap();
+        assert!(matches!(updated.status, TransactionStatus::Confirmed));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_transaction() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx).await.unwrap();
+        repo.delete_by_id(random_id.to_string()).await.unwrap();
+
+        let result = repo.get_by_id(random_id.to_string()).await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_list_all_transactions() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let random_id2 = Uuid::new_v4().to_string();
+
+        let tx1 = create_test_transaction(&random_id);
+        let tx2 = create_test_transaction(&random_id2);
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+
+        let transactions = repo.list_all().await.unwrap();
+        assert!(transactions.len() >= 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_count_transactions() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        let count = repo.count().await.unwrap();
+        repo.create(tx).await.unwrap();
+        assert!(repo.count().await.unwrap() >= count + 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_nonexistent_transaction() {
+        let repo = setup_test_repo().await;
+        let result = repo.get_by_id("nonexistent".to_string()).await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_duplicate_transaction_creation() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx.clone()).await.unwrap();
+        let result = repo.create(tx).await;
+
+        assert!(matches!(
+            result,
+            Err(RepositoryError::ConstraintViolation(_))
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_nonexistent_transaction() {
+        let repo = setup_test_repo().await;
+        let tx = create_test_transaction("test-1");
+
+        let result = repo.update("nonexistent".to_string(), tx).await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_list_paginated() {
+        let repo = setup_test_repo().await;
+
+        // Create multiple transactions
+        for _ in 1..=10 {
+            let random_id = Uuid::new_v4().to_string();
+            let tx = create_test_transaction(&random_id);
+            repo.create(tx).await.unwrap();
+        }
+
+        // Test first page with 3 items per page
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 3,
+        };
+        let result = repo.list_paginated(query).await.unwrap();
+        assert_eq!(result.items.len(), 3);
+        assert!(result.total >= 10);
+        assert_eq!(result.page, 1);
+        assert_eq!(result.per_page, 3);
+
+        // Test empty page (beyond total items)
+        let query = PaginationQuery {
+            page: 1000,
+            per_page: 3,
+        };
+        let result = repo.list_paginated(query).await.unwrap();
+        assert_eq!(result.items.len(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_find_by_relayer_id() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let random_id2 = Uuid::new_v4().to_string();
+        let random_id3 = Uuid::new_v4().to_string();
+
+        let tx1 = create_test_transaction_with_relayer(&random_id, "relayer-1");
+        let tx2 = create_test_transaction_with_relayer(&random_id2, "relayer-1");
+        let tx3 = create_test_transaction_with_relayer(&random_id3, "relayer-2");
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+        repo.create(tx3).await.unwrap();
+
+        // Test finding transactions for relayer-1
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = repo
+            .find_by_relayer_id("relayer-1", query.clone())
+            .await
+            .unwrap();
+        assert!(result.total >= 2);
+        assert!(result.items.len() >= 2);
+        assert!(result.items.iter().all(|tx| tx.relayer_id == "relayer-1"));
+
+        // Test finding transactions for relayer-2
+        let result = repo
+            .find_by_relayer_id("relayer-2", query.clone())
+            .await
+            .unwrap();
+        assert!(result.total >= 1);
+        assert!(result.items.len() >= 1);
+        assert!(result.items.iter().all(|tx| tx.relayer_id == "relayer-2"));
+
+        // Test finding transactions for non-existent relayer
+        let result = repo
+            .find_by_relayer_id("non-existent", query.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.total, 0);
+        assert_eq!(result.items.len(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_find_by_status() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let random_id2 = Uuid::new_v4().to_string();
+        let random_id3 = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx1 = create_test_transaction_with_status(
+            &random_id,
+            &relayer_id,
+            TransactionStatus::Pending,
+        );
+        let tx2 =
+            create_test_transaction_with_status(&random_id2, &relayer_id, TransactionStatus::Sent);
+        let tx3 = create_test_transaction_with_status(
+            &random_id3,
+            &relayer_id,
+            TransactionStatus::Confirmed,
+        );
+
+        repo.create(tx1).await.unwrap();
+        repo.create(tx2).await.unwrap();
+        repo.create(tx3).await.unwrap();
+
+        // Test finding pending transactions
+        let result = repo
+            .find_by_status(&relayer_id, &[TransactionStatus::Pending])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].status, TransactionStatus::Pending);
+
+        // Test finding multiple statuses
+        let result = repo
+            .find_by_status(
+                &relayer_id,
+                &[TransactionStatus::Pending, TransactionStatus::Sent],
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+
+        // Test finding non-existent status
+        let result = repo
+            .find_by_status(&relayer_id, &[TransactionStatus::Failed])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_find_by_nonce() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let random_id2 = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        let tx1 = create_test_transaction_with_nonce(&random_id, 42, &relayer_id);
+        let tx2 = create_test_transaction_with_nonce(&random_id2, 43, &relayer_id);
+
+        repo.create(tx1.clone()).await.unwrap();
+        repo.create(tx2).await.unwrap();
+
+        // Test finding existing nonce
+        let result = repo.find_by_nonce(&relayer_id, 42).await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, random_id);
+
+        // Test finding non-existent nonce
+        let result = repo.find_by_nonce(&relayer_id, 99).await.unwrap();
+        assert!(result.is_none());
+
+        // Test finding nonce for non-existent relayer
+        let result = repo.find_by_nonce("non-existent", 42).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_status() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx).await.unwrap();
+        let updated = repo
+            .update_status(random_id.to_string(), TransactionStatus::Confirmed)
+            .await
+            .unwrap();
+        assert_eq!(updated.status, TransactionStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_partial_update() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx).await.unwrap();
+
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Sent),
+            status_reason: Some("Transaction sent".to_string()),
+            sent_at: Some("2025-01-27T16:00:00.000000+00:00".to_string()),
+            confirmed_at: None,
+            network_data: None,
+            hashes: None,
+            is_canceled: None,
+            priced_at: None,
+            noop_count: None,
+        };
+
+        let updated = repo
+            .partial_update(random_id.to_string(), update)
+            .await
+            .unwrap();
+        assert_eq!(updated.status, TransactionStatus::Sent);
+        assert_eq!(updated.status_reason, Some("Transaction sent".to_string()));
+        assert_eq!(
+            updated.sent_at,
+            Some("2025-01-27T16:00:00.000000+00:00".to_string())
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_set_sent_at() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx).await.unwrap();
+        let updated = repo
+            .set_sent_at(
+                random_id.to_string(),
+                "2025-01-27T16:00:00.000000+00:00".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.sent_at,
+            Some("2025-01-27T16:00:00.000000+00:00".to_string())
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_set_confirmed_at() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx).await.unwrap();
+        let updated = repo
+            .set_confirmed_at(
+                random_id.to_string(),
+                "2025-01-27T16:00:00.000000+00:00".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.confirmed_at,
+            Some("2025-01-27T16:00:00.000000+00:00".to_string())
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_network_data() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx).await.unwrap();
+
+        let new_network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            gas_price: Some(2000000000),
+            gas_limit: 42000,
+            nonce: Some(2),
+            value: U256::from_str("2000000000000000000").unwrap(),
+            data: Some("0x1234".to_string()),
+            from: "0xNewSender".to_string(),
+            to: Some("0xNewRecipient".to_string()),
+            chain_id: 1,
+            signature: None,
+            hash: Some("0xnewhash".to_string()),
+            speed: Some(Speed::SafeLow),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        });
+
+        let updated = repo
+            .update_network_data(random_id.to_string(), new_network_data.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            updated
+                .network_data
+                .get_evm_transaction_data()
+                .unwrap()
+                .hash,
+            new_network_data.get_evm_transaction_data().unwrap().hash
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_debug_implementation() {
+        let repo = setup_test_repo().await;
+        let debug_str = format!("{:?}", repo);
+        assert!(debug_str.contains("RedisTransactionRepository"));
+        assert!(debug_str.contains("test_prefix"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_error_handling_empty_id() {
+        let repo = setup_test_repo().await;
+
+        let result = repo.get_by_id("".to_string()).await;
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+
+        let result = repo
+            .update("".to_string(), create_test_transaction("test"))
+            .await;
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+
+        let result = repo.delete_by_id("".to_string()).await;
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_pagination_validation() {
+        let repo = setup_test_repo().await;
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 0,
+        };
+        let result = repo.list_paginated(query).await;
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_index_consistency() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_nonce(&random_id, 42, &relayer_id);
+
+        // Create transaction
+        repo.create(tx.clone()).await.unwrap();
+
+        // Verify it can be found by nonce
+        let found = repo.find_by_nonce(&relayer_id, 42).await.unwrap();
+        assert!(found.is_some());
+
+        // Update the transaction with a new nonce
+        let mut updated_tx = tx.clone();
+        if let NetworkTransactionData::Evm(ref mut evm_data) = updated_tx.network_data {
+            evm_data.nonce = Some(43);
+        }
+
+        repo.update(random_id.to_string(), updated_tx)
+            .await
+            .unwrap();
+
+        // Verify old nonce index is cleaned up
+        let old_nonce_result = repo.find_by_nonce(&relayer_id, 42).await.unwrap();
+        assert!(old_nonce_result.is_none());
+
+        // Verify new nonce index works
+        let new_nonce_result = repo.find_by_nonce(&relayer_id, 43).await.unwrap();
+        assert!(new_nonce_result.is_some());
     }
 }

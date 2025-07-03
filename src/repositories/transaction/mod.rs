@@ -143,7 +143,6 @@ impl TransactionRepositoryType {
     }
 }
 
-// Implement the trait for the enum wrapper
 #[async_trait]
 impl TransactionRepository for TransactionRepositoryImpl {
     async fn find_by_relayer_id(
@@ -253,7 +252,6 @@ impl TransactionRepository for TransactionRepositoryImpl {
     }
 }
 
-// Also implement the base Repository trait
 #[async_trait]
 impl Repository<TransactionRepoModel, String> for TransactionRepositoryImpl {
     async fn create(
