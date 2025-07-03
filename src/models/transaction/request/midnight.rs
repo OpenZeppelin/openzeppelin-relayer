@@ -44,7 +44,7 @@ pub struct MidnightContractAction {
 pub struct MidnightInputRequest {
     /// Origin wallet seed (hex encoded)
     pub origin: String,
-    /// Token type (e.g., "tDUST" or "NATIVE_TOKEN")
+    /// Token type (e.g., "02000000000000000000000000000000000000000000000000000000000000000000")
     pub token_type: String,
     /// Amount to consume (in smallest unit)
     pub value: String,
@@ -56,7 +56,7 @@ pub struct MidnightOutputRequest {
     /// Destination wallet seed (hex encoded)
     /// TODO: Change this to wallet address once updated by Midnight team
     pub destination: String,
-    /// Token type (e.g., "tDUST" or "NATIVE_TOKEN")
+    /// Token type (e.g., "02000000000000000000000000000000000000000000000000000000000000000000")
     pub token_type: String,
     /// Amount to send (in smallest unit)
     pub value: String,
