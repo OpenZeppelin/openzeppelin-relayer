@@ -54,14 +54,18 @@ impl ProgressTracker {
 
     /// Check if sync is complete based on progress updates
     ///
-    /// Returns true if all relevant indices have been processed and at least some data was processed.
+    /// Returns true if we're already at or past the highest relevant index.
     pub fn is_sync_complete(&self, highest_index: u64, highest_relevant_wallet_index: u64) -> bool {
-        // Only consider sync complete if:
-        // 1. We're at or past the highest relevant index
-        // 2. We've actually processed data up to that point
-        // 3. We've processed at least some data (transactions or Merkle updates)
-        (self.start_index >= highest_relevant_wallet_index
-            || highest_index >= highest_relevant_wallet_index)
+        // Consider sync complete if:
+        // 1. We started at or past the highest relevant wallet index (nothing new to sync)
+        // 2. OR we've reached the highest relevant index and processed data
+        if self.start_index >= highest_relevant_wallet_index {
+            // Already caught up - nothing new to sync
+            return true;
+        }
+
+        // Otherwise, we need to have processed data up to the highest relevant index
+        (highest_index >= highest_relevant_wallet_index)
             && self.last_processed_index >= highest_relevant_wallet_index
             && self.has_processed_data()
     }

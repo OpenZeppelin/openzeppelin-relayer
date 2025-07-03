@@ -169,9 +169,8 @@ pub fn create_midnight_network(network: &str) -> MidnightNetworkConfig {
             http: "https://indexer.midnight.network".to_string(),
             ws: "wss://indexer.midnight.network".to_string(),
         },
-        prover_url: None,
+        prover_url: "http://localhost:6300".to_string(),
         commitment_tree_ttl: None,
-        network_id: None,
     }
 }
 
@@ -191,9 +190,8 @@ pub fn create_midnight_network_with_parent(network: &str, parent: &str) -> Midni
             http: "https://indexer.midnight.network".to_string(),
             ws: "wss://indexer.midnight.network".to_string(),
         },
-        prover_url: None,
+        prover_url: "http://localhost:6300".to_string(),
         commitment_tree_ttl: None,
-        network_id: None,
     }
 }
 

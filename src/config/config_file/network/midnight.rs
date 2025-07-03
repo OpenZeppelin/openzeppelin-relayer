@@ -21,9 +21,8 @@ pub struct MidnightNetworkConfig {
     pub common: NetworkConfigCommon,
     // Midnight-specific fields
     pub indexer_urls: IndexerUrls, // URL for the indexer server (ws, http)
-    pub prover_url: Option<String>, // URL for the prover server
+    pub prover_url: String,        // URL for the prover server
     pub commitment_tree_ttl: Option<u64>, // How long to cache Merkle roots
-    pub network_id: Option<String>, // mainnet, testnet, devnet
 }
 
 impl MidnightNetworkConfig {
@@ -34,6 +33,47 @@ impl MidnightNetworkConfig {
     /// - `Err(ConfigFileError)` if validation fails (e.g., missing fields, invalid URLs).
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         self.common.validate()?;
+
+        // Validate indexer URLs
+        reqwest::Url::parse(&self.indexer_urls.http).map_err(|_| {
+            ConfigFileError::InvalidFormat(format!(
+                "Invalid indexer HTTP URL: {}",
+                self.indexer_urls.http
+            ))
+        })?;
+
+        reqwest::Url::parse(&self.indexer_urls.ws).map_err(|_| {
+            ConfigFileError::InvalidFormat(format!(
+                "Invalid indexer WebSocket URL: {}",
+                self.indexer_urls.ws
+            ))
+        })?;
+
+        // Validate prover URL if provided
+        reqwest::Url::parse(&self.prover_url).map_err(|_| {
+            ConfigFileError::InvalidFormat(format!("Invalid prover URL: {}", self.prover_url))
+        })?;
+
+        // Validate network_id if provided
+        match self.common.network.as_str() {
+            "mainnet" | "testnet" | "devnet" => {}
+            _ => {
+                return Err(ConfigFileError::InvalidFormat(format!(
+                    "Invalid network_id: {}. Must be one of: mainnet, testnet, devnet",
+                    self.common.network
+                )))
+            }
+        }
+
+        // Validate commitment_tree_ttl is reasonable if provided
+        if let Some(ttl) = self.commitment_tree_ttl {
+            if ttl == 0 {
+                return Err(ConfigFileError::InvalidFormat(
+                    "commitment_tree_ttl must be greater than 0".to_string(),
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -43,9 +83,8 @@ impl MidnightNetworkConfig {
         Self {
             common: self.common.merge_with_parent(&parent.common),
             indexer_urls: self.indexer_urls.clone(),
-            prover_url: self.prover_url.clone().or(parent.prover_url.clone()),
+            prover_url: self.prover_url.clone(),
             commitment_tree_ttl: self.commitment_tree_ttl.or(parent.commitment_tree_ttl),
-            network_id: self.network_id.clone().or(parent.network_id.clone()),
         }
     }
 }

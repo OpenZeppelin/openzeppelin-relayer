@@ -209,9 +209,8 @@ mod tests {
                         http: "https://indexer.midnight.network".to_string(),
                         ws: "wss://indexer.midnight.network".to_string(),
                     },
-                    prover_url: None,
+                    prover_url: "http://localhost:6300".to_string(),
                     commitment_tree_ttl: None,
-                    network_id: None,
                 };
                 NetworkRepoModel::new_midnight(midnight_config)
             }

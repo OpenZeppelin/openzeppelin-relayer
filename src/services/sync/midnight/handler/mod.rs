@@ -17,8 +17,8 @@ pub use tracker::*;
 /// Trait for sync manager functionality required by the relayer
 #[async_trait]
 pub trait SyncManagerTrait: Send + Sync {
-    /// Synchronize the wallet state from the given block height
-    async fn sync(&mut self, start_height: u64) -> Result<(), SyncError>;
+    /// Synchronize the wallet state from the given blockchain index
+    async fn sync(&mut self, start_index: u64) -> Result<(), SyncError>;
 
     /// Get the current ledger context
     fn get_context(&self) -> Arc<LedgerContext<DefaultDB>>;
