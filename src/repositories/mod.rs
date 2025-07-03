@@ -5,6 +5,7 @@
 use crate::models::{PaginationQuery, RepositoryError};
 use async_trait::async_trait;
 use eyre::Result;
+use thiserror::Error;
 
 mod relayer;
 pub use relayer::*;
@@ -15,7 +16,7 @@ pub use transaction::*;
 mod signer;
 pub use signer::*;
 
-mod notification;
+pub mod notification;
 pub use notification::*;
 
 mod transaction_counter;
@@ -51,4 +52,12 @@ pub trait Repository<T, ID> {
     async fn update(&self, id: ID, entity: T) -> Result<T, RepositoryError>;
     async fn delete_by_id(&self, id: ID) -> Result<(), RepositoryError>;
     async fn count(&self) -> Result<usize, RepositoryError>;
+}
+
+#[derive(Error, Debug)]
+pub enum ConversionError {
+    #[error("Invalid type: {0}")]
+    InvalidType(String),
+    #[error("Invalid config: {0}")]
+    InvalidConfig(String),
 }

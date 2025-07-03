@@ -15,6 +15,7 @@ use crate::models::{
     JupiterSwapOptions, PaginationQuery, RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig,
     SolanaFeePaymentStrategy, SolanaSwapStrategy,
 };
+use crate::repositories::ConversionError;
 use crate::{
     config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy, RelayerFileConfig},
     constants::{
@@ -31,7 +32,6 @@ use async_trait::async_trait;
 use eyre::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::sync::{Mutex, MutexGuard};
 
 use super::{PaginatedResult, Repository};
@@ -246,14 +246,6 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     }
 }
 
-#[derive(Error, Debug)]
-pub enum ConversionError {
-    #[error("Invalid network type: {0}")]
-    InvalidNetworkType(String),
-    #[error("Invalid config: {0}")]
-    InvalidConfig(String),
-}
-
 impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
     type Error = ConversionError;
 
@@ -266,7 +258,7 @@ impl TryFrom<RelayerFileConfig> for RelayerRepoModel {
 
         let policies = if let Some(config_policies) = &config.policies {
             RelayerNetworkPolicy::try_from(config_policies.clone()).map_err(|_| {
-                ConversionError::InvalidNetworkType("Failed to convert network policy".to_string())
+                ConversionError::InvalidType("Failed to convert network policy".to_string())
             })?
         } else {
             // return default policy based on network type

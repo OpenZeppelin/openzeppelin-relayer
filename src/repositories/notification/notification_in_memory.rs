@@ -4,6 +4,7 @@
 //! The repository is implemented using a `Mutex`-protected `HashMap` to
 //! ensure thread safety in asynchronous contexts. Additionally, it includes
 //! conversion implementations for `NotificationFileConfig` to `NotificationRepoModel`.
+
 use crate::{
     config::{NotificationFileConfig, NotificationFileConfigType},
     models::{NotificationRepoModel, NotificationType as ModelNotificationType, RepositoryError},
@@ -16,6 +17,21 @@ use tokio::sync::{Mutex, MutexGuard};
 #[derive(Debug)]
 pub struct InMemoryNotificationRepository {
     store: Mutex<HashMap<String, NotificationRepoModel>>,
+}
+
+impl Clone for InMemoryNotificationRepository {
+    fn clone(&self) -> Self {
+        // Try to get the current data, or use empty HashMap if lock fails
+        let data = self
+            .store
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
+        Self {
+            store: Mutex::new(data),
+        }
+    }
 }
 
 #[allow(dead_code)]
