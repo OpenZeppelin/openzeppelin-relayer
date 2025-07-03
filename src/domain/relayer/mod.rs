@@ -29,7 +29,8 @@ use crate::{
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemorySyncState, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        RelayerRepositoryStorage,
     },
     services::{
         get_network_provider,
@@ -327,6 +328,7 @@ pub trait RelayerFactoryTrait {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         signer_repository: Arc<InMemorySignerRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
+        sync_state_store: Arc<InMemorySyncState>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
@@ -343,6 +345,7 @@ impl RelayerFactoryTrait for RelayerFactory {
         transaction_repository: Arc<InMemoryTransactionRepository>,
         signer_repository: Arc<InMemorySignerRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
+        sync_state_store: Arc<InMemorySyncState>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
@@ -481,15 +484,19 @@ impl RelayerFactoryTrait for RelayerFactory {
                 let network_id = to_midnight_network_id(&relayer.network);
 
                 // Create the sync manager
-                let sync_manager = Arc::new(
-                    SyncManager::<QuickSyncStrategy>::new(indexer_client, wallet_seed, network_id)
-                        .map_err(|e| {
-                            RelayerError::NetworkConfiguration(format!(
-                                "Failed to create sync manager: {}",
-                                e
-                            ))
-                        })?,
-                );
+                let sync_manager = SyncManager::<QuickSyncStrategy>::new(
+                    indexer_client,
+                    wallet_seed,
+                    network_id,
+                    sync_state_store.clone(),
+                    relayer.id.clone(),
+                )
+                .map_err(|e| {
+                    RelayerError::NetworkConfiguration(format!(
+                        "Failed to create sync manager: {}",
+                        e
+                    ))
+                })?;
 
                 // Signer repository is passed from the factory
 
@@ -505,7 +512,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     transaction_repository,
                     signer_repository,
                     transaction_counter_service,
-                    sync_manager,
+                    Arc::new(tokio::sync::Mutex::new(sync_manager)),
                     job_producer,
                 );
                 let relayer =

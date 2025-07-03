@@ -47,6 +47,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use log::{info, warn};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::domain::relayer::{Relayer, RelayerError};
 
@@ -66,7 +67,7 @@ where
     pub transaction_repository: Arc<T>,
     pub signer_repository: Arc<SR>,
     pub transaction_counter_service: Arc<C>,
-    pub sync_service: Arc<S>,
+    pub sync_service: Arc<Mutex<S>>,
     pub job_producer: Arc<J>,
 }
 
@@ -101,7 +102,7 @@ where
         transaction_repository: Arc<T>,
         signer_repository: Arc<SR>,
         transaction_counter_service: Arc<C>,
-        sync_service: Arc<S>,
+        sync_service: Arc<Mutex<S>>,
         job_producer: Arc<J>,
     ) -> Self {
         Self {
@@ -136,7 +137,7 @@ where
     transaction_repository: Arc<T>,
     signer_repository: Arc<SR>,
     transaction_counter_service: Arc<C>,
-    sync_service: Arc<S>,
+    sync_service: Arc<Mutex<S>>,
     job_producer: Arc<J>,
 }
 
@@ -302,7 +303,9 @@ where
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         // Get the ledger context from the sync service
-        let context = self.sync_service.get_context();
+        let sync_service = self.sync_service.lock().await;
+        let context = sync_service.get_context();
+        drop(sync_service); // Drop the lock early
 
         // Get the signer to access the wallet seed
         let signer_model = self
@@ -420,6 +423,21 @@ where
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         info!("Initializing Midnight relayer: {}", self.relayer.id);
+
+        // First sync the wallet from genesis on initial setup
+        info!(
+            "Performing initial wallet sync from genesis for relayer: {}",
+            self.relayer.id
+        );
+
+        let mut sync_service = self.sync_service.lock().await;
+        sync_service
+            .sync(0)
+            .await
+            .map_err(|e| RelayerError::ProviderError(format!("Initial sync failed: {}", e)))?;
+        drop(sync_service); // Explicitly drop the lock
+
+        info!("Initial wallet sync completed successfully");
 
         let seq_res = self.sync_nonce().await.err();
 
@@ -596,7 +614,7 @@ mod tests {
                 Arc::new(tx_repo),
                 ctx.signer_repository.clone(),
                 Arc::new(counter),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer),
             ),
         )
@@ -632,7 +650,7 @@ mod tests {
                 Arc::new(tx_repo),
                 ctx.signer_repository.clone(),
                 Arc::new(counter),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer),
             ),
         )
@@ -673,7 +691,7 @@ mod tests {
                 Arc::new(tx_repo),
                 ctx.signer_repository.clone(),
                 Arc::new(counter),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer),
             ),
         )
@@ -743,7 +761,7 @@ mod tests {
                 Arc::new(tx_repo_mock),
                 ctx.signer_repository.clone(),
                 Arc::new(counter_mock),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer_mock),
             ),
         )
@@ -804,7 +822,7 @@ mod tests {
                 Arc::new(tx_repo_mock),
                 ctx.signer_repository.clone(),
                 Arc::new(counter_mock),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer_mock),
             ),
         )
@@ -848,7 +866,7 @@ mod tests {
                 tx_repo,
                 ctx.signer_repository.clone(),
                 counter,
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 job_producer,
             ),
         )
@@ -888,7 +906,7 @@ mod tests {
                 tx_repo,
                 ctx.signer_repository.clone(),
                 counter,
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 job_producer,
             ),
         )

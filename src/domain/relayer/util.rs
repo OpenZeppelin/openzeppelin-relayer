@@ -76,6 +76,7 @@ pub async fn get_network_relayer(
         state.transaction_repository(),
         state.signer_repository(),
         state.transaction_counter_store(),
+        state.sync_state_store(),
         state.job_producer(),
     )
     .await
@@ -110,6 +111,7 @@ pub async fn get_network_relayer_by_model(
         state.transaction_repository(),
         state.signer_repository(),
         state.transaction_counter_store(),
+        state.sync_state_store(),
         state.job_producer(),
     )
     .await

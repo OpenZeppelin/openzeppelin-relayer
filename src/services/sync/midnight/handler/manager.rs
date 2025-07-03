@@ -1,18 +1,22 @@
 use std::sync::{Arc, Mutex};
 
-use crate::services::midnight::{
-    handler::{
-        EventDispatcher, ProgressTracker, SyncConfig, SyncEvent, SyncEventHandler, SyncStrategy,
+use crate::{
+    repositories::{InMemorySyncState, SyncStateTrait},
+    services::midnight::{
+        handler::{
+            EventDispatcher, ProgressTracker, SyncConfig, SyncEvent, SyncEventHandler, SyncStrategy,
+        },
+        indexer::{ApplyStage, MidnightIndexerClient},
+        utils::{derive_viewing_key, parse_collapsed_update, process_transaction},
+        SyncError,
     },
-    indexer::{ApplyStage, MidnightIndexerClient},
-    utils::{derive_viewing_key, parse_collapsed_update, process_transaction},
-    SyncError,
 };
 
-use log::{debug, info};
+use log::{debug, info, warn};
 use midnight_ledger_prototype::transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
 use midnight_node_ledger_helpers::{
-    DefaultDB, LedgerContext, NetworkId, Proof, Transaction, WalletSeed,
+    mn_ledger_serialize::{deserialize, serialize},
+    DefaultDB, LedgerContext, LedgerState, NetworkId, Proof, Transaction, WalletSeed, WalletState,
 };
 
 /// Enum to track updates in chronological order during wallet synchronization.
@@ -114,16 +118,116 @@ pub struct SyncManager<S: SyncStrategy> {
     strategy: S,
     // The network
     network: NetworkId,
+    // The sync state store
+    sync_state_store: Arc<InMemorySyncState>,
+    // The relayer ID for tracking sync state
+    relayer_id: String,
 }
 
 impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
+    /// Serialize the current ledger context to bytes
+    fn serialize_context(&self) -> Result<Vec<u8>, SyncError> {
+        // Serialize the wallet state for the current seed
+        let wallet_state = {
+            let wallets_guard = self
+                .context
+                .wallets
+                .lock()
+                .map_err(|e| SyncError::SyncError(format!("Failed to lock wallets: {}", e)))?;
+
+            wallets_guard
+                .get(&self.seed)
+                .map(|wallet| {
+                    // We only serialize the wallet state, not the secret keys
+                    let mut state_bytes = Vec::new();
+                    serialize(&wallet.state, &mut state_bytes, self.network).map_err(|e| {
+                        SyncError::SyncError(format!("Failed to serialize wallet state: {:?}", e))
+                    })?;
+                    Ok::<Vec<u8>, SyncError>(state_bytes)
+                })
+                .transpose()?
+        };
+
+        // Serialize the ledger state
+        let ledger_state_bytes = {
+            let ledger_state_guard =
+                self.context.ledger_state.lock().map_err(|e| {
+                    SyncError::SyncError(format!("Failed to lock ledger state: {}", e))
+                })?;
+
+            let mut bytes = Vec::new();
+            serialize(&*ledger_state_guard, &mut bytes, self.network).map_err(|e| {
+                SyncError::SyncError(format!("Failed to serialize ledger state: {:?}", e))
+            })?;
+            bytes
+        };
+
+        // Combine wallet state and ledger state into a single serialized context
+        bincode::serialize(&(wallet_state, ledger_state_bytes))
+            .map_err(|e| SyncError::SyncError(format!("Failed to serialize context: {}", e)))
+    }
+
+    /// Restore the ledger context from serialized bytes
+    fn restore_context(&self, serialized_context: &[u8]) -> Result<(), SyncError> {
+        // Deserialize the combined context
+        match bincode::deserialize::<(Option<Vec<u8>>, Vec<u8>)>(serialized_context) {
+            Ok((wallet_state_bytes, ledger_state_bytes)) => {
+                // Restore ledger state
+                let mut reader = &ledger_state_bytes[..];
+                match deserialize::<LedgerState<DefaultDB>, _>(&mut reader, self.network) {
+                    Ok(ledger_state) => {
+                        if let Ok(mut ledger_state_guard) = self.context.ledger_state.lock() {
+                            *ledger_state_guard = ledger_state;
+                            debug!("Successfully restored ledger state");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to deserialize ledger state: {:?}, starting fresh",
+                            e
+                        );
+                    }
+                }
+
+                // Restore wallet state if available
+                if let Some(state_bytes) = wallet_state_bytes {
+                    let mut reader = &state_bytes[..];
+                    match deserialize::<WalletState<DefaultDB>, _>(&mut reader, self.network) {
+                        Ok(wallet_state) => {
+                            if let Ok(mut wallets_guard) = self.context.wallets.lock() {
+                                if let Some(wallet) = wallets_guard.get_mut(&self.seed) {
+                                    wallet.update_state(wallet_state);
+                                    debug!("Successfully restored wallet state");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to deserialize wallet state: {:?}, starting fresh",
+                                e
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to deserialize context: {}, starting fresh", e);
+                Ok(())
+            }
+        }
+    }
+
     /// Create a new manager with the specified sync strategy and configuration.
     ///
     /// This method initializes all services and selects the sync strategy based on the provided options.
+    /// It will also attempt to restore the ledger context from a previous sync if available.
     pub fn new(
         indexer_client: &MidnightIndexerClient,
         seed: &WalletSeed,
         network: NetworkId,
+        sync_state_store: Arc<InMemorySyncState>,
+        relayer_id: String,
     ) -> Result<Self, SyncError> {
         // Temporarily add random destination seed to the context until Midnight fixes this
         // mn_shield-addr_test1cx5yug2suxqec6pzzfgwrg90crcvlk6ktlvg52eczkrw426suglqxqzl5ad0jpxv4mtdc0kpyswfjdjjqs8zh0fu0kupaha382r3py8wwqm03l5k
@@ -135,6 +239,7 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
             *seed,
             destination_seed,
         ]));
+
         let wallet = context.wallet_from_seed(*seed);
         let viewing_key = derive_viewing_key(&wallet, network)?;
 
@@ -146,23 +251,58 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
         // Create sync strategy
         let strategy = S::new(indexer_client, Some(config));
 
-        Ok(Self {
+        let manager = Self {
             context,
             seed: *seed,
             strategy,
             network,
-        })
+            sync_state_store,
+            relayer_id,
+        };
+
+        // Try to restore the context from saved state
+        if let Ok(Some(serialized_context)) = manager
+            .sync_state_store
+            .get_ledger_context(&manager.relayer_id)
+        {
+            info!(
+                "Found saved ledger context for relayer {}, attempting to restore",
+                manager.relayer_id
+            );
+
+            if let Err(e) = manager.restore_context(&serialized_context) {
+                warn!("Failed to restore context: {}", e);
+            }
+        }
+
+        Ok(manager)
     }
 
     /// Start synchronization.
     ///
     /// This method runs the sync strategy, dispatches events, buffers updates, and applies them in order.
     /// It also manages state persistence and progress tracking.
-    pub async fn sync(&mut self, start_height: u64) -> Result<(), SyncError> {
-        info!("Starting wallet synchronization");
+    /// If start_index is None, it will read from the sync state store.
+    pub async fn sync(&mut self, start_index: Option<u64>) -> Result<(), SyncError> {
+        // Determine the starting index
+        let start_index = match start_index {
+            Some(index) => index,
+            None => {
+                // Read from sync state store
+                self.sync_state_store
+                    .get_last_synced_index(&self.relayer_id)
+                    .map_err(|e| SyncError::SyncError(format!("Failed to get sync state: {}", e)))?
+                    .unwrap_or(0)
+            }
+        };
+
+        info!(
+            "Starting wallet synchronization from blockchain index: {} for relayer: {}",
+            start_index, self.relayer_id
+        );
 
         // Create progress tracker
-        let mut progress_tracker = ProgressTracker::new(start_height);
+        let mut progress_tracker = ProgressTracker::new(start_index);
 
         // Create shared buffer for chronological updates
         let updates_buffer = Arc::new(Mutex::new(Vec::<ChronologicalUpdate>::new()));
@@ -174,7 +314,7 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
         event_dispatcher.register_handler(Box::new(event_handler));
 
         self.strategy
-            .sync(start_height, &mut event_dispatcher, &mut progress_tracker)
+            .sync(start_index, &mut event_dispatcher, &mut progress_tracker)
             .await?;
 
         // Apply all buffered updates in chronological order
@@ -189,10 +329,13 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
 
         info!("Applying {} updates in chronological order", updates.len());
 
+        let mut last_blockchain_index = start_index;
+
         for update in updates {
             match update {
                 ChronologicalUpdate::MerkleUpdate { index, update } => {
                     info!("Applying merkle update at index {}", index);
+                    last_blockchain_index = index;
 
                     let mut wallets_guard = self.context.wallets.lock().unwrap();
 
@@ -224,6 +367,8 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
                     tx,
                     apply_stage,
                 } => {
+                    last_blockchain_index = index;
+
                     // Only apply transactions that succeeded
                     let should_apply = match &apply_stage {
                         Some(stage) => stage.should_apply(),
@@ -238,6 +383,22 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
             }
         }
 
+        // Save the last synced blockchain index and serialize the context
+        if last_blockchain_index > start_index {
+            // Serialize the current context
+            let context_bytes = self.serialize_context()?;
+
+            // Save both the index and the serialized context
+            self.sync_state_store
+                .set_sync_state(&self.relayer_id, last_blockchain_index, Some(context_bytes))
+                .map_err(|e| SyncError::SyncError(format!("Failed to save sync state: {}", e)))?;
+
+            info!(
+                "Updated sync state to blockchain index {} for relayer {}",
+                last_blockchain_index, self.relayer_id
+            );
+        }
+
         info!("Wallet synchronization completed successfully");
         Ok(())
     }
@@ -245,12 +406,17 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
     pub fn get_context(&self) -> Arc<LedgerContext<DefaultDB>> {
         Arc::clone(&self.context)
     }
+
+    /// Convenience method to sync from the last stored height
+    pub async fn sync_incremental(&mut self) -> Result<(), SyncError> {
+        self.sync(None).await
+    }
 }
 
 #[async_trait::async_trait]
 impl<S: SyncStrategy + Sync + Send> super::SyncManagerTrait for SyncManager<S> {
-    async fn sync(&mut self, start_height: u64) -> Result<(), SyncError> {
-        self.sync(start_height).await
+    async fn sync(&mut self, start_index: u64) -> Result<(), SyncError> {
+        self.sync(Some(start_index)).await
     }
 
     fn get_context(&self) -> Arc<LedgerContext<DefaultDB>> {

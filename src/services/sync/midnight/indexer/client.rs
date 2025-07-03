@@ -229,11 +229,6 @@ impl MidnightIndexerClient {
                                             .and_then(|p| p.get("data"))
                                             .and_then(|d| d.get("wallet"))
                                         {
-                                            debug!(
-                                                "Raw wallet data: {}",
-                                                serde_json::to_string_pretty(&wallet_data)
-                                                    .unwrap_or_else(|_| "Invalid JSON".to_string())
-                                            );
                                             match serde_json::from_value::<WalletSyncEvent>(
                                                 wallet_data.clone(),
                                             ) {

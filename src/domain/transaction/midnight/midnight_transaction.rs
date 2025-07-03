@@ -29,6 +29,7 @@ use midnight_node_ledger_helpers::{
 };
 use rand::Rng;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[allow(dead_code)]
 /// Midnight transaction handler with generic dependencies
@@ -48,6 +49,7 @@ where
     job_producer: Arc<J>,
     signer: Arc<S>,
     transaction_counter_service: Arc<C>,
+    sync_manager: Arc<Mutex<SyncManager<QuickSyncStrategy>>>,
     network: MidnightNetwork,
 }
 
@@ -72,6 +74,7 @@ where
     /// * `job_producer` - Producer for job queue.
     /// * `signer` - The signer service.
     /// * `transaction_counter_service` - Service for managing transaction counters.
+    /// * `sync_manager` - Sync manager.
     /// * `network` - The Midnight network configuration.
     ///
     /// # Returns
@@ -85,6 +88,7 @@ where
         job_producer: Arc<J>,
         signer: Arc<S>,
         transaction_counter_service: Arc<C>,
+        sync_manager: Arc<Mutex<SyncManager<QuickSyncStrategy>>>,
         network: MidnightNetwork,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
@@ -95,6 +99,7 @@ where
             job_producer,
             signer,
             transaction_counter_service,
+            sync_manager,
             network,
         })
     }
@@ -122,6 +127,11 @@ where
     /// Returns a reference to the network configuration.
     pub fn network(&self) -> &MidnightNetwork {
         &self.network
+    }
+
+    /// Returns a reference to the sync manager.
+    pub fn sync_manager(&self) -> &Arc<Mutex<SyncManager<QuickSyncStrategy>>> {
+        &self.sync_manager
     }
 
     /// Enqueue a submit-transaction job for the given transaction.
@@ -374,28 +384,18 @@ where
 
         // Extract Midnight-specific data
         let midnight_data = tx.network_data.get_midnight_transaction_data()?;
-
-        // Get wallet seed for the relayer
         let wallet_seed = self.signer.wallet_seed();
 
-        // Sync wallet state with the network
-        let indexer_client = self.provider.get_indexer_client();
-        // TODO: We should probably move this up one level
-        // This still requires `MIDNIGHT_LEDGER_TEST_STATIC_DIR` environment variable to be set (limitation by LedgerContext test resolver)
-        // We should check with the Midnight team if we can use a different constructor for LedgerContext
-        let mut sync_manager = SyncManager::<QuickSyncStrategy>::new(
-            indexer_client,
-            wallet_seed,
-            to_midnight_network_id(&self.network.network),
-        )
-        .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
-
+        // Perform incremental sync - the sync manager will automatically
+        // read from the last synced blockchain index stored for this relayer
+        let mut sync_manager = self.sync_manager.lock().await;
         sync_manager
-            .sync(0)
+            .sync_incremental()
             .await
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         let context = sync_manager.get_context();
+        drop(sync_manager);
 
         // Check balance
         let balance = self.provider.get_balance(wallet_seed, &context).await?;
