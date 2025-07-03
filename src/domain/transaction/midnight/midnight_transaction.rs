@@ -4,7 +4,7 @@
 
 use crate::{
     domain::{to_midnight_network_id, MidnightTransactionBuilder, Transaction, DUST_TOKEN_TYPE},
-    jobs::{JobProducer, JobProducerTrait, TransactionSend},
+    jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, MidnightNetwork, MidnightOfferRequest,
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
@@ -17,6 +17,7 @@ use crate::{
     services::{
         midnight::handler::{QuickSyncStrategy, SyncManager},
         remote_prover::RemoteProofServer,
+        sync::midnight::indexer::ApplyStage,
         MidnightProvider, MidnightProviderTrait, MidnightSigner, MidnightSignerTrait,
         TransactionSubmissionResult,
     },
@@ -364,6 +365,24 @@ where
 
         Ok(offer)
     }
+
+    /// Helper method to schedule a transaction status check job.
+    pub(super) async fn schedule_status_check(
+        &self,
+        tx: &TransactionRepoModel,
+        delay_seconds: Option<i64>,
+    ) -> Result<(), TransactionError> {
+        let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
+        self.job_producer()
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                delay,
+            )
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to schedule status check: {}", e))
+            })
+    }
 }
 
 #[async_trait]
@@ -523,14 +542,14 @@ where
 
         // Update transaction with hash and block hash
         let mut updated_midnight_data = midnight_data.clone();
-        updated_midnight_data.hash = Some(result.tx_hash.clone());
-        updated_midnight_data.block_hash = result.block_hash;
+        updated_midnight_data.hash = Some(result.extrinsic_tx_hash.clone());
+        updated_midnight_data.pallet_hash = Some(result.pallet_tx_hash.clone());
 
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
             network_data: Some(NetworkTransactionData::Midnight(updated_midnight_data)),
             sent_at: Some(Utc::now().to_rfc3339()),
-            hashes: Some(vec![result.tx_hash]),
+            hashes: Some(vec![result.extrinsic_tx_hash]),
             ..Default::default()
         };
 
@@ -569,15 +588,134 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // TODO: Implement status handling
-        // 1. Query transaction status from network
-        // 2. Handle partial success (some segments succeeded, others failed)
-        // 3. Update transaction status accordingly
-
         log::debug!("Handling Midnight transaction status: {}", tx.id);
 
-        // For now, just return the transaction as-is
-        Ok(tx)
+        // If transaction is in a final state, return as-is
+        if matches!(
+            tx.status,
+            TransactionStatus::Confirmed | TransactionStatus::Failed | TransactionStatus::Expired
+        ) {
+            return Ok(tx);
+        }
+
+        // Extract Midnight-specific data
+        let midnight_data = tx.network_data.get_midnight_transaction_data()?;
+
+        // Check if we have a transaction hash
+        let pallet_tx_hash = midnight_data.pallet_hash.as_ref().ok_or_else(|| {
+            TransactionError::UnexpectedError("Transaction hash is missing".to_string())
+        })?;
+
+        match self.provider.get_transaction_by_hash(pallet_tx_hash).await {
+            Ok(Some(tx_data)) => {
+                // Check the applyStage field to determine success/failure
+                if let Some(apply_stage_value) = tx_data.get("applyStage") {
+                    // Deserialize the applyStage value into the ApplyStage enum
+                    let apply_stage: ApplyStage = serde_json::from_value(apply_stage_value.clone())
+                        .map_err(|e| {
+                            TransactionError::UnexpectedError(format!(
+                                "Failed to parse applyStage: {}",
+                                e
+                            ))
+                        })?;
+
+                    match apply_stage {
+                        ApplyStage::SucceedEntirely => {
+                            // Transaction succeeded entirely
+                            let update = TransactionUpdateRequest {
+                                status: Some(TransactionStatus::Confirmed),
+                                confirmed_at: Some(Utc::now().to_rfc3339()),
+                                ..Default::default()
+                            };
+
+                            let updated_tx = self
+                                .transaction_repository
+                                .partial_update(tx.id.clone(), update)
+                                .await?;
+
+                            self.send_transaction_update_notification(&updated_tx)
+                                .await?;
+
+                            Ok(updated_tx)
+                        }
+                        ApplyStage::FailEntirely => {
+                            // Transaction failed entirely
+                            log::warn!("Transaction {} failed entirely", tx.id);
+
+                            let update = TransactionUpdateRequest {
+                                status: Some(TransactionStatus::Failed),
+                                ..Default::default()
+                            };
+
+                            let updated_tx = self
+                                .transaction_repository
+                                .partial_update(tx.id.clone(), update)
+                                .await?;
+
+                            self.send_transaction_update_notification(&updated_tx)
+                                .await?;
+
+                            Ok(updated_tx)
+                        }
+                        ApplyStage::SucceedPartially => {
+                            // Partial success - could be expanded to handle segment-specific results
+                            log::warn!("Transaction {} succeeded partially", tx.id);
+
+                            // For now, treat any partial success as a failure
+                            // In the future, this could be more nuanced
+                            let update = TransactionUpdateRequest {
+                                status: Some(TransactionStatus::Failed),
+                                ..Default::default()
+                            };
+
+                            let updated_tx = self
+                                .transaction_repository
+                                .partial_update(tx.id.clone(), update)
+                                .await?;
+
+                            self.send_transaction_update_notification(&updated_tx)
+                                .await?;
+
+                            Ok(updated_tx)
+                        }
+                        ApplyStage::Pending => {
+                            // Still pending - schedule another check
+                            log::info!("Transaction {} is still pending", tx.id);
+
+                            self.schedule_status_check(&tx, Some(5)).await?;
+
+                            Ok(tx)
+                        }
+                    }
+                } else {
+                    // No applyStage field - this shouldn't happen
+                    log::error!("Transaction {} missing applyStage field", tx.id);
+
+                    // Schedule another status check
+                    self.schedule_status_check(&tx, Some(5)).await?;
+
+                    Ok(tx)
+                }
+            }
+            Ok(None) => {
+                // Transaction not found in indexer yet
+                log::info!("Transaction {} not found in indexer yet", tx.id);
+
+                // Schedule another status check
+                self.schedule_status_check(&tx, Some(5)).await?;
+
+                Ok(tx)
+            }
+            Err(e) => {
+                // Error querying indexer
+                log::error!("Error querying indexer for transaction {}: {}", tx.id, e);
+
+                // Schedule another status check
+                self.schedule_status_check(&tx, Some(5)).await?;
+
+                Ok(tx)
+            }
+        }
     }
 
     async fn cancel_transaction(

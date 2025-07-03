@@ -14,7 +14,6 @@ use midnight_node_ledger_helpers::{
 };
 use midnight_node_res::subxt_metadata::api as mn_meta;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use subxt::{OnlineClient, PolkadotConfig};
 
 use super::rpc_selector::RpcSelector;
@@ -31,8 +30,8 @@ use super::ProviderError;
 /// Response structure for transaction submission
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionSubmissionResult {
-    pub tx_hash: String,
-    pub block_hash: Option<String>,
+    pub extrinsic_tx_hash: String,
+    pub pallet_tx_hash: String,
 }
 
 /// Provider implementation for Midnight blockchain networks.
@@ -94,6 +93,18 @@ pub trait MidnightProviderTrait: Send + Sync {
 
     /// Get indexer client
     fn get_indexer_client(&self) -> &MidnightIndexerClient;
+
+    /// Get block by hash
+    async fn get_block_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError>;
+
+    /// Get transaction by hash
+    async fn get_transaction_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError>;
 }
 
 impl MidnightProvider {
@@ -294,7 +305,7 @@ impl MidnightProviderTrait for MidnightProvider {
 
                 let mn_tx = mn_meta::tx()
                     .midnight()
-                    .send_mn_transaction(hex::encode(serialized).into_bytes());
+                    .send_mn_transaction(hex::encode(&serialized).into_bytes());
 
                 let unsigned_extrinsic = api.tx().create_unsigned(&mn_tx).map_err(|e| {
                     ProviderError::Other(format!("Failed to create extrinsic: {}", e))
@@ -324,63 +335,25 @@ impl MidnightProviderTrait for MidnightProvider {
                     }
                 }
 
-                let submit_result = tokio::time::timeout(
-                    Duration::from_secs(30), // 30 second timeout for submission
-                    unsigned_extrinsic.submit_and_watch(),
-                )
-                .await;
+                // Get the transaction hash from the midnight transaction
+                let tx_hash = tx_clone.transaction_hash();
+                // TransactionHash doesn't implement Display, but we can serialize it
+                // and convert to hex to get the proper format
+                let tx_hash_bytes = serialize(&tx_hash, network_id).map_err(|e| {
+                    ProviderError::Other(format!("Failed to serialize transaction hash: {:?}", e))
+                })?;
+                let pallet_tx_hash = format!("0x{}", hex::encode(tx_hash_bytes));
+
+                // Submit the transaction (returns immediately after acceptance)
+                let submit_result = unsigned_extrinsic.submit().await;
 
                 match submit_result {
-                    Ok(Ok(mut tx_progress)) => {
-                        // Wait for the transaction to be included in a block
-                        let mut block_hash = None;
-                        while let Some(status) = tx_progress.next().await {
-                            match status {
-                                Ok(subxt::tx::TxStatus::InBestBlock(block_ref)) => {
-                                    block_hash = Some(format!(
-                                        "0x{}",
-                                        hex::encode(block_ref.block_hash().as_bytes())
-                                    ));
-
-                                    // Check if the transaction succeeded in the block
-                                    if let Err(e) = block_ref.wait_for_success().await {
-                                        return Err(ProviderError::Other(format!(
-                                            "Transaction failed in block: {:?}",
-                                            e
-                                        )));
-                                    }
-                                    break;
-                                }
-                                Ok(subxt::tx::TxStatus::InFinalizedBlock(block_ref)) => {
-                                    // If we somehow get finalized before best block, use this
-                                    block_hash = Some(format!(
-                                        "0x{}",
-                                        hex::encode(block_ref.block_hash().as_bytes())
-                                    ));
-
-                                    // Check if the transaction succeeded in the block
-                                    if let Err(e) = block_ref.wait_for_success().await {
-                                        return Err(ProviderError::Other(format!(
-                                            "Transaction failed in finalized block: {:?}",
-                                            e
-                                        )));
-                                    }
-                                    break;
-                                }
-                                Ok(_other_status) => {}
-                                Err(e) => {
-                                    return Err(ProviderError::Other(format!(
-                                        "Error waiting for transaction inclusion: {:?}",
-                                        e
-                                    )));
-                                }
-                            }
-                        }
-
-                        // Create result struct and serialize to JSON
+                    Ok(_extrinsic_hash) => {
+                        // Transaction was accepted, return immediately
+                        // The actual status monitoring will be handled by handle_transaction_status
                         let result = TransactionSubmissionResult {
-                            tx_hash: tx_hash_string,
-                            block_hash,
+                            extrinsic_tx_hash: tx_hash_string,
+                            pallet_tx_hash,
                         };
 
                         // Serialize to JSON string
@@ -390,11 +363,10 @@ impl MidnightProviderTrait for MidnightProvider {
 
                         Ok(json_result)
                     }
-                    Ok(Err(e)) => Err(ProviderError::Other(format!(
+                    Err(e) => Err(ProviderError::Other(format!(
                         "Failed to submit transaction: {}",
                         e
                     ))),
-                    Err(_) => Err(ProviderError::Timeout),
                 }
             }
         })
@@ -410,6 +382,35 @@ impl MidnightProviderTrait for MidnightProvider {
 
     fn get_indexer_client(&self) -> &MidnightIndexerClient {
         &self.indexer_client
+    }
+
+    async fn get_block_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError> {
+        match self.indexer_client.get_block_by_hash(hash).await {
+            Ok(Some(block)) => Ok(Some(block)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(ProviderError::Other(format!(
+                "Failed to get block by hash: {}",
+                e
+            ))),
+        }
+    }
+
+    /// Get transaction by hash
+    async fn get_transaction_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError> {
+        match self.indexer_client.get_transaction_by_hash(hash).await {
+            Ok(Some(tx)) => Ok(Some(tx)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(ProviderError::Other(format!(
+                "Failed to get transaction by hash: {}",
+                e
+            ))),
+        }
     }
 }
 

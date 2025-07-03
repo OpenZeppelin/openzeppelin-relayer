@@ -499,4 +499,85 @@ impl MidnightIndexerClient {
 
         Ok(response_json)
     }
+
+    /// Query block information by hash
+    pub async fn get_block_by_hash(
+        &self,
+        block_hash: &str,
+    ) -> Result<Option<serde_json::Value>, IndexerError> {
+        let query = r#"
+        query Block($hash: String!) {
+            block(offset: { hash: $hash }) {
+                height
+                timestamp
+                transactions {
+                    hash
+                    applyStage
+                    raw
+                }
+            }
+        }
+        "#;
+
+        let variables = serde_json::json!({
+            "hash": block_hash
+        });
+
+        let response = self.execute_query(query, Some(variables)).await?;
+
+        // Extract the block data from the response
+        if let Some(data) = response.get("data") {
+            if let Some(block) = data.get("block") {
+                if block.is_null() {
+                    Ok(None)
+                } else {
+                    Ok(Some(block.clone()))
+                }
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Query transaction information by hash
+    pub async fn get_transaction_by_hash(
+        &self,
+        tx_hash: &str,
+    ) -> Result<Option<serde_json::Value>, IndexerError> {
+        let query = r#"
+        query Transactions($hash: String!) {
+            transactions(offset: { hash: $hash }) {
+                applyStage
+                raw
+            }
+        }
+        "#;
+
+        let variables = serde_json::json!({
+            "hash": tx_hash
+        });
+
+        let response = self.execute_query(query, Some(variables)).await?;
+
+        // Extract the transactions data from the response
+        if let Some(data) = response.get("data") {
+            if let Some(transactions) = data.get("transactions") {
+                if let Some(tx_array) = transactions.as_array() {
+                    if !tx_array.is_empty() {
+                        Ok(Some(tx_array[0].clone()))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
 }

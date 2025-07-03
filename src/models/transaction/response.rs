@@ -79,6 +79,8 @@ pub struct MidnightTransactionResponse {
     #[schema(nullable = false)]
     pub hash: Option<String>,
     #[schema(nullable = false)]
+    pub pallet_hash: Option<String>,
+    #[schema(nullable = false)]
     pub block_hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
@@ -138,6 +140,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                 TransactionResponse::Midnight(MidnightTransactionResponse {
                     id: model.id,
                     hash: midnight_data.hash,
+                    pallet_hash: midnight_data.pallet_hash,
                     block_hash: midnight_data.block_hash,
                     status: model.status,
                     created_at: model.created_at,
