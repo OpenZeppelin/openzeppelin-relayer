@@ -21,7 +21,7 @@ pub enum SignerType {
     Turnkey,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignerRepoModel {
     pub id: String,
     pub config: SignerConfig,
@@ -33,13 +33,40 @@ pub struct LocalSignerConfig {
     pub raw_key: SecretVec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl<'de> Deserialize<'de> for LocalSignerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct LocalSignerConfigHelper {
+            raw_key: String,
+        }
+
+        let helper = LocalSignerConfigHelper::deserialize(deserializer)?;
+        let raw_key = if helper.raw_key == "[REDACTED]" {
+            // Return a zero-filled SecretVec when deserializing redacted data
+            SecretVec::zero(32)
+        } else {
+            // For actual data, try to decode as base64
+            use base64::Engine;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&helper.raw_key)
+                .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+            SecretVec::new(decoded.len(), |v| v.copy_from_slice(&decoded))
+        };
+
+        Ok(LocalSignerConfig { raw_key })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AwsKmsSignerConfig {
     pub region: Option<String>,
     pub key_id: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultTransitSignerConfig {
     pub key_name: String,
     pub address: String,
@@ -50,7 +77,7 @@ pub struct VaultTransitSignerConfig {
     pub mount_point: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnkeySignerConfig {
     pub api_public_key: String,
     pub api_private_key: SecretString,
@@ -59,7 +86,7 @@ pub struct TurnkeySignerConfig {
     pub public_key: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerServiceAccountConfig {
     pub private_key: SecretString,
     pub private_key_id: SecretString,
@@ -73,7 +100,7 @@ pub struct GoogleCloudKmsSignerServiceAccountConfig {
     pub universe_domain: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerKeyConfig {
     pub location: String,
     pub key_ring_id: String,
@@ -81,13 +108,13 @@ pub struct GoogleCloudKmsSignerKeyConfig {
     pub key_version: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerConfig {
     pub service_account: GoogleCloudKmsSignerServiceAccountConfig,
     pub key: GoogleCloudKmsSignerKeyConfig,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SignerConfig {
     Test(LocalSignerConfig),
     Local(LocalSignerConfig),
