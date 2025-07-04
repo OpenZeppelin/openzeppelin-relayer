@@ -37,6 +37,10 @@ pub enum PluginError {
     RelayerError(String),
     #[error("Plugin execution error: {0}")]
     PluginExecutionError(String),
+    #[error("Invalid method: {0}")]
+    InvalidMethod(String),
+    #[error("Invalid payload: {0}")]
+    InvalidPayload(String),
 }
 
 impl From<PluginError> for String {
@@ -165,7 +169,7 @@ mod tests {
             path: "test-path".to_string(),
         };
         let app_state: AppState<MockJobProducerTrait> =
-            create_mock_app_state(None, None, None, Some(vec![plugin])).await;
+            create_mock_app_state(None, None, None, Some(vec![plugin]), None).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 

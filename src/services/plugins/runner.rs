@@ -129,7 +129,7 @@ mod tests {
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
-        let state = create_mock_app_state(None, None, None, None).await;
+        let state = create_mock_app_state(None, None, None, None, None).await;
 
         let plugin_runner = PluginRunner;
         let result = plugin_runner
