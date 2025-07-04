@@ -24,7 +24,7 @@ pub enum MidnightAddressError {
 }
 
 /// Represents a Midnight address with its type, network, and data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MidnightAddress {
     /// The type of the address (e.g., "shield-addr")
     pub type_: String,
@@ -191,5 +191,46 @@ mod tests {
         assert_eq!(decoded_address.type_, "shield-addr".to_string());
         assert_eq!(decoded_address.network, Some("test".to_string()));
         assert_eq!(decoded_address.data, address.data);
+    }
+
+    #[test]
+    fn test_from_wallet() {
+        let wallet = Wallet::<DefaultDB>::new(
+            WalletSeed(
+                hex::decode("b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c")
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ),
+            0,
+            WalletKind::NoLegacy,
+        );
+        let address = MidnightAddress::from_wallet(&wallet, NetworkId::TestNet);
+        assert_eq!(address.type_, "shield-addr".to_string());
+        assert_eq!(address.network, Some("test".to_string()));
+        assert_eq!(address.encode(), "mn_shield-addr_test1quc5snkchyepu6rpn5sn85cmnjfk2kzynwtf3lapt9t8q0qlw97sxqypw479uxdvf48386urhyndrty9vmpkjlydmdcur78rr3lw345kg5r4fgc2");
+    }
+
+    #[test]
+    fn test_encode_decode() {
+        let address =
+            MidnightAddress::from_seed(MidnightAddress::generate_random_seed(), NetworkId::TestNet);
+        let encoded_address = address.encode();
+        let decoded_address = MidnightAddress::decode(&encoded_address).unwrap();
+        assert_eq!(address, decoded_address);
+    }
+
+    #[test]
+    fn test_try_from() {
+        let address =
+            MidnightAddress::from_seed(MidnightAddress::generate_random_seed(), NetworkId::TestNet);
+        let network_id = NetworkId::try_from(&address).unwrap();
+        assert_eq!(network_id, NetworkId::TestNet);
+    }
+
+    #[test]
+    fn test_random_seed() {
+        let seed = MidnightAddress::generate_random_seed();
+        assert_eq!(seed.len(), 64);
     }
 }
