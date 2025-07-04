@@ -48,19 +48,24 @@ type Relayer = {
   sendTransaction: (payload: NetworkTransactionRequest) => Promise<Result<SendTransactionResult>>;
 }
 
-function getPluginParams(): unknown {
+type Plugin<T, R> = (plugin: PluginAPI, pluginParams: T) => Promise<R>;
+
+function getPluginParams<T>(): T {
   const pluginParams = process.argv[3];
 
-  if (pluginParams) {
+  if (!pluginParams) {
+    throw new Error("Plugin parameters are required but not provided");
+  }
+
     try {
-      return JSON.parse(pluginParams);
+      const parsed = JSON.parse(pluginParams);
+      return parsed as T;
     } catch (e) {
-      throw new Error(`Failed to parse payload: ${e}`);
+      throw new Error(`Failed to parse plugin parameters: ${e}`);
     }
-  } else return {};
 }
 
-export async function runPlugin(main: (plugin: PluginAPI, pluginParams: unknown) => Promise<any>) {
+export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
   const logInterceptor = new LogInterceptor();
 
   try {
@@ -76,7 +81,7 @@ export async function runPlugin(main: (plugin: PluginAPI, pluginParams: unknown)
     // Start intercepting logs
     logInterceptor.start();
 
-    const pluginParams = getPluginParams();
+    const pluginParams = getPluginParams<T>();
 
     // runs main function
     await main(plugin, pluginParams)
