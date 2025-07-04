@@ -37,6 +37,10 @@ pub enum PluginError {
     RelayerError(String),
     #[error("Plugin execution error: {0}")]
     PluginExecutionError(String),
+    #[error("Invalid method: {0}")]
+    InvalidMethod(String),
+    #[error("Invalid payload: {0}")]
+    InvalidPayload(String),
 }
 
 impl From<PluginError> for String {

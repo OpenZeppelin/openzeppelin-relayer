@@ -5,22 +5,25 @@
 //! Supported methods:
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
-use crate::domain::{get_network_relayer, get_relayer_by_id, Relayer};
+use crate::domain::{get_network_relayer, get_relayer_by_id, get_transaction_by_id, Relayer};
 use crate::models::{NetworkTransactionRequest, TransactionResponse};
 use crate::{jobs::JobProducerTrait, models::AppState};
 use actix_web::web;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use strum::Display;
 
 use super::PluginError;
 
 #[cfg(test)]
 use mockall::automock;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Display)]
 pub enum PluginMethod {
     #[serde(rename = "sendTransaction")]
     SendTransaction,
+    #[serde(rename = "getTransaction")]
+    GetTransaction,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -30,6 +33,12 @@ pub struct Request {
     pub relayer_id: String,
     pub method: PluginMethod,
     pub payload: serde_json::Value,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GetTransactionRequest {
+    pub transaction_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -54,6 +63,11 @@ pub trait RelayerApiTrait {
         state: &web::ThinData<AppState<J>>,
     ) -> Result<Response, PluginError>;
     async fn handle_send_transaction<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError>;
+    async fn handle_get_transaction<J: JobProducerTrait + 'static>(
         &self,
         request: Request,
         state: &web::ThinData<AppState<J>>,
@@ -86,6 +100,7 @@ impl RelayerApi {
     ) -> Result<Response, PluginError> {
         match request.method {
             PluginMethod::SendTransaction => self.handle_send_transaction(request, state).await,
+            PluginMethod::GetTransaction => self.handle_get_transaction(request, state).await,
         }
     }
 
@@ -131,6 +146,36 @@ impl RelayerApi {
             error: None,
         })
     }
+
+    async fn handle_get_transaction<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError> {
+        // validation purpose only, checks if relayer exists
+        get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let get_transaction_request: GetTransactionRequest =
+            serde_json::from_value(request.payload)
+                .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
+
+        let transaction = get_transaction_by_id(get_transaction_request.transaction_id, state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let transaction_response: TransactionResponse = transaction.into();
+
+        let result = serde_json::to_value(transaction_response)
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
+    }
 }
 
 #[async_trait]
@@ -157,6 +202,14 @@ impl RelayerApiTrait for RelayerApi {
         state: &web::ThinData<AppState<J>>,
     ) -> Result<Response, PluginError> {
         self.handle_send_transaction(request, state).await
+    }
+
+    async fn handle_get_transaction<J: JobProducerTrait + 'static>(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J>>,
+    ) -> Result<Response, PluginError> {
+        self.handle_get_transaction(request, state).await
     }
 }
 
