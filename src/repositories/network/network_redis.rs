@@ -310,6 +310,16 @@ impl fmt::Debug for RedisNetworkRepository {
 #[async_trait]
 impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     async fn create(&self, entity: NetworkRepoModel) -> Result<NetworkRepoModel, RepositoryError> {
+        if entity.id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Network ID cannot be empty".to_string(),
+            ));
+        }
+        if entity.name.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Network name cannot be empty".to_string(),
+            ));
+        }
         let key = self.network_key(&entity.id);
         let network_list_key = self.network_list_key();
         let mut conn = self.client.as_ref().clone();
@@ -352,6 +362,12 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     }
 
     async fn get_by_id(&self, id: String) -> Result<NetworkRepoModel, RepositoryError> {
+        if id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Network ID cannot be empty".to_string(),
+            ));
+        }
+
         let key = self.network_key(&id);
         let mut conn = self.client.as_ref().clone();
 
@@ -714,7 +730,8 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_create_network() {
         let repo = setup_test_repo().await;
-        let network = create_test_network("test-network", NetworkType::Evm);
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
 
         let result = repo.create(network.clone()).await;
         assert!(result.is_ok());
@@ -729,7 +746,8 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_get_network_by_id() {
         let repo = setup_test_repo().await;
-        let network = create_test_network("test-network", NetworkType::Evm);
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
 
         repo.create(network.clone()).await.unwrap();
 
@@ -754,7 +772,8 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_create_duplicate_network() {
         let repo = setup_test_repo().await;
-        let network = create_test_network("test-network", NetworkType::Evm);
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
 
         repo.create(network.clone()).await.unwrap();
         let result = repo.create(network).await;
@@ -769,7 +788,8 @@ mod tests {
     async fn test_update_network() {
         let repo = setup_test_repo().await;
         let random_id = Uuid::new_v4().to_string();
-        let mut network = create_test_network("test-network", NetworkType::Evm);
+        let random_name = Uuid::new_v4().to_string();
+        let mut network = create_test_network(&random_name, NetworkType::Evm);
         network.id = format!("evm:{}", random_id);
 
         // Create the network first
@@ -789,7 +809,8 @@ mod tests {
     async fn test_delete_network() {
         let repo = setup_test_repo().await;
         let random_id = Uuid::new_v4().to_string();
-        let mut network = create_test_network("test-network", NetworkType::Evm);
+        let random_name = Uuid::new_v4().to_string();
+        let mut network = create_test_network(&random_name, NetworkType::Evm);
         network.id = format!("evm:{}", random_id);
 
         // Create the network first
@@ -808,8 +829,10 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_list_all_networks() {
         let repo = setup_test_repo().await;
-        let network1 = create_test_network("network1", NetworkType::Evm);
-        let network2 = create_test_network("network2", NetworkType::Solana);
+        let test_network_random = Uuid::new_v4().to_string();
+        let test_network_random2 = Uuid::new_v4().to_string();
+        let network1 = create_test_network(&test_network_random, NetworkType::Evm);
+        let network2 = create_test_network(&test_network_random2, NetworkType::Solana);
 
         repo.create(network1.clone()).await.unwrap();
         repo.create(network2.clone()).await.unwrap();
@@ -826,8 +849,10 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_count_networks() {
         let repo = setup_test_repo().await;
-        let network1 = create_test_network("network1", NetworkType::Evm);
-        let network2 = create_test_network("network2", NetworkType::Solana);
+        let test_network_random = Uuid::new_v4().to_string();
+        let test_network_random2 = Uuid::new_v4().to_string();
+        let network1 = create_test_network(&test_network_random, NetworkType::Evm);
+        let network2 = create_test_network(&test_network_random2, NetworkType::Solana);
 
         assert_eq!(repo.count().await.unwrap(), 0);
 
@@ -842,9 +867,12 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_list_paginated() {
         let repo = setup_test_repo().await;
-        let network1 = create_test_network("network1", NetworkType::Evm);
-        let network2 = create_test_network("network2", NetworkType::Solana);
-        let network3 = create_test_network("network3", NetworkType::Stellar);
+        let test_network_random = Uuid::new_v4().to_string();
+        let test_network_random2 = Uuid::new_v4().to_string();
+        let test_network_random3 = Uuid::new_v4().to_string();
+        let network1 = create_test_network(&test_network_random, NetworkType::Evm);
+        let network2 = create_test_network(&test_network_random2, NetworkType::Solana);
+        let network3 = create_test_network(&test_network_random3, NetworkType::Stellar);
 
         repo.create(network1).await.unwrap();
         repo.create(network2).await.unwrap();
@@ -866,16 +894,20 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_get_by_name() {
         let repo = setup_test_repo().await;
-        let network = create_test_network("mainnet", NetworkType::Evm);
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
 
         repo.create(network.clone()).await.unwrap();
 
-        let retrieved = repo.get_by_name(NetworkType::Evm, "mainnet").await.unwrap();
+        let retrieved = repo
+            .get_by_name(NetworkType::Evm, &test_network_random)
+            .await
+            .unwrap();
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().name, "mainnet");
+        assert_eq!(retrieved.unwrap().name, test_network_random);
 
         let not_found = repo
-            .get_by_name(NetworkType::Solana, "mainnet")
+            .get_by_name(NetworkType::Solana, &test_network_random)
             .await
             .unwrap();
         assert!(not_found.is_none());
@@ -885,13 +917,14 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_get_by_chain_id() {
         let repo = setup_test_repo().await;
-        let network = create_test_network("mainnet", NetworkType::Evm);
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
 
         repo.create(network.clone()).await.unwrap();
 
         let retrieved = repo.get_by_chain_id(NetworkType::Evm, 1).await.unwrap();
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().name, "mainnet");
+        assert_eq!(retrieved.unwrap().name, test_network_random);
 
         let not_found = repo.get_by_chain_id(NetworkType::Evm, 999).await.unwrap();
         assert!(not_found.is_none());
@@ -904,7 +937,8 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_update_nonexistent_network() {
         let repo = setup_test_repo().await;
-        let network = create_test_network("test-network", NetworkType::Evm);
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
 
         let result = repo.update(network.id.clone(), network).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
@@ -946,6 +980,7 @@ mod tests {
                 }),
             })
             .await;
+
         assert!(matches!(
             create_result,
             Err(RepositoryError::InvalidData(_))
@@ -989,7 +1024,8 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_id_mismatch_validation() {
         let repo = setup_test_repo().await;
-        let network = create_test_network("test-network", NetworkType::Evm);
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
 
         repo.create(network.clone()).await.unwrap();
 
