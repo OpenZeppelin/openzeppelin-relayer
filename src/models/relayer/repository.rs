@@ -12,7 +12,7 @@ use crate::{
 
 use super::RpcConfig;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Display, Deserialize, Copy, ToSchema)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, Display, Deserialize, Copy, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkType {
     Evm,
