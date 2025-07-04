@@ -1,4 +1,4 @@
-import { Speed, TransactionStatus } from "@openzeppelin/relayer-sdk";
+import { Speed } from "@openzeppelin/relayer-sdk";
 import { PluginAPI, runPlugin } from "../lib/plugin";
 
 async function example(api: PluginAPI) {

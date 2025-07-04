@@ -169,7 +169,7 @@ mod tests {
             path: "test-path".to_string(),
         };
         let app_state: AppState<MockJobProducerTrait> =
-            create_mock_app_state(None, None, None, Some(vec![plugin])).await;
+            create_mock_app_state(None, None, None, Some(vec![plugin]), None).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 

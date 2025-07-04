@@ -219,7 +219,7 @@ mod tests {
 
     use crate::utils::mocks::mockutils::{
         create_mock_app_state, create_mock_evm_transaction_request, create_mock_network,
-        create_mock_relayer, create_mock_signer,
+        create_mock_relayer, create_mock_signer, create_mock_transaction,
     };
 
     use super::*;
@@ -237,6 +237,7 @@ mod tests {
             Some(vec![create_mock_relayer("test".to_string(), false)]),
             Some(vec![create_mock_signer()]),
             Some(vec![create_mock_network()]),
+            None,
             None,
         )
         .await;
@@ -266,6 +267,7 @@ mod tests {
             Some(vec![create_mock_signer()]),
             Some(vec![create_mock_network()]),
             None,
+            None,
         )
         .await;
 
@@ -293,6 +295,7 @@ mod tests {
             Some(vec![create_mock_relayer("test".to_string(), false)]),
             Some(vec![create_mock_signer()]),
             Some(vec![create_mock_network()]),
+            None,
             None,
         )
         .await;
@@ -322,5 +325,97 @@ mod tests {
             RelayerApiTrait::handle_send_transaction(&relayer_api, request.clone(), &state).await;
 
         assert!(response.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_transaction() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            Some(vec![create_mock_transaction()]),
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetTransaction,
+            payload: serde_json::json!(GetTransactionRequest {
+                transaction_id: "test".to_string(),
+            }),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_transaction_error_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            Some(vec![create_mock_transaction()]),
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetTransaction,
+            payload: serde_json::json!(GetTransactionRequest {
+                transaction_id: "test".to_string(),
+            }),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID test not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_transaction_error_transaction_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetTransaction,
+            payload: serde_json::json!(GetTransactionRequest {
+                transaction_id: "test".to_string(),
+            }),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Transaction with ID test not found"));
     }
 }
