@@ -1,7 +1,11 @@
 import { Speed } from "@openzeppelin/relayer-sdk";
 import { PluginAPI, runPlugin } from "../lib/plugin";
 
-async function example(api: PluginAPI) {
+type Params = {
+    destinationAddress: string;
+};
+
+async function example(api: PluginAPI, params: Params): Promise<string> {
     console.info("Plugin started...");
     /**
      * Instances the relayer with the given id.
@@ -12,7 +16,7 @@ async function example(api: PluginAPI) {
      * Sends an arbitrary transaction through the relayer.
      */
     const result = await relayer.sendTransaction({
-        to: "0xab5801a7d398351b8be11c439e05c5b3259aec9b",
+        to: params.destinationAddress,
         value: 1,
         data: "0x",
         gas_limit: 21000,
@@ -22,12 +26,12 @@ async function example(api: PluginAPI) {
     /*
     * Waits for the transaction to be mined on chain.
     */
-    const transaction = await result.wait();
+    await result.wait();
 
-    return transaction.hash;
+    return "done!";
 }
 
 /**
  * This is the entry point for the plugin
  */
-runPlugin(example)
+runPlugin(example);
