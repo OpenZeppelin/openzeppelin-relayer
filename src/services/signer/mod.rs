@@ -43,7 +43,10 @@ mod midnight;
 pub use midnight::*;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
+    domain::{
+        to_midnight_network_id, SignDataRequest, SignDataResponse, SignTransactionResponse,
+        SignTypedDataRequest,
+    },
     models::{
         Address, NetworkTransactionData, NetworkType, SignerError, SignerFactoryError,
         SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
@@ -148,6 +151,7 @@ impl SignerFactory {
     pub fn create_signer(
         network_type: &NetworkType,
         signer_model: &SignerRepoModel,
+        network: &str,
     ) -> Result<NetworkSigner, SignerFactoryError> {
         let signer = match network_type {
             NetworkType::Evm => {
@@ -163,7 +167,10 @@ impl SignerFactory {
                 NetworkSigner::Stellar(stellar_signer)
             }
             NetworkType::Midnight => {
-                let midnight_signer = MidnightSignerFactory::create_midnight_signer(signer_model)?;
+                let midnight_signer = MidnightSignerFactory::create_midnight_signer(
+                    signer_model,
+                    to_midnight_network_id(network),
+                )?;
                 NetworkSigner::Midnight(midnight_signer)
             }
         };

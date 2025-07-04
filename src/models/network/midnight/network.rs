@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct MidnightNetwork {
-    /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
+    /// Unique network identifier (e.g., "mainnet", "testnet", "devnet").
     pub network: String,
     /// List of RPC endpoint URLs for connecting to the network.
     pub rpc_urls: Vec<String>,

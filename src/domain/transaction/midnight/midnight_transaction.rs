@@ -3,7 +3,10 @@
 //! This module provides the core transaction handling logic for Midnight network transactions.
 
 use crate::{
-    domain::{to_midnight_network_id, MidnightTransactionBuilder, Transaction, DUST_TOKEN_TYPE},
+    domain::{
+        to_midnight_network_id, MidnightTransactionBuilder, SignTransactionResponse, Transaction,
+        DUST_TOKEN_TYPE,
+    },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, MidnightNetwork, MidnightOfferRequest,
@@ -456,7 +459,6 @@ where
             builder = builder.with_guaranteed_offer(offer);
         }
 
-        // TODO: Handle intents and fallible offers when contract support is added
         if !midnight_data.intents.is_empty() || !midnight_data.fallible_offers.is_empty() {
             return Err(TransactionError::NotSupported(
                 "Contract interactions not yet supported".to_string(),
@@ -478,7 +480,6 @@ where
         // Update transaction with prepared data
         let mut updated_midnight_data = midnight_data.clone();
         updated_midnight_data.raw = Some(serialized_tx);
-        // TODO: Store binding randomness and prover request ID when available
 
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Sent),
@@ -750,30 +751,42 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // TODO: Implement transaction signing
-        // 1. Get the transaction data
-        // 2. Sign with the signer
-        // 3. Update transaction with signature
+        let signature_response = self
+            .signer
+            .sign_transaction(tx.network_data.clone())
+            .await?;
 
-        log::debug!("Signing Midnight transaction: {}", tx.id);
+        // Extract the Midnight signature from the response
+        let signature = match signature_response {
+            SignTransactionResponse::Midnight(midnight_sig) => midnight_sig,
+            _ => {
+                return Err(TransactionError::InvalidType(
+                    "Expected Midnight signature response".to_string(),
+                ))
+            }
+        };
 
-        // For now, just return the transaction as-is
-        Ok(tx)
+        let mut updated_midnight_data = tx.network_data.get_midnight_transaction_data()?;
+        updated_midnight_data.signature = Some(signature.signature);
+
+        let update = TransactionUpdateRequest {
+            network_data: Some(NetworkTransactionData::Midnight(updated_midnight_data)),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        Ok(updated_tx)
     }
 
     async fn validate_transaction(
         &self,
-        tx: TransactionRepoModel,
+        _tx: TransactionRepoModel,
     ) -> Result<bool, TransactionError> {
-        // TODO: Implement transaction validation
-        // 1. Validate transaction structure
-        // 2. Check segment sequencing rules
-        // 3. Validate proofs if available
         // NOTE: This is already handled by the transaction builder in the prepare_transaction method
-
-        log::debug!("Validating Midnight transaction: {}", tx.id);
-
-        // For now, just return true
         Ok(true)
     }
 }

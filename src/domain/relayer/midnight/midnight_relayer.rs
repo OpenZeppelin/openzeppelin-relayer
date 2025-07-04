@@ -23,8 +23,8 @@
 use crate::{
     constants::MIDNIGHT_SMALLEST_UNIT_NAME,
     domain::{
-        next_sequence_u64, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest,
+        next_sequence_u64, to_midnight_network_id, BalanceResponse, JsonRpcRequest,
+        JsonRpcResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
@@ -314,8 +314,11 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(format!("Failed to get signer: {}", e)))?;
 
-        let midnight_signer = MidnightSignerFactory::create_midnight_signer(&signer_model)
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to create signer: {}", e)))?;
+        let midnight_signer = MidnightSignerFactory::create_midnight_signer(
+            &signer_model,
+            to_midnight_network_id(&self.network.network),
+        )
+        .map_err(|e| RelayerError::ProviderError(format!("Failed to create signer: {}", e)))?;
 
         let wallet_seed = midnight_signer.wallet_seed();
 

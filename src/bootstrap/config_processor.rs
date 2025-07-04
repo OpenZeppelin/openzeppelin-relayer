@@ -301,8 +301,9 @@ async fn process_relayers<J: JobProducerTrait>(
             .find(|s| s.id == repo_model.signer_id)
             .ok_or_else(|| eyre::eyre!("Signer not found"))?;
         let network_type = repo_model.network_type;
-        let signer_service = SignerFactory::create_signer(&network_type, signer_model)
-            .wrap_err("Failed to create signer service")?;
+        let signer_service =
+            SignerFactory::create_signer(&network_type, signer_model, &repo_model.network)
+                .wrap_err("Failed to create signer service")?;
 
         let address = signer_service.address().await?;
         repo_model.address = address.to_string();

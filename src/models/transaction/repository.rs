@@ -313,13 +313,12 @@ impl StellarTransactionData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidnightTransactionData {
     // Transaction lifecycle fields
-    pub hash: Option<String>,               // Extrinsic transaction hash
-    pub pallet_hash: Option<String>,        // Midnight pallet transaction hash
-    pub block_hash: Option<String>,         // Hash of the block containing the transaction
-    pub binding_randomness: Option<String>, // Fr serialized as hex
+    pub hash: Option<String>,        // Extrinsic transaction hash
+    pub pallet_hash: Option<String>, // Midnight pallet transaction hash
+    pub block_hash: Option<String>,  // Hash of the block containing the transaction
     pub segment_results: Option<HashMap<u16, bool>>, // For partial success tracking
-    pub prover_request_id: Option<String>,  // To track async proof generation
-    pub raw: Option<Vec<u8>>,               // Serialized transaction
+    pub raw: Option<Vec<u8>>,
+    pub signature: Option<String>, // Signature of the transaction
 
     // Request data stored for prepare_transaction
     pub guaranteed_offer: Option<MidnightOfferRequest>,
@@ -441,10 +440,9 @@ impl
                     hash: None,
                     pallet_hash: None,
                     block_hash: None,
-                    binding_randomness: None,
                     segment_results: None,
-                    prover_request_id: None,
                     raw: None,
+                    signature: None,
                     guaranteed_offer: midnight_request.guaranteed_offer.clone(),
                     intents: midnight_request.intents.clone(),
                     fallible_offers: midnight_request.fallible_offers.clone(),

@@ -507,8 +507,10 @@ impl RelayerTransactionFactory {
                 )?))
             }
             NetworkType::Midnight => {
-                let signer_service =
-                    Arc::new(MidnightSignerFactory::create_midnight_signer(&signer)?);
+                let signer_service = Arc::new(MidnightSignerFactory::create_midnight_signer(
+                    &signer,
+                    to_midnight_network_id(&relayer.network),
+                )?);
 
                 let network_repo = network_repository
                     .get(NetworkType::Midnight, &relayer.network)

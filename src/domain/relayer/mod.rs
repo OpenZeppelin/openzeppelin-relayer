@@ -467,21 +467,20 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Some(&metadata),
                 )?;
 
+                // Convert network to NetworkId for sync manager
+                let network_id = to_midnight_network_id(&relayer.network);
+
                 // Create the Midnight signer to get the wallet seed
-                let midnight_signer = MidnightSignerFactory::create_midnight_signer(&signer)
-                    .map_err(|e| {
-                        RelayerError::NetworkConfiguration(format!(
-                            "Failed to create signer: {}",
-                            e
-                        ))
-                    })?;
+                let midnight_signer = MidnightSignerFactory::create_midnight_signer(
+                    &signer, network_id,
+                )
+                .map_err(|e| {
+                    RelayerError::NetworkConfiguration(format!("Failed to create signer: {}", e))
+                })?;
                 let wallet_seed = midnight_signer.wallet_seed();
 
                 // Get the indexer client from provider
                 let indexer_client = midnight_provider.get_indexer_client();
-
-                // Convert network to NetworkId for sync manager
-                let network_id = to_midnight_network_id(&relayer.network);
 
                 // Create the sync manager
                 let sync_manager = SyncManager::<QuickSyncStrategy>::new(
@@ -570,7 +569,6 @@ pub struct SignTransactionResponseStellar {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignTransactionResponseMidnight {
-    // TODO: Implement signature
     pub signature: String,
 }
 
