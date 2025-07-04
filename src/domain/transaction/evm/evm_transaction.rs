@@ -341,6 +341,7 @@ where
         let nonce = self
             .transaction_counter_service
             .get_and_increment(&self.relayer.id, &self.relayer.address)
+            .await
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         let updated_evm_data = tx
@@ -852,7 +853,7 @@ mod tests {
 
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(42));
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let price_params = PriceParams {
             gas_price: Some(30000000000),
@@ -948,7 +949,7 @@ mod tests {
 
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(42));
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let price_params = PriceParams {
             gas_price: Some(30000000000),

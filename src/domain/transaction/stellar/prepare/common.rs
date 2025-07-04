@@ -121,7 +121,7 @@ where
 ///
 /// This function retrieves and increments the sequence counter for the given relayer,
 /// converting it from u64 to i64 with proper error handling.
-pub fn get_next_sequence<C>(
+pub async fn get_next_sequence<C>(
     counter_service: &C,
     relayer_id: &str,
     relayer_address: &str,
@@ -131,6 +131,7 @@ where
 {
     let sequence_u64 = counter_service
         .get_and_increment(relayer_id, relayer_address)
+        .await
         .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
     i64_from_u64(sequence_u64).map_err(|relayer_err| {
@@ -350,6 +351,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::future::ready;
+
     use super::*;
     use soroban_rs::xdr::{
         Memo, MuxedAccount, SequenceNumber, Transaction, TransactionExt, TransactionV1Envelope,
@@ -405,9 +408,9 @@ mod tests {
         let mut counter_service = MockTransactionCounterTrait::new();
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(100));
+            .returning(|_, _| Box::pin(ready(Ok(100))));
 
-        let result = get_next_sequence(&counter_service, "relayer-1", "GTEST");
+        let result = get_next_sequence(&counter_service, "relayer-1", "GTEST").await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 100i64);
@@ -420,9 +423,9 @@ mod tests {
         let mut counter_service = MockTransactionCounterTrait::new();
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(u64::MAX));
+            .returning(|_, _| Box::pin(ready(Ok(u64::MAX))));
 
-        let result = get_next_sequence(&counter_service, "relayer-1", "GTEST");
+        let result = get_next_sequence(&counter_service, "relayer-1", "GTEST").await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
