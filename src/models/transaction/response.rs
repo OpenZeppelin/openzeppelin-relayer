@@ -11,6 +11,7 @@ pub enum TransactionResponse {
     Evm(EvmTransactionResponse),
     Solana(SolanaTransactionResponse),
     Stellar(StellarTransactionResponse),
+    Midnight(MidnightTransactionResponse),
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -72,6 +73,19 @@ pub struct StellarTransactionResponse {
     pub sequence_number: i64,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
+pub struct MidnightTransactionResponse {
+    pub id: String,
+    #[schema(nullable = false)]
+    pub hash: Option<String>,
+    pub status: TransactionStatus,
+    pub created_at: String,
+    #[schema(nullable = false)]
+    pub sent_at: Option<String>,
+    #[schema(nullable = false)]
+    pub confirmed_at: Option<String>,
+}
+
 impl From<TransactionRepoModel> for TransactionResponse {
     fn from(model: TransactionRepoModel) -> Self {
         match model.network_data {
@@ -116,6 +130,17 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     source_account: stellar_data.source_account,
                     fee: stellar_data.fee.unwrap_or(0),
                     sequence_number: stellar_data.sequence_number.unwrap_or(0),
+                })
+            }
+            // TODO: Implement MidnightTransactionResponse
+            NetworkTransactionData::Midnight(midnight_data) => {
+                TransactionResponse::Midnight(MidnightTransactionResponse {
+                    id: model.id,
+                    hash: midnight_data.hash,
+                    status: model.status,
+                    created_at: model.created_at,
+                    sent_at: model.sent_at,
+                    confirmed_at: model.confirmed_at,
                 })
             }
         }
