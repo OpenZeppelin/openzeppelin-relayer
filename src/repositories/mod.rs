@@ -22,7 +22,7 @@ pub use notification::*;
 mod transaction_counter;
 pub use transaction_counter::*;
 
-mod network;
+pub mod network;
 pub use network::*;
 
 mod plugin;

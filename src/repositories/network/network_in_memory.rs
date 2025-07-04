@@ -3,35 +3,34 @@
 //! network configurations, while update and delete operations are not supported.
 //! The repository is implemented using a `Mutex`-protected `HashMap` to
 //! ensure thread safety in asynchronous contexts.
+
 use crate::{
     models::{NetworkRepoModel, NetworkType, RepositoryError},
-    repositories::*,
+    repositories::{NetworkRepository, PaginatedResult, PaginationQuery, Repository},
 };
 use async_trait::async_trait;
 use eyre::Result;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
-#[async_trait]
-pub trait NetworkRepository: Repository<NetworkRepoModel, String> {
-    /// Get a network by network type and name
-    async fn get_by_name(
-        &self,
-        network_type: NetworkType,
-        name: &str,
-    ) -> Result<Option<NetworkRepoModel>, RepositoryError>;
-
-    /// Get a network by network type and chain ID
-    async fn get_by_chain_id(
-        &self,
-        network_type: NetworkType,
-        chain_id: u64,
-    ) -> Result<Option<NetworkRepoModel>, RepositoryError>;
-}
-
 #[derive(Debug)]
 pub struct InMemoryNetworkRepository {
     store: Mutex<HashMap<String, NetworkRepoModel>>,
+}
+
+impl Clone for InMemoryNetworkRepository {
+    fn clone(&self) -> Self {
+        // Try to get the current data, or use empty HashMap if lock fails
+        let data = self
+            .store
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
+        Self {
+            store: Mutex::new(data),
+        }
+    }
 }
 
 impl InMemoryNetworkRepository {
@@ -171,10 +170,11 @@ impl NetworkRepository for InMemoryNetworkRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::config::{
         EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
     };
+
+    use super::*;
 
     fn create_test_network(name: String, network_type: NetworkType) -> NetworkRepoModel {
         let common = NetworkConfigCommon {
@@ -312,38 +312,5 @@ mod tests {
             pagination_result,
             Err(RepositoryError::NotSupported(_))
         ));
-    }
-
-    #[tokio::test]
-    async fn test_mock_network_repository_can_be_created() {
-        // This test verifies that our mock implementation compiles correctly
-        #[cfg(test)]
-        {
-            use super::MockNetworkRepository;
-            let _mock_repo = MockNetworkRepository::new();
-            // If this compiles, our mock is syntactically correct
-        }
-    }
-}
-
-#[cfg(test)]
-mockall::mock! {
-    pub NetworkRepository {}
-
-    #[async_trait]
-    impl Repository<NetworkRepoModel, String> for NetworkRepository {
-        async fn create(&self, entity: NetworkRepoModel) -> Result<NetworkRepoModel, RepositoryError>;
-        async fn get_by_id(&self, id: String) -> Result<NetworkRepoModel, RepositoryError>;
-        async fn list_all(&self) -> Result<Vec<NetworkRepoModel>, RepositoryError>;
-        async fn list_paginated(&self, query: PaginationQuery) -> Result<PaginatedResult<NetworkRepoModel>, RepositoryError>;
-        async fn update(&self, id: String, entity: NetworkRepoModel) -> Result<NetworkRepoModel, RepositoryError>;
-        async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
-        async fn count(&self) -> Result<usize, RepositoryError>;
-    }
-
-    #[async_trait]
-    impl NetworkRepository for NetworkRepository {
-        async fn get_by_name(&self, network_type: NetworkType, name: &str) -> Result<Option<NetworkRepoModel>, RepositoryError>;
-        async fn get_by_chain_id(&self, network_type: NetworkType, chain_id: u64) -> Result<Option<NetworkRepoModel>, RepositoryError>;
     }
 }
