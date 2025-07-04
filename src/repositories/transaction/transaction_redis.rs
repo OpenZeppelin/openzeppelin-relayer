@@ -346,6 +346,12 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         &self,
         entity: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
+        if entity.id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Transaction ID cannot be empty".to_string(),
+            ));
+        }
+
         let key = self.tx_key(&entity.relayer_id, &entity.id);
         let reverse_key = self.tx_to_relayer_key(&entity.id);
         let mut conn = self.client.as_ref().clone();

@@ -188,6 +188,18 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         &self,
         entity: NotificationRepoModel,
     ) -> Result<NotificationRepoModel, RepositoryError> {
+        if entity.id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Notification ID cannot be empty".to_string(),
+            ));
+        }
+
+        if entity.url.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Notification URL cannot be empty".to_string(),
+            ));
+        }
+
         let key = self.notification_key(&entity.id);
         let notification_list_key = self.notification_list_key();
         let mut conn = self.client.as_ref().clone();

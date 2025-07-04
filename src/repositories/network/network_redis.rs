@@ -715,14 +715,14 @@ mod tests {
 
     async fn setup_test_repo() -> RedisNetworkRepository {
         let redis_url = "redis://localhost:6379";
-        let key_prefix = format!("test_network_{}", Uuid::new_v4());
+        let key_prefix = "test_prefix";
 
         let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
         let connection_manager = ConnectionManager::new(client)
             .await
             .expect("Failed to create connection manager");
 
-        RedisNetworkRepository::new(Arc::new(connection_manager), key_prefix)
+        RedisNetworkRepository::new(Arc::new(connection_manager), key_prefix.to_string())
             .expect("Failed to create repository")
     }
 
