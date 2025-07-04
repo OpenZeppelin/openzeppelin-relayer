@@ -14,8 +14,8 @@
 use crate::{
     jobs::JobProducer,
     models::{
-        EvmNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, SolanaNetwork, StellarNetwork,
-        TransactionError, TransactionRepoModel,
+        EvmNetwork, MidnightNetwork, NetworkType, RelayerRepoModel, SignerRepoModel, SolanaNetwork,
+        StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -23,7 +23,7 @@ use crate::{
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
-        EvmSignerFactory, StellarSignerFactory,
+        EvmSignerFactory, MidnightSignerFactory, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -33,14 +33,18 @@ use mockall::automock;
 use std::sync::Arc;
 
 mod evm;
+mod midnight;
 mod solana;
 mod stellar;
 mod util;
 
 pub use evm::*;
+pub use midnight::*;
 pub use solana::*;
 pub use stellar::*;
 pub use util::*;
+
+use self::midnight_transaction::DefaultMidnightTransaction;
 
 /// A trait that defines the operations for handling transactions across different networks.
 #[cfg_attr(test, automock)]
@@ -167,6 +171,7 @@ pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
     Solana(SolanaRelayerTransaction),
     Stellar(DefaultStellarTransaction),
+    Midnight(DefaultMidnightTransaction),
 }
 
 #[async_trait]
@@ -188,6 +193,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.prepare_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.prepare_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.prepare_transaction(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.prepare_transaction(tx).await,
         }
     }
 
@@ -208,6 +214,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.submit_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.submit_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.submit_transaction(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.submit_transaction(tx).await,
         }
     }
     /// Resubmits a transaction with updated parameters based on the network type.
@@ -227,6 +234,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.resubmit_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.resubmit_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.resubmit_transaction(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.resubmit_transaction(tx).await,
         }
     }
 
@@ -248,6 +256,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.handle_transaction_status(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.handle_transaction_status(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.handle_transaction_status(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.handle_transaction_status(tx).await,
         }
     }
 
@@ -268,6 +277,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.cancel_transaction(tx).await,
             NetworkTransaction::Solana(_) => solana_not_supported_transaction(),
             NetworkTransaction::Stellar(relayer) => relayer.cancel_transaction(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.cancel_transaction(tx).await,
         }
     }
 
@@ -288,6 +298,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.replace_transaction(tx).await,
             NetworkTransaction::Solana(_) => solana_not_supported_transaction(),
             NetworkTransaction::Stellar(relayer) => relayer.replace_transaction(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.replace_transaction(tx).await,
         }
     }
 
@@ -308,6 +319,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.sign_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.sign_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.sign_transaction(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.sign_transaction(tx).await,
         }
     }
 
@@ -329,6 +341,7 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.validate_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.validate_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.validate_transaction(tx).await,
+            NetworkTransaction::Midnight(relayer) => relayer.validate_transaction(tx).await,
         }
     }
 }
@@ -485,8 +498,41 @@ impl RelayerTransactionFactory {
                     transaction_counter_store,
                 )?))
             }
-            // TODO: Implement MidnightRelayer
-            NetworkType::Midnight => unimplemented!(),
+            NetworkType::Midnight => {
+                let signer_service =
+                    Arc::new(MidnightSignerFactory::create_midnight_signer(&signer)?);
+
+                let network_repo = network_repository
+                    .get(NetworkType::Midnight, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Network {} not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = MidnightNetwork::try_from(network_repo)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
+
+                let midnight_provider = Arc::new(get_network_provider(
+                    &network,
+                    relayer.custom_rpc_urls.clone(),
+                )?);
+
+                Ok(NetworkTransaction::Midnight(MidnightTransaction::new(
+                    relayer,
+                    midnight_provider,
+                    relayer_repository,
+                    transaction_repository,
+                    job_producer,
+                    signer_service,
+                    transaction_counter_store,
+                    network,
+                )?))
+            }
         }
     }
 }
