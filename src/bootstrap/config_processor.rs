@@ -403,8 +403,8 @@ mod tests {
         models::{NetworkType, PlainOrEnvValue, SecretString},
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage, TransactionRepositoryImpl,
+            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+            RelayerRepositoryImpl, TransactionRepositoryImpl,
         },
     };
     use serde_json::json;
@@ -434,9 +434,7 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         AppState {
-            relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
-                InMemoryRelayerRepository::default(),
-            )),
+            relayer_repository: Arc::new(RelayerRepositoryImpl::new_in_memory()),
             transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
@@ -1104,9 +1102,7 @@ mod tests {
 
         // Create shared repositories
         let signer_repo = Arc::new(InMemorySignerRepository::default());
-        let relayer_repo = Arc::new(RelayerRepositoryStorage::in_memory(
-            InMemoryRelayerRepository::default(),
-        ));
+        let relayer_repo = Arc::new(RelayerRepositoryImpl::new_in_memory());
         let notification_repo = Arc::new(InMemoryNotificationRepository::default());
         let network_repo = Arc::new(InMemoryNetworkRepository::default());
         let transaction_repo = Arc::new(TransactionRepositoryImpl::InMemory(

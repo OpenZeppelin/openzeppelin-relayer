@@ -8,8 +8,8 @@ use crate::{
     models::{AppState, DefaultAppState},
     repositories::{
         InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        RelayerRepositoryStorage, TransactionRepositoryType,
+        InMemorySignerRepository, InMemoryTransactionCounter, RelayerRepositoryImpl,
+        TransactionRepositoryType,
     },
 };
 use actix_web::web;
@@ -30,9 +30,7 @@ use std::sync::Arc;
 pub async fn initialize_app_state(
     server_config: Arc<ServerConfig>,
 ) -> Result<web::ThinData<DefaultAppState>> {
-    let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
-        InMemoryRelayerRepository::new(),
-    ));
+    let relayer_repository = Arc::new(RelayerRepositoryImpl::new_in_memory());
 
     let transaction_repository = Arc::new(
         TransactionRepositoryType::Redis

@@ -20,7 +20,7 @@ pub enum NetworkType {
     Solana,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RelayerNetworkPolicy {
     Evm(RelayerEvmPolicy),
     Solana(RelayerSolanaPolicy),
@@ -50,7 +50,7 @@ impl RelayerNetworkPolicy {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RelayerEvmPolicy {
     pub gas_price_cap: Option<u128>,
     pub whitelist_receivers: Option<Vec<String>>,
@@ -163,7 +163,7 @@ pub struct RelayerSolanaSwapConfig {
     pub jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerSolanaPolicy {
     pub fee_payment_strategy: SolanaFeePaymentStrategy,
@@ -262,7 +262,7 @@ impl Default for RelayerSolanaPolicy {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerStellarPolicy {
     pub max_fee: Option<u32>,
@@ -280,7 +280,7 @@ impl Default for RelayerStellarPolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayerRepoModel {
     pub id: String,
     pub name: String,
@@ -324,6 +324,141 @@ impl Default for RelayerRepoModel {
             system_disabled: false,
             custom_rpc_urls: None,
         }
+    }
+}
+
+impl TryFrom<crate::config::RelayerFileConfig> for RelayerRepoModel {
+    type Error = eyre::Report;
+
+    fn try_from(config: crate::config::RelayerFileConfig) -> Result<Self, Self::Error> {
+        use crate::config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy};
+
+        // Convert network type
+        let network_type = match config.network_type {
+            ConfigFileNetworkType::Evm => NetworkType::Evm,
+            ConfigFileNetworkType::Solana => NetworkType::Solana,
+            ConfigFileNetworkType::Stellar => NetworkType::Stellar,
+        };
+
+        // Convert policies based on network type
+        let policies = match config.policies {
+            Some(ConfigFileRelayerNetworkPolicy::Evm(evm_policy)) => {
+                RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                    gas_price_cap: evm_policy.gas_price_cap,
+                    whitelist_receivers: evm_policy.whitelist_receivers,
+                    eip1559_pricing: evm_policy.eip1559_pricing,
+                    private_transactions: evm_policy.private_transactions.unwrap_or(false),
+                    min_balance: evm_policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
+                })
+            }
+            Some(ConfigFileRelayerNetworkPolicy::Solana(solana_policy)) => {
+                use crate::config::ConfigFileRelayerSolanaFeePaymentStrategy;
+
+                let allowed_tokens = solana_policy.allowed_tokens.map(|tokens| {
+                    tokens
+                        .into_iter()
+                        .map(|token| {
+                            SolanaAllowedTokensPolicy::new_partial(
+                                token.mint,
+                                token.max_allowed_fee,
+                                token.swap_config.map(|swap| SolanaAllowedTokensSwapConfig {
+                                    slippage_percentage: swap.slippage_percentage,
+                                    min_amount: swap.min_amount,
+                                    max_amount: swap.max_amount,
+                                    retain_min_amount: swap.retain_min_amount,
+                                }),
+                            )
+                        })
+                        .collect()
+                });
+
+                let swap_config = solana_policy.swap_config.map(|swap| {
+                    use crate::config::ConfigFileRelayerSolanaSwapStrategy;
+
+                    RelayerSolanaSwapConfig {
+                        strategy: Some(match swap.strategy {
+                            Some(ConfigFileRelayerSolanaSwapStrategy::JupiterSwap) => {
+                                SolanaSwapStrategy::JupiterSwap
+                            }
+                            Some(ConfigFileRelayerSolanaSwapStrategy::JupiterUltra) => {
+                                SolanaSwapStrategy::JupiterUltra
+                            }
+                            None => SolanaSwapStrategy::Noop,
+                        }),
+                        cron_schedule: swap.cron_schedule,
+                        min_balance_threshold: swap.min_balance_threshold,
+                        jupiter_swap_options: swap.jupiter_swap_options.map(|opts| {
+                            JupiterSwapOptions {
+                                priority_fee_max_lamports: opts.priority_fee_max_lamports,
+                                priority_level: opts.priority_level,
+                                dynamic_compute_unit_limit: opts.dynamic_compute_unit_limit,
+                            }
+                        }),
+                    }
+                });
+
+                RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                    fee_payment_strategy: match solana_policy.fee_payment_strategy {
+                        Some(ConfigFileRelayerSolanaFeePaymentStrategy::User) => {
+                            SolanaFeePaymentStrategy::User
+                        }
+                        Some(ConfigFileRelayerSolanaFeePaymentStrategy::Relayer) => {
+                            SolanaFeePaymentStrategy::Relayer
+                        }
+                        None => SolanaFeePaymentStrategy::User,
+                    },
+                    fee_margin_percentage: solana_policy.fee_margin_percentage,
+                    min_balance: solana_policy
+                        .min_balance
+                        .unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
+                    allowed_tokens,
+                    allowed_programs: solana_policy.allowed_programs,
+                    allowed_accounts: solana_policy.allowed_accounts,
+                    disallowed_accounts: solana_policy.disallowed_accounts,
+                    max_signatures: solana_policy.max_signatures,
+                    max_tx_data_size: solana_policy
+                        .max_tx_data_size
+                        .unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
+                    max_allowed_fee_lamports: solana_policy.max_allowed_fee_lamports,
+                    swap_config,
+                })
+            }
+            Some(ConfigFileRelayerNetworkPolicy::Stellar(stellar_policy)) => {
+                RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                    max_fee: stellar_policy.max_fee,
+                    timeout_seconds: stellar_policy.timeout_seconds,
+                    min_balance: stellar_policy
+                        .min_balance
+                        .unwrap_or(DEFAULT_STELLAR_MIN_BALANCE),
+                })
+            }
+            None => {
+                // Use default policy based on network type
+                match network_type {
+                    NetworkType::Evm => RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+                    NetworkType::Solana => {
+                        RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default())
+                    }
+                    NetworkType::Stellar => {
+                        RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default())
+                    }
+                }
+            }
+        };
+
+        Ok(Self {
+            id: config.id,
+            name: config.name,
+            network: config.network,
+            paused: config.paused,
+            network_type,
+            signer_id: config.signer_id,
+            policies,
+            address: "".to_string(), // Will be filled in later by process_relayers
+            notification_id: config.notification_id,
+            system_disabled: false,
+            custom_rpc_urls: config.custom_rpc_urls,
+        })
     }
 }
 

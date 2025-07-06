@@ -18,8 +18,8 @@ use crate::{
         SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage, TransactionRepositoryImpl,
+        InMemoryNetworkRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+        RelayerRepositoryImpl, TransactionRepositoryImpl,
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
@@ -351,7 +351,7 @@ pub trait RelayerTransactionFactoryTrait {
     /// # Arguments
     ///
     /// * `relayer` - A `RelayerRepoModel` representing the relayer.
-    /// * `relayer_repository` - An `Arc` to the `RelayerRepositoryStorage`.
+    /// * `relayer_repository` - An `Arc` to the `RelayerRepositoryImpl`.
     /// * `transaction_repository` - An `Arc` to the `InMemoryTransactionRepository`.
     /// * `job_producer` - An `Arc` to the `JobProducer`.
     ///
@@ -360,7 +360,7 @@ pub trait RelayerTransactionFactoryTrait {
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
     fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+        relayer_repository: Arc<RelayerRepositoryImpl>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
@@ -376,7 +376,7 @@ impl RelayerTransactionFactory {
     ///
     /// * `relayer` - A `RelayerRepoModel` representing the relayer.
     /// * `signer` - A `SignerRepoModel` representing the signer.
-    /// * `relayer_repository` - An `Arc` to the `RelayerRepositoryStorage`.
+    /// * `relayer_repository` - An `Arc` to the `RelayerRepositoryImpl`.
     /// * `transaction_repository` - An `Arc` to the `InMemoryTransactionRepository`.
     /// * `transaction_counter_store` - An `Arc` to the `InMemoryTransactionCounter`.
     /// * `job_producer` - An `Arc` to the `JobProducer`.
@@ -387,7 +387,7 @@ impl RelayerTransactionFactory {
     pub async fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+        relayer_repository: Arc<RelayerRepositoryImpl>,
         network_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<TransactionRepositoryImpl>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,

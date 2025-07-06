@@ -34,9 +34,8 @@ use crate::{
         StellarRpcResult, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        NetworkRepository, RelayerRepository, RelayerRepositoryStorage, Repository,
-        TransactionRepository,
+        InMemoryNetworkRepository, InMemoryTransactionCounter, NetworkRepository,
+        RelayerRepository, RelayerRepositoryImpl, Repository, TransactionRepository,
     },
     services::{
         StellarProvider, StellarProviderTrait, TransactionCounterService,
@@ -126,7 +125,7 @@ where
 
 pub type DefaultStellarRelayer<J, T> = StellarRelayer<
     StellarProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
+    RelayerRepositoryImpl,
     InMemoryNetworkRepository,
     T,
     J,

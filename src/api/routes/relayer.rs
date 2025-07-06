@@ -193,8 +193,8 @@ mod tests {
         models::AppState,
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage, Repository,
+            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+            RelayerRepositoryImpl, Repository,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -202,9 +202,7 @@ mod tests {
 
     // Simple mock for AppState
     async fn get_test_app_state() -> AppState<MockJobProducerTrait, InMemoryTransactionRepository> {
-        let relayer_repo = Arc::new(RelayerRepositoryStorage::in_memory(
-            InMemoryRelayerRepository::new(),
-        ));
+        let relayer_repo = Arc::new(RelayerRepositoryImpl::new_in_memory());
         let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
         let signer_repo = Arc::new(InMemorySignerRepository::new());
         let network_repo = Arc::new(InMemoryNetworkRepository::new());

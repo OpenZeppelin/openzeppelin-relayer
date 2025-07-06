@@ -8,8 +8,8 @@ use crate::{
     models::TransactionRepoModel,
     repositories::{
         InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        RelayerRepositoryStorage, Repository, TransactionRepository, TransactionRepositoryImpl,
+        InMemorySignerRepository, InMemoryTransactionCounter, RelayerRepositoryImpl, Repository,
+        TransactionRepository, TransactionRepositoryImpl,
     },
 };
 
@@ -21,7 +21,7 @@ pub struct AppState<
     T: TransactionRepository + Repository<TransactionRepoModel, String>,
 > {
     /// Repository for managing relayer data.
-    pub relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+    pub relayer_repository: Arc<RelayerRepositoryImpl>,
     /// Repository for managing transaction data.
     pub transaction_repository: Arc<T>,
     /// Repository for managing signer data.
@@ -47,9 +47,9 @@ impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoM
     ///
     /// # Returns
     ///
-    /// An `Arc` pointing to the `RelayerRepositoryStorage`.
-    pub fn relayer_repository(&self) -> Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>> {
-        Arc::clone(&self.relayer_repository)
+    /// An `Arc` pointing to the `RelayerRepositoryImpl`.
+    pub fn relayer_repository(&self) -> Arc<RelayerRepositoryImpl> {
+        self.relayer_repository.clone()
     }
 
     /// Returns a clone of the transaction repository.
@@ -145,9 +145,7 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         AppState {
-            relayer_repository: Arc::new(RelayerRepositoryStorage::in_memory(
-                InMemoryRelayerRepository::default(),
-            )),
+            relayer_repository: Arc::new(RelayerRepositoryImpl::default()),
             transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
             signer_repository: Arc::new(InMemorySignerRepository::default()),
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),

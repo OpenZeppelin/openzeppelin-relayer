@@ -15,9 +15,8 @@ pub mod mockutils {
         },
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, PluginRepositoryTrait, RelayerRepositoryStorage,
-            Repository,
+            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
+            PluginRepositoryTrait, RelayerRepositoryImpl, Repository,
         },
     };
 
@@ -81,9 +80,7 @@ pub mod mockutils {
         networks: Option<Vec<NetworkRepoModel>>,
         plugins: Option<Vec<PluginModel>>,
     ) -> AppState<MockJobProducerTrait, InMemoryTransactionRepository> {
-        let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
-            InMemoryRelayerRepository::default(),
-        ));
+        let relayer_repository = Arc::new(RelayerRepositoryImpl::new_in_memory());
         if let Some(relayers) = relayers {
             for relayer in relayers {
                 relayer_repository.create(relayer).await.unwrap();

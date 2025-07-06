@@ -11,7 +11,7 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TransactionCounterService<T> {
     relayer_id: String,
     address: String,

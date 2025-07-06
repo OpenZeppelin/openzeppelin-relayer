@@ -25,8 +25,7 @@ use crate::{
         SolanaNetwork, TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository,
+        InMemoryNetworkRepository, RelayerRepository, RelayerRepositoryImpl, Repository,
     },
     services::{
         JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
@@ -72,14 +71,8 @@ where
     dex_service: Arc<NetworkDex<SP, S, JS>>,
 }
 
-pub type DefaultSolanaRelayer<J, T> = SolanaRelayer<
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    T,
-    J,
-    SolanaSigner,
-    JupiterService,
-    SolanaProvider,
->;
+pub type DefaultSolanaRelayer<J, T> =
+    SolanaRelayer<RelayerRepositoryImpl, T, J, SolanaSigner, JupiterService, SolanaProvider>;
 
 impl<R, T, J, S, JS, SP> SolanaRelayer<R, T, J, S, JS, SP>
 where

@@ -21,8 +21,7 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, RelayerRepositoryStorage, Repository,
-        TransactionRepository,
+        InMemoryNetworkRepository, RelayerRepositoryImpl, Repository, TransactionRepository,
     },
     services::{get_network_provider, JupiterService, SolanaSignerFactory},
 };
@@ -34,7 +33,7 @@ pub async fn create_solana_relayer<
 >(
     relayer: RelayerRepoModel,
     signer: SignerRepoModel,
-    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
+    relayer_repository: Arc<RelayerRepositoryImpl>,
     network_repository: Arc<InMemoryNetworkRepository>,
     transaction_repository: Arc<T>,
     job_producer: Arc<J>,
