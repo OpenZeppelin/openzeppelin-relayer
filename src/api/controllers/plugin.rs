@@ -4,8 +4,14 @@
 //! - Calling plugins
 use crate::{
     jobs::JobProducerTrait,
-    models::{ApiError, ApiResponse, AppState, PluginCallRequest, TransactionRepoModel},
-    repositories::{Repository, TransactionRepository},
+    models::{
+        ApiError, ApiResponse, AppState, NetworkRepoModel, NotificationRepoModel,
+        PluginCallRequest, RelayerRepoModel, SignerRepoModel, TransactionRepoModel,
+    },
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
     services::plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
 };
 use actix_web::{web, HttpResponse};
@@ -24,12 +30,18 @@ use std::sync::Arc;
 ///
 /// The result of the plugin call.
 pub async fn call_plugin<
-    J: JobProducerTrait + 'static,
-    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
-    state: web::ThinData<AppState<J, T>>,
+    state: web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
 ) -> Result<HttpResponse, ApiError> {
     let plugin = state
         .plugin_repository

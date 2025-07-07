@@ -116,8 +116,7 @@ mod tests {
     use super::*;
     use crate::{
         domain::SignTransactionResponse,
-        models::{DecoratedSignature, NetworkTransactionData},
-        repositories::TransactionCounterError,
+        models::{DecoratedSignature, NetworkTransactionData, RepositoryError},
     };
     use soroban_rs::xdr::{
         BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
@@ -136,7 +135,7 @@ mod tests {
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<u64, TransactionCounterError> {
+        ) -> Result<u64, RepositoryError> {
             Ok(self.sequence)
         }
 
@@ -144,7 +143,7 @@ mod tests {
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<Option<u64>, TransactionCounterError> {
+        ) -> Result<Option<u64>, RepositoryError> {
             Ok(Some(self.sequence))
         }
 
@@ -152,7 +151,7 @@ mod tests {
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<u64, TransactionCounterError> {
+        ) -> Result<u64, RepositoryError> {
             Ok(self.sequence - 1)
         }
 
@@ -161,7 +160,7 @@ mod tests {
             _relayer_id: &str,
             _address: &str,
             _value: u64,
-        ) -> Result<(), TransactionCounterError> {
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
     }

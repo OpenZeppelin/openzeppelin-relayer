@@ -48,8 +48,14 @@
 //! 6. The server closes the socket connection.
 //!
 
-use crate::models::TransactionRepoModel;
-use crate::repositories::{Repository, TransactionRepository};
+use crate::models::{
+    NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
+    TransactionRepoModel,
+};
+use crate::repositories::{
+    NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+    TransactionCounterTrait, TransactionRepository,
+};
 use crate::{jobs::JobProducerTrait, models::AppState};
 use actix_web::web;
 use std::sync::Arc;
@@ -102,14 +108,20 @@ impl SocketService {
     ///
     /// A vector of traces.
     pub async fn listen<
+        RA: RelayerApiTrait<J, TR, RR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
         J: JobProducerTrait + 'static,
-        R: RelayerApiTrait<J, T> + 'static + Send + Sync,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        state: Arc<web::ThinData<AppState<J, T>>>,
-        relayer_api: Arc<R>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError> {
         let mut shutdown = shutdown_rx;
 
@@ -120,7 +132,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    let result = tokio::spawn(Self::handle_connection::<J, R, T>(stream, state, relayer_api))
+                    let result = tokio::spawn(Self::handle_connection::<RA, J, TR, RR, NR, NFR, SR, TCR, PR>(stream, state, relayer_api))
                         .await
                         .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
@@ -151,13 +163,19 @@ impl SocketService {
     ///
     /// A vector of traces.
     async fn handle_connection<
+        RA: RelayerApiTrait<J, TR, RR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
         J: JobProducerTrait + 'static,
-        R: RelayerApiTrait<J, T> + 'static + Send + Sync,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         stream: UnixStream,
-        state: Arc<web::ThinData<AppState<J, T>>>,
-        relayer_api: Arc<R>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError> {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();

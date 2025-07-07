@@ -5,10 +5,14 @@ use std::sync::Arc;
 
 use crate::{
     jobs::{JobProducer, JobProducerTrait},
-    models::TransactionRepoModel,
+    models::{
+        NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
+        TransactionRepoModel,
+    },
     repositories::{
-        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-        InMemorySignerRepository, InMemoryTransactionCounter, RelayerRepositoryImpl, Repository,
+        NetworkRepository, NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
+        PluginRepositoryTrait, RelayerRepository, RelayerRepositoryImpl, Repository,
+        SignerRepositoryImpl, TransactionCounterRepositoryImpl, TransactionCounterTrait,
         TransactionRepository, TransactionRepositoryImpl,
     },
 };
@@ -17,38 +21,61 @@ use crate::{
 /// required for the application's operation.
 #[derive(Clone, Debug)]
 pub struct AppState<
-    J: JobProducerTrait,
-    T: TransactionRepository + Repository<TransactionRepoModel, String>,
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
 > {
     /// Repository for managing relayer data.
-    pub relayer_repository: Arc<RelayerRepositoryImpl>,
+    pub relayer_repository: Arc<RR>,
     /// Repository for managing transaction data.
-    pub transaction_repository: Arc<T>,
+    pub transaction_repository: Arc<TR>,
     /// Repository for managing signer data.
-    pub signer_repository: Arc<InMemorySignerRepository>,
+    pub signer_repository: Arc<SR>,
     /// Repository for managing notification data.
-    pub notification_repository: Arc<InMemoryNotificationRepository>,
+    pub notification_repository: Arc<NFR>,
     /// Repository for managing network data.
-    pub network_repository: Arc<InMemoryNetworkRepository>,
+    pub network_repository: Arc<NR>,
     /// Store for managing transaction counters.
-    pub transaction_counter_store: Arc<InMemoryTransactionCounter>,
+    pub transaction_counter_store: Arc<TCR>,
     /// Producer for managing job creation and execution.
     pub job_producer: Arc<J>,
     /// Repository for managing plugins.
-    pub plugin_repository: Arc<InMemoryPluginRepository>,
+    pub plugin_repository: Arc<PR>,
 }
 
-pub type DefaultAppState = AppState<JobProducer, TransactionRepositoryImpl>;
+pub type DefaultAppState = AppState<
+    JobProducer,
+    RelayerRepositoryImpl,
+    TransactionRepositoryImpl,
+    NetworkRepositoryImpl,
+    NotificationRepositoryImpl,
+    SignerRepositoryImpl,
+    TransactionCounterRepositoryImpl,
+    PluginRepositoryImpl,
+>;
 
-impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoModel, String>>
-    AppState<J, T>
+impl<
+        J: JobProducerTrait,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    > AppState<J, RR, TR, NR, NFR, SR, TCR, PR>
 {
     /// Returns a clone of the relayer repository.
     ///
     /// # Returns
     ///
     /// An `Arc` pointing to the `RelayerRepositoryImpl`.
-    pub fn relayer_repository(&self) -> Arc<RelayerRepositoryImpl> {
+    pub fn relayer_repository(&self) -> Arc<RR> {
         self.relayer_repository.clone()
     }
 
@@ -57,7 +84,7 @@ impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoM
     /// # Returns
     ///
     /// An `Arc` pointing to the `Arc<TransactionRepositoryImpl>`.
-    pub fn transaction_repository(&self) -> Arc<T> {
+    pub fn transaction_repository(&self) -> Arc<TR> {
         Arc::clone(&self.transaction_repository)
     }
 
@@ -66,7 +93,7 @@ impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoM
     /// # Returns
     ///
     /// An `Arc` pointing to the `InMemorySignerRepository`.
-    pub fn signer_repository(&self) -> Arc<InMemorySignerRepository> {
+    pub fn signer_repository(&self) -> Arc<SR> {
         Arc::clone(&self.signer_repository)
     }
 
@@ -75,7 +102,7 @@ impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoM
     /// # Returns
     ///
     /// An `Arc` pointing to the `InMemoryNotificationRepository`.
-    pub fn notification_repository(&self) -> Arc<InMemoryNotificationRepository> {
+    pub fn notification_repository(&self) -> Arc<NFR> {
         Arc::clone(&self.notification_repository)
     }
 
@@ -84,7 +111,7 @@ impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoM
     /// # Returns
     ///
     /// An `Arc` pointing to the `InMemoryNetworkRepository`.
-    pub fn network_repository(&self) -> Arc<InMemoryNetworkRepository> {
+    pub fn network_repository(&self) -> Arc<NR> {
         Arc::clone(&self.network_repository)
     }
 
@@ -93,7 +120,7 @@ impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoM
     /// # Returns
     ///
     /// An `Arc` pointing to the `InMemoryTransactionCounter`.
-    pub fn transaction_counter_store(&self) -> Arc<InMemoryTransactionCounter> {
+    pub fn transaction_counter_store(&self) -> Arc<TCR> {
         Arc::clone(&self.transaction_counter_store)
     }
 
@@ -111,19 +138,28 @@ impl<J: JobProducerTrait, T: TransactionRepository + Repository<TransactionRepoM
     /// # Returns
     ///
     /// An `Arc` pointing to the `InMemoryPluginRepository`.
-    pub fn plugin_repository(&self) -> Arc<InMemoryPluginRepository> {
+    pub fn plugin_repository(&self) -> Arc<PR> {
         Arc::clone(&self.plugin_repository)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{jobs::MockJobProducerTrait, repositories::InMemoryTransactionRepository};
+    use crate::{jobs::MockJobProducerTrait, repositories::TransactionRepositoryImpl};
 
     use super::*;
     use std::sync::Arc;
 
-    fn create_test_app_state() -> AppState<MockJobProducerTrait, InMemoryTransactionRepository> {
+    fn create_test_app_state() -> AppState<
+        MockJobProducerTrait,
+        RelayerRepositoryImpl,
+        TransactionRepositoryImpl,
+        NetworkRepositoryImpl,
+        NotificationRepositoryImpl,
+        SignerRepositoryImpl,
+        TransactionCounterRepositoryImpl,
+        PluginRepositoryImpl,
+    > {
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
 
@@ -145,14 +181,14 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         AppState {
-            relayer_repository: Arc::new(RelayerRepositoryImpl::default()),
-            transaction_repository: Arc::new(InMemoryTransactionRepository::new()),
-            signer_repository: Arc::new(InMemorySignerRepository::default()),
-            notification_repository: Arc::new(InMemoryNotificationRepository::default()),
-            network_repository: Arc::new(InMemoryNetworkRepository::default()),
-            transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
+            relayer_repository: Arc::new(RelayerRepositoryImpl::new_in_memory()),
+            transaction_repository: Arc::new(TransactionRepositoryImpl::new_in_memory()),
+            signer_repository: Arc::new(SignerRepositoryImpl::new_in_memory()),
+            notification_repository: Arc::new(NotificationRepositoryImpl::new_in_memory()),
+            network_repository: Arc::new(NetworkRepositoryImpl::new_in_memory()),
+            transaction_counter_store: Arc::new(TransactionCounterRepositoryImpl::new_in_memory()),
             job_producer: Arc::new(mock_job_producer),
-            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
+            plugin_repository: Arc::new(PluginRepositoryImpl::new_in_memory()),
         }
     }
 

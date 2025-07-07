@@ -20,11 +20,15 @@ use crate::{
     jobs::JobProducerTrait,
     models::{
         AppState, DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
-        EvmTransactionDataSignature, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError, RelayerRepoModel,
-        RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
+        EvmTransactionDataSignature, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
+        NotificationRepoModel, RelayerError, RelayerRepoModel, RelayerStatus, SignerRepoModel,
+        StellarNetwork, TransactionError, TransactionRepoModel,
     },
-    repositories::{Repository, TransactionRepository},
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
     services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
 };
 
@@ -204,18 +208,24 @@ pub trait SolanaRelayerTrait {
 
 pub enum NetworkRelayer<
     J: JobProducerTrait + 'static,
-    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
 > {
-    Evm(DefaultEvmRelayer<J, T>),
-    Solana(DefaultSolanaRelayer<J, T>),
-    Stellar(DefaultStellarRelayer<J, T>),
+    Evm(DefaultEvmRelayer<J, T, RR, NR, TCR>),
+    Solana(DefaultSolanaRelayer<J, T, RR, NR>),
+    Stellar(DefaultStellarRelayer<J, T, NR, RR, TCR>),
 }
 
 #[async_trait]
 impl<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
-    > Relayer for NetworkRelayer<J, T>
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+    > Relayer for NetworkRelayer<J, T, RR, NR, TCR>
 {
     async fn process_transaction_request(
         &self,
@@ -305,15 +315,21 @@ impl<
 
 #[async_trait]
 pub trait RelayerFactoryTrait<
-    J: JobProducerTrait + 'static,
-    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
 >
 {
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J, T>>,
-    ) -> Result<NetworkRelayer<J, T>, RelayerError>;
+        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, RelayerError>;
 }
 
 pub struct RelayerFactory;
@@ -321,19 +337,25 @@ pub struct RelayerFactory;
 #[async_trait]
 impl<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync,
-    > RelayerFactoryTrait<J, T> for RelayerFactory
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    > RelayerFactoryTrait<J, RR, TR, NR, NFR, SR, TCR, PR> for RelayerFactory
 {
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J, T>>,
-    ) -> Result<NetworkRelayer<J, T>, RelayerError> {
+        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, RelayerError> {
         match relayer.network_type {
             NetworkType::Evm => {
                 let network_repo = state
                     .network_repository()
-                    .get(NetworkType::Evm, &relayer.network)
+                    .get_by_name(NetworkType::Evm, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -382,7 +404,7 @@ impl<
             NetworkType::Stellar => {
                 let network_repo = state
                     .network_repository()
-                    .get(NetworkType::Stellar, &relayer.network)
+                    .get_by_name(NetworkType::Stellar, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -405,7 +427,7 @@ impl<
                     state.transaction_counter_store(),
                 ));
 
-                let relayer = DefaultStellarRelayer::<J, T>::new(
+                let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
                     relayer,
                     stellar_provider,
                     stellar::StellarRelayerDependencies::new(

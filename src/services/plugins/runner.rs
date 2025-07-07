@@ -8,11 +8,17 @@
 //!
 use std::sync::Arc;
 
-use crate::repositories::{Repository, TransactionRepository};
 use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};
 use crate::{
     jobs::JobProducerTrait,
-    models::{AppState, TransactionRepoModel},
+    models::{
+        AppState, NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
+        TransactionRepoModel,
+    },
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
 };
 
 use super::PluginError;
@@ -28,13 +34,19 @@ use mockall::automock;
 pub trait PluginRunnerTrait {
     async fn run<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J, T>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<ScriptResult, PluginError>;
 }
 
@@ -44,13 +56,19 @@ pub struct PluginRunner;
 impl PluginRunner {
     async fn run<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J, T>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<ScriptResult, PluginError> {
         let socket_service = SocketService::new(socket_path)?;
         let socket_path_clone = socket_service.socket_path().to_string();
@@ -89,13 +107,19 @@ impl PluginRunner {
 impl PluginRunnerTrait for PluginRunner {
     async fn run<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J, T>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<ScriptResult, PluginError> {
         self.run(socket_path, script_path, script_params, state)
             .await
@@ -107,8 +131,14 @@ mod tests {
     use std::fs;
 
     use crate::{
-        jobs::MockJobProducerTrait, repositories::InMemoryTransactionRepository,
-        services::plugins::LogLevel, utils::mocks::mockutils::create_mock_app_state,
+        jobs::MockJobProducerTrait,
+        repositories::{
+            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
+            RelayerRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl,
+            TransactionRepositoryImpl,
+        },
+        services::plugins::LogLevel,
+        utils::mocks::mockutils::create_mock_app_state,
     };
     use tempfile::tempdir;
 
@@ -146,7 +176,7 @@ mod tests {
 
         let plugin_runner = PluginRunner;
         let result = plugin_runner
-            .run::<MockJobProducerTrait, InMemoryTransactionRepository>(
+            .run::<MockJobProducerTrait, TransactionRepositoryImpl, RelayerRepositoryImpl, NetworkRepositoryImpl, NotificationRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl, PluginRepositoryImpl>(
                 &socket_path.display().to_string(),
                 script_path.display().to_string(),
                 "{ \"test\": \"test\" }".to_string(),

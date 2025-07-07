@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use dashmap::DashMap;
 
-use crate::repositories::{TransactionCounterError, TransactionCounterTrait};
+use crate::repositories::{RepositoryError, TransactionCounterTrait};
 
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryTransactionCounter {
@@ -24,11 +24,7 @@ impl InMemoryTransactionCounter {
 
 #[async_trait]
 impl TransactionCounterTrait for InMemoryTransactionCounter {
-    async fn get(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<Option<u64>, TransactionCounterError> {
+    async fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, RepositoryError> {
         Ok(self
             .store
             .get(&(relayer_id.to_string(), address.to_string()))
@@ -39,7 +35,7 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
         &self,
         relayer_id: &str,
         address: &str,
-    ) -> Result<u64, TransactionCounterError> {
+    ) -> Result<u64, RepositoryError> {
         let mut entry = self
             .store
             .entry((relayer_id.to_string(), address.to_string()))
@@ -49,16 +45,12 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
         Ok(current)
     }
 
-    async fn decrement(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<u64, TransactionCounterError> {
+    async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError> {
         let mut entry = self
             .store
             .get_mut(&(relayer_id.to_string(), address.to_string()))
             .ok_or_else(|| {
-                TransactionCounterError::NotFound(format!("Counter not found for {}", address))
+                RepositoryError::NotFound(format!("Counter not found for {}", address))
             })?;
         if *entry > 0 {
             *entry -= 1;
@@ -71,7 +63,7 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
         relayer_id: &str,
         address: &str,
         value: u64,
-    ) -> Result<(), TransactionCounterError> {
+    ) -> Result<(), RepositoryError> {
         self.store
             .insert((relayer_id.to_string(), address.to_string()), value);
         Ok(())
@@ -86,7 +78,7 @@ mod tests {
     async fn test_decrement_not_found() {
         let store = InMemoryTransactionCounter::new();
         let result = store.decrement("nonexistent", "0x1234").await;
-        assert!(matches!(result, Err(TransactionCounterError::NotFound(_))));
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 
     #[tokio::test]

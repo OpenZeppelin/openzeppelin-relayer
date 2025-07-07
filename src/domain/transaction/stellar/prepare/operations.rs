@@ -93,7 +93,7 @@ mod tests {
         domain::{SignTransactionResponse, SignTransactionResponseStellar},
         models::{
             AssetSpec, DecoratedSignature, NetworkTransactionData, NetworkType, OperationSpec,
-            TransactionInput, TransactionStatus,
+            RepositoryError, TransactionInput, TransactionStatus,
         },
         repositories::MockTransactionCounterTrait,
         services::{MockSigner, MockStellarProviderTrait},
@@ -268,11 +268,7 @@ mod tests {
 
         let mut counter = MockTransactionCounterTrait::new();
         counter.expect_get_and_increment().returning(|_, _| {
-            Box::pin(async {
-                Err(crate::repositories::TransactionCounterError::NotFound(
-                    "Counter not found".to_string(),
-                ))
-            })
+            Box::pin(async { Err(RepositoryError::NotFound("Counter not found".to_string())) })
         });
 
         let provider = MockStellarProviderTrait::new();

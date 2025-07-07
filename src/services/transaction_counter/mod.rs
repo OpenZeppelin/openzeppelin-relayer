@@ -44,21 +44,31 @@ where
     T: TransactionCounterTrait + Send + Sync,
 {
     async fn get(&self) -> Result<Option<u64>, TransactionCounterError> {
-        self.store.get(&self.relayer_id, &self.address).await
+        self.store
+            .get(&self.relayer_id, &self.address)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 
     async fn get_and_increment(&self) -> Result<u64, TransactionCounterError> {
         self.store
             .get_and_increment(&self.relayer_id, &self.address)
             .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 
     async fn decrement(&self) -> Result<u64, TransactionCounterError> {
-        self.store.decrement(&self.relayer_id, &self.address).await
+        self.store
+            .decrement(&self.relayer_id, &self.address)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 
     async fn set(&self, value: u64) -> Result<(), TransactionCounterError> {
-        self.store.set(&self.relayer_id, &self.address, value).await
+        self.store
+            .set(&self.relayer_id, &self.address, value)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 }
 

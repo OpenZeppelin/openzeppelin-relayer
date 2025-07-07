@@ -7,8 +7,8 @@ use crate::{
     jobs::{self, Queue},
     models::{AppState, DefaultAppState},
     repositories::{
-        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-        InMemorySignerRepository, InMemoryTransactionCounter, RelayerRepositoryImpl,
+        NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
+        RelayerRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl,
         TransactionRepositoryType,
     },
 };
@@ -37,13 +37,13 @@ pub async fn initialize_app_state(
             .create_repository(&server_config)
             .await,
     );
-    let signer_repository = Arc::new(InMemorySignerRepository::new());
-    let notification_repository = Arc::new(InMemoryNotificationRepository::new());
-    let network_repository = Arc::new(InMemoryNetworkRepository::new());
-    let transaction_counter_store = Arc::new(InMemoryTransactionCounter::new());
+    let signer_repository = Arc::new(SignerRepositoryImpl::new_in_memory());
+    let notification_repository = Arc::new(NotificationRepositoryImpl::new_in_memory());
+    let network_repository = Arc::new(NetworkRepositoryImpl::new_in_memory());
+    let transaction_counter_store = Arc::new(TransactionCounterRepositoryImpl::new_in_memory());
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
-    let plugin_repository = Arc::new(InMemoryPluginRepository::new());
+    let plugin_repository = Arc::new(PluginRepositoryImpl::new_in_memory());
 
     let app_state = web::ThinData(AppState {
         relayer_repository,

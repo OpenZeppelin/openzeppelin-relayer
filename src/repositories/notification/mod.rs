@@ -4,6 +4,7 @@ mod notification_redis;
 
 pub use notification_in_memory::*;
 pub use notification_redis::*;
+use redis::aio::ConnectionManager;
 
 use crate::{
     config::ServerConfig,
@@ -24,6 +25,21 @@ pub enum NotificationRepositoryType {
 pub enum NotificationRepositoryImpl {
     InMemory(InMemoryNotificationRepository),
     Redis(RedisNotificationRepository),
+}
+
+impl NotificationRepositoryImpl {
+    pub fn new_in_memory() -> Self {
+        Self::InMemory(InMemoryNotificationRepository::new())
+    }
+    pub fn new_redis(
+        connection_manager: Arc<ConnectionManager>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
+        Ok(Self::Redis(RedisNotificationRepository::new(
+            connection_manager,
+            key_prefix,
+        )?))
+    }
 }
 
 impl NotificationRepositoryType {

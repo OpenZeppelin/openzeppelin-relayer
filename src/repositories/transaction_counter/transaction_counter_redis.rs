@@ -6,7 +6,7 @@
 //! to ensure consistency when incrementing and decrementing counters.
 
 use super::TransactionCounterTrait;
-use crate::repositories::TransactionCounterError;
+use crate::models::RepositoryError;
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
@@ -34,9 +34,9 @@ impl RedisTransactionCounter {
     pub fn new(
         connection_manager: Arc<ConnectionManager>,
         key_prefix: String,
-    ) -> Result<Self, TransactionCounterError> {
+    ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Redis key prefix cannot be empty".to_string(),
             ));
         }
@@ -55,36 +55,36 @@ impl RedisTransactionCounter {
         )
     }
 
-    /// Convert Redis errors to appropriate TransactionCounterError types
-    fn map_redis_error(&self, error: RedisError, context: &str) -> TransactionCounterError {
+    /// Convert Redis errors to appropriate RepositoryError types
+    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
         match error.kind() {
             redis::ErrorKind::IoError => {
                 error!("Redis IO error in {}: {}", context, error);
-                TransactionCounterError::NotFound(format!("Redis connection failed: {}", error))
+                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
             }
             redis::ErrorKind::AuthenticationFailed => {
                 error!("Redis authentication failed in {}: {}", context, error);
-                TransactionCounterError::NotFound(format!("Redis authentication failed: {}", error))
+                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
             }
             redis::ErrorKind::TypeError => {
                 error!("Redis type error in {}: {}", context, error);
-                TransactionCounterError::NotFound(format!("Redis data type error: {}", error))
+                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
             }
             redis::ErrorKind::ExecAbortError => {
                 warn!("Redis transaction aborted in {}: {}", context, error);
-                TransactionCounterError::NotFound(format!("Redis transaction aborted: {}", error))
+                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
             }
             redis::ErrorKind::BusyLoadingError => {
                 warn!("Redis busy loading in {}: {}", context, error);
-                TransactionCounterError::NotFound(format!("Redis is loading: {}", error))
+                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
             }
             redis::ErrorKind::NoScriptError => {
                 error!("Redis script error in {}: {}", context, error);
-                TransactionCounterError::NotFound(format!("Redis script error: {}", error))
+                RepositoryError::Other(format!("Redis script error: {}", error))
             }
             _ => {
                 error!("Unexpected Redis error in {}: {}", context, error);
-                TransactionCounterError::NotFound(format!("Redis error in {}: {}", context, error))
+                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
             }
         }
     }
@@ -92,19 +92,15 @@ impl RedisTransactionCounter {
 
 #[async_trait]
 impl TransactionCounterTrait for RedisTransactionCounter {
-    async fn get(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<Option<u64>, TransactionCounterError> {
+    async fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, RepositoryError> {
         if relayer_id.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Relayer ID cannot be empty".to_string(),
             ));
         }
 
         if address.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Address cannot be empty".to_string(),
             ));
         }
@@ -130,15 +126,15 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         &self,
         relayer_id: &str,
         address: &str,
-    ) -> Result<u64, TransactionCounterError> {
+    ) -> Result<u64, RepositoryError> {
         if relayer_id.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Relayer ID cannot be empty".to_string(),
             ));
         }
 
         if address.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Address cannot be empty".to_string(),
             ));
         }
@@ -172,19 +168,15 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         Ok(current)
     }
 
-    async fn decrement(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<u64, TransactionCounterError> {
+    async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError> {
         if relayer_id.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Relayer ID cannot be empty".to_string(),
             ));
         }
 
         if address.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Address cannot be empty".to_string(),
             ));
         }
@@ -204,7 +196,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             .map_err(|e| self.map_redis_error(e, "get_current_value_for_decrement"))?;
 
         let current = current_value.ok_or_else(|| {
-            TransactionCounterError::NotFound(format!(
+            RepositoryError::NotFound(format!(
                 "Counter not found for relayer {} and address {}",
                 relayer_id, address
             ))
@@ -227,15 +219,15 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         relayer_id: &str,
         address: &str,
         value: u64,
-    ) -> Result<(), TransactionCounterError> {
+    ) -> Result<(), RepositoryError> {
         if relayer_id.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Relayer ID cannot be empty".to_string(),
             ));
         }
 
         if address.is_empty() {
-            return Err(TransactionCounterError::NotFound(
+            return Err(RepositoryError::InvalidData(
                 "Address cannot be empty".to_string(),
             ));
         }
@@ -342,7 +334,7 @@ mod tests {
     async fn test_decrement_not_found() {
         let repo = setup_test_repo().await;
         let result = repo.decrement("nonexistent", "0x1234").await;
-        assert!(matches!(result, Err(TransactionCounterError::NotFound(_))));
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
     }
 
     #[tokio::test]
@@ -352,11 +344,11 @@ mod tests {
 
         // Test empty relayer_id
         let result = repo.get("", "0x1234").await;
-        assert!(matches!(result, Err(TransactionCounterError::NotFound(_))));
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
 
         // Test empty address
         let result = repo.get("relayer", "").await;
-        assert!(matches!(result, Err(TransactionCounterError::NotFound(_))));
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
     }
 
     #[tokio::test]

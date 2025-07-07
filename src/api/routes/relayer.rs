@@ -192,20 +192,29 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::AppState,
         repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-            RelayerRepositoryImpl, Repository,
+            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
+            RelayerRepositoryImpl, Repository, SignerRepositoryImpl,
+            TransactionCounterRepositoryImpl, TransactionRepositoryImpl,
         },
     };
     use actix_web::{http::StatusCode, test, App};
     use std::sync::Arc;
 
     // Simple mock for AppState
-    async fn get_test_app_state() -> AppState<MockJobProducerTrait, InMemoryTransactionRepository> {
+    async fn get_test_app_state() -> AppState<
+        MockJobProducerTrait,
+        RelayerRepositoryImpl,
+        TransactionRepositoryImpl,
+        NetworkRepositoryImpl,
+        NotificationRepositoryImpl,
+        SignerRepositoryImpl,
+        TransactionCounterRepositoryImpl,
+        PluginRepositoryImpl,
+    > {
         let relayer_repo = Arc::new(RelayerRepositoryImpl::new_in_memory());
-        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
-        let signer_repo = Arc::new(InMemorySignerRepository::new());
-        let network_repo = Arc::new(InMemoryNetworkRepository::new());
+        let transaction_repo = Arc::new(TransactionRepositoryImpl::new_in_memory());
+        let signer_repo = Arc::new(SignerRepositoryImpl::new_in_memory());
+        let network_repo = Arc::new(NetworkRepositoryImpl::new_in_memory());
 
         // Create test entities so routes don't return 404
 
@@ -299,11 +308,11 @@ mod tests {
             relayer_repository: relayer_repo,
             transaction_repository: transaction_repo,
             signer_repository: signer_repo,
-            notification_repository: Arc::new(InMemoryNotificationRepository::new()),
+            notification_repository: Arc::new(NotificationRepositoryImpl::new_in_memory()),
             network_repository: network_repo,
-            transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
+            transaction_counter_store: Arc::new(TransactionCounterRepositoryImpl::new_in_memory()),
             job_producer: Arc::new(MockJobProducerTrait::new()),
-            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
+            plugin_repository: Arc::new(PluginRepositoryImpl::new_in_memory()),
         }
     }
 

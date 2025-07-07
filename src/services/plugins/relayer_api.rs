@@ -6,8 +6,14 @@
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
 use crate::domain::{get_network_relayer, get_relayer_by_id, Relayer};
-use crate::models::{NetworkTransactionRequest, TransactionRepoModel, TransactionResponse};
-use crate::repositories::{Repository, TransactionRepository};
+use crate::models::{
+    NetworkRepoModel, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
+    SignerRepoModel, TransactionRepoModel, TransactionResponse,
+};
+use crate::repositories::{
+    NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+    TransactionCounterTrait, TransactionRepository,
+};
 use crate::{jobs::JobProducerTrait, models::AppState};
 use actix_web::web;
 use async_trait::async_trait;
@@ -45,25 +51,31 @@ pub struct Response {
 #[cfg_attr(test, automock)]
 pub trait RelayerApiTrait<
     J: JobProducerTrait + 'static,
-    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
 >
 {
     async fn handle_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Response;
 
     async fn process_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<Response, PluginError>;
 
     async fn handle_send_transaction(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<Response, PluginError>;
 }
 
@@ -73,11 +85,17 @@ pub struct RelayerApi;
 impl RelayerApi {
     pub async fn handle_request<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Response {
         match self.process_request(request.clone(), state).await {
             Ok(response) => response,
@@ -91,11 +109,17 @@ impl RelayerApi {
 
     async fn process_request<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<Response, PluginError> {
         match request.method {
             PluginMethod::SendTransaction => self.handle_send_transaction(request, state).await,
@@ -104,11 +128,17 @@ impl RelayerApi {
 
     async fn handle_send_transaction<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<Response, PluginError> {
         let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
             .await
@@ -152,13 +182,19 @@ impl RelayerApi {
 #[async_trait]
 impl<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-    > RelayerApiTrait<J, T> for RelayerApi
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    > RelayerApiTrait<J, TR, RR, NR, NFR, SR, TCR, PR> for RelayerApi
 {
     async fn handle_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Response {
         self.handle_request(request, state).await
     }
@@ -166,7 +202,7 @@ impl<
     async fn process_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<Response, PluginError> {
         self.process_request(request, state).await
     }
@@ -174,7 +210,7 @@ impl<
     async fn handle_send_transaction(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, T>>,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<Response, PluginError> {
         self.handle_send_transaction(request, state).await
     }

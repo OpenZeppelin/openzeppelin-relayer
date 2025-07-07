@@ -4,8 +4,14 @@ use std::sync::Arc;
 
 use crate::{
     jobs::JobProducerTrait,
-    models::{AppState, PluginCallRequest, TransactionRepoModel},
-    repositories::{Repository, TransactionRepository},
+    models::{
+        AppState, NetworkRepoModel, NotificationRepoModel, PluginCallRequest, RelayerRepoModel,
+        SignerRepoModel, TransactionRepoModel,
+    },
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
 };
 use actix_web::web;
 use async_trait::async_trait;
@@ -68,12 +74,18 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
     async fn call_plugin<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, T>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
         let script_params = plugin_call_request.params.to_string();
@@ -100,7 +112,13 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 #[cfg_attr(test, automock)]
 pub trait PluginServiceTrait<
     J: JobProducerTrait + 'static,
-    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
 >: Send + Sync
 {
     fn new(runner: PluginRunner) -> Self;
@@ -108,15 +126,21 @@ pub trait PluginServiceTrait<
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, T>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError>;
 }
 
 #[async_trait]
 impl<
         J: JobProducerTrait + 'static,
-        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-    > PluginServiceTrait<J, T> for PluginService<PluginRunner>
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    > PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR> for PluginService<PluginRunner>
 {
     fn new(runner: PluginRunner) -> Self {
         Self::new(runner)
@@ -126,7 +150,7 @@ impl<
         &self,
         code_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, T>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         self.call_plugin(code_path, plugin_call_request, state)
             .await
@@ -136,8 +160,13 @@ impl<
 #[cfg(test)]
 mod tests {
     use crate::{
-        jobs::MockJobProducerTrait, models::PluginModel,
-        repositories::InMemoryTransactionRepository,
+        jobs::MockJobProducerTrait,
+        models::PluginModel,
+        repositories::{
+            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
+            RelayerRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl,
+            TransactionRepositoryImpl,
+        },
         utils::mocks::mockutils::create_mock_app_state,
     };
 
@@ -149,13 +178,21 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
         };
-        let app_state: AppState<MockJobProducerTrait, InMemoryTransactionRepository> =
-            create_mock_app_state(None, None, None, Some(vec![plugin])).await;
+        let app_state: AppState<
+            MockJobProducerTrait,
+            RelayerRepositoryImpl,
+            TransactionRepositoryImpl,
+            NetworkRepositoryImpl,
+            NotificationRepositoryImpl,
+            SignerRepositoryImpl,
+            TransactionCounterRepositoryImpl,
+            PluginRepositoryImpl,
+        > = create_mock_app_state(None, None, None, Some(vec![plugin])).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, InMemoryTransactionRepository>()
+            .expect_run::<MockJobProducerTrait, TransactionRepositoryImpl, RelayerRepositoryImpl, NetworkRepositoryImpl, NotificationRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl, PluginRepositoryImpl>()
             .returning(|_, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {

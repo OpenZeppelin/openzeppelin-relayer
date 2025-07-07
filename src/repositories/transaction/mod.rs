@@ -2,6 +2,7 @@
 mod transaction_in_memory;
 mod transaction_redis;
 
+use redis::aio::ConnectionManager;
 pub use transaction_in_memory::*;
 pub use transaction_redis::*;
 
@@ -116,6 +117,21 @@ pub enum TransactionRepositoryType {
 pub enum TransactionRepositoryImpl {
     InMemory(InMemoryTransactionRepository),
     Redis(RedisTransactionRepository),
+}
+
+impl TransactionRepositoryImpl {
+    pub fn new_in_memory() -> Self {
+        Self::InMemory(InMemoryTransactionRepository::new())
+    }
+    pub fn new_redis(
+        connection_manager: Arc<ConnectionManager>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
+        Ok(Self::Redis(RedisTransactionRepository::new(
+            connection_manager,
+            key_prefix,
+        )?))
+    }
 }
 
 impl TransactionRepositoryType {

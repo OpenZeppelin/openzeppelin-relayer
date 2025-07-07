@@ -1,6 +1,7 @@
 pub mod transaction_counter_in_memory;
 pub mod transaction_counter_redis;
 
+use redis::aio::ConnectionManager;
 pub use transaction_counter_in_memory::InMemoryTransactionCounter;
 pub use transaction_counter_redis::RedisTransactionCounter;
 
@@ -12,7 +13,7 @@ use thiserror::Error;
 #[cfg(test)]
 use mockall::automock;
 
-use crate::config::ServerConfig;
+use crate::{config::ServerConfig, models::RepositoryError};
 
 #[derive(Error, Debug, Serialize)]
 pub enum TransactionCounterError {
@@ -26,30 +27,18 @@ pub enum TransactionCounterError {
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait TransactionCounterTrait {
-    async fn get(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<Option<u64>, TransactionCounterError>;
+    async fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, RepositoryError>;
 
     async fn get_and_increment(
         &self,
         relayer_id: &str,
         address: &str,
-    ) -> Result<u64, TransactionCounterError>;
+    ) -> Result<u64, RepositoryError>;
 
-    async fn decrement(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<u64, TransactionCounterError>;
+    async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError>;
 
-    async fn set(
-        &self,
-        relayer_id: &str,
-        address: &str,
-        value: u64,
-    ) -> Result<(), TransactionCounterError>;
+    async fn set(&self, relayer_id: &str, address: &str, value: u64)
+        -> Result<(), RepositoryError>;
 }
 
 // Enum representing the type of transaction counter repository to use
@@ -65,28 +54,40 @@ pub enum TransactionCounterRepositoryImpl {
     Redis(RedisTransactionCounter),
 }
 
+impl TransactionCounterRepositoryImpl {
+    pub fn new_in_memory() -> Self {
+        Self::InMemory(InMemoryTransactionCounter::new())
+    }
+    pub fn new_redis(
+        connection_manager: Arc<ConnectionManager>,
+        key_prefix: String,
+    ) -> Result<Self, RepositoryError> {
+        Ok(Self::Redis(RedisTransactionCounter::new(
+            connection_manager,
+            key_prefix,
+        )?))
+    }
+}
+
 impl TransactionCounterRepositoryType {
     /// Creates a transaction counter repository based on the enum variant
     pub async fn create_repository(
         self,
         config: &ServerConfig,
-    ) -> Result<TransactionCounterRepositoryImpl, TransactionCounterError> {
+    ) -> Result<TransactionCounterRepositoryImpl, RepositoryError> {
         match self {
             TransactionCounterRepositoryType::InMemory => Ok(
                 TransactionCounterRepositoryImpl::InMemory(InMemoryTransactionCounter::new()),
             ),
             TransactionCounterRepositoryType::Redis => {
                 let client = redis::Client::open(config.redis_url.clone()).map_err(|e| {
-                    TransactionCounterError::NotFound(format!(
-                        "Failed to create Redis client: {}",
-                        e
-                    ))
+                    RepositoryError::InvalidData(format!("Failed to create Redis client: {}", e))
                 })?;
                 let connection_manager =
                     redis::aio::ConnectionManager::new(client)
                         .await
                         .map_err(|e| {
-                            TransactionCounterError::NotFound(format!(
+                            RepositoryError::InvalidData(format!(
                                 "Failed to create Redis connection manager: {}",
                                 e
                             ))
@@ -103,11 +104,7 @@ impl TransactionCounterRepositoryType {
 
 #[async_trait]
 impl TransactionCounterTrait for TransactionCounterRepositoryImpl {
-    async fn get(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<Option<u64>, TransactionCounterError> {
+    async fn get(&self, relayer_id: &str, address: &str) -> Result<Option<u64>, RepositoryError> {
         match self {
             TransactionCounterRepositoryImpl::InMemory(counter) => {
                 counter.get(relayer_id, address).await
@@ -122,7 +119,7 @@ impl TransactionCounterTrait for TransactionCounterRepositoryImpl {
         &self,
         relayer_id: &str,
         address: &str,
-    ) -> Result<u64, TransactionCounterError> {
+    ) -> Result<u64, RepositoryError> {
         match self {
             TransactionCounterRepositoryImpl::InMemory(counter) => {
                 counter.get_and_increment(relayer_id, address).await
@@ -133,11 +130,7 @@ impl TransactionCounterTrait for TransactionCounterRepositoryImpl {
         }
     }
 
-    async fn decrement(
-        &self,
-        relayer_id: &str,
-        address: &str,
-    ) -> Result<u64, TransactionCounterError> {
+    async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError> {
         match self {
             TransactionCounterRepositoryImpl::InMemory(counter) => {
                 counter.decrement(relayer_id, address).await
@@ -153,7 +146,7 @@ impl TransactionCounterTrait for TransactionCounterRepositoryImpl {
         relayer_id: &str,
         address: &str,
         value: u64,
-    ) -> Result<(), TransactionCounterError> {
+    ) -> Result<(), RepositoryError> {
         match self {
             TransactionCounterRepositoryImpl::InMemory(counter) => {
                 counter.set(relayer_id, address, value).await

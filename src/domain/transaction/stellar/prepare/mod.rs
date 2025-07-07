@@ -349,7 +349,7 @@ mod prepare_transaction_tests {
         // Mock sequence counter to fail
         mocks.counter.expect_get_and_increment().returning(|_, _| {
             Box::pin(async {
-                Err(crate::repositories::TransactionCounterError::NotFound(
+                Err(RepositoryError::NotFound(
                     "Counter service failure".to_string(),
                 ))
             })
