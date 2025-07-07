@@ -207,6 +207,8 @@ These tags help the relayer:
 
 === EVM-Specific Fields
 
+NOTE: The OpenZeppelin Relayer supports any EVM-based L1 blockchain, as long as it doesn't deviate significantly from standard EVM behavior. Some L2 networks may also work, depending on how closely they follow EVM conventions. Users are encouraged to add the networks they need via the JSON configuration and test them thoroughly on testnets before deploying to production.
+
 [cols="1,1,1,3"]
 |===
 |Field |Type |Required |Description

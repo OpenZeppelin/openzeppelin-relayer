@@ -72,10 +72,18 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         Self { runner }
     }
 
+    fn resolve_plugin_path(plugin_path: &str) -> String {
+        if plugin_path.starts_with("plugins/") {
+            plugin_path.to_string()
+        } else {
+            format!("plugins/{}", plugin_path)
+        }
+    }
+
     async fn call_plugin<
-        J: JobProducerTrait + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        J: JobProducerTrait + 'static,
         TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
@@ -83,15 +91,17 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
-        code_path: String,
+        script_path: String,
         plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
+        let resolved_script_path = Self::resolve_plugin_path(&script_path);
         let script_params = plugin_call_request.params.to_string();
+
         let result = self
             .runner
-            .run(&socket_path, code_path, script_params, state)
+            .run(&socket_path, resolved_script_path, script_params, state)
             .await;
 
         match result {
@@ -124,7 +134,7 @@ pub trait PluginServiceTrait<
     fn new(runner: PluginRunner) -> Self;
     async fn call_plugin(
         &self,
-        code_path: String,
+        script_path: String,
         plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError>;
@@ -148,11 +158,11 @@ impl<
 
     async fn call_plugin(
         &self,
-        code_path: String,
+        script_path: String,
         plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError> {
-        self.call_plugin(code_path, plugin_call_request, state)
+        self.call_plugin(script_path, plugin_call_request, state)
             .await
     }
 }
@@ -171,6 +181,24 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn test_resolve_plugin_path() {
+        assert_eq!(
+            PluginService::<MockPluginRunnerTrait>::resolve_plugin_path("plugins/examples/test.ts"),
+            "plugins/examples/test.ts"
+        );
+
+        assert_eq!(
+            PluginService::<MockPluginRunnerTrait>::resolve_plugin_path("examples/test.ts"),
+            "plugins/examples/test.ts"
+        );
+
+        assert_eq!(
+            PluginService::<MockPluginRunnerTrait>::resolve_plugin_path("test.ts"),
+            "plugins/test.ts"
+        );
+    }
 
     #[tokio::test]
     async fn test_call_plugin() {

@@ -30,7 +30,7 @@
 import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
 import { LogInterceptor } from "./logger";
-import { NetworkTransactionRequest } from "@openzeppelin/relayer-sdk/dist/src/models/network-transaction-request";
+import { NetworkTransactionRequest } from "@openzeppelin/relayer-sdk";
 
 type SendTransactionResult = {
   id: string;

@@ -54,7 +54,10 @@ export class LogInterceptor {
    * Add the result as a special log entry
    */
   addResult(message: string): void {
-    const logEntry: LogEntry = JSON.parse(message);
+    const logEntry: LogEntry = {
+      level: "result",
+      message: message,
+    };
     this.logs.push(logEntry);
     this.originalConsole.log(JSON.stringify(logEntry));
   }
