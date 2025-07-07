@@ -1,3 +1,27 @@
+//! Plugin Repository Module
+//!
+//! This module provides the plugin repository layer for the OpenZeppelin Relayer service.
+//! It implements a specialized repository pattern for managing plugin configurations,
+//! supporting both in-memory and Redis-backed storage implementations.
+//!
+//! ## Features
+//!
+//! - **Plugin Management**: Store and retrieve plugin configurations
+//! - **Path Resolution**: Manage plugin script paths for execution
+//! - **Duplicate Prevention**: Ensure unique plugin IDs
+//! - **Configuration Loading**: Convert from file configurations to repository models
+//!
+//! ## Repository Implementations
+//!
+//! - [`InMemoryPluginRepository`]: Fast in-memory storage for testing/development
+//! - [`RedisPluginRepository`]: Redis-backed storage for production environments
+//!
+//! ## Plugin System
+//!
+//! The plugin system allows extending the relayer functionality through external scripts.
+//! Each plugin is identified by a unique ID and contains a path to the executable script.
+//!
+
 pub mod plugin_in_memory;
 pub mod plugin_redis;
 

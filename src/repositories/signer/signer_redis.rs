@@ -46,7 +46,6 @@ impl RedisSignerRepository {
         format!("{}:{}", self.key_prefix, SIGNER_LIST_KEY)
     }
 
-
     async fn add_to_list(&self, id: &str) -> Result<(), RepositoryError> {
         let key = self.signer_list_key();
         let mut conn = self.client.as_ref().clone();
@@ -421,7 +420,9 @@ mod tests {
         let signer = create_test_signer("test-signer");
 
         let serialized = repo.serialize_entity(&signer, |s| &s.id, "signer").unwrap();
-        let deserialized: SignerRepoModel = repo.deserialize_entity(&serialized, &signer.id, "signer").unwrap();
+        let deserialized: SignerRepoModel = repo
+            .deserialize_entity(&serialized, &signer.id, "signer")
+            .unwrap();
 
         assert_eq!(signer.id, deserialized.id);
         assert!(matches!(signer.config, SignerConfig::Test(_)));

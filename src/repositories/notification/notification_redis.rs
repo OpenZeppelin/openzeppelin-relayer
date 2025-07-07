@@ -77,7 +77,11 @@ impl RedisNotificationRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_entity::<NotificationRepoModel>(&json, &ids[i], "notification") {
+                    match self.deserialize_entity::<NotificationRepoModel>(
+                        &json,
+                        &ids[i],
+                        "notification",
+                    ) {
                         Ok(notification) => notifications.push(notification),
                         Err(e) => {
                             failed_count += 1;
@@ -103,7 +107,6 @@ impl RedisNotificationRepository {
         debug!("Successfully fetched {} notifications", notifications.len());
         Ok(notifications)
     }
-
 }
 
 impl fmt::Debug for RedisNotificationRepository {
@@ -187,7 +190,8 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         match value {
             Some(json) => {
-                let notification = self.deserialize_entity::<NotificationRepoModel>(&json, &id, "notification")?;
+                let notification =
+                    self.deserialize_entity::<NotificationRepoModel>(&json, &id, "notification")?;
                 debug!("Successfully fetched notification {}", id);
                 Ok(notification)
             }

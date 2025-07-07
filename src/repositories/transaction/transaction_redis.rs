@@ -137,7 +137,11 @@ impl RedisTransactionRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_entity::<TransactionRepoModel>(&json, &valid_ids[i], "transaction") {
+                    match self.deserialize_entity::<TransactionRepoModel>(
+                        &json,
+                        &valid_ids[i],
+                        "transaction",
+                    ) {
                         Ok(tx) => transactions.push(tx),
                         Err(e) => {
                             failed_count += 1;
@@ -174,7 +178,6 @@ impl RedisTransactionRepository {
             }
         }
     }
-
 
     /// Update indexes atomically with comprehensive error handling
     async fn update_indexes(
@@ -374,7 +377,8 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         match value {
             Some(json) => {
-                let tx = self.deserialize_entity::<TransactionRepoModel>(&json, &id, "transaction")?;
+                let tx =
+                    self.deserialize_entity::<TransactionRepoModel>(&json, &id, "transaction")?;
                 debug!("Successfully fetched transaction {}", id);
                 Ok(tx)
             }

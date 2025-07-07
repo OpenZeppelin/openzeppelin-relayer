@@ -1,4 +1,30 @@
-//! Signer Repository
+//! Signer Repository Module
+//!
+//! This module provides the signer repository layer for the OpenZeppelin Relayer service.
+//! It implements the Repository pattern to abstract signer data persistence operations,
+//! supporting both in-memory and Redis-backed storage implementations.
+//!
+//! ## Features
+//!
+//! - **CRUD Operations**: Create, read, update, and delete signer configurations
+//! - **Multi-Provider Support**: Handle various signer types (Local, AWS KMS, Google Cloud KMS, etc.)
+//! - **Secure Storage**: Proper handling of cryptographic keys and secrets
+//! - **Pagination Support**: Efficient paginated listing of signers
+//! - **Configuration Management**: Convert between file configs and repository models
+//!
+//! ## Repository Implementations
+//!
+//! - [`InMemorySignerRepository`]: Fast in-memory storage for testing/development
+//! - [`RedisSignerRepository`]: Redis-backed storage for production environments
+//!
+//! ## Supported Signer Types
+//!
+//! - **Local Signers**: Direct private key management
+//! - **AWS KMS**: AWS Key Management Service integration
+//! - **Google Cloud KMS**: Google Cloud Key Management Service integration
+//! - **Turnkey**: Turnkey service integration
+//! - **Vault**: HashiCorp Vault integration
+
 mod signer_in_memory;
 mod signer_redis;
 

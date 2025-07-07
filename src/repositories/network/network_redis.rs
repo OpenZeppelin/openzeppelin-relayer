@@ -12,7 +12,7 @@ use crate::repositories::{PaginatedResult, PaginationQuery, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands};
+use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 
@@ -188,7 +188,6 @@ impl RedisNetworkRepository {
         Ok(())
     }
 
-
     /// Batch fetch networks by IDs
     async fn get_networks_by_ids(
         &self,
@@ -214,13 +213,15 @@ impl RedisNetworkRepository {
 
         for (i, value) in values.into_iter().enumerate() {
             match value {
-                Some(json) => match self.deserialize_entity::<NetworkRepoModel>(&json, &ids[i], "network") {
-                    Ok(network) => networks.push(network),
-                    Err(e) => {
-                        failed_count += 1;
-                        error!("Failed to deserialize network {}: {}", ids[i], e);
+                Some(json) => {
+                    match self.deserialize_entity::<NetworkRepoModel>(&json, &ids[i], "network") {
+                        Ok(network) => networks.push(network),
+                        Err(e) => {
+                            failed_count += 1;
+                            error!("Failed to deserialize network {}: {}", ids[i], e);
+                        }
                     }
-                },
+                }
                 None => {
                     warn!("Network {} not found in batch fetch", ids[i]);
                 }

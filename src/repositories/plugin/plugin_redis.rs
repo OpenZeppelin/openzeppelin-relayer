@@ -47,7 +47,6 @@ impl RedisPluginRepository {
     fn plugin_list_key(&self) -> String {
         format!("{}:{}", self.key_prefix, PLUGIN_LIST_KEY)
     }
-
 }
 
 impl fmt::Debug for RedisPluginRepository {
@@ -209,7 +208,9 @@ mod tests {
         let plugin = create_test_plugin("test-plugin", "/path/to/plugin");
 
         let json = repo.serialize_entity(&plugin, |p| &p.id, "plugin").unwrap();
-        let deserialized: PluginModel = repo.deserialize_entity(&json, &plugin.id, "plugin").unwrap();
+        let deserialized: PluginModel = repo
+            .deserialize_entity(&json, &plugin.id, "plugin")
+            .unwrap();
 
         assert_eq!(plugin.id, deserialized.id);
         assert_eq!(plugin.path, deserialized.path);

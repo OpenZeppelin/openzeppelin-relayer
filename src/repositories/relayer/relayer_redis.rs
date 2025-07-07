@@ -7,7 +7,7 @@ use crate::repositories::{PaginatedResult, RelayerRepository, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands};
+use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 
@@ -101,7 +101,6 @@ impl RedisRelayerRepository {
         debug!("Successfully fetched {} relayers", relayers.len());
         Ok(relayers)
     }
-
 }
 
 impl fmt::Debug for RedisRelayerRepository {
@@ -519,7 +518,9 @@ mod tests {
         let repo = setup_test_repo().await;
         let relayer = create_test_relayer("test-relayer");
 
-        let serialized = repo.serialize_entity(&relayer, |r| &r.id, "relayer").unwrap();
+        let serialized = repo
+            .serialize_entity(&relayer, |r| &r.id, "relayer")
+            .unwrap();
         let deserialized: RelayerRepoModel = repo
             .deserialize_entity(&serialized, &relayer.id, "relayer")
             .unwrap();

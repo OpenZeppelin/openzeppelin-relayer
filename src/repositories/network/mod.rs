@@ -1,3 +1,23 @@
+//! Network Repository Module
+//!
+//! This module provides the network repository layer for the OpenZeppelin Relayer service.
+//! It implements the Repository pattern to abstract network configuration persistence operations,
+//! supporting both in-memory and Redis-backed storage implementations.
+//!
+//! ## Features
+//!
+//! - **CRUD Operations**: Create, read, update, and delete network configurations
+//! - **Multi-Chain Support**: Handle EVM, Solana, and Stellar network configurations
+//! - **Specialized Queries**: Find networks by name and chain ID
+//! - **Pagination Support**: Efficient paginated listing of networks
+//! - **Type Safety**: Strongly typed network configurations per blockchain type
+//!
+//! ## Repository Implementations
+//!
+//! - [`InMemoryNetworkRepository`]: Fast in-memory storage for testing/development
+//! - [`RedisNetworkRepository`]: Redis-backed storage for production environments
+//!
+
 use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 use std::sync::Arc;

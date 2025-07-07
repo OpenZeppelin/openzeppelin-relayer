@@ -1,4 +1,21 @@
-//! Notification Repository
+//! Notification Repository Module
+//!
+//! This module provides the notification repository layer for the OpenZeppelin Relayer service.
+//! It implements the Repository pattern to abstract notification data persistence operations,
+//! supporting both in-memory and Redis-backed storage implementations.
+//!
+//! ## Features
+//!
+//! - **CRUD Operations**: Create, read, update, and delete notification configurations
+//! - **Webhook Support**: Store webhook notification configurations
+//! - **Pagination Support**: Efficient paginated listing of notifications
+//! - **Configuration Management**: Handle notification signing keys and URLs
+//!
+//! ## Repository Implementations
+//!
+//! - [`InMemoryNotificationRepository`]: Fast in-memory storage for testing/development
+//! - [`RedisNotificationRepository`]: Redis-backed storage for production environments
+//!
 mod notification_in_memory;
 mod notification_redis;
 

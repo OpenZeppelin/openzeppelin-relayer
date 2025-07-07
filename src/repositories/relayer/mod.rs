@@ -1,4 +1,24 @@
-//! Relayer Repository
+//! Relayer Repository Module
+//!
+//! This module provides the relayer repository layer for the OpenZeppelin Relayer service.
+//! It implements the Repository pattern to abstract relayer data persistence operations,
+//! supporting both in-memory and Redis-backed storage implementations.
+//!
+//! ## Features
+//!
+//! - **CRUD Operations**: Create, read, update, and delete relayer configurations
+//! - **Status Management**: Enable/disable relayers and track their state
+//! - **Policy Management**: Update relayer network policies
+//! - **Partial Updates**: Support for partial relayer configuration updates
+//! - **Active Filtering**: Query for active (non-paused) relayers
+//! - **Pagination Support**: Efficient paginated listing of relayers
+//!
+//! ## Repository Implementations
+//!
+//! - [`InMemoryRelayerRepository`]: Fast in-memory storage for testing/development
+//! - [`RedisRelayerRepository`]: Redis-backed storage for production environments
+//!
+
 mod relayer_in_memory;
 mod relayer_redis;
 

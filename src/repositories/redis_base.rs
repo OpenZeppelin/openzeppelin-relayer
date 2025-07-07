@@ -5,9 +5,8 @@
 
 use crate::models::RepositoryError;
 use log::{error, warn};
-use redis::{aio::ConnectionManager, RedisError};
+use redis::RedisError;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Base trait for Redis repositories providing common functionality
 pub trait RedisRepository {

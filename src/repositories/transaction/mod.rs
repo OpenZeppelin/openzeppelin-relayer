@@ -1,4 +1,23 @@
-//! Transaction Repository
+//! Transaction Repository Module
+//!
+//! This module provides the transaction repository layer for the OpenZeppelin Relayer service.
+//! It implements the Repository pattern to abstract transaction data persistence operations,
+//! supporting both in-memory and Redis-backed storage implementations.
+//!
+//! ## Features
+//!
+//! - **CRUD Operations**: Create, read, update, and delete transactions
+//! - **Specialized Queries**: Find transactions by relayer ID, status, and nonce
+//! - **Pagination Support**: Efficient paginated listing of transactions
+//! - **Status Management**: Update transaction status and timestamps
+//! - **Partial Updates**: Support for partial transaction updates
+//! - **Network Data**: Manage transaction network-specific data
+//!
+//! ## Repository Implementations
+//!
+//! - [`InMemoryTransactionRepository`]: Fast in-memory storage for testing/development
+//! - [`RedisTransactionRepository`]: Redis-backed storage for production environments
+//!
 mod transaction_in_memory;
 mod transaction_redis;
 

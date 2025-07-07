@@ -1,3 +1,23 @@
+//! Transaction Counter Repository Module
+//!
+//! This module provides the transaction counter repository layer for the OpenZeppelin Relayer service.
+//! It implements specialized counters for tracking transaction nonces and sequence numbers
+//! across different blockchain networks, supporting both in-memory and Redis-backed storage.
+//!
+//! ## Repository Implementations
+//!
+//! - [`InMemoryTransactionCounter`]: Fast in-memory storage using DashMap for concurrency
+//! - [`RedisTransactionCounter`]: Redis-backed storage for production environments
+//!
+//! ## Counter Operations
+//!
+//! The transaction counter supports several key operations:
+//!
+//! - **Get**: Retrieve current counter value
+//! - **Get and Increment**: Atomically get current value and increment
+//! - **Decrement**: Decrement counter (for rollbacks)
+//! - **Set**: Set counter to specific value
+//!
 pub mod transaction_counter_in_memory;
 pub mod transaction_counter_redis;
 
