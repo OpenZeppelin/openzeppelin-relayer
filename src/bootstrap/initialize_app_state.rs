@@ -14,6 +14,7 @@ use crate::{
 };
 use actix_web::web;
 use color_eyre::Result;
+use log::warn;
 use std::{sync::Arc, time::Duration};
 use tokio::time::timeout;
 
@@ -46,6 +47,7 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
             plugin: Arc::new(PluginRepositoryStorage::new_in_memory()),
         },
         RepositoryStorageType::Redis => {
+            warn!("Redis repository storage support is experimental");
             let redis_client = redis::Client::open(config.redis_url.as_str())?;
             let connection_manager = timeout(
                 Duration::from_millis(config.redis_connection_timeout_ms),
@@ -69,11 +71,10 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
                     connection_manager.clone(),
                     config.redis_key_prefix.clone(),
                 )?),
-                // signer: Arc::new(SignerRepositoryStorage::new_redis(
-                //     connection_manager.clone(),
-                //     config.redis_key_prefix.clone(),
-                // )?),
-                signer: Arc::new(SignerRepositoryStorage::new_in_memory()),
+                signer: Arc::new(SignerRepositoryStorage::new_redis(
+                    connection_manager.clone(),
+                    config.redis_key_prefix.clone(),
+                )?),
                 notification: Arc::new(NotificationRepositoryStorage::new_redis(
                     connection_manager.clone(),
                     config.redis_key_prefix.clone(),

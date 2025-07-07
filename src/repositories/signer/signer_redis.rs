@@ -1,6 +1,6 @@
 //! Redis-backed implementation of the signer repository.
 
-use crate::models::{RepositoryError, SignerRepoModel};
+use crate::models::{RepositoryError, SignerRepoModel, SignerRepoModelStorage};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::*;
 use async_trait::async_trait;
@@ -127,8 +127,11 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             }
         }
 
+        // Convert to storage model in order to serialize key properly
+        let signer_storage: SignerRepoModelStorage = signer.clone().into();
+
         // Serialize signer
-        let serialized = self.serialize_entity(&signer, |s| &s.id, "signer")?;
+        let serialized = self.serialize_entity(&signer_storage, |s| &s.id, "signer")?;
 
         // Store signer
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
