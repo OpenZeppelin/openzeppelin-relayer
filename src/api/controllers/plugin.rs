@@ -36,7 +36,7 @@ pub async fn call_plugin<J: JobProducerTrait + 'static>(
     let plugin_runner = PluginRunner;
     let plugin_service = PluginService::new(plugin_runner);
     let result = plugin_service
-        .call_plugin(plugin.path, plugin_call_request, Arc::new(state))
+        .call_plugin(plugin, plugin_call_request, Arc::new(state))
         .await;
 
     match result {
