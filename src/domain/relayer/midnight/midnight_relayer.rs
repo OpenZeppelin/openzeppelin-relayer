@@ -30,16 +30,16 @@ use crate::{
     models::{
         produce_relayer_disabled_payload, MidnightNetwork, MidnightRpcResult, NetworkRpcRequest,
         NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, SignerRepoModel, TransactionRepoModel, TransactionStatus,
+        RepositoryError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-        InMemoryTransactionCounter, InMemoryTransactionRepository, NetworkRepository,
-        RelayerRepository, RelayerRepositoryStorage, Repository, TransactionRepository,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
+        RelayerRepositoryStorage, Repository, TransactionRepository,
     },
     services::{
         sync::midnight::handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
-        MidnightProvider, MidnightProviderTrait, MidnightSignerFactory, MidnightSignerTrait,
+        MidnightProvider, MidnightProviderTrait, MidnightSigner, MidnightSignerTrait,
         TransactionCounterService, TransactionCounterServiceTrait,
     },
 };
@@ -59,12 +59,12 @@ where
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
     S: SyncManagerTrait + Send + Sync,
-    SR: Repository<SignerRepoModel, String> + Send + Sync,
+    SR: MidnightSignerTrait + Send + Sync,
 {
     pub relayer_repository: Arc<R>,
     pub network_repository: Arc<N>,
     pub transaction_repository: Arc<T>,
-    pub signer_repository: Arc<SR>,
+    pub signer: Arc<SR>,
     pub transaction_counter_service: Arc<C>,
     pub sync_service: Arc<S>,
     pub job_producer: Arc<J>,
@@ -78,7 +78,7 @@ where
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
     S: SyncManagerTrait + Send + Sync,
-    SR: Repository<SignerRepoModel, String> + Send + Sync,
+    SR: MidnightSignerTrait + Send + Sync,
 {
     /// Creates a new dependencies container for `MidnightRelayer`.
     ///
@@ -87,7 +87,7 @@ where
     /// * `relayer_repository` - Repository for managing relayer model persistence
     /// * `network_repository` - Repository for accessing network configuration data (RPC URLs, chain settings)
     /// * `transaction_repository` - Repository for storing and retrieving transaction models
-    /// * `signer_repository` - Repository for accessing signer configurations
+    /// * `signer` - Transaction signer for signing transactions
     /// * `transaction_counter_service` - Service for managing sequence numbers to ensure proper transaction ordering
     /// * `sync_service` - Service for syncing wallet state with the blockchain
     /// * `job_producer` - Service for creating background jobs for transaction processing and notifications
@@ -99,7 +99,7 @@ where
         relayer_repository: Arc<R>,
         network_repository: Arc<N>,
         transaction_repository: Arc<T>,
-        signer_repository: Arc<SR>,
+        signer: Arc<SR>,
         transaction_counter_service: Arc<C>,
         sync_service: Arc<S>,
         job_producer: Arc<J>,
@@ -108,7 +108,7 @@ where
             relayer_repository,
             network_repository,
             transaction_repository,
-            signer_repository,
+            signer,
             transaction_counter_service,
             sync_service,
             job_producer,
@@ -126,7 +126,7 @@ where
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
     S: SyncManagerTrait + Send + Sync,
-    SR: Repository<SignerRepoModel, String> + Send + Sync,
+    SR: MidnightSignerTrait + Send + Sync,
 {
     relayer: RelayerRepoModel,
     network: MidnightNetwork,
@@ -134,7 +134,7 @@ where
     relayer_repository: Arc<R>,
     network_repository: Arc<N>,
     transaction_repository: Arc<T>,
-    signer_repository: Arc<SR>,
+    signer: Arc<SR>,
     transaction_counter_service: Arc<C>,
     sync_service: Arc<S>,
     job_producer: Arc<J>,
@@ -148,7 +148,7 @@ pub type DefaultMidnightRelayer = MidnightRelayer<
     JobProducer,
     TransactionCounterService<InMemoryTransactionCounter>,
     SyncManager<QuickSyncStrategy>,
-    InMemorySignerRepository,
+    MidnightSigner,
 >;
 
 impl<P, R, N, T, J, C, S, SR> MidnightRelayer<P, R, N, T, J, C, S, SR>
@@ -160,7 +160,7 @@ where
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
     S: SyncManagerTrait + Send + Sync,
-    SR: Repository<SignerRepoModel, String> + Send + Sync,
+    SR: MidnightSignerTrait + Send + Sync,
 {
     /// Creates a new `MidnightRelayer` instance.
     ///
@@ -203,7 +203,7 @@ where
             relayer_repository: dependencies.relayer_repository,
             network_repository: dependencies.network_repository,
             transaction_repository: dependencies.transaction_repository,
-            signer_repository: dependencies.signer_repository,
+            signer: dependencies.signer,
             transaction_counter_service: dependencies.transaction_counter_service,
             sync_service: dependencies.sync_service,
             job_producer: dependencies.job_producer,
@@ -266,7 +266,7 @@ where
     J: JobProducerTrait + Send + Sync,
     C: TransactionCounterServiceTrait + Send + Sync,
     S: SyncManagerTrait + Send + Sync,
-    SR: Repository<SignerRepoModel, String> + Send + Sync,
+    SR: MidnightSignerTrait + Send + Sync,
 {
     async fn process_transaction_request(
         &self,
@@ -304,17 +304,7 @@ where
         // Get the ledger context from the sync service
         let context = self.sync_service.get_context();
 
-        // Get the signer to access the wallet seed
-        let signer_model = self
-            .signer_repository
-            .get_by_id(self.relayer.signer_id.clone())
-            .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to get signer: {}", e)))?;
-
-        let midnight_signer = MidnightSignerFactory::create_midnight_signer(&signer_model)
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to create signer: {}", e)))?;
-
-        let wallet_seed = midnight_signer.wallet_seed();
+        let wallet_seed = self.signer.wallet_seed();
 
         let balance = self
             .provider
@@ -457,7 +447,10 @@ mod tests {
             InMemoryNetworkRepository, InMemorySignerRepository, MockRelayerRepository,
             MockTransactionRepository,
         },
-        services::{MockMidnightProviderTrait, MockTransactionCounterServiceTrait, ProviderError},
+        services::{
+            MidnightSignerFactory, MockMidnightProviderTrait, MockTransactionCounterServiceTrait,
+            ProviderError,
+        },
     };
     use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
     use mockall::{mock, predicate::*};
@@ -587,6 +580,7 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
+        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
 
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
@@ -595,7 +589,7 @@ mod tests {
                 Arc::new(relayer_repo),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo),
-                ctx.signer_repository.clone(),
+                Arc::new(signer),
                 Arc::new(counter),
                 Arc::new(sync_manager),
                 Arc::new(job_producer),
@@ -623,7 +617,7 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-
+        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider,
@@ -631,7 +625,7 @@ mod tests {
                 Arc::new(relayer_repo),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo),
-                ctx.signer_repository.clone(),
+                Arc::new(signer),
                 Arc::new(counter),
                 Arc::new(sync_manager),
                 Arc::new(job_producer),
@@ -664,7 +658,7 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let counter = MockTransactionCounterServiceTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-
+        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider,
@@ -672,7 +666,7 @@ mod tests {
                 Arc::new(relayer_repo),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo),
-                ctx.signer_repository.clone(),
+                Arc::new(signer),
                 Arc::new(counter),
                 Arc::new(sync_manager),
                 Arc::new(job_producer),
@@ -696,7 +690,7 @@ mod tests {
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
         let counter_mock = MockTransactionCounterServiceTrait::new();
-
+        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
         provider_mock
             .expect_get_nonce()
             .times(1)
@@ -742,7 +736,7 @@ mod tests {
                 Arc::new(relayer_repo_mock),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo_mock),
-                ctx.signer_repository.clone(),
+                Arc::new(signer),
                 Arc::new(counter_mock),
                 Arc::new(sync_manager),
                 Arc::new(job_producer_mock),
@@ -786,7 +780,7 @@ mod tests {
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
         let counter_mock = MockTransactionCounterServiceTrait::new();
-
+        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
         provider_mock
             .expect_get_nonce()
             .with(eq(relayer_model.address.clone()))
@@ -803,7 +797,7 @@ mod tests {
                 Arc::new(relayer_repo_mock),
                 ctx.network_repository.clone(),
                 Arc::new(tx_repo_mock),
-                ctx.signer_repository.clone(),
+                Arc::new(signer),
                 Arc::new(counter_mock),
                 Arc::new(sync_manager),
                 Arc::new(job_producer_mock),
@@ -839,7 +833,7 @@ mod tests {
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
         let sync_manager = TestCtx::create_mock_sync_manager();
-
+        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model,
             provider,
@@ -847,7 +841,7 @@ mod tests {
                 relayer_repo,
                 ctx.network_repository.clone(),
                 tx_repo,
-                ctx.signer_repository.clone(),
+                Arc::new(signer),
                 counter,
                 Arc::new(sync_manager),
                 job_producer,
@@ -879,7 +873,7 @@ mod tests {
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
         let sync_manager = TestCtx::create_mock_sync_manager();
-
+        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model,
             provider,
@@ -887,7 +881,7 @@ mod tests {
                 relayer_repo,
                 ctx.network_repository.clone(),
                 tx_repo,
-                ctx.signer_repository.clone(),
+                Arc::new(signer),
                 counter,
                 Arc::new(sync_manager),
                 job_producer,

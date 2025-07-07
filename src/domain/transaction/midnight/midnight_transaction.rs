@@ -152,6 +152,12 @@ where
         )
         .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
+        // Synchronises the LedgerContext (including ledger and wallet state) with the network
+        // This is required to get the latest merkle tree state before submitting a transaction to ensure the transaction is valid locally AND on-chain
+        // We use the QuickSyncStrategy by default which is a lightweight sync that uses the indexer to get the latest wallet-relevant states
+        // The main difference between QuickSyncStrategy and FullSyncStrategy is that QuickSyncStrategy only syncs the wallet state and the ledger state, while FullSyncStrategy syncs the entire ledger state
+        // This is useful because it's much faster and doesn't require downloading the entire ledger state from genesis
+        // However, it requires trusting the indexer with your wallet viewing key (which is a public key).
         sync_manager
             .sync(0)
             .await

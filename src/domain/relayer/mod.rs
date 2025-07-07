@@ -28,8 +28,8 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemorySignerRepository,
-        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{
         get_network_provider,
@@ -317,7 +317,6 @@ impl Relayer for NetworkRelayer {
 }
 
 #[async_trait]
-#[allow(clippy::too_many_arguments)]
 pub trait RelayerFactoryTrait {
     async fn create_relayer(
         relayer: RelayerRepoModel,
@@ -325,7 +324,6 @@ pub trait RelayerFactoryTrait {
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
-        signer_repository: Arc<InMemorySignerRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
@@ -341,7 +339,6 @@ impl RelayerFactoryTrait for RelayerFactory {
         relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
         networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
-        signer_repository: Arc<InMemorySignerRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
@@ -503,7 +500,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     relayer_repository,
                     networks_repository,
                     transaction_repository,
-                    signer_repository,
+                    Arc::new(midnight_signer),
                     transaction_counter_service,
                     sync_manager,
                     job_producer,
