@@ -3,10 +3,16 @@
 //! This module provides the core transaction handling logic for Midnight network transactions.
 
 use crate::{
-    // constants::MIDNIGHT_DECIMALS,
-    domain::{to_midnight_network_id, MidnightTransactionBuilder, Transaction},
-    jobs::{JobProducer, JobProducerTrait},
-    models::{MidnightNetwork, RelayerRepoModel, TransactionError, TransactionRepoModel},
+    domain::{
+        to_midnight_network_id, MidnightTransactionBuilder, SignTransactionResponse, Transaction,
+        DUST_TOKEN_TYPE,
+    },
+    jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
+    models::{
+        produce_transaction_update_notification_payload, MidnightNetwork, MidnightOfferRequest,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
+    },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
         RelayerRepositoryStorage, Repository, TransactionCounterTrait, TransactionRepository,
@@ -14,14 +20,20 @@ use crate::{
     services::{
         midnight::handler::{QuickSyncStrategy, SyncManager},
         remote_prover::RemoteProofServer,
+        sync::midnight::indexer::ApplyStage,
         MidnightProvider, MidnightProviderTrait, MidnightSigner, MidnightSignerTrait,
+        TransactionSubmissionResult,
     },
 };
 use async_trait::async_trait;
-use log::info;
-use midnight_node_ledger_helpers::DefaultDB;
+use chrono::Utc;
+use log::{debug, info};
+use midnight_node_ledger_helpers::{
+    DefaultDB, InputInfo, LedgerContext, OfferInfo, OutputInfo, WalletSeed,
+};
 use rand::Rng;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[allow(dead_code)]
 /// Midnight transaction handler with generic dependencies
@@ -41,6 +53,7 @@ where
     job_producer: Arc<J>,
     signer: Arc<S>,
     transaction_counter_service: Arc<C>,
+    sync_manager: Arc<Mutex<SyncManager<QuickSyncStrategy>>>,
     network: MidnightNetwork,
 }
 
@@ -65,6 +78,7 @@ where
     /// * `job_producer` - Producer for job queue.
     /// * `signer` - The signer service.
     /// * `transaction_counter_service` - Service for managing transaction counters.
+    /// * `sync_manager` - Sync manager.
     /// * `network` - The Midnight network configuration.
     ///
     /// # Returns
@@ -78,6 +92,7 @@ where
         job_producer: Arc<J>,
         signer: Arc<S>,
         transaction_counter_service: Arc<C>,
+        sync_manager: Arc<Mutex<SyncManager<QuickSyncStrategy>>>,
         network: MidnightNetwork,
     ) -> Result<Self, TransactionError> {
         Ok(Self {
@@ -88,6 +103,7 @@ where
             job_producer,
             signer,
             transaction_counter_service,
+            sync_manager,
             network,
         })
     }
@@ -116,6 +132,260 @@ where
     pub fn network(&self) -> &MidnightNetwork {
         &self.network
     }
+
+    /// Returns a reference to the sync manager.
+    pub fn sync_manager(&self) -> &Arc<Mutex<SyncManager<QuickSyncStrategy>>> {
+        &self.sync_manager
+    }
+
+    /// Enqueue a submit-transaction job for the given transaction.
+    pub async fn enqueue_submit(&self, tx: &TransactionRepoModel) -> Result<(), TransactionError> {
+        let job = TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone());
+        self.job_producer()
+            .produce_submit_transaction_job(job, None)
+            .await?;
+        Ok(())
+    }
+
+    /// Sends a transaction update notification if a notification ID is configured.
+    pub(super) async fn send_transaction_update_notification(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        if let Some(notification_id) = &self.relayer().notification_id {
+            self.job_producer()
+                .produce_send_notification_job(
+                    produce_transaction_update_notification_payload(notification_id, tx),
+                    None,
+                )
+                .await
+                .map_err(|e| {
+                    TransactionError::UnexpectedError(format!("Failed to send notification: {}", e))
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Convert API offer request to Midnight's OfferInfo type
+    /// This method handles UTXO selection, fee calculation, and change output creation
+    async fn convert_offer_request_to_offer_info(
+        &self,
+        offer_request: &MidnightOfferRequest,
+        from_wallet_seed: WalletSeed,
+        context: &Arc<LedgerContext<DefaultDB>>,
+    ) -> Result<OfferInfo<DefaultDB>, TransactionError> {
+        // Validate we have at least one input
+        if offer_request.inputs.is_empty() {
+            return Err(TransactionError::ValidationError(
+                "At least one input is required".to_string(),
+            ));
+        }
+
+        let output_requests = &offer_request.outputs;
+
+        // Validate all inputs are from the relayer's wallet
+        for input_req in &offer_request.inputs {
+            // Parse the origin wallet seed
+            let origin_seed_bytes = hex::decode(&input_req.origin).map_err(|e| {
+                TransactionError::ValidationError(format!("Invalid origin wallet seed hex: {}", e))
+            })?;
+
+            if origin_seed_bytes.len() != 32 {
+                return Err(TransactionError::ValidationError(
+                    "Wallet seed must be 32 bytes".to_string(),
+                ));
+            }
+
+            let mut origin_array = [0u8; 32];
+            origin_array.copy_from_slice(&origin_seed_bytes);
+            let origin_seed = WalletSeed(origin_array);
+
+            // Verify the origin matches the relayer's wallet
+            if origin_seed != from_wallet_seed {
+                return Err(TransactionError::ValidationError(
+                    "All input origins must match relayer wallet".to_string(),
+                ));
+            }
+        }
+
+        // Calculate total output amount
+        let mut total_output_amount = 0u128;
+        let token_type = DUST_TOKEN_TYPE; // Only support DUST_TOKEN_TYPE
+
+        for output_req in output_requests {
+            let amount = output_req.value.parse::<u128>().map_err(|e| {
+                TransactionError::ValidationError(format!("Invalid output value: {}", e))
+            })?;
+            total_output_amount += amount;
+        }
+
+        // Calculate fee based on transaction structure
+        // Use actual number of inputs and potentially outputs.len() + 1 outputs (including change)
+        let num_inputs = offer_request.inputs.len();
+        let num_outputs = output_requests.len() + 1; // +1 for potential change output
+
+        // // Use Wallet::calculate_fee to get the minimum fee
+        // let calculated_fee = midnight_node_ledger_helpers::Wallet::<DefaultDB>::calculate_fee(
+        // 	num_inputs,
+        // 	num_outputs
+        // );
+
+        // The Wallet::calculate_fee method seems to overestimate fees significantly
+        // Based on observed fees from actual transactions:
+        // - 1 input, 2 outputs = ~60,855 tDUST
+        // - Add ~20k tDUST for each additional input/output
+        let base_fee = 61000u128;
+        let per_input_fee = if num_inputs > 1 {
+            (num_inputs - 1) as u128 * 20000
+        } else {
+            0
+        };
+        let per_output_fee = if num_outputs > 2 {
+            (num_outputs - 2) as u128 * 20000
+        } else {
+            0
+        };
+        let calculated_fee = base_fee + per_input_fee + per_output_fee;
+
+        debug!(
+            "Transaction with {} inputs, {} outputs: {} tDUST + {} tDUST fee = {} tDUST total",
+            num_inputs,
+            num_outputs,
+            total_output_amount,
+            calculated_fee,
+            total_output_amount + calculated_fee
+        );
+
+        // Get the wallet to find available UTXOs
+        let from_wallet = context.wallet_from_seed(from_wallet_seed);
+
+        // Build the offer
+        let mut offer = OfferInfo::default();
+
+        // Process each input request
+        let mut total_input_amount = 0u128;
+        for input_req in &offer_request.inputs {
+            // Parse input value
+            let requested_value = input_req.value.parse::<u128>().map_err(|e| {
+                TransactionError::ValidationError(format!("Invalid input value: {}", e))
+            })?;
+
+            // Create a temporary input_info to find the minimum UTXO that can cover this input
+            let temp_input_info = InputInfo::<WalletSeed> {
+                origin: from_wallet_seed,
+                token_type,
+                value: requested_value,
+            };
+
+            // Find the actual UTXO that will be selected for this input
+            let selected_coin = temp_input_info.min_match_coin(&from_wallet.state);
+            let actual_utxo_value = selected_coin.value;
+
+            debug!(
+                "Selected UTXO with value: {} tDUST for requested value: {} tDUST",
+                actual_utxo_value, requested_value
+            );
+
+            // Create the actual input with the exact UTXO value
+            let input_info = InputInfo::<WalletSeed> {
+                origin: from_wallet_seed,
+                token_type,
+                value: actual_utxo_value, // Use the exact value of the selected UTXO
+            };
+
+            offer.inputs.push(Box::new(input_info));
+            total_input_amount += actual_utxo_value;
+        }
+
+        // Verify total inputs can cover outputs + fees
+        if total_input_amount < total_output_amount + calculated_fee {
+            return Err(TransactionError::InsufficientBalance(format!(
+                "Total input value {} is insufficient for outputs {} + fee {} = {} tDUST",
+                total_input_amount,
+                total_output_amount,
+                calculated_fee,
+                total_output_amount + calculated_fee
+            )));
+        }
+
+        // Add all requested outputs
+        for output_req in output_requests {
+            // Parse destination wallet seed
+            let dest_seed_bytes = hex::decode(&output_req.destination).map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Invalid destination wallet seed hex: {}",
+                    e
+                ))
+            })?;
+
+            if dest_seed_bytes.len() != 32 {
+                return Err(TransactionError::ValidationError(
+                    "Wallet seed must be 32 bytes".to_string(),
+                ));
+            }
+
+            let mut dest_array = [0u8; 32];
+            dest_array.copy_from_slice(&dest_seed_bytes);
+            let dest_seed = WalletSeed(dest_array);
+
+            // Parse amount
+            let value = output_req.value.parse::<u128>().map_err(|e| {
+                TransactionError::ValidationError(format!("Invalid output value: {}", e))
+            })?;
+
+            // For now, we only support DUST_TOKEN_TYPE
+            let output_info = OutputInfo::<WalletSeed> {
+                destination: dest_seed,
+                token_type, // Always DUST_TOKEN_TYPE
+                value,
+            };
+
+            offer.outputs.push(Box::new(output_info));
+            debug!(
+                "Added output: {} tDUST to {:?}",
+                value,
+                hex::encode(dest_seed.0)
+            );
+        }
+
+        // Calculate change and create change output if needed
+        // This ensures the indexer recognizes the transaction as relevant to the sender
+        let change_amount = total_input_amount.saturating_sub(total_output_amount + calculated_fee);
+        if change_amount > 0 {
+            let change_output = OutputInfo::<WalletSeed> {
+                destination: from_wallet_seed, // Send change back to sender
+                token_type,
+                value: change_amount,
+            };
+            offer.outputs.push(Box::new(change_output));
+            debug!(
+                "Added change output: {} tDUST back to sender",
+                change_amount
+            );
+        } else {
+            debug!("No change output needed (exact amount)");
+        }
+
+        Ok(offer)
+    }
+
+    /// Helper method to schedule a transaction status check job.
+    pub(super) async fn schedule_status_check(
+        &self,
+        tx: &TransactionRepoModel,
+        delay_seconds: Option<i64>,
+    ) -> Result<(), TransactionError> {
+        let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
+        self.job_producer()
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                delay,
+            )
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to schedule status check: {}", e))
+            })
+    }
 }
 
 #[async_trait]
@@ -132,42 +402,26 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // TODO: Implement transaction preparation
-        // 1. Build intents and offers from request
-        // 2. Request proofs from prover server
-        // 3. Construct the full transaction
-        // 4. Update transaction data with proof request IDs
+        log::debug!("Preparing Midnight transaction: {}", tx.id);
 
+        // Extract Midnight-specific data
+        let midnight_data = tx.network_data.get_midnight_transaction_data()?;
         let wallet_seed = self.signer.wallet_seed();
 
-        let indexer_client = self.provider.get_indexer_client();
-
-        // TODO: We should probably move this up one level
-        // This still requires `MIDNIGHT_LEDGER_TEST_STATIC_DIR` environment variable to be set (limitation by LedgerContext test resolver)
-        // We should check with the Midnight team if we can use a different constructor for LedgerContext
-        let mut sync_manager = SyncManager::<QuickSyncStrategy>::new(
-            indexer_client,
-            wallet_seed,
-            to_midnight_network_id(&self.network.network),
-        )
-        .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
-
-        // Synchronises the LedgerContext (including ledger and wallet state) with the network
-        // This is required to get the latest merkle tree state before submitting a transaction to ensure the transaction is valid locally AND on-chain
-        // We use the QuickSyncStrategy by default which is a lightweight sync that uses the indexer to get the latest wallet-relevant states
-        // The main difference between QuickSyncStrategy and FullSyncStrategy is that QuickSyncStrategy only syncs the wallet state and the ledger state, while FullSyncStrategy syncs the entire ledger state
-        // This is useful because it's much faster and doesn't require downloading the entire ledger state from genesis
-        // However, it requires trusting the indexer with your wallet viewing key (which is a public key).
+        // Perform incremental sync - the sync manager will automatically
+        // read from the last synced blockchain index stored for this relayer
+        let mut sync_manager = self.sync_manager.lock().await;
         sync_manager
-            .sync(0)
+            .sync_incremental()
             .await
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         let context = sync_manager.get_context();
+        drop(sync_manager);
 
+        // Check balance
         let balance = self.provider.get_balance(wallet_seed, &context).await?;
-
-        info!("Balance: {}", balance);
+        info!("Wallet balance: {} tDUST", balance);
 
         // Create proof provider
         let proof_provider = Box::new(RemoteProofServer::new(
@@ -191,178 +445,133 @@ where
             rng_seed[i] ^= byte;
         }
 
-        // #[allow(clippy::identity_op)]
-        // let amount = 1 * 10u128.pow(MIDNIGHT_DECIMALS); // 1 tDUST
+        // Build transaction based on request data
+        let mut builder = MidnightTransactionBuilder::<DefaultDB>::new()
+            .with_context(context.clone())
+            .with_proof_provider(proof_provider)
+            .with_rng_seed(rng_seed);
 
-        // // Calculate transaction fees first to validate total requirement
-        // let estimated_fee =
-        // 	midnight_node_ledger_helpers::Wallet::<MidnightDefaultDB>::calculate_fee(1, 1);
-        // let total_required = amount + estimated_fee;
+        // Convert and add guaranteed offer if present
+        if let Some(offer_request) = &midnight_data.guaranteed_offer {
+            let offer = self
+                .convert_offer_request_to_offer_info(offer_request, *wallet_seed, &context)
+                .await?;
+            builder = builder.with_guaranteed_offer(offer);
+        }
 
-        // Calculate fee based on transaction structure
-        // For now, assume 2 outputs (recipient + change) in most cases
-        // Note: The Wallet::calculate_fee method seems to overestimate fees significantly
-        // Based on the error, actual fee for 1 input, 2 outputs is ~60,855 dust
-        // let actual_fee = 61000u128; // Conservative estimate for 1 input, 2 outputs (observed: 60,855)
-        // let total_required = amount + actual_fee;
+        if !midnight_data.intents.is_empty() || !midnight_data.fallible_offers.is_empty() {
+            return Err(TransactionError::NotSupported(
+                "Contract interactions not yet supported".to_string(),
+            ));
+        }
 
-        // // Validate total amount including fees
-        // if total_required > available_utxo_value {
-        // 	return Err(TransactionError::InsufficientBalance(format!(
-        // 		"Requested {} tDUST + {} tDUST fee = {} tDUST total, but only {} tDUST available",
-        // 		format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 		format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 		format_token_amount(total_required, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 		format_token_amount(available_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	)));
-        // }
-        // info!(
-        // 	"Amount validated successfully (including {} tDUST fee)",
-        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
-        // );
+        // Build and prove the transaction
+        let proven_transaction = builder.build().await?;
 
-        // // First, find the actual UTXO that will be spent to get its exact value
-        // let from_wallet = context.wallet_from_seed(from_wallet_seed);
+        // Serialize the transaction using Midnight's serialize function
+        let serialized_tx = midnight_node_ledger_helpers::serialize(
+            &proven_transaction,
+            to_midnight_network_id(&self.network.network),
+        )
+        .map_err(|e| {
+            TransactionError::UnexpectedError(format!("Failed to serialize transaction: {:?}", e))
+        })?;
 
-        // // Create a temporary input_info to find the minimum UTXO
-        // let temp_input_info = InputInfo::<WalletSeed> {
-        // 	origin: from_wallet_seed,
-        // 	token_type,
-        // 	value: amount + actual_fee, // Minimum amount needed including fees
-        // };
+        // Update transaction with prepared data
+        let mut updated_midnight_data = midnight_data.clone();
+        updated_midnight_data.raw = Some(serialized_tx);
 
-        // // Find the actual UTXO that will be selected
-        // let selected_coin = temp_input_info.min_match_coin(&from_wallet.state);
-        // let actual_utxo_value = selected_coin.value;
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Sent),
+            network_data: Some(NetworkTransactionData::Midnight(updated_midnight_data)),
+            priced_at: Some(Utc::now().to_rfc3339()),
+            ..Default::default()
+        };
 
-        // debug!("Selected UTXO details:");
-        // debug!(
-        // 	"   - Value: {} tDUST",
-        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS)
-        // );
-        // debug!("   - Type: {:?}", selected_coin.type_);
-        // debug!("   - Nonce: {:?}", selected_coin.nonce);
+        let updated_tx = self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await?;
 
-        // // Debug: Check the mt_index
-        // if let Some((_, qualified_coin_sp)) = from_wallet
-        // 	.state
-        // 	.coins
-        // 	.iter()
-        // 	.find(|(_, coin_sp)| coin_sp.nonce == selected_coin.nonce)
-        // {
-        // 	debug!("   - MT Index: {}", qualified_coin_sp.mt_index);
-        // 	debug!(
-        // 		"   - Wallet state first_free: {}",
-        // 		from_wallet.state.first_free
-        // 	);
-        // }
+        self.enqueue_submit(&updated_tx).await?;
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
 
-        // // Verify the selected UTXO has sufficient value
-        // if actual_utxo_value < amount + actual_fee {
-        // 	error!(
-        // 	"Selected UTXO value {} tDUST is insufficient for amount {} tDUST + fee {} tDUST = {} tDUST",
-        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(amount + actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
-        // );
-        // 	return Err(TransactionError::InsufficientBalance(format!(
-        // 	"Selected UTXO value {} tDUST is insufficient for transaction amount {} tDUST + fee {} tDUST = {} tDUST",
-        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(amount + actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
-        // )));
-        // }
-
-        // debug!(
-        // 	"Found UTXO with value: {} tDUST (requested minimum: {} tDUST including {} tDUST fee)",
-        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(amount + actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // 	format_token_amount(actual_fee, transaction::MIDNIGHT_TOKEN_DECIMALS)
-        // );
-
-        // // Now create the actual input_info with the exact UTXO value that will be spent
-        // // This ensures the zero-knowledge proof references the correct UTXO
-        // let input_info = InputInfo::<WalletSeed> {
-        // 	origin: from_wallet_seed,
-        // 	token_type,
-        // 	value: actual_utxo_value, // Use the exact value of the selected UTXO
-        // };
-
-        // debug!(
-        // 	"Input info: {{origin: {:?}, token_type: {:?}, value: {} tDUST (actual UTXO value)}}",
-        // 	hex::encode(from_wallet_seed.0),
-        // 	token_type,
-        // 	format_token_amount(actual_utxo_value, transaction::MIDNIGHT_TOKEN_DECIMALS),
-        // );
-
-        // // Create output to recipient
-        // let recipient_output = OutputInfo::<WalletSeed> {
-        // 	destination: to_wallet_seed,
-        // 	token_type,
-        // 	value: amount,
-        // };
-
-        // debug!(
-        // 	"Recipient output: {{destination: {:?}, token_type: {:?}, value: {} tDUST}}",
-        // 	hex::encode(to_wallet_seed.0),
-        // 	token_type,
-        // 	format_token_amount(amount, transaction::MIDNIGHT_TOKEN_DECIMALS)
-        // );
-
-        // // Create the guaranteed offer with input and outputs
-        // let mut offer = OfferInfo::default();
-        // offer.inputs.push(Box::new(input_info));
-        // offer.outputs.push(Box::new(recipient_output));
-
-        // // Calculate change and create change output if needed
-        // // This ensures the indexer recognizes the transaction as relevant to the sender
-        // let change_amount = actual_utxo_value.saturating_sub(amount + actual_fee);
-        // if change_amount > 0 {
-        // 	let change_output = OutputInfo::<WalletSeed> {
-        // 		destination: from_wallet_seed, // Send change back to sender
-        // 		token_type,
-        // 		value: change_amount,
-        // 	};
-        // 	offer.outputs.push(Box::new(change_output));
-        // 	debug!(
-        // 		"Change output: {{destination: self, token_type: {:?}, value: {} tDUST}}",
-        // 		token_type,
-        // 		format_token_amount(change_amount, transaction::MIDNIGHT_TOKEN_DECIMALS)
-        // 	);
-        // } else {
-        // 	debug!("No change output needed (exact amount)");
-        // }
-
-        let _transaction = MidnightTransactionBuilder::<DefaultDB>::new()
-			.with_context(context)
-			.with_proof_provider(proof_provider)
-			.with_rng_seed(rng_seed)
-			// .with_guaranteed_offer(offer)
-			.build()
-			.await?;
-
-        log::debug!("Preparing Midnight transaction: {}", tx.id);
-
-        // For now, just return the transaction as-is
-        Ok(tx)
+        Ok(updated_tx)
     }
 
     async fn submit_transaction(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // TODO: Implement transaction submission
-        // 1. Check if proofs are ready
-        // 2. Sign the transaction
-        // 3. Submit to the network
-        // 4. Handle partial success results
+        // Extract Midnight-specific data
+        let midnight_data = tx.network_data.get_midnight_transaction_data()?;
 
-        log::debug!("Submitting Midnight transaction: {}", tx.id);
+        // Check if we have serialized transaction data
+        let serialized_tx = midnight_data.raw.as_ref().ok_or_else(|| {
+            TransactionError::UnexpectedError(
+                "Transaction not prepared - missing serialized data".to_string(),
+            )
+        })?;
 
-        // For now, just return the transaction as-is
-        Ok(tx)
+        // Deserialize the transaction
+        let transaction = midnight_node_ledger_helpers::deserialize::<
+            midnight_node_ledger_helpers::Transaction<
+                midnight_node_ledger_helpers::Proof,
+                DefaultDB,
+            >,
+            _,
+        >(
+            &serialized_tx[..],
+            to_midnight_network_id(&self.network.network),
+        )
+        .map_err(|e| {
+            TransactionError::UnexpectedError(format!("Failed to deserialize transaction: {:?}", e))
+        })?;
+
+        // Submit to the network
+        let result_json = self.provider.send_transaction(transaction).await?;
+
+        // Parse the JSON response
+        let result: TransactionSubmissionResult =
+            serde_json::from_str(&result_json).map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to parse transaction result: {}",
+                    e
+                ))
+            })?;
+
+        // Update transaction with hash and block hash
+        let mut updated_midnight_data = midnight_data.clone();
+        updated_midnight_data.hash = Some(result.extrinsic_tx_hash.clone());
+        updated_midnight_data.pallet_hash = Some(result.pallet_tx_hash.clone());
+
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Submitted),
+            network_data: Some(NetworkTransactionData::Midnight(updated_midnight_data)),
+            sent_at: Some(Utc::now().to_rfc3339()),
+            hashes: Some(vec![result.extrinsic_tx_hash]),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        // Schedule status check
+        let job = crate::jobs::TransactionStatusCheck::new(
+            updated_tx.id.clone(),
+            updated_tx.relayer_id.clone(),
+        );
+        self.job_producer()
+            .produce_check_transaction_status_job(job, None)
+            .await?;
+
+        self.send_transaction_update_notification(&updated_tx)
+            .await?;
+
+        Ok(updated_tx)
     }
 
     async fn resubmit_transaction(
@@ -372,8 +581,6 @@ where
         // TODO: Implement transaction resubmission
         // This might involve resubmitting only failed segments
 
-        log::debug!("Resubmitting Midnight transaction: {}", tx.id);
-
         // For now, just return the transaction as-is
         Ok(tx)
     }
@@ -382,15 +589,134 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // TODO: Implement status handling
-        // 1. Query transaction status from network
-        // 2. Handle partial success (some segments succeeded, others failed)
-        // 3. Update transaction status accordingly
-
         log::debug!("Handling Midnight transaction status: {}", tx.id);
 
-        // For now, just return the transaction as-is
-        Ok(tx)
+        // If transaction is in a final state, return as-is
+        if matches!(
+            tx.status,
+            TransactionStatus::Confirmed | TransactionStatus::Failed | TransactionStatus::Expired
+        ) {
+            return Ok(tx);
+        }
+
+        // Extract Midnight-specific data
+        let midnight_data = tx.network_data.get_midnight_transaction_data()?;
+
+        // Check if we have a transaction hash
+        let pallet_tx_hash = midnight_data.pallet_hash.as_ref().ok_or_else(|| {
+            TransactionError::UnexpectedError("Transaction hash is missing".to_string())
+        })?;
+
+        match self.provider.get_transaction_by_hash(pallet_tx_hash).await {
+            Ok(Some(tx_data)) => {
+                // Check the applyStage field to determine success/failure
+                if let Some(apply_stage_value) = tx_data.get("applyStage") {
+                    // Deserialize the applyStage value into the ApplyStage enum
+                    let apply_stage: ApplyStage = serde_json::from_value(apply_stage_value.clone())
+                        .map_err(|e| {
+                            TransactionError::UnexpectedError(format!(
+                                "Failed to parse applyStage: {}",
+                                e
+                            ))
+                        })?;
+
+                    match apply_stage {
+                        ApplyStage::SucceedEntirely => {
+                            // Transaction succeeded entirely
+                            let update = TransactionUpdateRequest {
+                                status: Some(TransactionStatus::Confirmed),
+                                confirmed_at: Some(Utc::now().to_rfc3339()),
+                                ..Default::default()
+                            };
+
+                            let updated_tx = self
+                                .transaction_repository
+                                .partial_update(tx.id.clone(), update)
+                                .await?;
+
+                            self.send_transaction_update_notification(&updated_tx)
+                                .await?;
+
+                            Ok(updated_tx)
+                        }
+                        ApplyStage::FailEntirely => {
+                            // Transaction failed entirely
+                            log::warn!("Transaction {} failed entirely", tx.id);
+
+                            let update = TransactionUpdateRequest {
+                                status: Some(TransactionStatus::Failed),
+                                ..Default::default()
+                            };
+
+                            let updated_tx = self
+                                .transaction_repository
+                                .partial_update(tx.id.clone(), update)
+                                .await?;
+
+                            self.send_transaction_update_notification(&updated_tx)
+                                .await?;
+
+                            Ok(updated_tx)
+                        }
+                        ApplyStage::SucceedPartially => {
+                            // Partial success - could be expanded to handle segment-specific results
+                            log::warn!("Transaction {} succeeded partially", tx.id);
+
+                            // For now, treat any partial success as a failure
+                            // In the future, this could be more nuanced
+                            let update = TransactionUpdateRequest {
+                                status: Some(TransactionStatus::Failed),
+                                ..Default::default()
+                            };
+
+                            let updated_tx = self
+                                .transaction_repository
+                                .partial_update(tx.id.clone(), update)
+                                .await?;
+
+                            self.send_transaction_update_notification(&updated_tx)
+                                .await?;
+
+                            Ok(updated_tx)
+                        }
+                        ApplyStage::Pending => {
+                            // Still pending - schedule another check
+                            log::info!("Transaction {} is still pending", tx.id);
+
+                            self.schedule_status_check(&tx, Some(5)).await?;
+
+                            Ok(tx)
+                        }
+                    }
+                } else {
+                    // No applyStage field - this shouldn't happen
+                    log::error!("Transaction {} missing applyStage field", tx.id);
+
+                    // Schedule another status check
+                    self.schedule_status_check(&tx, Some(5)).await?;
+
+                    Ok(tx)
+                }
+            }
+            Ok(None) => {
+                // Transaction not found in indexer yet
+                log::info!("Transaction {} not found in indexer yet", tx.id);
+
+                // Schedule another status check
+                self.schedule_status_check(&tx, Some(5)).await?;
+
+                Ok(tx)
+            }
+            Err(e) => {
+                // Error querying indexer
+                log::error!("Error querying indexer for transaction {}: {}", tx.id, e);
+
+                // Schedule another status check
+                self.schedule_status_check(&tx, Some(5)).await?;
+
+                Ok(tx)
+            }
+        }
     }
 
     async fn cancel_transaction(
@@ -425,29 +751,42 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // TODO: Implement transaction signing
-        // 1. Get the transaction data
-        // 2. Sign with the signer
-        // 3. Update transaction with signature
+        let signature_response = self
+            .signer
+            .sign_transaction(tx.network_data.clone())
+            .await?;
 
-        log::debug!("Signing Midnight transaction: {}", tx.id);
+        // Extract the Midnight signature from the response
+        let signature = match signature_response {
+            SignTransactionResponse::Midnight(midnight_sig) => midnight_sig,
+            _ => {
+                return Err(TransactionError::InvalidType(
+                    "Expected Midnight signature response".to_string(),
+                ))
+            }
+        };
 
-        // For now, just return the transaction as-is
-        Ok(tx)
+        let mut updated_midnight_data = tx.network_data.get_midnight_transaction_data()?;
+        updated_midnight_data.signature = Some(signature.signature);
+
+        let update = TransactionUpdateRequest {
+            network_data: Some(NetworkTransactionData::Midnight(updated_midnight_data)),
+            ..Default::default()
+        };
+
+        let updated_tx = self
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
+            .await?;
+
+        Ok(updated_tx)
     }
 
     async fn validate_transaction(
         &self,
-        tx: TransactionRepoModel,
+        _tx: TransactionRepoModel,
     ) -> Result<bool, TransactionError> {
-        // TODO: Implement transaction validation
-        // 1. Validate transaction structure
-        // 2. Check segment sequencing rules
-        // 3. Validate proofs if available
-
-        log::debug!("Validating Midnight transaction: {}", tx.id);
-
-        // For now, just return true
+        // NOTE: This is already handled by the transaction builder in the prepare_transaction method
         Ok(true)
     }
 }

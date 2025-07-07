@@ -43,12 +43,12 @@ pub trait SyncStrategy: Send + Sync {
     /// Create a new sync strategy.
     fn new(indexer_client: &MidnightIndexerClient, config: Option<SyncConfig>) -> Self;
 
-    /// Execute the sync strategy from the given start height.
+    /// Execute the sync strategy from the given start index.
     ///
     /// This method should emit events via the dispatcher and update the progress tracker.
     async fn sync(
         &mut self,
-        start_height: u64,
+        start_index: u64,
         event_dispatcher: &mut EventDispatcher,
         progress_tracker: &mut ProgressTracker,
     ) -> Result<(), SyncError>;
@@ -102,14 +102,14 @@ impl SyncStrategy for QuickSyncStrategy {
     /// Execute the relevant transaction sync strategy.
     async fn sync(
         &mut self,
-        start_height: u64,
+        start_index: u64,
         event_dispatcher: &mut EventDispatcher,
         progress_tracker: &mut ProgressTracker,
     ) -> Result<(), SyncError> {
         let config = self.ensure_config()?;
         let session_id = self.establish_session().await?;
 
-        debug!("Starting quick sync from index {}", start_height);
+        debug!("Starting quick sync from index {}", start_index);
 
         let send_progress_events = config.send_progress_events.unwrap_or(true);
         let idle_timeout = config.idle_timeout.unwrap_or(Duration::from_secs(5));
@@ -117,7 +117,7 @@ impl SyncStrategy for QuickSyncStrategy {
         // Subscribe to wallet events
         let mut wallet_stream = self
             .indexer_client
-            .subscribe_wallet(&session_id, Some(start_height), Some(send_progress_events))
+            .subscribe_wallet(&session_id, Some(start_index), Some(send_progress_events))
             .await?;
 
         let mut last_event_time = Instant::now();
@@ -150,6 +150,10 @@ impl SyncStrategy for QuickSyncStrategy {
                                         highest_relevant_wallet_index,
                                         ..
                                     } => {
+                                        debug!(
+                                            "Progress update: start_index={}, highest_index={}, highest_relevant_wallet_index={}",
+                                            start_index, highest_index, highest_relevant_wallet_index
+                                        );
                                         if progress_tracker.is_sync_complete(*highest_index, *highest_relevant_wallet_index) {
                                             debug!("Sync completed based on progress update");
                                             // Dispatch completion event
@@ -203,7 +207,7 @@ impl SyncStrategy for FullSyncStrategy {
 
     async fn sync(
         &mut self,
-        _start_height: u64,
+        _start_index: u64,
         _event_dispatcher: &mut EventDispatcher,
         _progress_tracker: &mut ProgressTracker,
     ) -> Result<(), SyncError> {

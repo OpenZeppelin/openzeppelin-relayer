@@ -145,7 +145,6 @@ pub struct ConfigFileRelayerStellarPolicy {
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerMidnightPolicy {
     pub min_balance: Option<u64>,
-    // TODO: Add Midnight specific fields
 }
 
 #[derive(Debug, Serialize, Clone)]

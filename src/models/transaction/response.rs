@@ -78,6 +78,10 @@ pub struct MidnightTransactionResponse {
     pub id: String,
     #[schema(nullable = false)]
     pub hash: Option<String>,
+    #[schema(nullable = false)]
+    pub pallet_hash: Option<String>,
+    #[schema(nullable = false)]
+    pub block_hash: Option<String>,
     pub status: TransactionStatus,
     pub created_at: String,
     #[schema(nullable = false)]
@@ -132,11 +136,12 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     sequence_number: stellar_data.sequence_number.unwrap_or(0),
                 })
             }
-            // TODO: Implement MidnightTransactionResponse
             NetworkTransactionData::Midnight(midnight_data) => {
                 TransactionResponse::Midnight(MidnightTransactionResponse {
                     id: model.id,
                     hash: midnight_data.hash,
+                    pallet_hash: midnight_data.pallet_hash,
+                    block_hash: midnight_data.block_hash,
                     status: model.status,
                     created_at: model.created_at,
                     sent_at: model.sent_at,

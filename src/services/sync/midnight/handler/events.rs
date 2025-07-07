@@ -14,10 +14,36 @@ use crate::services::midnight::{
         CollapsedUpdateInfo, IndexerError, TransactionData, WalletSyncEvent as IndexerEvent,
         ZswapChainStateUpdate,
     },
+    utils::{parse_collapsed_update, process_transaction},
     SyncError,
 };
 
 use log::error;
+use midnight_ledger_prototype::transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
+use midnight_node_ledger_helpers::{DefaultDB, NetworkId, Proof, Transaction};
+use std::sync::{Arc, Mutex};
+
+use crate::services::midnight::indexer::ApplyStage;
+
+/// Enum to track updates in chronological order during wallet synchronization.
+///
+/// This enum is used to buffer and order both transaction and Merkle tree updates
+/// as they are received from the indexer, ensuring correct application order.
+///
+/// - `Transaction`: Represents a transaction update with its index, transaction data, and apply stage.
+/// - `MerkleUpdate`: Represents a Merkle tree update with its index and update data.
+#[derive(Clone)]
+pub enum ChronologicalUpdate {
+    Transaction {
+        index: u64,
+        tx: Box<Transaction<Proof, DefaultDB>>,
+        apply_stage: Option<ApplyStage>,
+    },
+    MerkleUpdate {
+        index: u64,
+        update: Box<MerkleTreeCollapsedUpdate>,
+    },
+}
 
 /// Events that occur during wallet synchronization
 pub enum SyncEvent {
@@ -56,13 +82,83 @@ pub trait SyncEventHandler: Send + Sync {
     fn name(&self) -> &'static str;
 }
 
+/// Enum representing all possible event handlers
+pub enum EventHandlerType {
+    /// The main event handler that buffers updates
+    EventHandler {
+        network: NetworkId,
+        updates_buffer: Arc<Mutex<Vec<ChronologicalUpdate>>>,
+    },
+    // Add more handler variants as needed in the future
+}
+
+impl EventHandlerType {
+    /// Handle a sync event based on the handler type
+    async fn handle(&mut self, event: &SyncEvent) -> Result<(), SyncError> {
+        match self {
+            EventHandlerType::EventHandler {
+                network,
+                updates_buffer,
+            } => {
+                match event {
+                    SyncEvent::TransactionReceived {
+                        blockchain_index,
+                        transaction_data,
+                    } => {
+                        // Process transaction and buffer it (don't apply yet)
+                        if let Some(tx) = process_transaction(transaction_data, *network)? {
+                            // Buffer the transaction for later application with its apply stage
+                            updates_buffer
+                                .lock()
+                                .unwrap()
+                                .push(ChronologicalUpdate::Transaction {
+                                    index: *blockchain_index,
+                                    tx: Box::new(tx),
+                                    apply_stage: transaction_data.apply_stage.clone(),
+                                });
+                        }
+                    }
+                    SyncEvent::MerkleUpdateReceived {
+                        update_info,
+                        blockchain_index,
+                    } => {
+                        // Process and buffer merkle update (don't apply yet)
+                        let update = parse_collapsed_update(update_info, *network)?;
+
+                        // Buffer the update for later application
+                        updates_buffer
+                            .lock()
+                            .unwrap()
+                            .push(ChronologicalUpdate::MerkleUpdate {
+                                index: *blockchain_index,
+                                update: Box::new(update),
+                            });
+                    }
+                    SyncEvent::SyncCompleted => {
+                        // Sync completed, no additional processing needed
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Get the name of this handler for logging and diagnostics
+    fn name(&self) -> &'static str {
+        match self {
+            EventHandlerType::EventHandler { .. } => "EventHandler",
+        }
+    }
+}
+
 /// Event dispatcher that manages multiple event handlers.
 ///
 /// The dispatcher allows multiple handlers to be registered and ensures all are called for each event.
 /// This enables logging, state updates, and persistence to be handled independently.
 #[derive(Default)]
 pub struct EventDispatcher {
-    handlers: Vec<Box<dyn SyncEventHandler>>,
+    handlers: Vec<EventHandlerType>,
 }
 
 impl EventDispatcher {
@@ -74,7 +170,7 @@ impl EventDispatcher {
     /// Register a new event handler.
     ///
     /// Handlers are called in the order they are registered.
-    pub fn register_handler(&mut self, handler: Box<dyn SyncEventHandler>) {
+    pub fn register_handler(&mut self, handler: EventHandlerType) {
         self.handlers.push(handler);
     }
 

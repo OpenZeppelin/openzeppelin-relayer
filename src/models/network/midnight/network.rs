@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct MidnightNetwork {
-    /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
+    /// Unique network identifier (e.g., "mainnet", "testnet", "devnet").
     pub network: String,
     /// List of RPC endpoint URLs for connecting to the network.
     pub rpc_urls: Vec<String>,
@@ -62,7 +62,7 @@ impl TryFrom<NetworkRepoModel> for MidnightNetwork {
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),
                     indexer_urls: midnight_config.indexer_urls.clone(),
-                    prover_url: midnight_config.prover_url.clone().unwrap_or_default(),
+                    prover_url: midnight_config.prover_url.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(

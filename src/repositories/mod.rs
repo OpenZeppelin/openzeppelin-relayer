@@ -24,6 +24,9 @@ pub use transaction_counter::*;
 mod network;
 pub use network::*;
 
+mod sync_state;
+pub use sync_state::*;
+
 #[derive(Debug)]
 pub struct PaginatedResult<T> {
     pub items: Vec<T>,

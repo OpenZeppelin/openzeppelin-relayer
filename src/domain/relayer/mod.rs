@@ -28,8 +28,8 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemorySyncState,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
     services::{
         get_network_provider,
@@ -317,6 +317,7 @@ impl Relayer for NetworkRelayer {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait RelayerFactoryTrait {
     async fn create_relayer(
         relayer: RelayerRepoModel,
@@ -325,6 +326,7 @@ pub trait RelayerFactoryTrait {
         networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
+        sync_state_store: Arc<InMemorySyncState>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError>;
 }
@@ -340,6 +342,7 @@ impl RelayerFactoryTrait for RelayerFactory {
         networks_repository: Arc<InMemoryNetworkRepository>,
         transaction_repository: Arc<InMemoryTransactionRepository>,
         transaction_counter_store: Arc<InMemoryTransactionCounter>,
+        sync_state_store: Arc<InMemorySyncState>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkRelayer, RelayerError> {
         match relayer.network_type {
@@ -461,32 +464,35 @@ impl RelayerFactoryTrait for RelayerFactory {
                     Some(&metadata),
                 )?;
 
+                // Convert network to NetworkId for sync manager
+                let network_id = to_midnight_network_id(&relayer.network);
+
                 // Create the Midnight signer to get the wallet seed
-                let midnight_signer = MidnightSignerFactory::create_midnight_signer(&signer)
-                    .map_err(|e| {
-                        RelayerError::NetworkConfiguration(format!(
-                            "Failed to create signer: {}",
-                            e
-                        ))
-                    })?;
+                let midnight_signer = MidnightSignerFactory::create_midnight_signer(
+                    &signer, network_id,
+                )
+                .map_err(|e| {
+                    RelayerError::NetworkConfiguration(format!("Failed to create signer: {}", e))
+                })?;
                 let wallet_seed = midnight_signer.wallet_seed();
 
                 // Get the indexer client from provider
                 let indexer_client = midnight_provider.get_indexer_client();
 
-                // Convert network to NetworkId for sync manager
-                let network_id = to_midnight_network_id(&relayer.network);
-
                 // Create the sync manager
-                let sync_manager = Arc::new(
-                    SyncManager::<QuickSyncStrategy>::new(indexer_client, wallet_seed, network_id)
-                        .map_err(|e| {
-                            RelayerError::NetworkConfiguration(format!(
-                                "Failed to create sync manager: {}",
-                                e
-                            ))
-                        })?,
-                );
+                let sync_manager = SyncManager::<QuickSyncStrategy>::new(
+                    indexer_client,
+                    wallet_seed,
+                    network_id,
+                    sync_state_store.clone(),
+                    relayer.id.clone(),
+                )
+                .map_err(|e| {
+                    RelayerError::NetworkConfiguration(format!(
+                        "Failed to create sync manager: {}",
+                        e
+                    ))
+                })?;
 
                 // Signer repository is passed from the factory
 
@@ -502,7 +508,7 @@ impl RelayerFactoryTrait for RelayerFactory {
                     transaction_repository,
                     Arc::new(midnight_signer),
                     transaction_counter_service,
-                    sync_manager,
+                    Arc::new(tokio::sync::Mutex::new(sync_manager)),
                     job_producer,
                 );
                 let relayer =
@@ -560,7 +566,6 @@ pub struct SignTransactionResponseStellar {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignTransactionResponseMidnight {
-    // TODO: Implement signature
     pub signature: String,
 }
 

@@ -47,6 +47,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use log::{info, warn};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::domain::relayer::{Relayer, RelayerError};
 
@@ -66,7 +67,7 @@ where
     pub transaction_repository: Arc<T>,
     pub signer: Arc<SR>,
     pub transaction_counter_service: Arc<C>,
-    pub sync_service: Arc<S>,
+    pub sync_service: Arc<Mutex<S>>,
     pub job_producer: Arc<J>,
 }
 
@@ -101,7 +102,7 @@ where
         transaction_repository: Arc<T>,
         signer: Arc<SR>,
         transaction_counter_service: Arc<C>,
-        sync_service: Arc<S>,
+        sync_service: Arc<Mutex<S>>,
         job_producer: Arc<J>,
     ) -> Self {
         Self {
@@ -136,7 +137,7 @@ where
     transaction_repository: Arc<T>,
     signer: Arc<SR>,
     transaction_counter_service: Arc<C>,
-    sync_service: Arc<S>,
+    sync_service: Arc<Mutex<S>>,
     job_producer: Arc<J>,
 }
 
@@ -302,7 +303,9 @@ where
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         // Get the ledger context from the sync service
-        let context = self.sync_service.get_context();
+        let sync_service = self.sync_service.lock().await;
+        let context = sync_service.get_context();
+        drop(sync_service); // Drop the lock early
 
         let wallet_seed = self.signer.wallet_seed();
 
@@ -411,6 +414,27 @@ where
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
         info!("Initializing Midnight relayer: {}", self.relayer.id);
 
+        // First sync the wallet from genesis on initial setup
+        info!(
+            "Performing initial wallet sync from genesis for relayer: {}",
+            self.relayer.id
+        );
+
+        // Synchronises the LedgerContext (including ledger and wallet state) with the network
+        // This is required to get the latest merkle tree state before submitting a transaction to ensure the transaction is valid locally AND on-chain
+        // We use the QuickSyncStrategy by default which is a lightweight sync that uses the indexer to get the latest wallet-relevant states
+        // The main difference between QuickSyncStrategy and FullSyncStrategy is that QuickSyncStrategy only syncs the wallet state and the ledger state, while FullSyncStrategy syncs the entire ledger state
+        // This is useful because it's much faster and doesn't require downloading the entire ledger state from genesis
+        // However, it requires trusting the indexer with your wallet viewing key (which is read-only key used to identify transactions belonging to your wallet).
+        let mut sync_service = self.sync_service.lock().await;
+        sync_service
+            .sync(0)
+            .await
+            .map_err(|e| RelayerError::ProviderError(format!("Initial sync failed: {}", e)))?;
+        drop(sync_service); // Explicitly drop the lock
+
+        info!("Initial wallet sync completed successfully");
+
         let seq_res = self.sync_nonce().await.err();
 
         let mut failures: Vec<String> = Vec::new();
@@ -452,7 +476,7 @@ mod tests {
             ProviderError,
         },
     };
-    use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
+    use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, NetworkId, WalletSeed};
     use mockall::{mock, predicate::*};
     use secrets::SecretVec;
     use std::future::ready;
@@ -537,9 +561,8 @@ mod tests {
                         is_testnet: Some(true),
                         tags: None,
                     },
-                    prover_url: Some("https://prover.midnight.network".to_string()),
+                    prover_url: "https://prover.midnight.network".to_string(),
                     commitment_tree_ttl: Some(60),
-                    network_id: Some("testnet".to_string()),
                     indexer_urls: IndexerUrls {
                         http: "https://indexer.midnight.network".to_string(),
                         ws: "wss://indexer.midnight.network".to_string(),
@@ -580,7 +603,9 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
+        let signer =
+            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
+                .unwrap();
 
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
@@ -591,7 +616,7 @@ mod tests {
                 Arc::new(tx_repo),
                 Arc::new(signer),
                 Arc::new(counter),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer),
             ),
         )
@@ -617,7 +642,9 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
+        let signer =
+            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
+                .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider,
@@ -627,7 +654,7 @@ mod tests {
                 Arc::new(tx_repo),
                 Arc::new(signer),
                 Arc::new(counter),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer),
             ),
         )
@@ -658,7 +685,9 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let counter = MockTransactionCounterServiceTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
+        let signer =
+            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
+                .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider,
@@ -668,7 +697,7 @@ mod tests {
                 Arc::new(tx_repo),
                 Arc::new(signer),
                 Arc::new(counter),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer),
             ),
         )
@@ -690,7 +719,9 @@ mod tests {
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
         let counter_mock = MockTransactionCounterServiceTrait::new();
-        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
+        let signer =
+            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
+                .unwrap();
         provider_mock
             .expect_get_nonce()
             .times(1)
@@ -738,7 +769,7 @@ mod tests {
                 Arc::new(tx_repo_mock),
                 Arc::new(signer),
                 Arc::new(counter_mock),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer_mock),
             ),
         )
@@ -780,7 +811,9 @@ mod tests {
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
         let counter_mock = MockTransactionCounterServiceTrait::new();
-        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
+        let signer =
+            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
+                .unwrap();
         provider_mock
             .expect_get_nonce()
             .with(eq(relayer_model.address.clone()))
@@ -799,7 +832,7 @@ mod tests {
                 Arc::new(tx_repo_mock),
                 Arc::new(signer),
                 Arc::new(counter_mock),
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 Arc::new(job_producer_mock),
             ),
         )
@@ -833,7 +866,9 @@ mod tests {
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
+        let signer =
+            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
+                .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model,
             provider,
@@ -843,7 +878,7 @@ mod tests {
                 tx_repo,
                 Arc::new(signer),
                 counter,
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 job_producer,
             ),
         )
@@ -873,7 +908,9 @@ mod tests {
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer = MidnightSignerFactory::create_midnight_signer(&ctx.signer_model).unwrap();
+        let signer =
+            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
+                .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model,
             provider,
@@ -883,7 +920,7 @@ mod tests {
                 tx_repo,
                 Arc::new(signer),
                 counter,
-                Arc::new(sync_manager),
+                Arc::new(Mutex::new(sync_manager)),
                 job_producer,
             ),
         )
