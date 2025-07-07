@@ -4,104 +4,20 @@ use crate::{
     repositories::{InMemorySyncState, SyncStateTrait},
     services::midnight::{
         handler::{
-            EventDispatcher, ProgressTracker, SyncConfig, SyncEvent, SyncEventHandler, SyncStrategy,
+            ChronologicalUpdate, EventDispatcher, EventHandlerType, ProgressTracker, SyncConfig,
+            SyncStrategy,
         },
-        indexer::{ApplyStage, MidnightIndexerClient},
-        utils::{derive_viewing_key, parse_collapsed_update, process_transaction},
+        indexer::MidnightIndexerClient,
+        utils::derive_viewing_key,
         SyncError,
     },
 };
 
 use log::{debug, info, warn};
-use midnight_ledger_prototype::transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate;
 use midnight_node_ledger_helpers::{
     mn_ledger_serialize::{deserialize, serialize},
-    DefaultDB, LedgerContext, LedgerState, NetworkId, Proof, Transaction, WalletSeed, WalletState,
+    DefaultDB, LedgerContext, LedgerState, NetworkId, WalletSeed, WalletState,
 };
-
-/// Enum to track updates in chronological order during wallet synchronization.
-///
-/// This enum is used to buffer and order both transaction and Merkle tree updates
-/// as they are received from the indexer, ensuring correct application order.
-///
-/// - `Transaction`: Represents a transaction update with its index, transaction data, and apply stage.
-/// - `MerkleUpdate`: Represents a Merkle tree update with its index and update data.
-#[derive(Clone)]
-enum ChronologicalUpdate {
-    Transaction {
-        index: u64,
-        tx: Box<Transaction<Proof, DefaultDB>>,
-        apply_stage: Option<ApplyStage>,
-    },
-    MerkleUpdate {
-        index: u64,
-        update: Box<MerkleTreeCollapsedUpdate>,
-    },
-}
-
-struct EventHandler {
-    network: NetworkId,
-    updates_buffer: Arc<Mutex<Vec<ChronologicalUpdate>>>,
-}
-
-impl EventHandler {
-    fn new(network: NetworkId, updates_buffer: Arc<Mutex<Vec<ChronologicalUpdate>>>) -> Self {
-        Self {
-            network,
-            updates_buffer,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl SyncEventHandler for EventHandler {
-    fn name(&self) -> &'static str {
-        "EventHandler"
-    }
-
-    async fn handle(&mut self, event: &SyncEvent) -> Result<(), SyncError> {
-        match event {
-            SyncEvent::TransactionReceived {
-                blockchain_index,
-                transaction_data,
-            } => {
-                // Process transaction and buffer it (don't apply yet)
-                if let Some(tx) = process_transaction(transaction_data, self.network)? {
-                    // Buffer the transaction for later application with its apply stage
-                    self.updates_buffer
-                        .lock()
-                        .unwrap()
-                        .push(ChronologicalUpdate::Transaction {
-                            index: *blockchain_index,
-                            tx: Box::new(tx),
-                            apply_stage: transaction_data.apply_stage.clone(),
-                        });
-                }
-            }
-            SyncEvent::MerkleUpdateReceived {
-                update_info,
-                blockchain_index,
-            } => {
-                // Process and buffer merkle update (don't apply yet)
-                let update = parse_collapsed_update(update_info, self.network)?;
-
-                // Buffer the update for later application
-                self.updates_buffer
-                    .lock()
-                    .unwrap()
-                    .push(ChronologicalUpdate::MerkleUpdate {
-                        index: *blockchain_index,
-                        update: Box::new(update),
-                    });
-            }
-            SyncEvent::SyncCompleted => {
-                // Sync completed, no additional processing needed
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-}
 
 /// Main sync manager that coordinates all sync components.
 ///
@@ -308,10 +224,13 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
         let updates_buffer = Arc::new(Mutex::new(Vec::<ChronologicalUpdate>::new()));
 
         // Execute sync strategy with a custom event handler
-        let event_handler = EventHandler::new(self.network, updates_buffer.clone());
+        let event_handler = EventHandlerType::EventHandler {
+            network: self.network,
+            updates_buffer: updates_buffer.clone(),
+        };
 
         let mut event_dispatcher = EventDispatcher::new();
-        event_dispatcher.register_handler(Box::new(event_handler));
+        event_dispatcher.register_handler(event_handler);
 
         self.strategy
             .sync(start_index, &mut event_dispatcher, &mut progress_tracker)
