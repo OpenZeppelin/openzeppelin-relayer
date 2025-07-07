@@ -1,7 +1,26 @@
 /// Configuration for the server, including network and rate limiting settings.
-use std::env;
+use std::{env, str::FromStr};
+use strum::Display;
 
 use crate::{constants::MINIMUM_SECRET_VALUE_LENGTH, models::SecretString};
+
+#[derive(Debug, Clone, PartialEq, Eq, Display)]
+pub enum RepositoryStorageType {
+    InMemory,
+    Redis,
+}
+
+impl FromStr for RepositoryStorageType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "inmemory" | "in_memory" => Ok(Self::InMemory),
+            "redis" => Ok(Self::Redis),
+            _ => Err(format!("Invalid repository storage type: {}", s)),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -37,6 +56,8 @@ pub struct ServerConfig {
     pub provider_retry_max_delay_ms: u64,
     /// Maximum number of failovers (switching to different providers).
     pub provider_max_failovers: u8,
+    /// The type of repository storage to use.
+    pub repository_storage_type: RepositoryStorageType,
 }
 
 impl ServerConfig {
@@ -59,6 +80,7 @@ impl ServerConfig {
     /// - `PROVIDER_RETRY_BASE_DELAY_MS` defaults to `100`.
     /// - `PROVIDER_RETRY_MAX_DELAY_MS` defaults to `2000`.
     /// - `PROVIDER_MAX_FAILOVERS` defaults to `3`.
+    /// - `REPOSITORY_STORAGE_TYPE` defaults to `"in_memory"`.
     pub fn from_env() -> Self {
         let conf_dir = if env::var("IN_DOCKER")
             .map(|val| val == "true")
@@ -137,6 +159,10 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
                 .unwrap_or(3),
+            repository_storage_type: env::var("REPOSITORY_STORAGE_TYPE")
+                .unwrap_or_else(|_| "in_memory".to_string())
+                .parse()
+                .unwrap_or(RepositoryStorageType::InMemory),
         }
     }
 }

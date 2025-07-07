@@ -55,7 +55,10 @@ impl RedisTransactionRepository {
 
     /// Generate key for reverse lookup: tx_to_relayer:{tx_id}
     fn tx_to_relayer_key(&self, tx_id: &str) -> String {
-        format!("{}:{}:{}", self.key_prefix, TX_TO_RELAYER_PREFIX, tx_id)
+        format!(
+            "{}:{}:{}:{}",
+            self.key_prefix, RELAYER_PREFIX, TX_TO_RELAYER_PREFIX, tx_id
+        )
     }
 
     /// Generate key for relayer status index: relayer:{relayer_id}:status:{status}

@@ -199,7 +199,7 @@ impl RelayerRepository for RelayerRepositoryStorage {
 mod tests {
     use super::*;
     use crate::{
-        config::ServerConfig,
+        config::{RepositoryStorageType, ServerConfig},
         models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy},
     };
 
@@ -331,6 +331,7 @@ mod tests {
             provider_retry_base_delay_ms: 100,
             provider_retry_max_delay_ms: 2000,
             provider_max_failovers: 3,
+            repository_storage_type: RepositoryStorageType::InMemory,
         };
 
         let client =

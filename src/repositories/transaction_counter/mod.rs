@@ -141,7 +141,10 @@ impl TransactionCounterTrait for TransactionCounterRepositoryStorage {
 
 #[cfg(test)]
 mod tests {
-    use crate::{config::ServerConfig, models::SecretString};
+    use crate::{
+        config::{RepositoryStorageType, ServerConfig},
+        models::SecretString,
+    };
 
     use super::*;
 
@@ -163,6 +166,7 @@ mod tests {
             api_key: SecretString::new(""),
             enable_swagger: false,
             metrics_port: 9090,
+            repository_storage_type: RepositoryStorageType::InMemory,
         }
     }
 

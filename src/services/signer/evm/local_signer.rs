@@ -58,7 +58,7 @@ impl LocalSigner {
             let key_bytes = config.raw_key.borrow();
 
             AlloyLocalSignerClient::from_bytes(&FixedBytes::from_slice(&key_bytes)).map_err(
-                |e| SignerError::Configuration(format!("Failed to create signer: {}", e)),
+                |e| SignerError::Configuration(format!("Failed to create local signer: {}", e)),
             )?
         };
 

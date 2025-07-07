@@ -3,7 +3,7 @@ use actix_web::{dev::Service, test, web, App, HttpResponse};
 use std::sync::Arc;
 
 use openzeppelin_relayer::{
-    config,
+    config::{RepositoryStorageType, ServerConfig},
     constants::{AUTHORIZATION_HEADER_NAME, AUTHORIZATION_HEADER_VALUE_PREFIX},
     models::SecretString,
     utils::check_authorization_header,
@@ -11,7 +11,7 @@ use openzeppelin_relayer::{
 
 #[actix_web::test]
 async fn test_authorization_middleware_success() {
-    let config = Arc::new(config::ServerConfig {
+    let config = Arc::new(ServerConfig {
         api_key: SecretString::new("test_key"),
         host: "localhost".to_string(),
         port: 8080,
@@ -28,6 +28,7 @@ async fn test_authorization_middleware_success() {
         provider_retry_base_delay_ms: 100,
         provider_retry_max_delay_ms: 2000,
         provider_max_failovers: 3,
+        repository_storage_type: RepositoryStorageType::InMemory,
     });
 
     let app = test::init_service(
@@ -65,7 +66,7 @@ async fn test_authorization_middleware_success() {
 
 #[actix_web::test]
 async fn test_authorization_middleware_failure() {
-    let config = Arc::new(config::ServerConfig {
+    let config = Arc::new(ServerConfig {
         api_key: SecretString::new("test_key"),
         host: "localhost".to_string(),
         port: 8080,
@@ -82,6 +83,7 @@ async fn test_authorization_middleware_failure() {
         provider_retry_base_delay_ms: 100,
         provider_retry_max_delay_ms: 2000,
         provider_max_failovers: 3,
+        repository_storage_type: RepositoryStorageType::InMemory,
     });
 
     let app = test::init_service(
