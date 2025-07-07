@@ -15,7 +15,7 @@ This relayer service enables interaction with blockchain networks through transa
 - Configure Api key in `config/config.json` file. See how to set it up in [api key section](https://github.com/OpenZeppelin/openzeppelin-relayer?tab=readme-ov-file#configure-api-key) for more information.
 - Redis server running. See how to set it up in [redis section](https://github.com/OpenZeppelin/openzeppelin-relayer?tab=readme-ov-file#starting-redis-manually-without-docker-compose) for more information.
 
-> :warning: Redis is automatically started when using docker compose. If you are not using docker compose, you need to create a dedicated network and start redis manually.
+> ⚠️ Redis is automatically started when using docker compose. If you are not using docker compose, you need to create a dedicated network and start redis manually.
 
 ## How to use images pushed to DockerHub
 
