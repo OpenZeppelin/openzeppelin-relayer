@@ -149,7 +149,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.set(&relayer_key, &serialized);
-        pipe.sadd(&self.relayer_list_key(), &entity.id);
+        pipe.sadd(self.relayer_list_key(), &entity.id);
 
         pipe.exec_async(&mut conn)
             .await
@@ -304,7 +304,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.set(&relayer_key, &serialized);
-        pipe.sadd(&self.relayer_list_key(), &id);
+        pipe.sadd(self.relayer_list_key(), &id);
 
         pipe.exec_async(&mut conn)
             .await
@@ -341,7 +341,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.del(&relayer_key);
-        pipe.srem(&self.relayer_list_key(), &id);
+        pipe.srem(self.relayer_list_key(), &id);
 
         pipe.exec_async(&mut conn)
             .await

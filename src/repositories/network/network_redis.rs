@@ -60,10 +60,7 @@ impl RedisNetworkRepository {
     fn network_name_index_key(&self, network_type: &NetworkType, name: &str) -> String {
         format!(
             "{}:{}:{}:{}",
-            self.key_prefix,
-            NETWORK_NAME_INDEX_PREFIX,
-            network_type.to_string(),
-            name
+            self.key_prefix, NETWORK_NAME_INDEX_PREFIX, network_type, name
         )
     }
 
@@ -71,10 +68,7 @@ impl RedisNetworkRepository {
     fn network_chain_id_index_key(&self, network_type: &NetworkType, chain_id: u64) -> String {
         format!(
             "{}:{}:{}:{}",
-            self.key_prefix,
-            NETWORK_CHAIN_ID_INDEX_PREFIX,
-            network_type.to_string(),
-            chain_id
+            self.key_prefix, NETWORK_CHAIN_ID_INDEX_PREFIX, network_type, chain_id
         )
     }
 
@@ -384,7 +378,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let total = all_ids.len() as u64;
         let per_page = query.per_page as usize;
         let page = query.page as usize;
-        let total_pages = (all_ids.len() + per_page - 1) / per_page;
+        let total_pages = all_ids.len().div_ceil(per_page);
 
         if page > total_pages && !all_ids.is_empty() {
             debug!(

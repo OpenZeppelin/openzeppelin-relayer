@@ -39,7 +39,6 @@ use super::NetworkRelayer;
 ///
 /// * `Result<RelayerRepoModel, ApiError>` - Returns a `RelayerRepoModel` on success, or an
 ///   `ApiError` on failure.
-
 pub async fn get_relayer_by_id<
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -71,7 +70,6 @@ pub async fn get_relayer_by_id<
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-
 pub async fn get_network_relayer<
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -107,7 +105,6 @@ pub async fn get_network_relayer<
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-
 pub async fn get_network_relayer_by_model<
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,

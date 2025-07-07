@@ -532,7 +532,7 @@ mod tests {
 
         let count = repo.count().await.unwrap();
         repo.create(notification).await.unwrap();
-        assert!(repo.count().await.unwrap() >= count + 1);
+        assert!(repo.count().await.unwrap() > count);
     }
 
     #[tokio::test]

@@ -557,7 +557,7 @@ mod tests {
 
         // Check count increased
         let new_count = repo.count().await.unwrap();
-        assert!(new_count >= initial_count + 1);
+        assert!(new_count > initial_count);
     }
 
     #[tokio::test]

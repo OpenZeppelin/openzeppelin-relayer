@@ -141,34 +141,8 @@ impl TransactionCounterTrait for TransactionCounterRepositoryStorage {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        config::{RepositoryStorageType, ServerConfig},
-        models::SecretString,
-    };
 
     use super::*;
-
-    fn create_test_config() -> ServerConfig {
-        ServerConfig {
-            redis_url: "redis://127.0.0.1:6379".to_string(),
-            redis_key_prefix: "test_counter".to_string(),
-            rate_limit_requests_per_second: 100,
-            rate_limit_burst_size: 100,
-            redis_connection_timeout_ms: 1000,
-            rpc_timeout_ms: 1000,
-            provider_max_retries: 3,
-            provider_retry_base_delay_ms: 100,
-            provider_retry_max_delay_ms: 1000,
-            provider_max_failovers: 3,
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-            config_file_path: "".to_string(),
-            api_key: SecretString::new(""),
-            enable_swagger: false,
-            metrics_port: 9090,
-            repository_storage_type: RepositoryStorageType::InMemory,
-        }
-    }
 
     #[tokio::test]
     async fn test_in_memory_repository_creation() {

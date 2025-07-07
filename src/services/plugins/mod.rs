@@ -73,9 +73,9 @@ impl<R: PluginRunnerTrait> PluginService<R> {
     }
 
     async fn call_plugin<
-        J: JobProducerTrait + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        J: JobProducerTrait + Send + Sync + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
         NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,

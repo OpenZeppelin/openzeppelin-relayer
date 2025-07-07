@@ -65,11 +65,7 @@ impl RedisTransactionRepository {
     fn relayer_status_key(&self, relayer_id: &str, status: &TransactionStatus) -> String {
         format!(
             "{}:{}:{}:{}:{}",
-            self.key_prefix,
-            RELAYER_PREFIX,
-            relayer_id,
-            STATUS_PREFIX,
-            status.to_string()
+            self.key_prefix, RELAYER_PREFIX, relayer_id, STATUS_PREFIX, status
         )
     }
 
@@ -428,7 +424,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
                 // Extract transaction IDs from keys
                 for key in keys {
-                    if let Some(tx_id) = key.split(':').last() {
+                    if let Some(tx_id) = key.split(':').next_back() {
                         all_tx_ids.push(tx_id.to_string());
                     }
                 }
@@ -488,7 +484,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
                 // Extract transaction IDs from keys
                 for key in keys {
-                    if let Some(tx_id) = key.split(':').last() {
+                    if let Some(tx_id) = key.split(':').next_back() {
                         all_tx_ids.push(tx_id.to_string());
                     }
                 }
@@ -676,7 +672,7 @@ impl TransactionRepository for RedisTransactionRepository {
 
             // Extract transaction IDs from keys
             for key in keys {
-                if let Some(tx_id) = key.split(':').last() {
+                if let Some(tx_id) = key.split(':').next_back() {
                     all_tx_ids.push(tx_id.to_string());
                 }
             }
@@ -1097,7 +1093,7 @@ mod tests {
 
         let count = repo.count().await.unwrap();
         repo.create(tx).await.unwrap();
-        assert!(repo.count().await.unwrap() >= count + 1);
+        assert!(repo.count().await.unwrap() > count);
     }
 
     #[tokio::test]
@@ -1202,7 +1198,7 @@ mod tests {
             .await
             .unwrap();
         assert!(result.total >= 1);
-        assert!(result.items.len() >= 1);
+        assert!(!result.items.is_empty());
         assert!(result.items.iter().all(|tx| tx.relayer_id == "relayer-2"));
 
         // Test finding transactions for non-existent relayer

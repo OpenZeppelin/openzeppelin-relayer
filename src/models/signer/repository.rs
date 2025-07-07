@@ -198,20 +198,18 @@ impl From<SignerConfig> for SignerConfigStorage {
     fn from(config: SignerConfig) -> Self {
         match config {
             SignerConfig::Local(local_config) => SignerConfigStorage::Local(local_config.into()),
-            SignerConfig::AwsKms(aws_config) => SignerConfigStorage::AwsKms(aws_config.into()),
+            SignerConfig::AwsKms(aws_config) => SignerConfigStorage::AwsKms(aws_config),
             SignerConfig::GoogleCloudKms(gcp_config) => {
-                SignerConfigStorage::GoogleCloudKms(gcp_config.into())
+                SignerConfigStorage::GoogleCloudKms(gcp_config)
             }
-            SignerConfig::Turnkey(turnkey_config) => {
-                SignerConfigStorage::Turnkey(turnkey_config.into())
-            }
-            SignerConfig::Vault(vault_config) => SignerConfigStorage::Vault(vault_config.into()),
+            SignerConfig::Turnkey(turnkey_config) => SignerConfigStorage::Turnkey(turnkey_config),
+            SignerConfig::Vault(vault_config) => SignerConfigStorage::Vault(vault_config),
             SignerConfig::Test(test_config) => SignerConfigStorage::Test(test_config.into()),
             SignerConfig::VaultCloud(vault_cloud_config) => {
                 SignerConfigStorage::VaultCloud(vault_cloud_config.into())
             }
             SignerConfig::VaultTransit(vault_transit_config) => {
-                SignerConfigStorage::VaultTransit(vault_transit_config.into())
+                SignerConfigStorage::VaultTransit(vault_transit_config)
             }
         }
     }
