@@ -5,8 +5,6 @@
 
 == Overview
 
-CAUTION: This software is in alpha stage. Use in production environments at your own risk.
-
 OpenZeppelin Relayer is a service that provides infrastructure to relay transactions to the EVM & Non-EVM networks. It is designed to be used as a backend for dApps that need to interact with these networks.
 
 
@@ -214,7 +212,7 @@ For detailed information about each directory and its contents, see xref:structu
 
 === Prerequisites
 
-* Rust 2021 edition
+* Rust 2021 edition, version `1.85` or later
 * Docker (optional, for containerized deployment)
 * Node.js, typescript and ts-node (optional, for plugins)
 
@@ -336,8 +334,6 @@ For comprehensive configuration details, including:
 See the dedicated xref:configuration.adoc[Configuration Guide].
 
 == Important Considerations
-
-CAUTION: This software is in alpha stage. Use in production environments at your own risk.
 
 == Deployment Considerations
 
