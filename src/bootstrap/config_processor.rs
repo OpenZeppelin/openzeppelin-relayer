@@ -443,9 +443,9 @@ mod tests {
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
-            RelayerRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl,
-            TransactionRepositoryImpl,
+            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+            RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
     };
     use serde_json::json;
@@ -455,13 +455,13 @@ mod tests {
 
     fn create_test_app_state() -> AppState<
         MockJobProducerTrait,
-        RelayerRepositoryImpl,
-        TransactionRepositoryImpl,
-        NetworkRepositoryImpl,
-        NotificationRepositoryImpl,
-        SignerRepositoryImpl,
-        TransactionCounterRepositoryImpl,
-        PluginRepositoryImpl,
+        RelayerRepositoryStorage,
+        TransactionRepositoryStorage,
+        NetworkRepositoryStorage,
+        NotificationRepositoryStorage,
+        SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage,
+        PluginRepositoryStorage,
     > {
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -484,14 +484,16 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         AppState {
-            relayer_repository: Arc::new(RelayerRepositoryImpl::new_in_memory()),
-            transaction_repository: Arc::new(TransactionRepositoryImpl::new_in_memory()),
-            signer_repository: Arc::new(SignerRepositoryImpl::new_in_memory()),
-            notification_repository: Arc::new(NotificationRepositoryImpl::new_in_memory()),
-            network_repository: Arc::new(NetworkRepositoryImpl::new_in_memory()),
-            transaction_counter_store: Arc::new(TransactionCounterRepositoryImpl::new_in_memory()),
+            relayer_repository: Arc::new(RelayerRepositoryStorage::new_in_memory()),
+            transaction_repository: Arc::new(TransactionRepositoryStorage::new_in_memory()),
+            signer_repository: Arc::new(SignerRepositoryStorage::new_in_memory()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
+            network_repository: Arc::new(NetworkRepositoryStorage::new_in_memory()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
             job_producer: Arc::new(mock_job_producer),
-            plugin_repository: Arc::new(PluginRepositoryImpl::new_in_memory()),
+            plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
         }
     }
 
@@ -1152,10 +1154,10 @@ mod tests {
 
         // Create shared repositories
         let signer_repo = Arc::new(InMemorySignerRepository::default());
-        let relayer_repo = Arc::new(RelayerRepositoryImpl::new_in_memory());
+        let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
         let notification_repo = Arc::new(InMemoryNotificationRepository::default());
         let network_repo = Arc::new(InMemoryNetworkRepository::default());
-        let transaction_repo = Arc::new(TransactionRepositoryImpl::InMemory(
+        let transaction_repo = Arc::new(TransactionRepositoryStorage::InMemory(
             InMemoryTransactionRepository::new(),
         ));
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());

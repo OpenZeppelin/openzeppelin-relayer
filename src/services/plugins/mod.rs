@@ -163,9 +163,9 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::PluginModel,
         repositories::{
-            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
-            RelayerRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl,
-            TransactionRepositoryImpl,
+            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+            RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
         utils::mocks::mockutils::create_mock_app_state,
     };
@@ -180,19 +180,19 @@ mod tests {
         };
         let app_state: AppState<
             MockJobProducerTrait,
-            RelayerRepositoryImpl,
-            TransactionRepositoryImpl,
-            NetworkRepositoryImpl,
-            NotificationRepositoryImpl,
-            SignerRepositoryImpl,
-            TransactionCounterRepositoryImpl,
-            PluginRepositoryImpl,
+            RelayerRepositoryStorage,
+            TransactionRepositoryStorage,
+            NetworkRepositoryStorage,
+            NotificationRepositoryStorage,
+            SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage,
+            PluginRepositoryStorage,
         > = create_mock_app_state(None, None, None, Some(vec![plugin])).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, TransactionRepositoryImpl, RelayerRepositoryImpl, NetworkRepositoryImpl, NotificationRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl, PluginRepositoryImpl>()
+            .expect_run::<MockJobProducerTrait, TransactionRepositoryStorage, RelayerRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>()
             .returning(|_, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {

@@ -32,7 +32,6 @@ pub use signer_in_memory::*;
 pub use signer_redis::*;
 
 use crate::{
-    config::ServerConfig,
     models::{RepositoryError, SignerRepoModel},
     repositories::{PaginatedResult, PaginationQuery, Repository},
 };
@@ -40,20 +39,14 @@ use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
-/// Enum representing the type of signer repository to use
-pub enum SignerRepositoryType {
-    InMemory,
-    Redis,
-}
-
 /// Enum wrapper for different signer repository implementations
 #[derive(Debug, Clone)]
-pub enum SignerRepositoryImpl {
+pub enum SignerRepositoryStorage {
     InMemory(InMemorySignerRepository),
     Redis(RedisSignerRepository),
 }
 
-impl SignerRepositoryImpl {
+impl SignerRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemorySignerRepository::new())
     }
@@ -67,51 +60,26 @@ impl SignerRepositoryImpl {
     }
 }
 
-impl SignerRepositoryType {
-    /// Creates a signer repository based on the enum variant
-    pub async fn create_repository(self, config: &ServerConfig) -> SignerRepositoryImpl {
-        match self {
-            SignerRepositoryType::InMemory => {
-                SignerRepositoryImpl::InMemory(InMemorySignerRepository::new())
-            }
-            SignerRepositoryType::Redis => {
-                let client = redis::Client::open(config.redis_url.clone())
-                    .expect("Failed to create Redis client");
-                let connection_manager = redis::aio::ConnectionManager::new(client)
-                    .await
-                    .expect("Failed to create Redis connection manager");
-                SignerRepositoryImpl::Redis(
-                    RedisSignerRepository::new(
-                        Arc::new(connection_manager),
-                        config.redis_key_prefix.clone(),
-                    )
-                    .expect("Failed to create Redis signer repository"),
-                )
-            }
-        }
-    }
-}
-
 #[async_trait]
-impl Repository<SignerRepoModel, String> for SignerRepositoryImpl {
+impl Repository<SignerRepoModel, String> for SignerRepositoryStorage {
     async fn create(&self, entity: SignerRepoModel) -> Result<SignerRepoModel, RepositoryError> {
         match self {
-            SignerRepositoryImpl::InMemory(repo) => repo.create(entity).await,
-            SignerRepositoryImpl::Redis(repo) => repo.create(entity).await,
+            SignerRepositoryStorage::InMemory(repo) => repo.create(entity).await,
+            SignerRepositoryStorage::Redis(repo) => repo.create(entity).await,
         }
     }
 
     async fn get_by_id(&self, id: String) -> Result<SignerRepoModel, RepositoryError> {
         match self {
-            SignerRepositoryImpl::InMemory(repo) => repo.get_by_id(id).await,
-            SignerRepositoryImpl::Redis(repo) => repo.get_by_id(id).await,
+            SignerRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
+            SignerRepositoryStorage::Redis(repo) => repo.get_by_id(id).await,
         }
     }
 
     async fn list_all(&self) -> Result<Vec<SignerRepoModel>, RepositoryError> {
         match self {
-            SignerRepositoryImpl::InMemory(repo) => repo.list_all().await,
-            SignerRepositoryImpl::Redis(repo) => repo.list_all().await,
+            SignerRepositoryStorage::InMemory(repo) => repo.list_all().await,
+            SignerRepositoryStorage::Redis(repo) => repo.list_all().await,
         }
     }
 
@@ -120,8 +88,8 @@ impl Repository<SignerRepoModel, String> for SignerRepositoryImpl {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<SignerRepoModel>, RepositoryError> {
         match self {
-            SignerRepositoryImpl::InMemory(repo) => repo.list_paginated(query).await,
-            SignerRepositoryImpl::Redis(repo) => repo.list_paginated(query).await,
+            SignerRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
+            SignerRepositoryStorage::Redis(repo) => repo.list_paginated(query).await,
         }
     }
 
@@ -131,22 +99,22 @@ impl Repository<SignerRepoModel, String> for SignerRepositoryImpl {
         entity: SignerRepoModel,
     ) -> Result<SignerRepoModel, RepositoryError> {
         match self {
-            SignerRepositoryImpl::InMemory(repo) => repo.update(id, entity).await,
-            SignerRepositoryImpl::Redis(repo) => repo.update(id, entity).await,
+            SignerRepositoryStorage::InMemory(repo) => repo.update(id, entity).await,
+            SignerRepositoryStorage::Redis(repo) => repo.update(id, entity).await,
         }
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
         match self {
-            SignerRepositoryImpl::InMemory(repo) => repo.delete_by_id(id).await,
-            SignerRepositoryImpl::Redis(repo) => repo.delete_by_id(id).await,
+            SignerRepositoryStorage::InMemory(repo) => repo.delete_by_id(id).await,
+            SignerRepositoryStorage::Redis(repo) => repo.delete_by_id(id).await,
         }
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         match self {
-            SignerRepositoryImpl::InMemory(repo) => repo.count().await,
-            SignerRepositoryImpl::Redis(repo) => repo.count().await,
+            SignerRepositoryStorage::InMemory(repo) => repo.count().await,
+            SignerRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
 }
@@ -168,16 +136,16 @@ mod tests {
 
     #[actix_web::test]
     async fn test_in_memory_impl_creation() {
-        let impl_repo = SignerRepositoryImpl::new_in_memory();
+        let impl_repo = SignerRepositoryStorage::new_in_memory();
         match impl_repo {
-            SignerRepositoryImpl::InMemory(_) => (),
+            SignerRepositoryStorage::InMemory(_) => (),
             _ => panic!("Expected InMemory variant"),
         }
     }
 
     #[actix_web::test]
     async fn test_in_memory_impl_operations() {
-        let impl_repo = SignerRepositoryImpl::new_in_memory();
+        let impl_repo = SignerRepositoryStorage::new_in_memory();
         let signer = create_test_signer("test-signer".to_string());
 
         // Test create
@@ -210,7 +178,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_impl_error_handling() {
-        let impl_repo = SignerRepositoryImpl::new_in_memory();
+        let impl_repo = SignerRepositoryStorage::new_in_memory();
 
         // Test getting non-existent signer
         let result = impl_repo.get_by_id("non-existent".to_string()).await;
@@ -220,14 +188,14 @@ mod tests {
 
     #[actix_web::test]
     async fn test_impl_debug() {
-        let impl_repo = SignerRepositoryImpl::new_in_memory();
+        let impl_repo = SignerRepositoryStorage::new_in_memory();
         let debug_string = format!("{:?}", impl_repo);
         assert!(debug_string.contains("InMemory"));
     }
 
     #[actix_web::test]
     async fn test_duplicate_creation_error() {
-        let impl_repo = SignerRepositoryImpl::new_in_memory();
+        let impl_repo = SignerRepositoryStorage::new_in_memory();
         let signer = create_test_signer("duplicate-test".to_string());
 
         // Create the signer first time
@@ -244,7 +212,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_update_operations() {
-        let impl_repo = SignerRepositoryImpl::new_in_memory();
+        let impl_repo = SignerRepositoryStorage::new_in_memory();
         let signer = create_test_signer("update-test".to_string());
 
         // Create the signer first
@@ -280,7 +248,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_operations() {
-        let impl_repo = SignerRepositoryImpl::new_in_memory();
+        let impl_repo = SignerRepositoryStorage::new_in_memory();
         let signer = create_test_signer("delete-test".to_string());
 
         // Create the signer first

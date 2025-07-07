@@ -26,7 +26,6 @@ pub use transaction_in_memory::*;
 pub use transaction_redis::*;
 
 use crate::{
-    config::ServerConfig,
     models::{
         NetworkTransactionData, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
@@ -125,20 +124,14 @@ mockall::mock! {
   }
 }
 
-/// Enum representing the type of transaction repository to use
-pub enum TransactionRepositoryType {
-    InMemory,
-    Redis,
-}
-
 /// Enum wrapper for different transaction repository implementations
 #[derive(Debug, Clone)]
-pub enum TransactionRepositoryImpl {
+pub enum TransactionRepositoryStorage {
     InMemory(InMemoryTransactionRepository),
     Redis(RedisTransactionRepository),
 }
 
-impl TransactionRepositoryImpl {
+impl TransactionRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemoryTransactionRepository::new())
     }
@@ -153,43 +146,18 @@ impl TransactionRepositoryImpl {
     }
 }
 
-impl TransactionRepositoryType {
-    /// Creates a transaction repository based on the enum variant
-    pub async fn create_repository(self, config: &ServerConfig) -> TransactionRepositoryImpl {
-        match self {
-            TransactionRepositoryType::InMemory => {
-                TransactionRepositoryImpl::InMemory(InMemoryTransactionRepository::new())
-            }
-            TransactionRepositoryType::Redis => {
-                let client = redis::Client::open(config.redis_url.clone())
-                    .expect("Failed to create Redis client");
-                let connection_manager = redis::aio::ConnectionManager::new(client)
-                    .await
-                    .expect("Failed to create Redis connection manager");
-                TransactionRepositoryImpl::Redis(
-                    RedisTransactionRepository::new(
-                        Arc::new(connection_manager),
-                        config.redis_key_prefix.clone(),
-                    )
-                    .expect("Failed to create Redis transaction repository"),
-                )
-            }
-        }
-    }
-}
-
 #[async_trait]
-impl TransactionRepository for TransactionRepositoryImpl {
+impl TransactionRepository for TransactionRepositoryStorage {
     async fn find_by_relayer_id(
         &self,
         relayer_id: &str,
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => {
+            TransactionRepositoryStorage::InMemory(repo) => {
                 repo.find_by_relayer_id(relayer_id, query).await
             }
-            TransactionRepositoryImpl::Redis(repo) => {
+            TransactionRepositoryStorage::Redis(repo) => {
                 repo.find_by_relayer_id(relayer_id, query).await
             }
         }
@@ -201,10 +169,10 @@ impl TransactionRepository for TransactionRepositoryImpl {
         statuses: &[TransactionStatus],
     ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => {
+            TransactionRepositoryStorage::InMemory(repo) => {
                 repo.find_by_status(relayer_id, statuses).await
             }
-            TransactionRepositoryImpl::Redis(repo) => {
+            TransactionRepositoryStorage::Redis(repo) => {
                 repo.find_by_status(relayer_id, statuses).await
             }
         }
@@ -216,10 +184,12 @@ impl TransactionRepository for TransactionRepositoryImpl {
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => {
+            TransactionRepositoryStorage::InMemory(repo) => {
                 repo.find_by_nonce(relayer_id, nonce).await
             }
-            TransactionRepositoryImpl::Redis(repo) => repo.find_by_nonce(relayer_id, nonce).await,
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.find_by_nonce(relayer_id, nonce).await
+            }
         }
     }
 
@@ -229,8 +199,8 @@ impl TransactionRepository for TransactionRepositoryImpl {
         status: TransactionStatus,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.update_status(tx_id, status).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.update_status(tx_id, status).await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.update_status(tx_id, status).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.update_status(tx_id, status).await,
         }
     }
 
@@ -240,8 +210,10 @@ impl TransactionRepository for TransactionRepositoryImpl {
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.partial_update(tx_id, update).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.partial_update(tx_id, update).await,
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.partial_update(tx_id, update).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => repo.partial_update(tx_id, update).await,
         }
     }
 
@@ -251,10 +223,10 @@ impl TransactionRepository for TransactionRepositoryImpl {
         network_data: NetworkTransactionData,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => {
+            TransactionRepositoryStorage::InMemory(repo) => {
                 repo.update_network_data(tx_id, network_data).await
             }
-            TransactionRepositoryImpl::Redis(repo) => {
+            TransactionRepositoryStorage::Redis(repo) => {
                 repo.update_network_data(tx_id, network_data).await
             }
         }
@@ -266,8 +238,8 @@ impl TransactionRepository for TransactionRepositoryImpl {
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.set_sent_at(tx_id, sent_at).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.set_sent_at(tx_id, sent_at).await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.set_sent_at(tx_id, sent_at).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.set_sent_at(tx_id, sent_at).await,
         }
     }
 
@@ -277,10 +249,10 @@ impl TransactionRepository for TransactionRepositoryImpl {
         confirmed_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => {
+            TransactionRepositoryStorage::InMemory(repo) => {
                 repo.set_confirmed_at(tx_id, confirmed_at).await
             }
-            TransactionRepositoryImpl::Redis(repo) => {
+            TransactionRepositoryStorage::Redis(repo) => {
                 repo.set_confirmed_at(tx_id, confirmed_at).await
             }
         }
@@ -288,28 +260,28 @@ impl TransactionRepository for TransactionRepositoryImpl {
 }
 
 #[async_trait]
-impl Repository<TransactionRepoModel, String> for TransactionRepositoryImpl {
+impl Repository<TransactionRepoModel, String> for TransactionRepositoryStorage {
     async fn create(
         &self,
         entity: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.create(entity).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.create(entity).await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.create(entity).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.create(entity).await,
         }
     }
 
     async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.get_by_id(id).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.get_by_id(id).await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.get_by_id(id).await,
         }
     }
 
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.list_all().await,
-            TransactionRepositoryImpl::Redis(repo) => repo.list_all().await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.list_all().await,
+            TransactionRepositoryStorage::Redis(repo) => repo.list_all().await,
         }
     }
 
@@ -318,8 +290,8 @@ impl Repository<TransactionRepoModel, String> for TransactionRepositoryImpl {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.list_paginated(query).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.list_paginated(query).await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.list_paginated(query).await,
         }
     }
 
@@ -329,22 +301,22 @@ impl Repository<TransactionRepoModel, String> for TransactionRepositoryImpl {
         entity: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.update(id, entity).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.update(id, entity).await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.update(id, entity).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.update(id, entity).await,
         }
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.delete_by_id(id).await,
-            TransactionRepositoryImpl::Redis(repo) => repo.delete_by_id(id).await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.delete_by_id(id).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.delete_by_id(id).await,
         }
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         match self {
-            TransactionRepositoryImpl::InMemory(repo) => repo.count().await,
-            TransactionRepositoryImpl::Redis(repo) => repo.count().await,
+            TransactionRepositoryStorage::InMemory(repo) => repo.count().await,
+            TransactionRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
 }

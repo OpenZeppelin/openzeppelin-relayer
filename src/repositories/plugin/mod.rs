@@ -36,7 +36,7 @@ use std::sync::Arc;
 use mockall::automock;
 
 use crate::{
-    config::{PluginFileConfig, ServerConfig},
+    config::PluginFileConfig,
     models::{PluginModel, RepositoryError},
     repositories::ConversionError,
 };
@@ -49,45 +49,14 @@ pub trait PluginRepositoryTrait {
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError>;
 }
 
-/// Enum representing the type of plugin repository to use
-pub enum PluginRepositoryType {
-    InMemory,
-    Redis,
-}
-
 /// Enum wrapper for different plugin repository implementations
 #[derive(Debug, Clone)]
-pub enum PluginRepositoryImpl {
+pub enum PluginRepositoryStorage {
     InMemory(InMemoryPluginRepository),
     Redis(RedisPluginRepository),
 }
 
-impl PluginRepositoryType {
-    /// Creates a plugin repository based on the enum variant
-    pub async fn create_repository(self, config: &ServerConfig) -> PluginRepositoryImpl {
-        match self {
-            PluginRepositoryType::InMemory => {
-                PluginRepositoryImpl::InMemory(InMemoryPluginRepository::new())
-            }
-            PluginRepositoryType::Redis => {
-                let client = redis::Client::open(config.redis_url.clone())
-                    .expect("Failed to create Redis client");
-                let connection_manager = redis::aio::ConnectionManager::new(client)
-                    .await
-                    .expect("Failed to create Redis connection manager");
-                PluginRepositoryImpl::Redis(
-                    RedisPluginRepository::new(
-                        Arc::new(connection_manager),
-                        config.redis_key_prefix.clone(),
-                    )
-                    .expect("Failed to create Redis plugin repository"),
-                )
-            }
-        }
-    }
-}
-
-impl PluginRepositoryImpl {
+impl PluginRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemoryPluginRepository::new())
     }
@@ -102,18 +71,18 @@ impl PluginRepositoryImpl {
 }
 
 #[async_trait]
-impl PluginRepositoryTrait for PluginRepositoryImpl {
+impl PluginRepositoryTrait for PluginRepositoryStorage {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
         match self {
-            PluginRepositoryImpl::InMemory(repo) => repo.get_by_id(id).await,
-            PluginRepositoryImpl::Redis(repo) => repo.get_by_id(id).await,
+            PluginRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
+            PluginRepositoryStorage::Redis(repo) => repo.get_by_id(id).await,
         }
     }
 
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError> {
         match self {
-            PluginRepositoryImpl::InMemory(repo) => repo.add(plugin).await,
-            PluginRepositoryImpl::Redis(repo) => repo.add(plugin).await,
+            PluginRepositoryStorage::InMemory(repo) => repo.add(plugin).await,
+            PluginRepositoryStorage::Redis(repo) => repo.add(plugin).await,
         }
     }
 }

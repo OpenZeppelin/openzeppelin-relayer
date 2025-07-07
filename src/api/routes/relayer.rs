@@ -192,9 +192,9 @@ mod tests {
         jobs::MockJobProducerTrait,
         models::AppState,
         repositories::{
-            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
-            RelayerRepositoryImpl, Repository, SignerRepositoryImpl,
-            TransactionCounterRepositoryImpl, TransactionRepositoryImpl,
+            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+            RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -203,18 +203,18 @@ mod tests {
     // Simple mock for AppState
     async fn get_test_app_state() -> AppState<
         MockJobProducerTrait,
-        RelayerRepositoryImpl,
-        TransactionRepositoryImpl,
-        NetworkRepositoryImpl,
-        NotificationRepositoryImpl,
-        SignerRepositoryImpl,
-        TransactionCounterRepositoryImpl,
-        PluginRepositoryImpl,
+        RelayerRepositoryStorage,
+        TransactionRepositoryStorage,
+        NetworkRepositoryStorage,
+        NotificationRepositoryStorage,
+        SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage,
+        PluginRepositoryStorage,
     > {
-        let relayer_repo = Arc::new(RelayerRepositoryImpl::new_in_memory());
-        let transaction_repo = Arc::new(TransactionRepositoryImpl::new_in_memory());
-        let signer_repo = Arc::new(SignerRepositoryImpl::new_in_memory());
-        let network_repo = Arc::new(NetworkRepositoryImpl::new_in_memory());
+        let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
+        let transaction_repo = Arc::new(TransactionRepositoryStorage::new_in_memory());
+        let signer_repo = Arc::new(SignerRepositoryStorage::new_in_memory());
+        let network_repo = Arc::new(NetworkRepositoryStorage::new_in_memory());
 
         // Create test entities so routes don't return 404
 
@@ -308,11 +308,13 @@ mod tests {
             relayer_repository: relayer_repo,
             transaction_repository: transaction_repo,
             signer_repository: signer_repo,
-            notification_repository: Arc::new(NotificationRepositoryImpl::new_in_memory()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
             network_repository: network_repo,
-            transaction_counter_store: Arc::new(TransactionCounterRepositoryImpl::new_in_memory()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
             job_producer: Arc::new(MockJobProducerTrait::new()),
-            plugin_repository: Arc::new(PluginRepositoryImpl::new_in_memory()),
+            plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
         }
     }
 

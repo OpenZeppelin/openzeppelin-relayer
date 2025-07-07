@@ -14,9 +14,9 @@ pub mod mockutils {
             SignerRepoModel,
         },
         repositories::{
-            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
-            PluginRepositoryTrait, RelayerRepositoryImpl, Repository, SignerRepositoryImpl,
-            TransactionCounterRepositoryImpl, TransactionRepositoryImpl,
+            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+            PluginRepositoryTrait, RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
 
@@ -81,36 +81,36 @@ pub mod mockutils {
         plugins: Option<Vec<PluginModel>>,
     ) -> AppState<
         MockJobProducerTrait,
-        RelayerRepositoryImpl,
-        TransactionRepositoryImpl,
-        NetworkRepositoryImpl,
-        NotificationRepositoryImpl,
-        SignerRepositoryImpl,
-        TransactionCounterRepositoryImpl,
-        PluginRepositoryImpl,
+        RelayerRepositoryStorage,
+        TransactionRepositoryStorage,
+        NetworkRepositoryStorage,
+        NotificationRepositoryStorage,
+        SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage,
+        PluginRepositoryStorage,
     > {
-        let relayer_repository = Arc::new(RelayerRepositoryImpl::new_in_memory());
+        let relayer_repository = Arc::new(RelayerRepositoryStorage::new_in_memory());
         if let Some(relayers) = relayers {
             for relayer in relayers {
                 relayer_repository.create(relayer).await.unwrap();
             }
         }
 
-        let signer_repository = Arc::new(SignerRepositoryImpl::new_in_memory());
+        let signer_repository = Arc::new(SignerRepositoryStorage::new_in_memory());
         if let Some(signers) = signers {
             for signer in signers {
                 signer_repository.create(signer).await.unwrap();
             }
         }
 
-        let network_repository = Arc::new(NetworkRepositoryImpl::new_in_memory());
+        let network_repository = Arc::new(NetworkRepositoryStorage::new_in_memory());
         if let Some(networks) = networks {
             for network in networks {
                 network_repository.create(network).await.unwrap();
             }
         }
 
-        let plugin_repository = Arc::new(PluginRepositoryImpl::new_in_memory());
+        let plugin_repository = Arc::new(PluginRepositoryStorage::new_in_memory());
         if let Some(plugins) = plugins {
             for plugin in plugins {
                 plugin_repository.add(plugin).await.unwrap();
@@ -141,11 +141,13 @@ pub mod mockutils {
 
         AppState {
             relayer_repository,
-            transaction_repository: Arc::new(TransactionRepositoryImpl::new_in_memory()),
+            transaction_repository: Arc::new(TransactionRepositoryStorage::new_in_memory()),
             signer_repository,
-            notification_repository: Arc::new(NotificationRepositoryImpl::new_in_memory()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
             network_repository,
-            transaction_counter_store: Arc::new(TransactionCounterRepositoryImpl::new_in_memory()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
         }

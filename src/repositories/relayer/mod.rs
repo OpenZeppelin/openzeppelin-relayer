@@ -26,7 +26,6 @@ pub use relayer_in_memory::*;
 pub use relayer_redis::*;
 
 use crate::{
-    config::ServerConfig,
     domain::RelayerUpdateRequest,
     models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
     repositories::{PaginatedResult, Repository},
@@ -56,20 +55,14 @@ pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync 
     ) -> Result<RelayerRepoModel, RepositoryError>;
 }
 
-/// Enum representing the type of relayer repository to use
-pub enum RelayerRepositoryType {
-    InMemory,
-    Redis,
-}
-
 /// Enum wrapper for different relayer repository implementations
 #[derive(Debug, Clone)]
-pub enum RelayerRepositoryImpl {
+pub enum RelayerRepositoryStorage {
     InMemory(InMemoryRelayerRepository),
     Redis(RedisRelayerRepository),
 }
 
-impl RelayerRepositoryImpl {
+impl RelayerRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemoryRelayerRepository::new())
     }
@@ -83,56 +76,34 @@ impl RelayerRepositoryImpl {
             key_prefix,
         )?))
     }
-
-    pub async fn create_repository(
-        repo_type: RelayerRepositoryType,
-        config: &ServerConfig,
-    ) -> Result<Self, RepositoryError> {
-        match repo_type {
-            RelayerRepositoryType::InMemory => Ok(Self::new_in_memory()),
-            RelayerRepositoryType::Redis => {
-                let redis_client = redis::Client::open(config.redis_url.as_str()).map_err(|e| {
-                    RepositoryError::InvalidData(format!("Invalid Redis URL: {}", e))
-                })?;
-                let connection_manager =
-                    ConnectionManager::new(redis_client).await.map_err(|e| {
-                        RepositoryError::Other(format!("Failed to connect to Redis: {}", e))
-                    })?;
-                Ok(RelayerRepositoryImpl::Redis(RedisRelayerRepository::new(
-                    Arc::new(connection_manager),
-                    config.redis_key_prefix.clone(),
-                )?))
-            }
-        }
-    }
 }
 
-impl Default for RelayerRepositoryImpl {
+impl Default for RelayerRepositoryStorage {
     fn default() -> Self {
         Self::new_in_memory()
     }
 }
 
 #[async_trait]
-impl Repository<RelayerRepoModel, String> for RelayerRepositoryImpl {
+impl Repository<RelayerRepoModel, String> for RelayerRepositoryStorage {
     async fn create(&self, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.create(entity).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.create(entity).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.create(entity).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.create(entity).await,
         }
     }
 
     async fn get_by_id(&self, id: String) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.get_by_id(id).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.get_by_id(id).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.get_by_id(id).await,
         }
     }
 
     async fn list_all(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.list_all().await,
-            RelayerRepositoryImpl::Redis(repo) => repo.list_all().await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_all().await,
+            RelayerRepositoryStorage::Redis(repo) => repo.list_all().await,
         }
     }
 
@@ -141,8 +112,8 @@ impl Repository<RelayerRepoModel, String> for RelayerRepositoryImpl {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<RelayerRepoModel>, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.list_paginated(query).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.list_paginated(query).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.list_paginated(query).await,
         }
     }
 
@@ -152,32 +123,32 @@ impl Repository<RelayerRepoModel, String> for RelayerRepositoryImpl {
         entity: RelayerRepoModel,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.update(id, entity).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.update(id, entity).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.update(id, entity).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.update(id, entity).await,
         }
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.delete_by_id(id).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.delete_by_id(id).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.delete_by_id(id).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.delete_by_id(id).await,
         }
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.count().await,
-            RelayerRepositoryImpl::Redis(repo) => repo.count().await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.count().await,
+            RelayerRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
 }
 
 #[async_trait]
-impl RelayerRepository for RelayerRepositoryImpl {
+impl RelayerRepository for RelayerRepositoryStorage {
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.list_active().await,
-            RelayerRepositoryImpl::Redis(repo) => repo.list_active().await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_active().await,
+            RelayerRepositoryStorage::Redis(repo) => repo.list_active().await,
         }
     }
 
@@ -187,8 +158,8 @@ impl RelayerRepository for RelayerRepositoryImpl {
         update: RelayerUpdateRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.partial_update(id, update).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.partial_update(id, update).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.partial_update(id, update).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.partial_update(id, update).await,
         }
     }
 
@@ -197,8 +168,8 @@ impl RelayerRepository for RelayerRepositoryImpl {
         relayer_id: String,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.enable_relayer(relayer_id).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.enable_relayer(relayer_id).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.enable_relayer(relayer_id).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.enable_relayer(relayer_id).await,
         }
     }
 
@@ -207,8 +178,8 @@ impl RelayerRepository for RelayerRepositoryImpl {
         relayer_id: String,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.disable_relayer(relayer_id).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.disable_relayer(relayer_id).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.disable_relayer(relayer_id).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.disable_relayer(relayer_id).await,
         }
     }
 
@@ -218,8 +189,8 @@ impl RelayerRepository for RelayerRepositoryImpl {
         policy: RelayerNetworkPolicy,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
-            RelayerRepositoryImpl::InMemory(repo) => repo.update_policy(id, policy).await,
-            RelayerRepositoryImpl::Redis(repo) => repo.update_policy(id, policy).await,
+            RelayerRepositoryStorage::InMemory(repo) => repo.update_policy(id, policy).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.update_policy(id, policy).await,
         }
     }
 }
@@ -227,7 +198,10 @@ impl RelayerRepository for RelayerRepositoryImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy};
+    use crate::{
+        config::ServerConfig,
+        models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy},
+    };
 
     fn create_test_relayer(id: String) -> RelayerRepoModel {
         RelayerRepoModel {
@@ -253,7 +227,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_in_memory_repository_impl() {
-        let impl_repo = RelayerRepositoryImpl::new_in_memory();
+        let impl_repo = RelayerRepositoryStorage::new_in_memory();
         let relayer = create_test_relayer("test-relayer".to_string());
 
         // Test create
@@ -292,7 +266,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_relayer_repository_trait_methods() {
-        let impl_repo = RelayerRepositoryImpl::new_in_memory();
+        let impl_repo = RelayerRepositoryStorage::new_in_memory();
         let relayer = create_test_relayer("test-relayer".to_string());
 
         // Create the relayer first
@@ -340,7 +314,6 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_repository_in_memory() {
-        let repo_type = RelayerRepositoryType::InMemory;
         let config = ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8080,
@@ -360,10 +333,19 @@ mod tests {
             provider_max_failovers: 3,
         };
 
-        let result = RelayerRepositoryImpl::create_repository(repo_type, &config).await;
-        assert!(result.is_ok());
+        let client =
+            redis::Client::open(config.redis_url.clone()).expect("Failed to create Redis client");
+        let connection_manager = redis::aio::ConnectionManager::new(client)
+            .await
+            .expect("Failed to create Redis connection manager");
 
-        if let Ok(RelayerRepositoryImpl::InMemory(_)) = result {
+        let result = RelayerRepositoryStorage::new_redis(
+            Arc::new(connection_manager),
+            config.redis_key_prefix.clone(),
+        )
+        .unwrap();
+
+        if let RelayerRepositoryStorage::InMemory(_) = result {
             // Success
         } else {
             panic!("Expected in-memory repository");
@@ -372,7 +354,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_pagination() {
-        let impl_repo = RelayerRepositoryImpl::new_in_memory();
+        let impl_repo = RelayerRepositoryStorage::new_in_memory();
         let relayer1 = create_test_relayer("test-relayer-1".to_string());
         let relayer2 = create_test_relayer("test-relayer-2".to_string());
 
@@ -392,7 +374,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_delete_relayer() {
-        let impl_repo = RelayerRepositoryImpl::new_in_memory();
+        let impl_repo = RelayerRepositoryStorage::new_in_memory();
         let relayer = create_test_relayer("delete-test".to_string());
 
         // Create relayer

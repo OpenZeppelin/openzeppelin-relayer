@@ -133,9 +133,9 @@ mod tests {
     use crate::{
         jobs::MockJobProducerTrait,
         repositories::{
-            NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
-            RelayerRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl,
-            TransactionRepositoryImpl,
+            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+            RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
         services::plugins::LogLevel,
         utils::mocks::mockutils::create_mock_app_state,
@@ -176,7 +176,7 @@ mod tests {
 
         let plugin_runner = PluginRunner;
         let result = plugin_runner
-            .run::<MockJobProducerTrait, TransactionRepositoryImpl, RelayerRepositoryImpl, NetworkRepositoryImpl, NotificationRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl, PluginRepositoryImpl>(
+            .run::<MockJobProducerTrait, TransactionRepositoryStorage, RelayerRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>(
                 &socket_path.display().to_string(),
                 script_path.display().to_string(),
                 "{ \"test\": \"test\" }".to_string(),

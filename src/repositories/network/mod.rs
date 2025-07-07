@@ -28,7 +28,6 @@ mod network_redis;
 pub use network_in_memory::InMemoryNetworkRepository;
 pub use network_redis::RedisNetworkRepository;
 
-use crate::config::ServerConfig;
 use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
 use crate::repositories::{PaginatedResult, PaginationQuery, Repository};
 
@@ -49,19 +48,13 @@ pub trait NetworkRepository: Repository<NetworkRepoModel, String> {
     ) -> Result<Option<NetworkRepoModel>, RepositoryError>;
 }
 
-/// Enum representing the type of notification repository to use
-pub enum NetworkRepositoryType {
-    InMemory,
-    Redis,
-}
-
 #[derive(Debug, Clone)]
-pub enum NetworkRepositoryImpl {
+pub enum NetworkRepositoryStorage {
     InMemory(InMemoryNetworkRepository),
     Redis(RedisNetworkRepository),
 }
 
-impl NetworkRepositoryImpl {
+impl NetworkRepositoryStorage {
     pub fn new_in_memory() -> Self {
         Self::InMemory(InMemoryNetworkRepository::new())
     }
@@ -75,51 +68,26 @@ impl NetworkRepositoryImpl {
     }
 }
 
-impl NetworkRepositoryType {
-    /// Creates a notification repository based on the enum variant
-    pub async fn create_repository(self, config: &ServerConfig) -> NetworkRepositoryImpl {
-        match self {
-            NetworkRepositoryType::InMemory => {
-                NetworkRepositoryImpl::InMemory(InMemoryNetworkRepository::new())
-            }
-            NetworkRepositoryType::Redis => {
-                let client = redis::Client::open(config.redis_url.clone())
-                    .expect("Failed to create Redis client");
-                let connection_manager = redis::aio::ConnectionManager::new(client)
-                    .await
-                    .expect("Failed to create Redis connection manager");
-                NetworkRepositoryImpl::Redis(
-                    RedisNetworkRepository::new(
-                        Arc::new(connection_manager),
-                        config.redis_key_prefix.clone(),
-                    )
-                    .expect("Failed to create Redis notification repository"),
-                )
-            }
-        }
-    }
-}
-
 #[async_trait]
-impl Repository<NetworkRepoModel, String> for NetworkRepositoryImpl {
+impl Repository<NetworkRepoModel, String> for NetworkRepositoryStorage {
     async fn create(&self, entity: NetworkRepoModel) -> Result<NetworkRepoModel, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.create(entity).await,
-            NetworkRepositoryImpl::Redis(repo) => repo.create(entity).await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.create(entity).await,
+            NetworkRepositoryStorage::Redis(repo) => repo.create(entity).await,
         }
     }
 
     async fn get_by_id(&self, id: String) -> Result<NetworkRepoModel, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.get_by_id(id).await,
-            NetworkRepositoryImpl::Redis(repo) => repo.get_by_id(id).await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
+            NetworkRepositoryStorage::Redis(repo) => repo.get_by_id(id).await,
         }
     }
 
     async fn list_all(&self) -> Result<Vec<NetworkRepoModel>, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.list_all().await,
-            NetworkRepositoryImpl::Redis(repo) => repo.list_all().await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.list_all().await,
+            NetworkRepositoryStorage::Redis(repo) => repo.list_all().await,
         }
     }
 
@@ -128,8 +96,8 @@ impl Repository<NetworkRepoModel, String> for NetworkRepositoryImpl {
         query: PaginationQuery,
     ) -> Result<PaginatedResult<NetworkRepoModel>, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.list_paginated(query).await,
-            NetworkRepositoryImpl::Redis(repo) => repo.list_paginated(query).await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
+            NetworkRepositoryStorage::Redis(repo) => repo.list_paginated(query).await,
         }
     }
 
@@ -139,36 +107,36 @@ impl Repository<NetworkRepoModel, String> for NetworkRepositoryImpl {
         entity: NetworkRepoModel,
     ) -> Result<NetworkRepoModel, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.update(id, entity).await,
-            NetworkRepositoryImpl::Redis(repo) => repo.update(id, entity).await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.update(id, entity).await,
+            NetworkRepositoryStorage::Redis(repo) => repo.update(id, entity).await,
         }
     }
 
     async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.delete_by_id(id).await,
-            NetworkRepositoryImpl::Redis(repo) => repo.delete_by_id(id).await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.delete_by_id(id).await,
+            NetworkRepositoryStorage::Redis(repo) => repo.delete_by_id(id).await,
         }
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.count().await,
-            NetworkRepositoryImpl::Redis(repo) => repo.count().await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.count().await,
+            NetworkRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
 }
 
 #[async_trait]
-impl NetworkRepository for NetworkRepositoryImpl {
+impl NetworkRepository for NetworkRepositoryStorage {
     async fn get_by_name(
         &self,
         network_type: NetworkType,
         name: &str,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => repo.get_by_name(network_type, name).await,
-            NetworkRepositoryImpl::Redis(repo) => repo.get_by_name(network_type, name).await,
+            NetworkRepositoryStorage::InMemory(repo) => repo.get_by_name(network_type, name).await,
+            NetworkRepositoryStorage::Redis(repo) => repo.get_by_name(network_type, name).await,
         }
     }
 
@@ -178,10 +146,10 @@ impl NetworkRepository for NetworkRepositoryImpl {
         chain_id: u64,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
         match self {
-            NetworkRepositoryImpl::InMemory(repo) => {
+            NetworkRepositoryStorage::InMemory(repo) => {
                 repo.get_by_chain_id(network_type, chain_id).await
             }
-            NetworkRepositoryImpl::Redis(repo) => {
+            NetworkRepositoryStorage::Redis(repo) => {
                 repo.get_by_chain_id(network_type, chain_id).await
             }
         }

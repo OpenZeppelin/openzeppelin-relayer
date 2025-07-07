@@ -7,15 +7,15 @@ use crate::{
     domain::transaction::Transaction,
     jobs::JobProducer,
     models::{NetworkTransactionRequest, RelayerRepoModel, TransactionError, TransactionRepoModel},
-    repositories::{RelayerRepositoryImpl, TransactionRepositoryImpl},
+    repositories::{RelayerRepositoryStorage, TransactionRepositoryStorage},
     services::SolanaProvider,
 };
 
 #[allow(dead_code)]
 pub struct SolanaRelayerTransaction {
-    relayer_repository: Arc<RelayerRepositoryImpl>,
+    relayer_repository: Arc<RelayerRepositoryStorage>,
     provider: Arc<SolanaProvider>,
-    transaction_repository: Arc<TransactionRepositoryImpl>,
+    transaction_repository: Arc<TransactionRepositoryStorage>,
     relayer: RelayerRepoModel,
     job_producer: Arc<JobProducer>,
 }
@@ -24,9 +24,9 @@ pub struct SolanaRelayerTransaction {
 impl SolanaRelayerTransaction {
     pub fn new(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryImpl>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
         provider: Arc<SolanaProvider>,
-        transaction_repository: Arc<TransactionRepositoryImpl>,
+        transaction_repository: Arc<TransactionRepositoryStorage>,
         job_producer: Arc<JobProducer>,
     ) -> Result<Self, TransactionError> {
         Ok(Self {

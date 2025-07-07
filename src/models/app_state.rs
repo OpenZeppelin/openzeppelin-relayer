@@ -10,10 +10,11 @@ use crate::{
         TransactionRepoModel,
     },
     repositories::{
-        NetworkRepository, NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
-        PluginRepositoryTrait, RelayerRepository, RelayerRepositoryImpl, Repository,
-        SignerRepositoryImpl, TransactionCounterRepositoryImpl, TransactionCounterTrait,
-        TransactionRepository, TransactionRepositoryImpl,
+        NetworkRepository, NetworkRepositoryStorage, NotificationRepositoryStorage,
+        PluginRepositoryStorage, PluginRepositoryTrait, RelayerRepository,
+        RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage, TransactionCounterTrait, TransactionRepository,
+        TransactionRepositoryStorage,
     },
 };
 
@@ -50,13 +51,13 @@ pub struct AppState<
 
 pub type DefaultAppState = AppState<
     JobProducer,
-    RelayerRepositoryImpl,
-    TransactionRepositoryImpl,
-    NetworkRepositoryImpl,
-    NotificationRepositoryImpl,
-    SignerRepositoryImpl,
-    TransactionCounterRepositoryImpl,
-    PluginRepositoryImpl,
+    RelayerRepositoryStorage,
+    TransactionRepositoryStorage,
+    NetworkRepositoryStorage,
+    NotificationRepositoryStorage,
+    SignerRepositoryStorage,
+    TransactionCounterRepositoryStorage,
+    PluginRepositoryStorage,
 >;
 
 impl<
@@ -74,7 +75,7 @@ impl<
     ///
     /// # Returns
     ///
-    /// An `Arc` pointing to the `RelayerRepositoryImpl`.
+    /// An `Arc` pointing to the `RelayerRepositoryStorage`.
     pub fn relayer_repository(&self) -> Arc<RR> {
         self.relayer_repository.clone()
     }
@@ -83,7 +84,7 @@ impl<
     ///
     /// # Returns
     ///
-    /// An `Arc` pointing to the `Arc<TransactionRepositoryImpl>`.
+    /// An `Arc` pointing to the `Arc<TransactionRepositoryStorage>`.
     pub fn transaction_repository(&self) -> Arc<TR> {
         Arc::clone(&self.transaction_repository)
     }
@@ -145,20 +146,20 @@ impl<
 
 #[cfg(test)]
 mod tests {
-    use crate::{jobs::MockJobProducerTrait, repositories::TransactionRepositoryImpl};
+    use crate::{jobs::MockJobProducerTrait, repositories::TransactionRepositoryStorage};
 
     use super::*;
     use std::sync::Arc;
 
     fn create_test_app_state() -> AppState<
         MockJobProducerTrait,
-        RelayerRepositoryImpl,
-        TransactionRepositoryImpl,
-        NetworkRepositoryImpl,
-        NotificationRepositoryImpl,
-        SignerRepositoryImpl,
-        TransactionCounterRepositoryImpl,
-        PluginRepositoryImpl,
+        RelayerRepositoryStorage,
+        TransactionRepositoryStorage,
+        NetworkRepositoryStorage,
+        NotificationRepositoryStorage,
+        SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage,
+        PluginRepositoryStorage,
     > {
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -181,14 +182,16 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         AppState {
-            relayer_repository: Arc::new(RelayerRepositoryImpl::new_in_memory()),
-            transaction_repository: Arc::new(TransactionRepositoryImpl::new_in_memory()),
-            signer_repository: Arc::new(SignerRepositoryImpl::new_in_memory()),
-            notification_repository: Arc::new(NotificationRepositoryImpl::new_in_memory()),
-            network_repository: Arc::new(NetworkRepositoryImpl::new_in_memory()),
-            transaction_counter_store: Arc::new(TransactionCounterRepositoryImpl::new_in_memory()),
+            relayer_repository: Arc::new(RelayerRepositoryStorage::new_in_memory()),
+            transaction_repository: Arc::new(TransactionRepositoryStorage::new_in_memory()),
+            signer_repository: Arc::new(SignerRepositoryStorage::new_in_memory()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
+            network_repository: Arc::new(NetworkRepositoryStorage::new_in_memory()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
             job_producer: Arc::new(mock_job_producer),
-            plugin_repository: Arc::new(PluginRepositoryImpl::new_in_memory()),
+            plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
         }
     }
 

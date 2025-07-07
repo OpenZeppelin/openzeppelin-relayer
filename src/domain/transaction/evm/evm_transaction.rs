@@ -26,9 +26,9 @@ use crate::{
         TransactionUpdateRequest,
     },
     repositories::{
-        NetworkRepository, NetworkRepositoryImpl, RelayerRepository, RelayerRepositoryImpl,
-        Repository, TransactionCounterRepositoryImpl, TransactionCounterTrait,
-        TransactionRepository, TransactionRepositoryImpl,
+        NetworkRepository, NetworkRepositoryStorage, RelayerRepository, RelayerRepositoryStorage,
+        Repository, TransactionCounterRepositoryStorage, TransactionCounterTrait,
+        TransactionRepository, TransactionRepositoryStorage,
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
 };
@@ -734,12 +734,12 @@ where
 // we define concrete type for the evm transaction
 pub type DefaultEvmTransaction = EvmRelayerTransaction<
     EvmProvider,
-    RelayerRepositoryImpl,
-    NetworkRepositoryImpl,
-    TransactionRepositoryImpl,
+    RelayerRepositoryStorage,
+    NetworkRepositoryStorage,
+    TransactionRepositoryStorage,
     JobProducer,
     EvmSigner,
-    TransactionCounterRepositoryImpl,
+    TransactionCounterRepositoryStorage,
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
 >;
 #[cfg(test)]

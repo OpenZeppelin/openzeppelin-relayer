@@ -7,9 +7,9 @@ use crate::{
     jobs::{self, Queue},
     models::{AppState, DefaultAppState},
     repositories::{
-        NetworkRepositoryImpl, NotificationRepositoryImpl, PluginRepositoryImpl,
-        RelayerRepositoryImpl, SignerRepositoryImpl, TransactionCounterRepositoryImpl,
-        TransactionRepositoryType,
+        NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+        RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+        TransactionRepositoryStorage,
     },
 };
 use actix_web::web;
@@ -30,27 +30,23 @@ use std::sync::Arc;
 pub async fn initialize_app_state(
     server_config: Arc<ServerConfig>,
 ) -> Result<web::ThinData<DefaultAppState>> {
-    let relayer_repository = Arc::new(RelayerRepositoryImpl::new_in_memory());
+    let relayer_repository = Arc::new(RelayerRepositoryStorage::new_in_memory());
 
-    let transaction_repository = Arc::new(
-        TransactionRepositoryType::Redis
-            .create_repository(&server_config)
-            .await,
-    );
-    let signer_repository = Arc::new(SignerRepositoryImpl::new_in_memory());
-    let notification_repository = Arc::new(NotificationRepositoryImpl::new_in_memory());
-    let network_repository = Arc::new(NetworkRepositoryImpl::new_in_memory());
-    let transaction_counter_store = Arc::new(TransactionCounterRepositoryImpl::new_in_memory());
+    let transaction_repository = Arc::new(TransactionRepositoryStorage::new_in_memory());
+    let signer_repository = Arc::new(SignerRepositoryStorage::new_in_memory());
+    let notification_repository = Arc::new(NotificationRepositoryStorage::new_in_memory());
+    let network_repository = Arc::new(NetworkRepositoryStorage::new_in_memory());
+    let transaction_counter_store = Arc::new(TransactionCounterRepositoryStorage::new_in_memory());
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
-    let plugin_repository = Arc::new(PluginRepositoryImpl::new_in_memory());
+    let plugin_repository = Arc::new(PluginRepositoryStorage::new_in_memory());
 
     let app_state = web::ThinData(AppState {
         relayer_repository,
         transaction_repository,
         signer_repository,
-        notification_repository,
         network_repository,
+        notification_repository,
         transaction_counter_store,
         job_producer,
         plugin_repository,
