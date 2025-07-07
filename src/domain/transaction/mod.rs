@@ -547,7 +547,7 @@ impl RelayerTransactionFactory {
                 let indexer_client = midnight_provider.get_indexer_client();
 
                 // This still requires `MIDNIGHT_LEDGER_TEST_STATIC_DIR` environment variable to be set (limitation by LedgerContext test resolver)
-                // We should check with the Midnight team if we can use a different constructor for LedgerContext
+                // TODO: We should check with the Midnight team if we can use a different constructor for LedgerContext
                 let sync_manager = Arc::new(Mutex::new(
                     SyncManager::<QuickSyncStrategy>::new(
                         indexer_client,
