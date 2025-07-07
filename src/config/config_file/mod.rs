@@ -284,6 +284,7 @@ mod tests {
             plugins: Some(vec![PluginFileConfig {
                 id: "test-1".to_string(),
                 path: "/app/plugins/test-plugin.ts".to_string(),
+                timeout: None,
             }]),
         }
     }
@@ -1146,7 +1147,8 @@ mod tests {
             }],
             "plugins": [{
                 "id": "plugin-id",
-                "path": "/app/plugins/plugin.ts"
+                "path": "/app/plugins/plugin.ts",
+                "timeout": 12
             }],
         });
 
@@ -1397,6 +1399,7 @@ mod tests {
             plugins: Some(vec![PluginFileConfig {
                 id: "id".to_string(),
                 path: "/app/plugins/test-plugin.js".to_string(),
+                timeout: None,
             }]),
         };
         let result = config.validate_plugins();

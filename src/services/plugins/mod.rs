@@ -133,8 +133,10 @@ impl<J: JobProducerTrait + 'static> PluginServiceTrait<J> for PluginService<Plug
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::{
-        jobs::MockJobProducerTrait, models::PluginModel,
+        constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS, jobs::MockJobProducerTrait, models::PluginModel,
         utils::mocks::mockutils::create_mock_app_state,
     };
 
@@ -163,6 +165,7 @@ mod tests {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
         let app_state: AppState<MockJobProducerTrait> =
             create_mock_app_state(None, None, None, Some(vec![plugin])).await;

@@ -381,6 +381,7 @@ mod tests {
             RelayerFileConfig, ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
             VaultTransitSignerFileConfig,
         },
+        constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
         models::{NetworkType, PlainOrEnvValue, SecretString},
         repositories::{
@@ -390,7 +391,7 @@ mod tests {
         },
     };
     use serde_json::json;
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1003,10 +1004,12 @@ mod tests {
             PluginFileConfig {
                 id: "test-plugin-1".to_string(),
                 path: "/app/plugins/test.ts".to_string(),
+                timeout: None,
             },
             PluginFileConfig {
                 id: "test-plugin-2".to_string(),
                 path: "/app/plugins/test2.ts".to_string(),
+                timeout: Some(12),
             },
         ];
 
@@ -1037,8 +1040,22 @@ mod tests {
 
         assert!(plugin_1.is_some());
         assert!(plugin_2.is_some());
-        assert_eq!(plugin_1.unwrap().path, "/app/plugins/test.ts");
-        assert_eq!(plugin_2.unwrap().path, "/app/plugins/test2.ts");
+
+        let plugin_1 = plugin_1.unwrap();
+        let plugin_2 = plugin_2.unwrap();
+
+        assert_eq!(plugin_1.path, "/app/plugins/test.ts");
+        assert_eq!(plugin_2.path, "/app/plugins/test2.ts");
+
+        // check that the timeout is set to the default value when not provided.
+        assert_eq!(
+            plugin_1.timeout.as_secs(),
+            Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS).as_secs()
+        );
+        assert_eq!(
+            plugin_2.timeout.as_secs(),
+            Duration::from_secs(12).as_secs()
+        );
 
         Ok(())
     }
@@ -1073,6 +1090,7 @@ mod tests {
         let plugins = vec![PluginFileConfig {
             id: "test-plugin-1".to_string(),
             path: "/app/plugins/test.ts".to_string(),
+            timeout: None,
         }];
 
         // Create config
@@ -1153,32 +1171,32 @@ mod tests {
         let signer = SignerFileConfig {
             id: "gcp-kms-signer".to_string(),
             config: SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
-            service_account: ServiceAccountConfig {
-                private_key: PlainOrEnvValue::Plain {
-                    value: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
+                service_account: ServiceAccountConfig {
+                    private_key: PlainOrEnvValue::Plain {
+                        value: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
+                    },
+                    client_email: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test-service-account@example.com"),
+                    },
+                    private_key_id: PlainOrEnvValue::Plain {
+                        value: SecretString::new("fake-private-key-id"),
+                    },
+                    client_id: "fake-client-id".to_string(),
+                    project_id: "fake-project-id".to_string(),
+                    auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                    token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                    client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com".to_string(),
+                    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
+                    universe_domain: "googleapis.com".to_string(),
                 },
-                client_email: PlainOrEnvValue::Plain {
-                    value: SecretString::new("test-service-account@example.com"),
+                key: KmsKeyConfig {
+                    location: "global".to_string(),
+                    key_id: "fake-key-id".to_string(),
+                    key_ring_id: "fake-key-ring-id".to_string(),
+                    key_version: 1,
                 },
-                private_key_id: PlainOrEnvValue::Plain {
-                    value: SecretString::new("fake-private-key-id"),
-                },
-                client_id: "fake-client-id".to_string(),
-                project_id: "fake-project-id".to_string(),
-                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-                token_uri: "https://oauth2.googleapis.com/token".to_string(),
-                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test-service-account%40example.com".to_string(),
-                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
-                universe_domain: "googleapis.com".to_string(),
-            },
-            key: KmsKeyConfig {
-                location: "global".to_string(),
-                key_id: "fake-key-id".to_string(),
-                key_ring_id: "fake-key-ring-id".to_string(),
-                key_version: 1,
-            },
-        }),
-    };
+            }),
+        };
 
         let result = process_signer(&signer).await;
 
