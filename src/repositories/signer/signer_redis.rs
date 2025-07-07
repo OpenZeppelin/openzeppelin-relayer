@@ -1,6 +1,7 @@
 //! Redis-backed implementation of the signer repository.
 
 use crate::models::{RepositoryError, SignerRepoModel};
+use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::*;
 use async_trait::async_trait;
 use log::{debug, error, warn};
@@ -17,6 +18,8 @@ pub struct RedisSignerRepository {
     pub client: Arc<ConnectionManager>,
     pub key_prefix: String,
 }
+
+impl RedisRepository for RedisSignerRepository {}
 
 impl RedisSignerRepository {
     pub fn new(
@@ -43,19 +46,6 @@ impl RedisSignerRepository {
         format!("{}:{}", self.key_prefix, SIGNER_LIST_KEY)
     }
 
-    fn serialize_signer(&self, signer: &SignerRepoModel) -> Result<String, RepositoryError> {
-        serde_json::to_string(signer).map_err(|e| {
-            error!("Serialization failed for signer {}: {}", signer.id, e);
-            RepositoryError::InvalidData(format!("Failed to serialize signer {}: {}", signer.id, e))
-        })
-    }
-
-    fn deserialize_signer(&self, data: &str) -> Result<SignerRepoModel, RepositoryError> {
-        serde_json::from_str(data).map_err(|e| {
-            error!("Deserialization failed for signer data: {}", e);
-            RepositoryError::InvalidData(format!("Failed to deserialize signer: {}", e))
-        })
-    }
 
     async fn add_to_list(&self, id: &str) -> Result<(), RepositoryError> {
         let key = self.signer_list_key();
@@ -139,7 +129,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         // Serialize signer
-        let serialized = self.serialize_signer(&signer)?;
+        let serialized = self.serialize_entity(&signer, |s| &s.id, "signer")?;
 
         // Store signer
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
@@ -168,7 +158,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let result: Result<Option<String>, RedisError> = conn.get(&key).await;
         match result {
             Ok(Some(data)) => {
-                let signer = self.deserialize_signer(&data)?;
+                let signer = self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")?;
                 debug!("Retrieved signer with ID: {}", id);
                 Ok(signer)
             }
@@ -231,7 +221,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         // Serialize signer
-        let serialized = self.serialize_signer(&signer)?;
+        let serialized = self.serialize_entity(&signer, |s| &s.id, "signer")?;
 
         // Update signer
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
@@ -430,8 +420,8 @@ mod tests {
         let repo = setup_test_repo().await;
         let signer = create_test_signer("test-signer");
 
-        let serialized = repo.serialize_signer(&signer).unwrap();
-        let deserialized = repo.deserialize_signer(&serialized).unwrap();
+        let serialized = repo.serialize_entity(&signer, |s| &s.id, "signer").unwrap();
+        let deserialized: SignerRepoModel = repo.deserialize_entity(&serialized, &signer.id, "signer").unwrap();
 
         assert_eq!(signer.id, deserialized.id);
         assert!(matches!(signer.config, SignerConfig::Test(_)));

@@ -1,11 +1,12 @@
 //! Redis-backed implementation of the PluginRepository.
 
 use crate::models::{PluginModel, RepositoryError};
+use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::PluginRepositoryTrait;
 use async_trait::async_trait;
-use log::{debug, error, warn};
+use log::{debug, error};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, RedisError};
+use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 
@@ -17,6 +18,8 @@ pub struct RedisPluginRepository {
     pub client: Arc<ConnectionManager>,
     pub key_prefix: String,
 }
+
+impl RedisRepository for RedisPluginRepository {}
 
 impl RedisPluginRepository {
     pub fn new(
@@ -45,64 +48,6 @@ impl RedisPluginRepository {
         format!("{}:{}", self.key_prefix, PLUGIN_LIST_KEY)
     }
 
-    /// Convert Redis errors to appropriate RepositoryError types
-    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
-        match error.kind() {
-            redis::ErrorKind::IoError => {
-                error!("Redis IO error in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
-            }
-            redis::ErrorKind::AuthenticationFailed => {
-                error!("Redis authentication failed in {}: {}", context, error);
-                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
-            }
-            redis::ErrorKind::TypeError => {
-                error!("Redis type error in {}: {}", context, error);
-                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
-            }
-            redis::ErrorKind::ExecAbortError => {
-                warn!("Redis transaction aborted in {}: {}", context, error);
-                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
-            }
-            redis::ErrorKind::BusyLoadingError => {
-                warn!("Redis busy loading in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
-            }
-            redis::ErrorKind::NoScriptError => {
-                error!("Redis script error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis script error: {}", error))
-            }
-            _ => {
-                error!("Unexpected Redis error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
-            }
-        }
-    }
-
-    /// Serialize plugin with detailed error context
-    fn serialize_plugin(&self, plugin: &PluginModel) -> Result<String, RepositoryError> {
-        serde_json::to_string(plugin).map_err(|e| {
-            error!("Serialization failed for plugin {}: {}", plugin.id, e);
-            RepositoryError::InvalidData(format!("Failed to serialize plugin {}: {}", plugin.id, e))
-        })
-    }
-
-    /// Deserialize plugin with detailed error context
-    fn deserialize_plugin(
-        &self,
-        json: &str,
-        plugin_id: &str,
-    ) -> Result<PluginModel, RepositoryError> {
-        serde_json::from_str(json).map_err(|e| {
-            error!("Deserialization failed for plugin {}: {}", plugin_id, e);
-            RepositoryError::InvalidData(format!(
-                "Failed to deserialize plugin {}: {} (JSON length: {})",
-                plugin_id,
-                e,
-                json.len()
-            ))
-        })
-    }
 }
 
 impl fmt::Debug for RedisPluginRepository {
@@ -136,7 +81,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         match json {
             Some(json) => {
                 debug!("Found plugin data for ID: {}", id);
-                let plugin = self.deserialize_plugin(&json, id)?;
+                let plugin = self.deserialize_entity::<PluginModel>(&json, id, "plugin")?;
                 Ok(Some(plugin))
             }
             None => {
@@ -179,7 +124,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         }
 
         // Serialize plugin
-        let json = self.serialize_plugin(&plugin)?;
+        let json = self.serialize_entity(&plugin, |p| &p.id, "plugin")?;
 
         // Use a pipeline to ensure atomicity
         let mut pipe = redis::pipe();
@@ -263,8 +208,8 @@ mod tests {
         let repo = setup_test_repo().await;
         let plugin = create_test_plugin("test-plugin", "/path/to/plugin");
 
-        let json = repo.serialize_plugin(&plugin).unwrap();
-        let deserialized = repo.deserialize_plugin(&json, &plugin.id).unwrap();
+        let json = repo.serialize_entity(&plugin, |p| &p.id, "plugin").unwrap();
+        let deserialized: PluginModel = repo.deserialize_entity(&json, &plugin.id, "plugin").unwrap();
 
         assert_eq!(plugin.id, deserialized.id);
         assert_eq!(plugin.path, deserialized.path);

@@ -28,6 +28,9 @@ pub use network::*;
 mod plugin;
 pub use plugin::*;
 
+// Redis base utilities for shared functionality
+pub mod redis_base;
+
 #[derive(Debug)]
 pub struct PaginatedResult<T> {
     pub items: Vec<T>,

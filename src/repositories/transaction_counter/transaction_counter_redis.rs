@@ -7,10 +7,11 @@
 
 use super::TransactionCounterTrait;
 use crate::models::RepositoryError;
+use crate::repositories::redis_base::RedisRepository;
 use async_trait::async_trait;
-use log::{debug, error, warn};
+use log::debug;
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, RedisError};
+use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 
@@ -21,6 +22,8 @@ pub struct RedisTransactionCounter {
     pub client: Arc<ConnectionManager>,
     pub key_prefix: String,
 }
+
+impl RedisRepository for RedisTransactionCounter {}
 
 impl fmt::Debug for RedisTransactionCounter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -53,40 +56,6 @@ impl RedisTransactionCounter {
             "{}:{}:{}:{}",
             self.key_prefix, COUNTER_PREFIX, relayer_id, address
         )
-    }
-
-    /// Convert Redis errors to appropriate RepositoryError types
-    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
-        match error.kind() {
-            redis::ErrorKind::IoError => {
-                error!("Redis IO error in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
-            }
-            redis::ErrorKind::AuthenticationFailed => {
-                error!("Redis authentication failed in {}: {}", context, error);
-                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
-            }
-            redis::ErrorKind::TypeError => {
-                error!("Redis type error in {}: {}", context, error);
-                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
-            }
-            redis::ErrorKind::ExecAbortError => {
-                warn!("Redis transaction aborted in {}: {}", context, error);
-                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
-            }
-            redis::ErrorKind::BusyLoadingError => {
-                warn!("Redis busy loading in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
-            }
-            redis::ErrorKind::NoScriptError => {
-                error!("Redis script error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis script error: {}", error))
-            }
-            _ => {
-                error!("Unexpected Redis error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
-            }
-        }
     }
 }
 

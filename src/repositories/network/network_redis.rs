@@ -7,11 +7,12 @@
 
 use super::NetworkRepository;
 use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
+use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{PaginatedResult, PaginationQuery, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, RedisError};
+use redis::{AsyncCommands};
 use std::fmt;
 use std::sync::Arc;
 
@@ -25,6 +26,8 @@ pub struct RedisNetworkRepository {
     pub client: Arc<ConnectionManager>,
     pub key_prefix: String,
 }
+
+impl RedisRepository for RedisNetworkRepository {}
 
 impl RedisNetworkRepository {
     pub fn new(
@@ -185,67 +188,6 @@ impl RedisNetworkRepository {
         Ok(())
     }
 
-    /// Convert Redis errors to appropriate RepositoryError types
-    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
-        match error.kind() {
-            redis::ErrorKind::IoError => {
-                error!("Redis IO error in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
-            }
-            redis::ErrorKind::AuthenticationFailed => {
-                error!("Redis authentication failed in {}: {}", context, error);
-                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
-            }
-            redis::ErrorKind::TypeError => {
-                error!("Redis type error in {}: {}", context, error);
-                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
-            }
-            redis::ErrorKind::ExecAbortError => {
-                warn!("Redis transaction aborted in {}: {}", context, error);
-                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
-            }
-            redis::ErrorKind::BusyLoadingError => {
-                warn!("Redis busy loading in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
-            }
-            redis::ErrorKind::NoScriptError => {
-                error!("Redis script error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis script error: {}", error))
-            }
-            _ => {
-                error!("Unexpected Redis error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
-            }
-        }
-    }
-
-    /// Serialize network with detailed error context
-    fn serialize_network(&self, network: &NetworkRepoModel) -> Result<String, RepositoryError> {
-        serde_json::to_string(network).map_err(|e| {
-            error!("Serialization failed for network {}: {}", network.id, e);
-            RepositoryError::InvalidData(format!(
-                "Failed to serialize network {}: {}",
-                network.id, e
-            ))
-        })
-    }
-
-    /// Deserialize network with detailed error context
-    fn deserialize_network(
-        &self,
-        json: &str,
-        network_id: &str,
-    ) -> Result<NetworkRepoModel, RepositoryError> {
-        serde_json::from_str(json).map_err(|e| {
-            error!("Deserialization failed for network {}: {}", network_id, e);
-            RepositoryError::InvalidData(format!(
-                "Failed to deserialize network {}: {} (JSON length: {})",
-                network_id,
-                e,
-                json.len()
-            ))
-        })
-    }
 
     /// Batch fetch networks by IDs
     async fn get_networks_by_ids(
@@ -272,7 +214,7 @@ impl RedisNetworkRepository {
 
         for (i, value) in values.into_iter().enumerate() {
             match value {
-                Some(json) => match self.deserialize_network(&json, &ids[i]) {
+                Some(json) => match self.deserialize_entity::<NetworkRepoModel>(&json, &ids[i], "network") {
                     Ok(network) => networks.push(network),
                     Err(e) => {
                         failed_count += 1;
@@ -326,7 +268,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         debug!("Creating network with ID: {}", entity.id);
 
-        let value = self.serialize_network(&entity)?;
+        let value = self.serialize_entity(&entity, |n| &n.id, "network")?;
 
         // Check if network already exists
         let existing: Option<String> = conn
@@ -380,7 +322,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         match network_data {
             Some(data) => {
-                let network = self.deserialize_network(&data, &id)?;
+                let network = self.deserialize_entity::<NetworkRepoModel>(&data, &id, "network")?;
                 debug!("Successfully retrieved network with ID: {}", id);
                 Ok(network)
             }
@@ -501,7 +443,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         // Get the old network for index cleanup
         let old_network = self.get_by_id(id.clone()).await?;
 
-        let value = self.serialize_network(&entity)?;
+        let value = self.serialize_entity(&entity, |n| &n.id, "network")?;
 
         let _: () = conn
             .set(&key, &value)

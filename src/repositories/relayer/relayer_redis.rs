@@ -2,11 +2,12 @@
 
 use crate::domain::RelayerUpdateRequest;
 use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError};
+use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{PaginatedResult, RelayerRepository, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, RedisError};
+use redis::{AsyncCommands};
 use std::fmt;
 use std::sync::Arc;
 
@@ -18,6 +19,8 @@ pub struct RedisRelayerRepository {
     pub client: Arc<ConnectionManager>,
     pub key_prefix: String,
 }
+
+impl RedisRepository for RedisRelayerRepository {}
 
 impl RedisRelayerRepository {
     pub fn new(
@@ -46,40 +49,6 @@ impl RedisRelayerRepository {
         format!("{}:{}", self.key_prefix, RELAYER_LIST_KEY)
     }
 
-    /// Convert Redis errors to appropriate RepositoryError types
-    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
-        match error.kind() {
-            redis::ErrorKind::IoError => {
-                error!("Redis IO error in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
-            }
-            redis::ErrorKind::AuthenticationFailed => {
-                error!("Redis authentication failed in {}: {}", context, error);
-                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
-            }
-            redis::ErrorKind::TypeError => {
-                error!("Redis type error in {}: {}", context, error);
-                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
-            }
-            redis::ErrorKind::ExecAbortError => {
-                warn!("Redis transaction aborted in {}: {}", context, error);
-                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
-            }
-            redis::ErrorKind::BusyLoadingError => {
-                warn!("Redis busy loading in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
-            }
-            redis::ErrorKind::NoScriptError => {
-                error!("Redis script error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis script error: {}", error))
-            }
-            _ => {
-                error!("Unexpected Redis error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
-            }
-        }
-    }
-
     /// Batch fetch relayers by IDs
     async fn get_relayers_by_ids(
         &self,
@@ -106,7 +75,7 @@ impl RedisRelayerRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_relayer(&json, &ids[i]) {
+                    match self.deserialize_entity(&json, &ids[i], "relayer") {
                         Ok(relayer) => relayers.push(relayer),
                         Err(e) => {
                             failed_count += 1;
@@ -133,33 +102,6 @@ impl RedisRelayerRepository {
         Ok(relayers)
     }
 
-    /// Serialize relayer with detailed error context
-    fn serialize_relayer(&self, relayer: &RelayerRepoModel) -> Result<String, RepositoryError> {
-        serde_json::to_string(relayer).map_err(|e| {
-            error!("Serialization failed for relayer {}: {}", relayer.id, e);
-            RepositoryError::InvalidData(format!(
-                "Failed to serialize relayer {}: {}",
-                relayer.id, e
-            ))
-        })
-    }
-
-    /// Deserialize relayer with detailed error context
-    fn deserialize_relayer(
-        &self,
-        json: &str,
-        relayer_id: &str,
-    ) -> Result<RelayerRepoModel, RepositoryError> {
-        serde_json::from_str(json).map_err(|e| {
-            error!("Deserialization failed for relayer {}: {}", relayer_id, e);
-            RepositoryError::InvalidData(format!(
-                "Failed to deserialize relayer {}: {} (JSON length: {})",
-                relayer_id,
-                e,
-                json.len()
-            ))
-        })
-    }
 }
 
 impl fmt::Debug for RedisRelayerRepository {
@@ -202,7 +144,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
             )));
         }
 
-        let serialized = self.serialize_relayer(&entity)?;
+        let serialized = self.serialize_entity(&entity, |r| &r.id, "relayer")?;
 
         // Use pipeline for atomic operations
         let mut pipe = redis::pipe();
@@ -238,7 +180,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         match json {
             Some(json) => {
                 debug!("Found relayer {}", id);
-                self.deserialize_relayer(&json, &id)
+                self.deserialize_entity(&json, &id, "relayer")
             }
             None => {
                 debug!("Relayer {} not found", id);
@@ -357,7 +299,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let mut updated_entity = entity;
         updated_entity.id = id.clone();
 
-        let serialized = self.serialize_relayer(&updated_entity)?;
+        let serialized = self.serialize_entity(&updated_entity, |r| &r.id, "relayer")?;
 
         // Use pipeline for atomic operations
         let mut pipe = redis::pipe();
@@ -577,8 +519,10 @@ mod tests {
         let repo = setup_test_repo().await;
         let relayer = create_test_relayer("test-relayer");
 
-        let serialized = repo.serialize_relayer(&relayer).unwrap();
-        let deserialized = repo.deserialize_relayer(&serialized, &relayer.id).unwrap();
+        let serialized = repo.serialize_entity(&relayer, |r| &r.id, "relayer").unwrap();
+        let deserialized: RelayerRepoModel = repo
+            .deserialize_entity(&serialized, &relayer.id, "relayer")
+            .unwrap();
 
         assert_eq!(relayer.id, deserialized.id);
         assert_eq!(relayer.name, deserialized.name);

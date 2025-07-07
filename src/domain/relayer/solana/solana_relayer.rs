@@ -747,7 +747,7 @@ mod tests {
             RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
             SolanaSwapStrategy,
         },
-        repositories::{MockNetworkRepository, MockRelayerRepository, MockRepository},
+        repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
             MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait, QuoteResponse,
             RoutePlan, SolanaProviderError, SwapEvents, SwapInfo, SwapResponse,
@@ -769,7 +769,7 @@ mod tests {
         signer: Arc<MockSolanaSignTrait>,
         jupiter: Arc<MockJupiterServiceTrait>,
         job_producer: Arc<MockJobProducerTrait>,
-        tx_repo: Arc<MockRepository<TransactionRepoModel, String>>,
+        tx_repo: Arc<MockTransactionRepository>,
         dex: Arc<NetworkDex<MockSolanaProviderTrait, MockSolanaSignTrait, MockJupiterServiceTrait>>,
         rpc_handler: Arc<
             SolanaRpcHandler<
@@ -790,7 +790,7 @@ mod tests {
             let signer = Arc::new(MockSolanaSignTrait::new());
             let jupiter = Arc::new(MockJupiterServiceTrait::new());
             let job = Arc::new(MockJobProducerTrait::new());
-            let tx_repo = Arc::new(MockRepository::<TransactionRepoModel, String>::new());
+            let tx_repo = Arc::new(MockTransactionRepository::new());
             let network_repository = Arc::new(MockNetworkRepository::new());
 
             let relayer_model = RelayerRepoModel {
@@ -859,7 +859,7 @@ mod tests {
             self,
         ) -> SolanaRelayer<
             MockRelayerRepository,
-            MockRepository<TransactionRepoModel, String>,
+            MockTransactionRepository,
             MockJobProducerTrait,
             MockSolanaSignTrait,
             MockJupiterServiceTrait,

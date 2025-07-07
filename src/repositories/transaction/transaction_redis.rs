@@ -4,11 +4,12 @@ use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
     TransactionStatus, TransactionUpdateRequest,
 };
+use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{PaginatedResult, Repository, TransactionRepository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, RedisError};
+use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 
@@ -24,6 +25,8 @@ pub struct RedisTransactionRepository {
     pub client: Arc<ConnectionManager>,
     pub key_prefix: String,
 }
+
+impl RedisRepository for RedisTransactionRepository {}
 
 impl RedisTransactionRepository {
     pub fn new(
@@ -80,40 +83,6 @@ impl RedisTransactionRepository {
         format!("{}:{}", self.key_prefix, RELAYER_LIST_KEY)
     }
 
-    /// Convert Redis errors to appropriate RepositoryError types
-    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
-        match error.kind() {
-            redis::ErrorKind::IoError => {
-                error!("Redis IO error in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
-            }
-            redis::ErrorKind::AuthenticationFailed => {
-                error!("Redis authentication failed in {}: {}", context, error);
-                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
-            }
-            redis::ErrorKind::TypeError => {
-                error!("Redis type error in {}: {}", context, error);
-                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
-            }
-            redis::ErrorKind::ExecAbortError => {
-                warn!("Redis transaction aborted in {}: {}", context, error);
-                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
-            }
-            redis::ErrorKind::BusyLoadingError => {
-                warn!("Redis busy loading in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
-            }
-            redis::ErrorKind::NoScriptError => {
-                error!("Redis script error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis script error: {}", error))
-            }
-            _ => {
-                error!("Unexpected Redis error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
-            }
-        }
-    }
-
     /// Batch fetch transactions by IDs using reverse lookup
     async fn get_transactions_by_ids(
         &self,
@@ -168,7 +137,7 @@ impl RedisTransactionRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_transaction(&json, &valid_ids[i]) {
+                    match self.deserialize_entity::<TransactionRepoModel>(&json, &valid_ids[i], "transaction") {
                         Ok(tx) => transactions.push(tx),
                         Err(e) => {
                             failed_count += 1;
@@ -206,33 +175,6 @@ impl RedisTransactionRepository {
         }
     }
 
-    /// Serialize transaction with detailed error context
-    fn serialize_transaction(&self, tx: &TransactionRepoModel) -> Result<String, RepositoryError> {
-        serde_json::to_string(tx).map_err(|e| {
-            error!("Serialization failed for transaction {}: {}", tx.id, e);
-            RepositoryError::InvalidData(format!(
-                "Failed to serialize transaction {} (relayer: {}): {}",
-                tx.id, tx.relayer_id, e
-            ))
-        })
-    }
-
-    /// Deserialize transaction with detailed error context
-    fn deserialize_transaction(
-        &self,
-        json: &str,
-        tx_id: &str,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        serde_json::from_str(json).map_err(|e| {
-            error!("Deserialization failed for transaction {}: {}", tx_id, e);
-            RepositoryError::InvalidData(format!(
-                "Failed to deserialize transaction {}: {} (JSON length: {})",
-                tx_id,
-                e,
-                json.len()
-            ))
-        })
-    }
 
     /// Update indexes atomically with comprehensive error handling
     async fn update_indexes(
@@ -358,7 +300,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         debug!("Creating transaction with ID: {}", entity.id);
 
-        let value = self.serialize_transaction(&entity)?;
+        let value = self.serialize_entity(&entity, |t| &t.id, "transaction")?;
 
         // Check if transaction already exists by checking reverse lookup
         let existing: Option<String> = conn
@@ -432,7 +374,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         match value {
             Some(json) => {
-                let tx = self.deserialize_transaction(&json, &id)?;
+                let tx = self.deserialize_entity::<TransactionRepoModel>(&json, &id, "transaction")?;
                 debug!("Successfully fetched transaction {}", id);
                 Ok(tx)
             }
@@ -604,7 +546,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let key = self.tx_key(&entity.relayer_id, &id);
         let mut conn = self.client.as_ref().clone();
 
-        let value = self.serialize_transaction(&entity)?;
+        let value = self.serialize_entity(&entity, |t| &t.id, "transaction")?;
 
         // Update transaction
         let _: () = conn
@@ -860,7 +802,7 @@ impl TransactionRepository for RedisTransactionRepository {
         let key = self.tx_key(&tx.relayer_id, &tx_id);
         let mut conn = self.client.as_ref().clone();
 
-        let value = self.serialize_transaction(&tx)?;
+        let value = self.serialize_entity(&tx, |t| &t.id, "transaction")?;
 
         let _: () = conn
             .set(&key, value)
@@ -1047,10 +989,10 @@ mod tests {
         let tx = create_test_transaction("test-1");
 
         let serialized = repo
-            .serialize_transaction(&tx)
+            .serialize_entity(&tx, |t| &t.id, "transaction")
             .expect("Serialization should succeed");
-        let deserialized = repo
-            .deserialize_transaction(&serialized, "test-1")
+        let deserialized: TransactionRepoModel = repo
+            .deserialize_entity(&serialized, "test-1", "transaction")
             .expect("Deserialization should succeed");
 
         assert_eq!(tx.id, deserialized.id);

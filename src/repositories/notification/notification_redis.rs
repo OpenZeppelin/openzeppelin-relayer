@@ -1,11 +1,12 @@
 //! Redis-backed implementation of the NotificationRepository.
 
 use crate::models::{NotificationRepoModel, PaginationQuery, RepositoryError};
+use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{PaginatedResult, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
-use redis::{AsyncCommands, RedisError};
+use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 
@@ -17,6 +18,8 @@ pub struct RedisNotificationRepository {
     pub client: Arc<ConnectionManager>,
     pub key_prefix: String,
 }
+
+impl RedisRepository for RedisNotificationRepository {}
 
 impl RedisNotificationRepository {
     pub fn new(
@@ -48,40 +51,6 @@ impl RedisNotificationRepository {
         format!("{}:{}", self.key_prefix, NOTIFICATION_LIST_KEY)
     }
 
-    /// Convert Redis errors to appropriate RepositoryError types
-    fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
-        match error.kind() {
-            redis::ErrorKind::IoError => {
-                error!("Redis IO error in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
-            }
-            redis::ErrorKind::AuthenticationFailed => {
-                error!("Redis authentication failed in {}: {}", context, error);
-                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
-            }
-            redis::ErrorKind::TypeError => {
-                error!("Redis type error in {}: {}", context, error);
-                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
-            }
-            redis::ErrorKind::ExecAbortError => {
-                warn!("Redis transaction aborted in {}: {}", context, error);
-                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
-            }
-            redis::ErrorKind::BusyLoadingError => {
-                warn!("Redis busy loading in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
-            }
-            redis::ErrorKind::NoScriptError => {
-                error!("Redis script error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis script error: {}", error))
-            }
-            _ => {
-                error!("Unexpected Redis error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
-            }
-        }
-    }
-
     /// Batch fetch notifications by IDs
     async fn get_notifications_by_ids(
         &self,
@@ -108,7 +77,7 @@ impl RedisNotificationRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_notification(&json, &ids[i]) {
+                    match self.deserialize_entity::<NotificationRepoModel>(&json, &ids[i], "notification") {
                         Ok(notification) => notifications.push(notification),
                         Err(e) => {
                             failed_count += 1;
@@ -135,42 +104,6 @@ impl RedisNotificationRepository {
         Ok(notifications)
     }
 
-    /// Serialize notification with detailed error context
-    fn serialize_notification(
-        &self,
-        notification: &NotificationRepoModel,
-    ) -> Result<String, RepositoryError> {
-        serde_json::to_string(notification).map_err(|e| {
-            error!(
-                "Serialization failed for notification {}: {}",
-                notification.id, e
-            );
-            RepositoryError::InvalidData(format!(
-                "Failed to serialize notification {}: {}",
-                notification.id, e
-            ))
-        })
-    }
-
-    /// Deserialize notification with detailed error context
-    fn deserialize_notification(
-        &self,
-        json: &str,
-        notification_id: &str,
-    ) -> Result<NotificationRepoModel, RepositoryError> {
-        serde_json::from_str(json).map_err(|e| {
-            error!(
-                "Deserialization failed for notification {}: {}",
-                notification_id, e
-            );
-            RepositoryError::InvalidData(format!(
-                "Failed to deserialize notification {}: {} (JSON length: {})",
-                notification_id,
-                e,
-                json.len()
-            ))
-        })
-    }
 }
 
 impl fmt::Debug for RedisNotificationRepository {
@@ -206,7 +139,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         debug!("Creating notification with ID: {}", entity.id);
 
-        let value = self.serialize_notification(&entity)?;
+        let value = self.serialize_entity(&entity, |n| &n.id, "notification")?;
 
         // Check if notification already exists
         let existing: Option<String> = conn
@@ -254,7 +187,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         match value {
             Some(json) => {
-                let notification = self.deserialize_notification(&json, &id)?;
+                let notification = self.deserialize_entity::<NotificationRepoModel>(&json, &id, "notification")?;
                 debug!("Successfully fetched notification {}", id);
                 Ok(notification)
             }
@@ -376,7 +309,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             )));
         }
 
-        let value = self.serialize_notification(&entity)?;
+        let value = self.serialize_entity(&entity, |n| &n.id, "notification")?;
 
         // Update notification data
         let _: () = conn
@@ -530,10 +463,10 @@ mod tests {
         let notification = create_test_notification(&random_id);
 
         let serialized = repo
-            .serialize_notification(&notification)
+            .serialize_entity(&notification, |n| &n.id, "notification")
             .expect("Serialization should succeed");
-        let deserialized = repo
-            .deserialize_notification(&serialized, &random_id)
+        let deserialized: NotificationRepoModel = repo
+            .deserialize_entity(&serialized, &random_id, "notification")
             .expect("Deserialization should succeed");
 
         assert_eq!(notification.id, deserialized.id);
