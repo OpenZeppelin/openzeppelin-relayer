@@ -1,10 +1,13 @@
-use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
+use crate::{
+    config::network::IndexerUrls,
+    models::{NetworkConfigData, NetworkRepoModel, RepositoryError},
+};
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct MidnightNetwork {
-    /// Unique network identifier (e.g., "mainnet", "sepolia", "custom-devnet").
+    /// Unique network identifier (e.g., "mainnet", "testnet", "devnet").
     pub network: String,
     /// List of RPC endpoint URLs for connecting to the network.
     pub rpc_urls: Vec<String>,
@@ -16,7 +19,10 @@ pub struct MidnightNetwork {
     pub is_testnet: bool,
     /// List of arbitrary tags for categorizing or filtering networks.
     pub tags: Vec<String>,
-    // TODO: Add Midnight specific fields
+    /// List of Indexer endpoint URLs for connecting to the network.
+    pub indexer_urls: IndexerUrls,
+    /// URL of the prover server for generating proofs.
+    pub prover_url: String,
 }
 
 impl TryFrom<NetworkRepoModel> for MidnightNetwork {
@@ -55,6 +61,8 @@ impl TryFrom<NetworkRepoModel> for MidnightNetwork {
                     average_blocktime_ms,
                     is_testnet: common.is_testnet.unwrap_or(false),
                     tags: common.tags.clone().unwrap_or_default(),
+                    indexer_urls: midnight_config.indexer_urls.clone(),
+                    prover_url: midnight_config.prover_url.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(

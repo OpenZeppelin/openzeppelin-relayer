@@ -11,8 +11,15 @@ use crate::{
     services::signer::{SignerError, SignerFactoryError},
     services::Signer,
 };
+use midnight_node_ledger_helpers::NetworkId;
 
 use super::DataSignerTrait;
+
+/// Trait for Midnight-specific signer functionality
+pub trait MidnightSignerTrait: Signer {
+    /// Get a reference to the wallet seed
+    fn wallet_seed(&self) -> &midnight_node_ledger_helpers::WalletSeed;
+}
 
 pub enum MidnightSigner {
     Local(LocalSigner),
@@ -38,17 +45,28 @@ impl Signer for MidnightSigner {
     }
 }
 
+impl MidnightSignerTrait for MidnightSigner {
+    fn wallet_seed(&self) -> &midnight_node_ledger_helpers::WalletSeed {
+        match self {
+            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.wallet_seed(),
+        }
+    }
+}
+
 pub struct MidnightSignerFactory;
 
 impl MidnightSignerFactory {
     pub fn create_midnight_signer(
         m: &SignerRepoModel,
+        network_id: NetworkId,
     ) -> Result<MidnightSigner, SignerFactoryError> {
         let signer = match m.config {
             SignerConfig::Local(_)
             | SignerConfig::Test(_)
             | SignerConfig::Vault(_)
-            | SignerConfig::VaultCloud(_) => MidnightSigner::Local(LocalSigner::new(m)?),
+            | SignerConfig::VaultCloud(_) => {
+                MidnightSigner::Local(LocalSigner::new(m, network_id)?)
+            }
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
             }
