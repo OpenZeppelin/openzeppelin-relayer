@@ -791,7 +791,7 @@ mod tests {
             let jupiter = Arc::new(MockJupiterServiceTrait::new());
             let job = Arc::new(MockJobProducerTrait::new());
             let tx_repo = Arc::new(MockTransactionRepository::new());
-            let network_repository = Arc::new(MockNetworkRepository::new());
+            let mut network_repository = MockNetworkRepository::new();
 
             let relayer_model = RelayerRepoModel {
                 id: "test-id".to_string(),
@@ -818,23 +818,6 @@ mod tests {
                 job.clone(),
             )));
 
-            TestCtx {
-                relayer_model,
-                mock_repo,
-                network_repository,
-                provider,
-                signer,
-                jupiter,
-                job_producer: job,
-                tx_repo,
-                dex,
-                rpc_handler,
-            }
-        }
-    }
-
-    impl TestCtx {
-        async fn setup_network(&self) {
             let test_network = NetworkRepoModel {
                 id: "solana:devnet".to_string(),
                 name: "devnet".to_string(),
@@ -852,9 +835,26 @@ mod tests {
                 }),
             };
 
-            self.network_repository.create(test_network).await.unwrap();
-        }
+            network_repository
+                .expect_get_by_name()
+                .returning(move |_, _| Ok(Some(test_network.clone())));
 
+            TestCtx {
+                relayer_model,
+                mock_repo,
+                network_repository: Arc::new(network_repository),
+                provider,
+                signer,
+                jupiter,
+                job_producer: job,
+                tx_repo,
+                dex,
+                rpc_handler,
+            }
+        }
+    }
+
+    impl TestCtx {
         async fn into_relayer(
             self,
         ) -> SolanaRelayer<
@@ -866,9 +866,6 @@ mod tests {
             MockSolanaProviderTrait,
             MockNetworkRepository,
         > {
-            // Setup network first
-            self.setup_network().await;
-
             // Get the network from the repository
             let network_repo = self
                 .network_repository

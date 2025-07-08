@@ -198,10 +198,7 @@ impl RelayerRepository for RelayerRepositoryStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::{RepositoryStorageType, ServerConfig},
-        models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy},
-    };
+    use crate::models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy};
 
     fn create_test_relayer(id: String) -> RelayerRepoModel {
         RelayerRepoModel {
@@ -314,43 +311,9 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_repository_in_memory() {
-        let config = ServerConfig {
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            redis_url: "redis://localhost:6379".to_string(),
-            config_file_path: "config/config.json".to_string(),
-            api_key: crate::models::SecretString::new("test-api-key-123"),
-            rate_limit_requests_per_second: 100,
-            rate_limit_burst_size: 300,
-            metrics_port: 8081,
-            enable_swagger: false,
-            redis_connection_timeout_ms: 5000,
-            redis_key_prefix: "test".to_string(),
-            rpc_timeout_ms: 10000,
-            provider_max_retries: 3,
-            provider_retry_base_delay_ms: 100,
-            provider_retry_max_delay_ms: 2000,
-            provider_max_failovers: 3,
-            repository_storage_type: RepositoryStorageType::InMemory,
-        };
+        let result = RelayerRepositoryStorage::new_in_memory();
 
-        let client =
-            redis::Client::open(config.redis_url.clone()).expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
-
-        let result = RelayerRepositoryStorage::new_redis(
-            Arc::new(connection_manager),
-            config.redis_key_prefix.clone(),
-        )
-        .unwrap();
-
-        if let RelayerRepositoryStorage::InMemory(_) = result {
-            // Success
-        } else {
-            panic!("Expected in-memory repository");
-        }
+        assert!(matches!(result, RelayerRepositoryStorage::InMemory(_)));
     }
 
     #[actix_web::test]
