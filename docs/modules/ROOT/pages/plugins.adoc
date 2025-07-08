@@ -64,7 +64,7 @@ runPlugin(myPlugin);
 
 Plugins are configured in the `./config/config.json` file, under the `plugins` key.
 
-The file contains a list of plugins, each with an id and path.
+The file contains a list of plugins, each with an id, path and timeout in seconds (optional).
 
 NOTE: The plugin path is relative to the `/plugins` directory
 
@@ -76,10 +76,18 @@ Example:
 "plugins": [
   {
     "id": "my-plugin",
-    "path": "my-plugin.ts"
+    "path": "my-plugin.ts",
+    "timeout": 30
   }
 ]
 ----
+
+=== Timeout
+
+The timeout is the maximum time *in seconds* that the plugin can run. If the plugin exceeds the timeout, it will be terminated with an error.
+
+The timeout is optional, and if not provided, the default is 300 seconds (5 minutes).
+
 
 == Invocation
 
