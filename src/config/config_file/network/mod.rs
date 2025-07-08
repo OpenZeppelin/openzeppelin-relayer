@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_validate_midnight_network_success() {
-        let config = create_midnight_network_wrapped("test-midnight");
+        let config = create_midnight_network_wrapped("testnet");
         let result = config.validate();
         assert!(result.is_ok());
     }
@@ -519,7 +519,9 @@ mod tests {
     fn test_deserialize_midnight_from_json() {
         let json = r#"{
             "type": "midnight",
-            "network": "test-midnight-json"
+            "network": "test-midnight-json",
+			"indexer_urls": {"http": "https://rpc.example.com", "ws": "wss://rpc.example.com"},
+			"prover_url": "http://localhost:6300"
         }"#;
 
         let config: NetworkFileConfig = serde_json::from_str(json).unwrap();
@@ -680,7 +682,7 @@ mod tests {
             create_evm_network_wrapped("test-evm"),
             create_solana_network_wrapped("test-solana"),
             create_stellar_network_wrapped("test-stellar"),
-            create_midnight_network_wrapped("test-midnight"),
+            create_midnight_network_wrapped("testnet"),
         ];
 
         // Ensure all methods work consistently across all network types

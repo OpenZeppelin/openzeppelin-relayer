@@ -654,7 +654,7 @@ mod tests {
             create_solana_network_wrapped("solana-parent"),
             create_solana_network_wrapped_with_parent("solana-child", "solana-parent"),
             create_stellar_network_wrapped("stellar-standalone"),
-            create_midnight_network_wrapped("midnight-standalone"),
+            create_midnight_network_wrapped("testnet"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
 
