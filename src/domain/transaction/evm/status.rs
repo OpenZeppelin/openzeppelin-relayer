@@ -223,7 +223,9 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         if self.should_resubmit(&tx).await? {
-            return self.handle_resubmission(tx).await;
+            let resubmitted_tx = self.handle_resubmission(tx).await?;
+            self.schedule_status_check(&resubmitted_tx, None).await?;
+            return Ok(resubmitted_tx);
         }
 
         self.schedule_status_check(&tx, Some(5)).await?;
@@ -282,6 +284,8 @@ where
             self.send_transaction_update_notification(&updated_tx)
                 .await?;
             return Ok(updated_tx);
+        } else {
+            self.schedule_status_check(&tx, Some(5)).await?;
         }
         Ok(tx)
     }
@@ -798,6 +802,12 @@ mod tests {
                 .expect_produce_submit_transaction_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
+            // Expect status check to be scheduled
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let updated_tx = evm_transaction.handle_submitted_state(tx).await.unwrap();
 
@@ -823,6 +833,12 @@ mod tests {
                 .network_repo
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            // Expect status check to be scheduled when not doing NOOP
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction

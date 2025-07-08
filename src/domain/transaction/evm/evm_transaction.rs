@@ -256,49 +256,6 @@ where
             TransactionError::InsufficientBalance(validation_error.to_string())
         })
     }
-
-    /// Signs a transaction data, updates repository with the signed transaction, and optionally sends a resubmit job.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx_id` - The transaction ID to update
-    /// * `evm_data` - The EVM transaction data to sign
-    /// * `send_resubmit` - Whether to send a resubmit job after updating
-    ///
-    /// # Returns
-    ///
-    /// The updated transaction model
-    async fn sign_update_and_notify(
-        &self,
-        tx_id: String,
-        evm_data: EvmTransactionData,
-        send_resubmit: bool,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        // Sign the transaction
-        let sig_result = self
-            .signer
-            .sign_transaction(NetworkTransactionData::Evm(evm_data.clone()))
-            .await?;
-
-        let final_evm_data = evm_data.with_signed_transaction_data(sig_result.into_evm()?);
-
-        // Update the transaction in the repository
-        let updated_tx = self
-            .transaction_repository
-            .update_network_data(tx_id, NetworkTransactionData::Evm(final_evm_data))
-            .await?;
-
-        // Send resubmit job if requested
-        if send_resubmit {
-            self.send_transaction_resubmit_job(&updated_tx).await?;
-        }
-
-        // Send notification
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
-
-        Ok(updated_tx)
-    }
 }
 
 #[async_trait]
@@ -532,13 +489,29 @@ where
         self.ensure_sufficient_balance(bumped_price_params.total_cost)
             .await?;
 
-        // sign, update and notify
+        let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
+            TransactionError::InvalidType("Raw transaction data is missing".to_string())
+        })?;
+
+        self.provider.send_raw_transaction(raw_tx).await?;
+
+        // Track attempt count and hash history
+        let mut hashes = tx.hashes.clone();
+        if let Some(hash) = final_evm_data.hash.clone() {
+            hashes.push(hash);
+        }
+
+        // Update the transaction in the repository
+        let update = TransactionUpdateRequest {
+            network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
+            hashes: Some(hashes),
+            priced_at: Some(Utc::now().to_rfc3339()),
+            ..Default::default()
+        };
+
         let updated_tx = self
-            .sign_update_and_notify(
-                tx.id.clone(),
-                final_evm_data,
-                true, // send_resubmit = true
-            )
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
             .await?;
 
         Ok(updated_tx)
@@ -671,19 +644,35 @@ where
         info!("Replacement price params: {:?}", price_params);
 
         // Apply the calculated price parameters to the updated EVM data
-        let final_evm_data = updated_evm_data.with_price_params(price_params.clone());
+        let evm_data_with_price_params = updated_evm_data.with_price_params(price_params.clone());
 
         // Validate the relayer has sufficient balance
         self.ensure_sufficient_balance(price_params.total_cost)
             .await?;
 
-        // sign, update and notify
+        let sig_result = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Evm(
+                evm_data_with_price_params.clone(),
+            ))
+            .await?;
+
+        let final_evm_data =
+            evm_data_with_price_params.with_signed_transaction_data(sig_result.into_evm()?);
+
+        // Update the transaction in the repository
         let updated_tx = self
-            .sign_update_and_notify(
+            .transaction_repository
+            .update_network_data(
                 old_tx.id.clone(),
-                final_evm_data,
-                true, // send_resubmit = true
+                NetworkTransactionData::Evm(final_evm_data),
             )
+            .await?;
+
+        self.send_transaction_resubmit_job(&updated_tx).await?;
+
+        // Send notification
+        self.send_transaction_update_notification(&updated_tx)
             .await?;
 
         Ok(updated_tx)
