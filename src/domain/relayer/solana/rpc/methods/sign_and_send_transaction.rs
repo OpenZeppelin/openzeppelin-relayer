@@ -206,6 +206,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -358,6 +359,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -513,6 +515,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -683,6 +686,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });
@@ -831,6 +835,7 @@ mod tests {
                     return_data: None,
                     replacement_blockhash: None,
                     inner_instructions: None,
+                    loaded_accounts_data_size: None,
                 })
             })
         });

@@ -31,3 +31,8 @@ pub use google_cloud_kms::*;
 
 pub mod sync;
 pub use sync::*;
+
+mod aws_kms;
+pub use aws_kms::*;
+
+pub mod plugins;

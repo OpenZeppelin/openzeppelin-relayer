@@ -41,6 +41,8 @@ pub enum RelayerError {
     InvalidDexName(String),
     #[error("Dex error : {0}")]
     DexError(String),
+    #[error("Transaction validation error: {0}")]
+    ValidationError(String),
 }
 
 impl From<RelayerError> for ApiError {
@@ -63,6 +65,7 @@ impl From<RelayerError> for ApiError {
             RelayerError::PolicyConfigurationError(msg) => ApiError::InternalError(msg),
             RelayerError::InvalidDexName(msg) => ApiError::InternalError(msg),
             RelayerError::DexError(msg) => ApiError::InternalError(msg),
+            RelayerError::ValidationError(msg) => ApiError::BadRequest(msg),
         }
     }
 }

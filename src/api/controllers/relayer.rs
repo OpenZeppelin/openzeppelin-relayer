@@ -9,14 +9,14 @@
 use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
-        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, JsonRpcRequest,
-        Relayer, RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest,
-        Transaction,
+        get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
+        RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest, Transaction,
     },
     jobs::JobProducer,
     models::{
-        ApiError, ApiResponse, AppState, NetworkRpcRequest, NetworkTransactionRequest, NetworkType,
-        PaginationMeta, PaginationQuery, RelayerResponse, TransactionResponse,
+        convert_to_internal_rpc_request, ApiError, ApiResponse, AppState,
+        NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery, RelayerResponse,
+        TransactionResponse,
     },
     repositories::{RelayerRepository, Repository, TransactionRepository},
 };
@@ -297,7 +297,7 @@ pub async fn list_transactions(
 ///
 /// # Returns
 ///
-/// A success response if the operation was successful.
+/// A success response with details about cancelled and failed transactions.
 pub async fn delete_pending_transactions(
     relayer_id: String,
     state: web::ThinData<AppState<JobProducer>>,
@@ -306,9 +306,9 @@ pub async fn delete_pending_transactions(
     relayer.validate_active_state()?;
     let network_relayer = get_network_relayer_by_model(relayer.clone(), &state).await?;
 
-    network_relayer.delete_pending_transactions().await?;
+    let result = network_relayer.delete_pending_transactions().await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(())))
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
 /// Cancels a specific transaction for a relayer.
@@ -349,6 +349,7 @@ pub async fn cancel_transaction(
 ///
 /// * `relayer_id` - The ID of the relayer.
 /// * `transaction_id` - The ID of the transaction to replace.
+/// * `request` - The new transaction request data.
 /// * `state` - The application state containing the transaction repository.
 ///
 /// # Returns
@@ -357,20 +358,24 @@ pub async fn cancel_transaction(
 pub async fn replace_transaction(
     relayer_id: String,
     transaction_id: String,
+    request: serde_json::Value,
     state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
 
-    let relayer_transaction = get_relayer_transaction_by_model(relayer.clone(), &state).await?;
+    let new_tx_request: NetworkTransactionRequest =
+        NetworkTransactionRequest::from_json(&relayer.network_type, request.clone())?;
+    new_tx_request.validate(&relayer)?;
 
     let transaction_to_replace = state
         .transaction_repository
         .get_by_id(transaction_id)
         .await?;
 
+    let relayer_transaction = get_relayer_transaction_by_model(relayer.clone(), &state).await?;
     let replaced_transaction = relayer_transaction
-        .replace_transaction(transaction_to_replace)
+        .replace_transaction(transaction_to_replace, new_tx_request)
         .await?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(replaced_transaction)))
@@ -435,7 +440,7 @@ pub async fn sign_typed_data(
 /// # Arguments
 ///
 /// * `relayer_id` - The ID of the relayer.
-/// * `request` - The JSON-RPC request.
+/// * `request` - The raw JSON-RPC request value.
 /// * `state` - The application state containing the relayer repository.
 ///
 /// # Returns
@@ -443,14 +448,15 @@ pub async fn sign_typed_data(
 /// The result of the JSON-RPC call.
 pub async fn relayer_rpc(
     relayer_id: String,
-    request: JsonRpcRequest<NetworkRpcRequest>,
+    request: serde_json::Value,
     state: web::ThinData<AppState<JobProducer>>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
-    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+    let network_relayer = get_network_relayer_by_model(relayer.clone(), &state).await?;
 
-    let result = network_relayer.rpc(request).await?;
+    let internal_request = convert_to_internal_rpc_request(request, &relayer.network_type)?;
+    let result = network_relayer.rpc(internal_request).await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

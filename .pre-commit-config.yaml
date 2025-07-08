@@ -35,7 +35,7 @@ repos:
     rev: v5.0.0
     hooks:
       - id: check-json
-        exclude: ^plugins/tsconfig\.json$
+        exclude: ^.*tsconfig\.json$
       - id: check-toml
       - id: check-merge-conflict
       - id: check-case-conflict

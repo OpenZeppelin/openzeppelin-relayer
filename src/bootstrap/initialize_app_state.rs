@@ -6,9 +6,9 @@ use crate::{
     jobs::{self, Queue},
     models::{AppState, DefaultAppState},
     repositories::{
-        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
-        InMemorySignerRepository, InMemorySyncState, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
+        InMemoryRelayerRepository, InMemorySignerRepository, InMemorySyncState,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
 };
 use actix_web::web;
@@ -38,6 +38,7 @@ pub async fn initialize_app_state() -> Result<web::ThinData<DefaultAppState>> {
     let sync_state_store = Arc::new(InMemorySyncState::new());
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
+    let plugin_repository = Arc::new(InMemoryPluginRepository::new());
 
     let app_state = web::ThinData(AppState {
         relayer_repository,
@@ -48,6 +49,7 @@ pub async fn initialize_app_state() -> Result<web::ThinData<DefaultAppState>> {
         transaction_counter_store,
         sync_state_store,
         job_producer,
+        plugin_repository,
     });
 
     Ok(app_state)

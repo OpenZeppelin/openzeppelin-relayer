@@ -93,7 +93,7 @@ impl RpcConfig {
     /// * `Result<()>` - Ok if all URLs have valid schemes, error on first invalid URL
     ///
     /// # Examples
-    /// ```
+    /// ```rust, ignore
     /// use crate::models::RpcConfig;
     ///
     /// let configs = vec![

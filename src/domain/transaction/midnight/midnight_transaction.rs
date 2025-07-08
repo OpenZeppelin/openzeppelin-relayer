@@ -4,14 +4,14 @@
 
 use crate::{
     domain::{
-        to_midnight_network_id, MidnightTransactionBuilder, SignTransactionResponse, Transaction,
-        DUST_TOKEN_TYPE,
+        midnight::{to_midnight_network_id, MidnightTransactionBuilder, DUST_TOKEN_TYPE},
+        SignTransactionResponse, Transaction,
     },
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, MidnightNetwork, MidnightOfferRequest,
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionData, NetworkTransactionRequest, RelayerRepoModel, TransactionError,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -735,12 +735,13 @@ where
 
     async fn replace_transaction(
         &self,
-        tx: TransactionRepoModel,
+        old_tx: TransactionRepoModel,
+        _new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
         // TODO: Implement transaction replacement
         // Note: Midnight transactions might not be replaceable
 
-        log::debug!("Replacing Midnight transaction: {}", tx.id);
+        log::debug!("Replacing Midnight transaction: {}", old_tx.id);
 
         Err(TransactionError::NotSupported(
             "Transaction replacement is not supported for Midnight".to_string(),

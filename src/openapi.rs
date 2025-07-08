@@ -1,6 +1,10 @@
 use crate::{
-    api::routes::{docs::relayer_docs, health, metrics},
+    api::routes::{
+        docs::{plugin_docs, relayer_docs},
+        health, metrics,
+    },
     domain, models,
+    services::plugins,
 };
 use utoipa::{
     openapi::security::{Http, HttpAuthScheme, SecurityScheme},
@@ -26,6 +30,7 @@ impl Modify for SecurityAddon {
     modifiers(&SecurityAddon),
     tags(
       (name = "Relayers", description = "Relayers are the core components of the OpenZeppelin Relayer API. They are responsible for executing transactions on behalf of users and providing a secure and reliable way to interact with the blockchain."),
+      (name = "Plugins", description = "Plugins are TypeScript functions that can be used to extend the OpenZeppelin Relayer API functionality."),
       (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
       (name = "Health", description = "Health is responsible for showing the health of the relayers.")
     ),
@@ -57,7 +62,8 @@ impl Modify for SecurityAddon {
         health::health,
         metrics::list_metrics,
         metrics::metric_detail,
-        metrics::scrape_metrics
+        metrics::scrape_metrics,
+        plugin_docs::doc_call_plugin
     ),
     components(schemas(
         models::RelayerResponse,
@@ -67,7 +73,9 @@ impl Modify for SecurityAddon {
         models::StellarPolicyResponse,
         domain::RelayerUpdateRequest,
         domain::SignDataRequest,
-        domain::SignTypedDataRequest
+        domain::SignTypedDataRequest,
+        models::PluginCallRequest,
+        plugins::PluginCallResponse
     ))
 )]
 pub struct ApiDoc;

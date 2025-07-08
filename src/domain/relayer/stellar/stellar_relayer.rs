@@ -23,14 +23,15 @@
 use crate::{
     constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
-        next_sequence_u64, BalanceResponse, JsonRpcRequest, JsonRpcResponse, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest,
+        stellar::next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest,
     },
-    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
+    jobs::{JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, NetworkRpcRequest, NetworkRpcResult,
-        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
-        StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcRequest,
+        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError, StellarNetwork,
+        StellarRpcResult, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
@@ -123,12 +124,12 @@ where
     job_producer: Arc<J>,
 }
 
-pub type DefaultStellarRelayer = StellarRelayer<
+pub type DefaultStellarRelayer<J> = StellarRelayer<
     StellarProvider,
     RelayerRepositoryStorage<InMemoryRelayerRepository>,
     InMemoryNetworkRepository,
     InMemoryTransactionRepository,
-    JobProducer,
+    J,
     TransactionCounterService<InMemoryTransactionCounter>,
 >;
 
@@ -336,9 +337,15 @@ where
         })
     }
 
-    async fn delete_pending_transactions(&self) -> Result<bool, RelayerError> {
+    async fn delete_pending_transactions(
+        &self,
+    ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
         println!("Stellar delete_pending_transactions...");
-        Ok(true)
+        Ok(DeletePendingTransactionsResponse {
+            queued_for_cancellation_transaction_ids: vec![],
+            failed_to_queue_transaction_ids: vec![],
+            total_processed: 0,
+        })
     }
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
@@ -362,7 +369,7 @@ where
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
         println!("Stellar rpc...");
         Ok(JsonRpcResponse {
-            id: Some(1),
+            id: None,
             jsonrpc: "2.0".to_string(),
             result: Some(NetworkRpcResult::Stellar(
                 StellarRpcResult::GenericRpcResult("".to_string()),

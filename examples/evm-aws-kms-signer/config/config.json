@@ -1,0 +1,39 @@
+{
+  "relayers": [
+    {
+      "id": "sepolia-example",
+      "name": "Sepolia Example",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "aws-signer-signer-evm",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "aws-signer-signer-evm",
+      "type": "aws_kms",
+      "config": {
+        "region": "",
+        "key_id": ""
+      }
+    }
+  ],
+  "plugins": []
+}

@@ -36,5 +36,7 @@
         }
       }
     }
-  ]
+  ],
+  "networks": "./config/networks",
+  "plugins": []
 }

@@ -8,6 +8,13 @@ use super::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct DeletePendingTransactionsResponse {
+    pub queued_for_cancellation_transaction_ids: Vec<String>,
+    pub failed_to_queue_transaction_ids: Vec<String>,
+    pub total_processed: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
     pub id: String,
     pub name: String,

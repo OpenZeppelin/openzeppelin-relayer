@@ -45,6 +45,7 @@ impl NetworkTransactionRequest {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
         match self {
             NetworkTransactionRequest::Evm(request) => request.validate(relayer),
+            NetworkTransactionRequest::Stellar(request) => request.validate(),
             _ => Ok(()),
         }
     }

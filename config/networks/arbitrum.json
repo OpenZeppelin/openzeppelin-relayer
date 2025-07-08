@@ -22,7 +22,8 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "rollup"
+        "rollup",
+        "no-mempool"
       ],
       "type": "evm"
     },
@@ -47,7 +48,8 @@
       "symbol": "ETH",
       "tags": [
         "deprecated",
-        "rollup"
+        "rollup",
+        "no-mempool"
       ],
       "type": "evm"
     },
@@ -71,7 +73,8 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "rollup"
+        "rollup",
+        "no-mempool"
       ],
       "type": "evm"
     }

@@ -6,9 +6,9 @@ use std::sync::Arc;
 use crate::{
     jobs::{JobProducer, JobProducerTrait},
     repositories::{
-        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
-        InMemorySignerRepository, InMemorySyncState, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
+        InMemoryRelayerRepository, InMemorySignerRepository, InMemorySyncState,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
 };
 
@@ -32,6 +32,8 @@ pub struct AppState<J: JobProducerTrait> {
     pub sync_state_store: Arc<InMemorySyncState>,
     /// Producer for managing job creation and execution.
     pub job_producer: Arc<J>,
+    /// Repository for managing plugins.
+    pub plugin_repository: Arc<InMemoryPluginRepository>,
 }
 
 pub type DefaultAppState = AppState<JobProducer>;
@@ -108,6 +110,15 @@ impl<J: JobProducerTrait> AppState<J> {
     pub fn job_producer(&self) -> Arc<J> {
         Arc::clone(&self.job_producer)
     }
+
+    /// Returns a clone of the plugin repository.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc` pointing to the `InMemoryPluginRepository`.
+    pub fn plugin_repository(&self) -> Arc<InMemoryPluginRepository> {
+        Arc::clone(&self.plugin_repository)
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +160,7 @@ mod tests {
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             sync_state_store: Arc::new(InMemorySyncState::default()),
             job_producer: Arc::new(mock_job_producer),
+            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }
     }
 
@@ -211,5 +223,15 @@ mod tests {
 
         assert!(Arc::ptr_eq(&producer1, &producer2));
         assert!(Arc::ptr_eq(&producer1, &app_state.job_producer));
+    }
+
+    #[test]
+    fn test_plugin_repository_getter() {
+        let app_state = create_test_app_state();
+        let store1 = app_state.plugin_repository();
+        let store2 = app_state.plugin_repository();
+
+        assert!(Arc::ptr_eq(&store1, &store2));
+        assert!(Arc::ptr_eq(&store1, &app_state.plugin_repository));
     }
 }

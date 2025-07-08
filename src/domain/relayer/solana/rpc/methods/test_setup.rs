@@ -1,8 +1,9 @@
 //! Test setup for solana rpc methods
 use solana_sdk::{
     hash::Hash, message::Message, pubkey::Pubkey, signature::Keypair, signer::Signer,
-    system_instruction, transaction::Transaction,
+    transaction::Transaction,
 };
+use solana_system_interface::instruction;
 use spl_associated_token_account::get_associated_token_address;
 use std::str::FromStr;
 
@@ -31,7 +32,7 @@ pub fn setup_test_context() -> (
     let payer = Keypair::new();
     let source = Keypair::new();
     let recipient = Pubkey::new_unique();
-    let ix = system_instruction::transfer(&source.pubkey(), &recipient, 1000);
+    let ix = instruction::transfer(&source.pubkey(), &recipient, 1000);
     let message = Message::new(&[ix], Some(&payer.pubkey()));
     let transaction = Transaction::new_unsigned(message);
     // Create test relayer
@@ -338,7 +339,8 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
     let token_owner = Keypair::new(); // This will own the token account
     let relayer_keypair = Keypair::new();
 
-    let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC token mint
+    // USDC token mint
+    let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
     let token_mint = Pubkey::from_str(test_token).unwrap();
 
     let source_token_account = get_associated_token_address(&token_owner.pubkey(), &token_mint);

@@ -258,14 +258,14 @@ mod tests {
         message::Message,
         pubkey::Pubkey,
         signature::{Keypair, Signer},
-        system_instruction,
     };
+    use solana_system_interface::instruction;
 
     fn create_test_transaction() -> Transaction {
         let payer = Keypair::new();
 
         let recipient = Pubkey::new_unique();
-        let instruction = system_instruction::transfer(
+        let instruction = instruction::transfer(
             &payer.pubkey(),
             &recipient,
             1000, // lamports

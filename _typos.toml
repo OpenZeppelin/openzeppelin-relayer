@@ -1,4 +1,0 @@
-[default.extend-words]
-# Technical term for "no operation" transactions
-NOOP = "NOOP"
-noop = "noop"
