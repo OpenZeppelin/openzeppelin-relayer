@@ -9,24 +9,38 @@ pub mod remote_prover;
 use async_trait::async_trait;
 use eyre::Result;
 use hex;
-use midnight_node_ledger_helpers::{serialize, DefaultDB, NetworkId, Proof, Transaction};
+use midnight_node_ledger_helpers::{
+    serialize, DefaultDB, LedgerContext, NetworkId, Proof, Transaction, WalletSeed, NATIVE_TOKEN,
+};
 use midnight_node_res::subxt_metadata::api as mn_meta;
+use serde::{Deserialize, Serialize};
 use subxt::{OnlineClient, PolkadotConfig};
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, RetryConfig};
+use crate::config::network::IndexerUrls;
 use crate::models::{RpcConfig, U256};
+use crate::services::midnight::indexer::MidnightIndexerClient;
 
 #[cfg(test)]
 use mockall::automock;
 
 use super::ProviderError;
 
+/// Response structure for transaction submission
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransactionSubmissionResult {
+    pub extrinsic_tx_hash: String,
+    pub pallet_tx_hash: String,
+}
+
 /// Provider implementation for Midnight blockchain networks.
 ///
 /// Wraps a Substrate/Subxt client to interact with Midnight blockchain.
 #[derive(Clone)]
 pub struct MidnightProvider {
+    /// Indexer client for querying the chain
+    indexer_client: MidnightIndexerClient,
     /// RPC selector for managing and selecting providers
     selector: RpcSelector,
     /// Timeout in seconds for new HTTP clients
@@ -48,8 +62,13 @@ pub trait MidnightProviderTrait: Send + Sync {
     /// Gets the balance of an address in the native currency.
     ///
     /// # Arguments
-    /// * `address` - The address to query the balance for
-    async fn get_balance(&self, address: &str) -> Result<U256, ProviderError>;
+    /// * `seed` - The seed to query the balance for
+    /// * `context` - The ledger context to use for the balance query
+    async fn get_balance(
+        &self,
+        seed: &WalletSeed,
+        context: &LedgerContext<DefaultDB>,
+    ) -> Result<U256, ProviderError>;
 
     /// Gets the current block number of the chain.
     async fn get_block_number(&self) -> Result<u64, ProviderError>;
@@ -71,6 +90,21 @@ pub trait MidnightProviderTrait: Send + Sync {
     /// # Arguments
     /// * `address` - The address to query the nonce for
     async fn get_nonce(&self, address: &str) -> Result<u64, ProviderError>;
+
+    /// Get indexer client
+    fn get_indexer_client(&self) -> &MidnightIndexerClient;
+
+    /// Get block by hash
+    async fn get_block_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError>;
+
+    /// Get transaction by hash
+    async fn get_transaction_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError>;
 }
 
 impl MidnightProvider {
@@ -82,7 +116,12 @@ impl MidnightProvider {
     ///
     /// # Returns
     /// * `Result<Self>` - A new provider instance or an error
-    pub fn new(configs: Vec<RpcConfig>, timeout_seconds: u64) -> Result<Self, ProviderError> {
+    pub fn new(
+        configs: Vec<RpcConfig>,
+        indexer_urls: IndexerUrls,
+        network_id: NetworkId,
+        timeout_seconds: u64,
+    ) -> Result<Self, ProviderError> {
         if configs.is_empty() {
             return Err(ProviderError::NetworkConfiguration(
                 "At least one RPC configuration must be provided".to_string(),
@@ -99,11 +138,11 @@ impl MidnightProvider {
 
         let retry_config = RetryConfig::from_env();
 
-        // TODO: Get network_id from configuration or determine from chain
-        let network_id = NetworkId::TestNet;
+        let indexer_client = MidnightIndexerClient::new(indexer_urls);
 
         Ok(Self {
             selector,
+            indexer_client,
             timeout_seconds,
             retry_config,
             network_id,
@@ -153,11 +192,22 @@ impl MidnightProvider {
         &self,
         url: &str,
     ) -> Result<OnlineClient<PolkadotConfig>, ProviderError> {
-        OnlineClient::<PolkadotConfig>::from_url(url)
-            .await
-            .map_err(|e| {
-                ProviderError::NetworkConfiguration(format!("Failed to connect to {}: {}", url, e))
-            })
+        // Apply timeout to the connection attempt
+        let timeout_duration = std::time::Duration::from_secs(self.timeout_seconds);
+
+        match tokio::time::timeout(
+            timeout_duration,
+            OnlineClient::<PolkadotConfig>::from_url(url),
+        )
+        .await
+        {
+            Ok(Ok(client)) => Ok(client),
+            Ok(Err(e)) => Err(ProviderError::NetworkConfiguration(format!(
+                "Failed to connect to {}: {}",
+                url, e
+            ))),
+            Err(_) => Err(ProviderError::Timeout),
+        }
     }
 
     /// Helper method to retry RPC calls with exponential backoff
@@ -173,13 +223,6 @@ impl MidnightProvider {
         Fut: std::future::Future<Output = Result<T, ProviderError>>,
     {
         // Classify which errors should be retried
-
-        log::debug!(
-            "Starting RPC operation '{}' with timeout: {}s",
-            operation_name,
-            self.timeout_seconds
-        );
-
         retry_rpc_call(
             &self.selector,
             operation_name,
@@ -208,13 +251,23 @@ impl AsRef<MidnightProvider> for MidnightProvider {
 
 #[async_trait]
 impl MidnightProviderTrait for MidnightProvider {
-    async fn get_balance(&self, _address: &str) -> Result<U256, ProviderError> {
-        self.retry_rpc_call("get_balance", move |_api| async move {
-            // TODO: Implement balance query from wallet state by iterating coins after indexer sync
-            log::warn!("get_balance not yet implemented for Midnight provider");
-            Ok(U256::from(0))
-        })
-        .await
+    async fn get_balance(
+        &self,
+        seed: &WalletSeed,
+        context: &LedgerContext<DefaultDB>,
+    ) -> Result<U256, ProviderError> {
+        let wallet = context.wallet_from_seed(*seed);
+        let mut balance = 0u128;
+
+        for (_, qualified_coin_info) in wallet.state.coins.iter() {
+            let coin_info: midnight_node_ledger_helpers::CoinInfo = (&*qualified_coin_info).into();
+
+            if coin_info.type_ == NATIVE_TOKEN {
+                balance = balance.saturating_add(coin_info.value);
+            }
+        }
+
+        Ok(U256::from(balance))
     }
 
     async fn get_nonce(&self, _address: &str) -> Result<u64, ProviderError> {
@@ -252,7 +305,7 @@ impl MidnightProviderTrait for MidnightProvider {
 
                 let mn_tx = mn_meta::tx()
                     .midnight()
-                    .send_mn_transaction(hex::encode(serialized).into_bytes());
+                    .send_mn_transaction(hex::encode(&serialized).into_bytes());
 
                 let unsigned_extrinsic = api.tx().create_unsigned(&mn_tx).map_err(|e| {
                     ProviderError::Other(format!("Failed to create extrinsic: {}", e))
@@ -267,9 +320,7 @@ impl MidnightProviderTrait for MidnightProvider {
 
                 // Check if validation result indicates success
                 match validation_result {
-                    subxt::tx::ValidationResult::Valid(_) => {
-                        // Transaction is valid, proceed with submission
-                    }
+                    subxt::tx::ValidationResult::Valid(_) => {}
                     subxt::tx::ValidationResult::Invalid(e) => {
                         return Err(ProviderError::Other(format!(
                             "Transaction validation failed: {:?}",
@@ -284,12 +335,39 @@ impl MidnightProviderTrait for MidnightProvider {
                     }
                 }
 
-                let _tx_progress = unsigned_extrinsic.submit_and_watch().await.map_err(|e| {
-                    ProviderError::Other(format!("Failed to submit transaction: {}", e))
+                // Get the transaction hash from the midnight transaction
+                let tx_hash = tx_clone.transaction_hash();
+                // TransactionHash doesn't implement Display, but we can serialize it
+                // and convert to hex to get the proper format
+                let tx_hash_bytes = serialize(&tx_hash, network_id).map_err(|e| {
+                    ProviderError::Other(format!("Failed to serialize transaction hash: {:?}", e))
                 })?;
+                let pallet_tx_hash = format!("0x{}", hex::encode(tx_hash_bytes));
 
-                // TODO: Track and apply successful transaction to wallet state
-                Ok(tx_hash_string)
+                // Submit the transaction (returns immediately after acceptance)
+                let submit_result = unsigned_extrinsic.submit().await;
+
+                match submit_result {
+                    Ok(_extrinsic_hash) => {
+                        // Transaction was accepted, return immediately
+                        // The actual status monitoring will be handled by handle_transaction_status
+                        let result = TransactionSubmissionResult {
+                            extrinsic_tx_hash: tx_hash_string,
+                            pallet_tx_hash,
+                        };
+
+                        // Serialize to JSON string
+                        let json_result = serde_json::to_string(&result).map_err(|e| {
+                            ProviderError::Other(format!("Failed to serialize result: {}", e))
+                        })?;
+
+                        Ok(json_result)
+                    }
+                    Err(e) => Err(ProviderError::Other(format!(
+                        "Failed to submit transaction: {}",
+                        e
+                    ))),
+                }
             }
         })
         .await
@@ -299,6 +377,39 @@ impl MidnightProviderTrait for MidnightProvider {
         match self.get_block_number().await {
             Ok(_) => Ok(true),
             Err(e) => Err(e),
+        }
+    }
+
+    fn get_indexer_client(&self) -> &MidnightIndexerClient {
+        &self.indexer_client
+    }
+
+    async fn get_block_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError> {
+        match self.indexer_client.get_block_by_hash(hash).await {
+            Ok(Some(block)) => Ok(Some(block)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(ProviderError::Other(format!(
+                "Failed to get block by hash: {}",
+                e
+            ))),
+        }
+    }
+
+    /// Get transaction by hash
+    async fn get_transaction_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<serde_json::Value>, ProviderError> {
+        match self.indexer_client.get_transaction_by_hash(hash).await {
+            Ok(Some(tx)) => Ok(Some(tx)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(ProviderError::Other(format!(
+                "Failed to get transaction by hash: {}",
+                e
+            ))),
         }
     }
 }
@@ -382,12 +493,25 @@ mod tests {
 
         let provider = MidnightProvider::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
+            IndexerUrls {
+                http: "http://localhost:8545".to_string(),
+                ws: "ws://localhost:8545".to_string(),
+            },
+            NetworkId::TestNet,
             30,
         );
         assert!(provider.is_ok());
 
         // Test with invalid URL
-        let provider = MidnightProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
+        let provider = MidnightProvider::new(
+            vec![RpcConfig::new("invalid-url".to_string())],
+            IndexerUrls {
+                http: "http://localhost:8545".to_string(),
+                ws: "ws://localhost:8545".to_string(),
+            },
+            NetworkId::TestNet,
+            30,
+        );
         assert!(provider.is_err());
     }
 
@@ -398,22 +522,47 @@ mod tests {
         // Test with valid URL and timeout
         let provider = MidnightProvider::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
+            IndexerUrls {
+                http: "http://localhost:8545".to_string(),
+                ws: "ws://localhost:8545".to_string(),
+            },
+            NetworkId::TestNet,
             30,
         );
         assert!(provider.is_ok());
 
         // Test with invalid URL
-        let provider = MidnightProvider::new(vec![RpcConfig::new("invalid-url".to_string())], 30);
+        let provider = MidnightProvider::new(
+            vec![RpcConfig::new("invalid-url".to_string())],
+            IndexerUrls {
+                http: "http://localhost:8545".to_string(),
+                ws: "ws://localhost:8545".to_string(),
+            },
+            NetworkId::TestNet,
+            30,
+        );
         assert!(provider.is_err());
 
         // Test with zero timeout
-        let provider =
-            MidnightProvider::new(vec![RpcConfig::new("http://localhost:8545".to_string())], 0);
+        let provider = MidnightProvider::new(
+            vec![RpcConfig::new("http://localhost:8545".to_string())],
+            IndexerUrls {
+                http: "http://localhost:8545".to_string(),
+                ws: "ws://localhost:8545".to_string(),
+            },
+            NetworkId::TestNet,
+            0,
+        );
         assert!(provider.is_ok());
 
         // Test with large timeout
         let provider = MidnightProvider::new(
             vec![RpcConfig::new("http://localhost:8545".to_string())],
+            IndexerUrls {
+                http: "http://localhost:8545".to_string(),
+                ws: "ws://localhost:8545".to_string(),
+            },
+            NetworkId::TestNet,
             3600,
         );
         assert!(provider.is_ok());

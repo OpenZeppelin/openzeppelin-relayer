@@ -7,8 +7,8 @@ use crate::{
     models::{AppState, DefaultAppState},
     repositories::{
         InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
-        InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+        InMemorySignerRepository, InMemorySyncState, InMemoryTransactionCounter,
+        InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
 };
 use actix_web::web;
@@ -35,6 +35,7 @@ pub async fn initialize_app_state() -> Result<web::ThinData<DefaultAppState>> {
     let notification_repository = Arc::new(InMemoryNotificationRepository::new());
     let network_repository = Arc::new(InMemoryNetworkRepository::new());
     let transaction_counter_store = Arc::new(InMemoryTransactionCounter::new());
+    let sync_state_store = Arc::new(InMemorySyncState::new());
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
 
@@ -45,6 +46,7 @@ pub async fn initialize_app_state() -> Result<web::ThinData<DefaultAppState>> {
         notification_repository,
         network_repository,
         transaction_counter_store,
+        sync_state_store,
         job_producer,
     });
 
