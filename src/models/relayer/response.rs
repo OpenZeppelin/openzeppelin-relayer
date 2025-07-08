@@ -41,6 +41,15 @@ pub enum RelayerStatus {
         paused: bool,
         sequence_number: String,
     },
+    #[serde(rename = "midnight")]
+    Midnight {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        nonce: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -49,6 +58,7 @@ pub enum NetworkPolicyResponse {
     Evm(EvmPolicyResponse),
     Solana(SolanaPolicyResponse),
     Stellar(StellarPolicyResponse),
+    Midnight(MidnightPolicyResponse),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -104,6 +114,11 @@ pub struct StellarPolicyResponse {
     pub min_balance: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MidnightPolicyResponse {
+    pub min_balance: u64,
+}
+
 impl From<RelayerRepoModel> for RelayerResponse {
     fn from(model: RelayerRepoModel) -> Self {
         let policies = match model.policies {
@@ -133,6 +148,11 @@ impl From<RelayerRepoModel> for RelayerResponse {
                 NetworkPolicyResponse::Stellar(StellarPolicyResponse {
                     max_fee: stellar.max_fee,
                     min_balance: stellar.min_balance,
+                })
+            }
+            RelayerNetworkPolicy::Midnight(midnight) => {
+                NetworkPolicyResponse::Midnight(MidnightPolicyResponse {
+                    min_balance: midnight.min_balance,
                 })
             }
         };

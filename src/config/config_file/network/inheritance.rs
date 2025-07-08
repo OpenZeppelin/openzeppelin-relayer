@@ -18,8 +18,8 @@
 //! 3. **Merging**: Combine child with resolved parent configuration
 
 use super::{
-    ConfigFileNetworkType, EvmNetworkConfig, NetworkFileConfig, SolanaNetworkConfig,
-    StellarNetworkConfig,
+    ConfigFileNetworkType, EvmNetworkConfig, MidnightNetworkConfig, NetworkFileConfig,
+    SolanaNetworkConfig, StellarNetworkConfig,
 };
 use crate::config::ConfigFileError;
 
@@ -108,6 +108,13 @@ impl<'a> InheritanceResolver<'a> {
         Stellar,
         Stellar,
         "Stellar"
+    );
+    impl_inheritance_resolver!(
+        resolve_midnight_inheritance,
+        MidnightNetworkConfig,
+        Midnight,
+        Midnight,
+        "Midnight"
     );
 }
 

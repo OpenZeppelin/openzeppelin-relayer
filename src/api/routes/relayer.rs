@@ -191,8 +191,8 @@ mod tests {
         jobs::{JobProducer, Queue},
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryRelayerRepository,
-            InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-            RelayerRepositoryStorage,
+            InMemorySignerRepository, InMemorySyncState, InMemoryTransactionCounter,
+            InMemoryTransactionRepository, RelayerRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -209,6 +209,7 @@ mod tests {
             notification_repository: Arc::new(InMemoryNotificationRepository::new()),
             network_repository: Arc::new(InMemoryNetworkRepository::new()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
+            sync_state_store: Arc::new(InMemorySyncState::new()),
             job_producer: Arc::new(JobProducer::new(Queue::setup().await.unwrap())),
         }
     }

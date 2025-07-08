@@ -1,5 +1,8 @@
 use std::fmt;
 
+mod midnight;
+pub use midnight::*;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum Address {
@@ -9,6 +12,8 @@ pub enum Address {
     Stellar(String),
     /// Solana address (Base58-encoded string)
     Solana(String),
+    /// Midnight address (bech32m-encoded string with type and network)
+    Midnight(String),
 }
 
 impl fmt::Display for Address {
@@ -17,6 +22,7 @@ impl fmt::Display for Address {
             Address::Evm(addr) => write!(f, "0x{}", hex::encode(addr)),
             Address::Stellar(addr) => write!(f, "{}", addr),
             Address::Solana(addr) => write!(f, "{}", addr),
+            Address::Midnight(addr) => write!(f, "{}", addr),
         }
     }
 }
@@ -33,6 +39,9 @@ impl Address {
             Address::Solana(addr) => {
                 addr.len() <= 44 && addr.chars().all(|c| c.is_ascii_alphanumeric())
             }
+            Address::Midnight(addr) => {
+                addr.len() <= 56 && addr.chars().all(|c| c.is_ascii_alphanumeric())
+            }
         }
     }
 }
@@ -40,6 +49,8 @@ impl Address {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::address::midnight::MidnightAddress;
+    use midnight_node_ledger_helpers::NetworkId;
 
     #[test]
     fn test_evm_address_display() {
@@ -50,6 +61,18 @@ mod tests {
         assert_eq!(
             address.to_string(),
             "0xc834dcdc9a074dbbadcc71584789ae4b463db116"
+        );
+    }
+
+    #[test]
+    fn test_midnight_address_display() {
+        let seed = "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c";
+        let midnight_addr =
+            MidnightAddress::from_seed(seed.to_string(), NetworkId::TestNet).encode();
+        let address = Address::Midnight(midnight_addr);
+        assert_eq!(
+            address.to_string(),
+            "mn_shield-addr_test1quc5snkchyepu6rpn5sn85cmnjfk2kzynwtf3lapt9t8q0qlw97sxqypw479uxdvf48386urhyndrty9vmpkjlydmdcur78rr3lw345kg5r4fgc2"
         );
     }
 }

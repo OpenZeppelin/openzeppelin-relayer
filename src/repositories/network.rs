@@ -165,7 +165,8 @@ impl NetworkRepository for InMemoryNetworkRepository {
 mod tests {
     use super::*;
     use crate::config::{
-        EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
+        network::IndexerUrls, EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon,
+        SolanaNetworkConfig, StellarNetworkConfig,
     };
 
     fn create_test_network(name: String, network_type: NetworkType) -> NetworkRepoModel {
@@ -200,6 +201,18 @@ mod tests {
                     passphrase: None,
                 };
                 NetworkRepoModel::new_stellar(stellar_config)
+            }
+            NetworkType::Midnight => {
+                let midnight_config = MidnightNetworkConfig {
+                    common,
+                    indexer_urls: IndexerUrls {
+                        http: "https://indexer.midnight.network".to_string(),
+                        ws: "wss://indexer.midnight.network".to_string(),
+                    },
+                    prover_url: "http://localhost:6300".to_string(),
+                    commitment_tree_ttl: None,
+                };
+                NetworkRepoModel::new_midnight(midnight_config)
             }
         }
     }
