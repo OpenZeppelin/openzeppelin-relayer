@@ -6,7 +6,7 @@ use crate::{
     jobs::JobProducerTrait,
     models::{
         AppState, NetworkRepoModel, NotificationRepoModel, PluginCallRequest, RelayerRepoModel,
-        SignerRepoModel, TransactionRepoModel,
+        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -80,6 +80,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     async fn call_plugin<
         J: JobProducerTrait + 'static,
         TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -93,7 +94,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         &self,
         script_path: String,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
         let resolved_script_path = Self::resolve_plugin_path(&script_path);

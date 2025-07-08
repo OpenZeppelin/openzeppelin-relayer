@@ -48,16 +48,15 @@
 //! 6. The server closes the socket connection.
 //!
 
+use crate::jobs::JobProducerTrait;
 use crate::models::{
-    NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
+    NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
     TransactionRepoModel,
 };
 use crate::repositories::{
     NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
     TransactionCounterTrait, TransactionRepository,
 };
-use crate::{jobs::JobProducerTrait, models::AppState};
-use actix_web::web;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -107,6 +106,7 @@ impl SocketService {
     /// # Returns
     ///
     /// A vector of traces.
+    #[allow(clippy::type_complexity)]
     pub async fn listen<
         RA: RelayerApiTrait<J, TR, RR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
         J: JobProducerTrait + 'static,
@@ -120,7 +120,7 @@ impl SocketService {
     >(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError> {
         let mut shutdown = shutdown_rx;
@@ -162,6 +162,7 @@ impl SocketService {
     /// # Returns
     ///
     /// A vector of traces.
+    #[allow(clippy::type_complexity)]
     async fn handle_connection<
         RA: RelayerApiTrait<J, TR, RR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
         J: JobProducerTrait + 'static,
@@ -174,7 +175,7 @@ impl SocketService {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         stream: UnixStream,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError> {
         let (r, mut w) = stream.into_split();
@@ -204,12 +205,12 @@ impl SocketService {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use crate::{
         services::plugins::{MockRelayerApiTrait, PluginMethod, Response},
         utils::mocks::mockutils::{create_mock_app_state, create_mock_evm_transaction_request},
     };
+    use actix_web::web;
+    use std::time::Duration;
 
     use super::*;
 

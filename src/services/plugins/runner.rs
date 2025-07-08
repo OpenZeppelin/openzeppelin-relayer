@@ -12,8 +12,8 @@ use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketS
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        AppState, NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
-        TransactionRepoModel,
+        NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
+        ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -22,7 +22,6 @@ use crate::{
 };
 
 use super::PluginError;
-use actix_web::web;
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
@@ -32,6 +31,7 @@ use mockall::automock;
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait PluginRunnerTrait {
+    #[allow(clippy::type_complexity)]
     async fn run<
         J: JobProducerTrait + 'static,
         TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -46,13 +46,14 @@ pub trait PluginRunnerTrait {
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<ScriptResult, PluginError>;
 }
 
 #[derive(Default)]
 pub struct PluginRunner;
 
+#[allow(clippy::type_complexity)]
 impl PluginRunner {
     async fn run<
         J: JobProducerTrait + 'static,
@@ -68,7 +69,7 @@ impl PluginRunner {
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<ScriptResult, PluginError> {
         let socket_service = SocketService::new(socket_path)?;
         let socket_path_clone = socket_service.socket_path().to_string();
@@ -119,7 +120,7 @@ impl PluginRunnerTrait for PluginRunner {
         socket_path: &str,
         script_path: String,
         script_params: String,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<ScriptResult, PluginError> {
         self.run(socket_path, script_path, script_params, state)
             .await
@@ -128,6 +129,7 @@ impl PluginRunnerTrait for PluginRunner {
 
 #[cfg(test)]
 mod tests {
+    use actix_web::web;
     use std::fs;
 
     use crate::{

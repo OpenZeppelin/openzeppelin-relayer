@@ -6,10 +6,10 @@ use crate::{
     config::{Config, SignerFileConfig, SignerFileConfigEnum},
     jobs::JobProducerTrait,
     models::{
-        AppState, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+        AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
         GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, NetworkRepoModel,
         NotificationRepoModel, PluginModel, RelayerRepoModel, SignerConfig, SignerRepoModel,
-        TransactionRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
+        ThinDataAppState, TransactionRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -18,7 +18,6 @@ use crate::{
     services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
     utils::unsafe_generate_random_private_key,
 };
-use actix_web::web::ThinData;
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use oz_keystore::{HashicorpCloudClient, LocalClient};
@@ -37,7 +36,7 @@ async fn process_plugins<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     config_file: &Config,
-    app_state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()> {
     if let Some(plugins) = &config_file.plugins {
         let plugin_futures = plugins.iter().map(|plugin| async {
@@ -252,7 +251,7 @@ async fn process_signers<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     config_file: &Config,
-    app_state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()> {
     let signer_futures = config_file.signers.iter().map(|signer| async {
         let signer_repo_model = process_signer(signer).await?;
@@ -289,7 +288,7 @@ async fn process_notifications<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     config_file: &Config,
-    app_state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()> {
     let notification_futures = config_file.notifications.iter().map(|notification| async {
         let notification_repo_model = NotificationRepoModel::try_from(notification.clone())
@@ -327,7 +326,7 @@ async fn process_networks<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     config_file: &Config,
-    app_state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()> {
     let network_futures = config_file.networks.iter().map(|network| async move {
         let network_repo_model = NetworkRepoModel::try_from(network.clone())?;
@@ -367,7 +366,7 @@ async fn process_relayers<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     config_file: &Config,
-    app_state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()> {
     let signers = app_state.signer_repository.list_all().await?;
 
@@ -418,7 +417,7 @@ pub async fn process_config_file<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     config_file: Config,
-    app_state: ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()> {
     process_plugins(&config_file, &app_state).await?;
     process_signers(&config_file, &app_state).await?;
@@ -439,7 +438,7 @@ mod tests {
             VaultTransitSignerFileConfig,
         },
         jobs::MockJobProducerTrait,
-        models::{NetworkType, PlainOrEnvValue, SecretString},
+        models::{AppState, NetworkType, PlainOrEnvValue, SecretString},
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -448,6 +447,7 @@ mod tests {
             TransactionRepositoryStorage,
         },
     };
+    use actix_web::web::ThinData;
     use serde_json::json;
     use std::sync::Arc;
     use wiremock::matchers::{body_json, header, method, path};

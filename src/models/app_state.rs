@@ -3,7 +3,7 @@
 //! The `AppState` provides methods to access these components in a thread-safe manner.
 use std::sync::Arc;
 
-use actix_web::web;
+use actix_web::web::ThinData;
 
 use crate::{
     jobs::{JobProducer, JobProducerTrait},
@@ -51,8 +51,9 @@ pub struct AppState<
     pub plugin_repository: Arc<PR>,
 }
 
-pub type AppStateRef<J, RR, TR, NR, NFR, SR, TCR, PR> =
-    Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>;
+/// type alias for the app state wrapped in a ThinData to avoid clippy warnings
+pub type ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR> =
+    ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>;
 
 pub type DefaultAppState = AppState<
     JobProducer,

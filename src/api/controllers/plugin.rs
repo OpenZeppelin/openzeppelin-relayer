@@ -5,8 +5,8 @@
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        ApiError, ApiResponse, AppState, NetworkRepoModel, NotificationRepoModel,
-        PluginCallRequest, RelayerRepoModel, SignerRepoModel, TransactionRepoModel,
+        ApiError, ApiResponse, NetworkRepoModel, NotificationRepoModel, PluginCallRequest,
+        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -14,7 +14,7 @@ use crate::{
     },
     services::plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
 };
-use actix_web::{web, HttpResponse};
+use actix_web::HttpResponse;
 use eyre::Result;
 use std::sync::Arc;
 
@@ -41,7 +41,7 @@ pub async fn call_plugin<
 >(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
-    state: web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<HttpResponse, ApiError> {
     let plugin = state
         .plugin_repository
@@ -65,6 +65,7 @@ pub async fn call_plugin<
 mod tests {
     use super::*;
     use crate::{models::PluginModel, utils::mocks::mockutils::create_mock_app_state};
+    use actix_web::web;
 
     #[actix_web::test]
     async fn test_call_plugin() {

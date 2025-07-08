@@ -6,15 +6,15 @@
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
 use crate::domain::{get_network_relayer, get_relayer_by_id, Relayer};
+use crate::jobs::JobProducerTrait;
 use crate::models::{
-    NetworkRepoModel, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
-    SignerRepoModel, TransactionRepoModel, TransactionResponse,
+    AppState, NetworkRepoModel, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
+    SignerRepoModel, ThinDataAppState, TransactionRepoModel, TransactionResponse,
 };
 use crate::repositories::{
     NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
     TransactionCounterTrait, TransactionRepository,
 };
-use crate::{jobs::JobProducerTrait, models::AppState};
 use actix_web::web;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,7 @@ impl RelayerApi {
     >(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
     ) -> Response {
         match self.process_request(request.clone(), state).await {
             Ok(response) => response,
@@ -119,7 +119,7 @@ impl RelayerApi {
     >(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
     ) -> Result<Response, PluginError> {
         match request.method {
             PluginMethod::SendTransaction => self.handle_send_transaction(request, state).await,
@@ -138,7 +138,7 @@ impl RelayerApi {
     >(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
     ) -> Result<Response, PluginError> {
         let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
             .await
@@ -194,7 +194,7 @@ impl<
     async fn handle_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
     ) -> Response {
         self.handle_request(request, state).await
     }
@@ -202,7 +202,7 @@ impl<
     async fn process_request(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
     ) -> Result<Response, PluginError> {
         self.process_request(request, state).await
     }
@@ -210,7 +210,7 @@ impl<
     async fn handle_send_transaction(
         &self,
         request: Request,
-        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
     ) -> Result<Response, PluginError> {
         self.handle_send_transaction(request, state).await
     }

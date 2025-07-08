@@ -11,14 +11,12 @@
 ///
 /// These utilities are essential for the application's relayer management and
 /// interaction with the underlying repositories and factories.
-use actix_web::web::ThinData;
-
 use crate::{
     domain::{RelayerFactory, RelayerFactoryTrait},
     jobs::JobProducerTrait,
     models::{
-        ApiError, AppState, NetworkRepoModel, NotificationRepoModel, RelayerError,
-        RelayerRepoModel, SignerRepoModel, TransactionRepoModel,
+        ApiError, NetworkRepoModel, NotificationRepoModel, RelayerError, RelayerRepoModel,
+        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -50,7 +48,7 @@ pub async fn get_relayer_by_id<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     relayer_id: String,
-    state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<RelayerRepoModel, ApiError> {
     state
         .relayer_repository
@@ -81,7 +79,7 @@ pub async fn get_network_relayer<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     relayer_id: String,
-    state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, ApiError> {
     let relayer_model = get_relayer_by_id(relayer_id.clone(), state).await?;
     let signer_model = state
@@ -116,7 +114,7 @@ pub async fn get_network_relayer_by_model<
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 >(
     relayer_model: RelayerRepoModel,
-    state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, ApiError> {
     let signer_model = state
         .signer_repository
