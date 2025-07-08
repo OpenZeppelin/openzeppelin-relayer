@@ -1,0 +1,21 @@
+{
+  "networks": [
+    {
+      "type": "midnight",
+      "network": "testnet",
+      "rpc_urls": [
+        "wss://rpc.testnet-02.midnight.network/"
+      ],
+      "explorer_urls": [
+        "https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.testnet-02.midnight.network#/explorer"
+      ],
+      "indexer_urls": {
+        "ws": "wss://indexer.testnet-02.midnight.network/api/v1/graphql/ws",
+        "http": "https://indexer.testnet-02.midnight.network/api/v1/graphql"
+      },
+      "prover_url": "http://localhost:6300",
+      "average_blocktime_ms": 6000,
+      "is_testnet": true
+    }
+  ]
+}

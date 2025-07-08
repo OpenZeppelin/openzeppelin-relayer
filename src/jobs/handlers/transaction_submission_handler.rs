@@ -8,7 +8,6 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use log::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
@@ -22,8 +21,6 @@ pub async fn transaction_submission_handler(
     state: Data<ThinData<AppState<JobProducer>>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
-    info!("handling transaction submission: {:?}", job.data);
-
     let result = handle_request(job.data, state).await;
 
     handle_result(
@@ -41,29 +38,24 @@ async fn handle_request(
     let relayer_transaction =
         get_relayer_transaction(status_request.relayer_id.clone(), &state).await?;
 
-    let transaction = get_transaction_by_id(status_request.transaction_id, &state).await?;
+    let transaction = get_transaction_by_id(status_request.transaction_id.clone(), &state).await?;
 
     match status_request.command {
         TransactionCommand::Submit => {
             relayer_transaction.submit_transaction(transaction).await?;
         }
-        TransactionCommand::Cancel { reason } => {
-            info!("Cancelling transaction: {:?}", reason);
+        TransactionCommand::Cancel { reason: _ } => {
             relayer_transaction.submit_transaction(transaction).await?;
         }
         TransactionCommand::Resubmit => {
-            info!("Resubmitting transaction with updated parameters");
             relayer_transaction
                 .resubmit_transaction(transaction)
                 .await?;
         }
         TransactionCommand::Resend => {
-            info!("Resending transaction");
             relayer_transaction.submit_transaction(transaction).await?;
         }
     };
-
-    info!("Transaction handled successfully");
 
     Ok(())
 }

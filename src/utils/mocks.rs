@@ -17,9 +17,9 @@ pub mod mockutils {
         },
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, PluginRepositoryTrait, RelayerRepositoryStorage,
-            Repository,
+            InMemoryRelayerRepository, InMemorySignerRepository, InMemorySyncState,
+            InMemoryTransactionCounter, InMemoryTransactionRepository, PluginRepositoryTrait,
+            RelayerRepositoryStorage, Repository,
         },
     };
 
@@ -171,6 +171,7 @@ pub mod mockutils {
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
+            sync_state_store: Arc::new(InMemorySyncState::default()),
         }
     }
 

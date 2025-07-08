@@ -193,8 +193,9 @@ mod tests {
         jobs::MockJobProducerTrait,
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage, Repository,
+            InMemoryRelayerRepository, InMemorySignerRepository, InMemorySyncState,
+            InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+            Repository,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -304,6 +305,7 @@ mod tests {
             notification_repository: Arc::new(InMemoryNotificationRepository::new()),
             network_repository: network_repo,
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
+            sync_state_store: Arc::new(InMemorySyncState::new()),
             job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }

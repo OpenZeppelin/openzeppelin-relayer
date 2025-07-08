@@ -5,7 +5,8 @@ use utoipa::ToSchema;
 use crate::{
     constants::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_EVM_MIN_BALANCE,
-        DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE, MAX_SOLANA_TX_DATA_SIZE,
+        DEFAULT_MIDNIGHT_MIN_BALANCE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
+        MAX_SOLANA_TX_DATA_SIZE,
     },
     models::RelayerError,
 };
@@ -18,6 +19,7 @@ pub enum NetworkType {
     Evm,
     Stellar,
     Solana,
+    Midnight,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -25,6 +27,7 @@ pub enum RelayerNetworkPolicy {
     Evm(RelayerEvmPolicy),
     Solana(RelayerSolanaPolicy),
     Stellar(RelayerStellarPolicy),
+    Midnight(RelayerMidnightPolicy),
 }
 
 impl RelayerNetworkPolicy {
@@ -46,6 +49,13 @@ impl RelayerNetworkPolicy {
         match self {
             Self::Stellar(policy) => policy.clone(),
             _ => RelayerStellarPolicy::default(),
+        }
+    }
+
+    pub fn get_midnight_policy(&self) -> RelayerMidnightPolicy {
+        match self {
+            Self::Midnight(policy) => policy.clone(),
+            _ => RelayerMidnightPolicy::default(),
         }
     }
 }
@@ -276,6 +286,20 @@ impl Default for RelayerStellarPolicy {
             max_fee: None,
             timeout_seconds: None,
             min_balance: DEFAULT_STELLAR_MIN_BALANCE,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct RelayerMidnightPolicy {
+    pub min_balance: u64,
+}
+
+impl Default for RelayerMidnightPolicy {
+    fn default() -> Self {
+        Self {
+            min_balance: DEFAULT_MIDNIGHT_MIN_BALANCE,
         }
     }
 }

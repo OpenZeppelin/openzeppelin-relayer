@@ -7,7 +7,6 @@
 [![CI](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/ci.yaml)
 [![Release Workflow](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml/badge.svg)](https://github.com/OpenZeppelin/openzeppelin-relayer/actions/workflows/release-please.yml)
 
-
 > :warning: This software is in alpha. Use in production environments at your own risk.
 
 This relayer service enables interaction with blockchain networks through transaction submissions. It offers multi-chain support and an extensible architecture for adding new chains.
@@ -35,6 +34,7 @@ This relayer service enables interaction with blockchain networks through transa
 - Solana
 - EVM
 - Stellar
+- Midnight (🚧 Partial support)
 
 > For details about current development status and upcoming features, check our [Project Roadmap](https://docs.openzeppelin.com/relayer/roadmap).
 
@@ -52,17 +52,16 @@ View the [Usage](https://docs.openzeppelin.com/relayer#running_the_relayer) docu
 
 The repository includes several ready-to-use examples to help you get started with different configurations:
 
-| Example                                                      | Description                               |
-| ------------------------------------------------------------ | ----------------------------------------- |
-| [`basic-example`](./examples/basic-example/)                 | Simple setup with Redis                   |
-| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging     |
-| [`basic-example-metrics`](./examples/basic-example-metrics/) | Setup with Prometheus and Grafana metrics |
-| [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management |
-| [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing |
-| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/) | Using Turnkey Signer for EVM secure signing |
-| [`solana-turnkey-signer`](./examples/solana-turnkey-signer/) | Using Turnkey Signer for Solana secure signing |
+| Example                                                                        | Description                                             |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| [`basic-example`](./examples/basic-example/)                                   | Simple setup with Redis                                 |
+| [`basic-example-logging`](./examples/basic-example-logging/)                   | Configuration with file-based logging                   |
+| [`basic-example-metrics`](./examples/basic-example-metrics/)                   | Setup with Prometheus and Grafana metrics               |
+| [`vault-secret-signer`](./examples/vault-secret-signer/)                       | Using HashiCorp Vault for key management                |
+| [`vault-transit-signer`](./examples/vault-transit-signer/)                     | Using Vault Transit for secure signing                  |
+| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                         | Using Turnkey Signer for EVM secure signing             |
+| [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                   | Using Turnkey Signer for Solana secure signing          |
 | [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/) | Using Google Cloud KMS Signer for Solana secure signing |
-
 
 Each example includes:
 

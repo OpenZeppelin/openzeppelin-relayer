@@ -1,6 +1,6 @@
 //! Network Configuration Module
 //!
-//! This module provides network configuration support for EVM, Solana, and Stellar networks
+//! This module provides network configuration support for EVM, Solana, Midnight, and Stellar networks
 //! with inheritance, validation, and flexible loading mechanisms.
 //!
 //! ## Key Features
@@ -23,8 +23,10 @@ pub mod common;
 pub mod evm;
 pub mod file_loading;
 pub mod inheritance;
+pub mod midnight;
 pub mod solana;
 pub mod stellar;
+
 #[cfg(test)]
 pub mod test_utils;
 
@@ -33,6 +35,7 @@ pub use common::*;
 pub use evm::*;
 pub use file_loading::*;
 pub use inheritance::*;
+pub use midnight::*;
 pub use solana::*;
 pub use stellar::*;
 
@@ -52,6 +55,8 @@ pub enum NetworkFileConfig {
     Solana(SolanaNetworkConfig),
     /// Configuration for a Stellar network.
     Stellar(StellarNetworkConfig),
+    /// Configuration for a Midnight network.
+    Midnight(MidnightNetworkConfig),
 }
 
 impl NetworkFileConfig {
@@ -65,6 +70,7 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => network.validate(),
             NetworkFileConfig::Solana(network) => network.validate(),
             NetworkFileConfig::Stellar(network) => network.validate(),
+            NetworkFileConfig::Midnight(network) => network.validate(),
         }
     }
 
@@ -77,6 +83,7 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => &network.common.network,
             NetworkFileConfig::Solana(network) => &network.common.network,
             NetworkFileConfig::Stellar(network) => &network.common.network,
+            NetworkFileConfig::Midnight(network) => &network.common.network,
         }
     }
 
@@ -89,6 +96,7 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(_) => ConfigFileNetworkType::Evm,
             NetworkFileConfig::Solana(_) => ConfigFileNetworkType::Solana,
             NetworkFileConfig::Stellar(_) => ConfigFileNetworkType::Stellar,
+            NetworkFileConfig::Midnight(_) => ConfigFileNetworkType::Midnight,
         }
     }
 
@@ -102,6 +110,7 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => network.common.is_testnet.unwrap_or(false),
             NetworkFileConfig::Solana(network) => network.common.is_testnet.unwrap_or(false),
             NetworkFileConfig::Stellar(network) => network.common.is_testnet.unwrap_or(false),
+            NetworkFileConfig::Midnight(network) => network.common.is_testnet.unwrap_or(false),
         }
     }
 
@@ -115,6 +124,7 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => network.common.from.as_deref(),
             NetworkFileConfig::Solana(network) => network.common.from.as_deref(),
             NetworkFileConfig::Stellar(network) => network.common.from.as_deref(),
+            NetworkFileConfig::Midnight(network) => network.common.from.as_deref(),
         }
     }
 }
@@ -141,6 +151,13 @@ mod tests {
     #[test]
     fn test_validate_stellar_network_success() {
         let config = create_stellar_network_wrapped("test-stellar");
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_midnight_network_success() {
+        let config = create_midnight_network_wrapped("testnet");
         let result = config.validate();
         assert!(result.is_ok());
     }
@@ -180,6 +197,21 @@ mod tests {
         let mut config = create_stellar_network_wrapped("test-stellar");
         if let NetworkFileConfig::Stellar(ref mut stellar_config) = config {
             stellar_config.common.network = "".to_string(); // Invalid empty network name
+        }
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::MissingField(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_midnight_network_failure() {
+        let mut config = create_midnight_network_wrapped("test-midnight");
+        if let NetworkFileConfig::Midnight(ref mut midnight_config) = config {
+            midnight_config.common.network = "".to_string(); // Invalid empty network name
         }
 
         let result = config.validate();
@@ -255,6 +287,12 @@ mod tests {
     }
 
     #[test]
+    fn test_network_name_midnight() {
+        let config = create_midnight_network_wrapped("test-midnight");
+        assert_eq!(config.network_name(), "test-midnight");
+    }
+
+    #[test]
     fn test_network_name_with_unicode() {
         let mut config = create_evm_network_wrapped("test-evm");
         if let NetworkFileConfig::Evm(ref mut evm_config) = config {
@@ -300,10 +338,17 @@ mod tests {
     }
 
     #[test]
+    fn test_network_type_midnight() {
+        let config = create_midnight_network_wrapped("test-midnight");
+        assert_eq!(config.network_type(), ConfigFileNetworkType::Midnight);
+    }
+
+    #[test]
     fn test_network_type_consistency() {
         let evm_config = create_evm_network_wrapped("test-evm");
         let solana_config = create_solana_network_wrapped("test-solana");
         let stellar_config = create_stellar_network_wrapped("test-stellar");
+        let midnight_config = create_midnight_network_wrapped("test-midnight");
 
         // Ensure each type returns the correct enum variant
         assert!(matches!(
@@ -317,6 +362,10 @@ mod tests {
         assert!(matches!(
             stellar_config.network_type(),
             ConfigFileNetworkType::Stellar
+        ));
+        assert!(matches!(
+            midnight_config.network_type(),
+            ConfigFileNetworkType::Midnight
         ));
     }
 
@@ -348,6 +397,15 @@ mod tests {
             stellar_config.common.from = Some("parent-stellar".to_string());
         }
         assert_eq!(config.inherits_from(), Some("parent-stellar"));
+    }
+
+    #[test]
+    fn test_inherits_from_some_midnight() {
+        let mut config = create_midnight_network_wrapped("test-midnight");
+        if let NetworkFileConfig::Midnight(ref mut midnight_config) = config {
+            midnight_config.common.from = Some("parent-midnight".to_string());
+        }
+        assert_eq!(config.inherits_from(), Some("parent-midnight"));
     }
 
     #[test]
@@ -402,6 +460,17 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_deserialize_midnight() {
+        let original = create_midnight_network_wrapped("test-midnight");
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: NetworkFileConfig = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(original.network_name(), deserialized.network_name());
+        assert_eq!(original.network_type(), deserialized.network_type());
+        assert_eq!(original.inherits_from(), deserialized.inherits_from());
+    }
+
+    #[test]
     fn test_deserialize_evm_from_json() {
         let json = r#"{
             "type": "evm",
@@ -443,6 +512,21 @@ mod tests {
         let config: NetworkFileConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.network_name(), "test-stellar-json");
         assert_eq!(config.network_type(), ConfigFileNetworkType::Stellar);
+        assert_eq!(config.inherits_from(), None);
+    }
+
+    #[test]
+    fn test_deserialize_midnight_from_json() {
+        let json = r#"{
+            "type": "midnight",
+            "network": "test-midnight-json",
+			"indexer_urls": {"http": "https://rpc.example.com", "ws": "wss://rpc.example.com"},
+			"prover_url": "http://localhost:6300"
+        }"#;
+
+        let config: NetworkFileConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.network_name(), "test-midnight-json");
+        assert_eq!(config.network_type(), ConfigFileNetworkType::Midnight);
         assert_eq!(config.inherits_from(), None);
     }
 
@@ -501,12 +585,14 @@ mod tests {
             create_evm_network_wrapped("test-evm"),
             create_solana_network_wrapped("test-solana"),
             create_stellar_network_wrapped("test-stellar"),
+            create_midnight_network_wrapped("test-midnight"),
         ];
 
         let types: Vec<ConfigFileNetworkType> = configs.iter().map(|c| c.network_type()).collect();
         assert!(types.contains(&ConfigFileNetworkType::Evm));
         assert!(types.contains(&ConfigFileNetworkType::Solana));
         assert!(types.contains(&ConfigFileNetworkType::Stellar));
+        assert!(types.contains(&ConfigFileNetworkType::Midnight));
     }
 
     #[test]
@@ -515,13 +601,15 @@ mod tests {
             create_evm_network_wrapped("test-evm"),
             create_solana_network_wrapped("test-solana"),
             create_stellar_network_wrapped("test-stellar"),
+            create_midnight_network_wrapped("test-midnight"),
         ];
 
         let names: Vec<&str> = configs.iter().map(|c| c.network_name()).collect();
-        assert_eq!(names.len(), 3);
+        assert_eq!(names.len(), 4);
         assert!(names.contains(&"test-evm"));
         assert!(names.contains(&"test-solana"));
         assert!(names.contains(&"test-stellar"));
+        assert!(names.contains(&"test-midnight"));
     }
 
     #[test]
@@ -594,6 +682,7 @@ mod tests {
             create_evm_network_wrapped("test-evm"),
             create_solana_network_wrapped("test-solana"),
             create_stellar_network_wrapped("test-stellar"),
+            create_midnight_network_wrapped("testnet"),
         ];
 
         // Ensure all methods work consistently across all network types
@@ -608,6 +697,7 @@ mod tests {
                 ConfigFileNetworkType::Evm
                     | ConfigFileNetworkType::Solana
                     | ConfigFileNetworkType::Stellar
+                    | ConfigFileNetworkType::Midnight
             ));
 
             // All should validate successfully

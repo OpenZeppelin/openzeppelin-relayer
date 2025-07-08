@@ -7,8 +7,8 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait},
     repositories::{
         InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-        InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        InMemoryRelayerRepository, InMemorySignerRepository, InMemorySyncState,
+        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
     },
 };
 
@@ -28,6 +28,8 @@ pub struct AppState<J: JobProducerTrait> {
     pub network_repository: Arc<InMemoryNetworkRepository>,
     /// Store for managing transaction counters.
     pub transaction_counter_store: Arc<InMemoryTransactionCounter>,
+    /// Store for managing sync state.
+    pub sync_state_store: Arc<InMemorySyncState>,
     /// Producer for managing job creation and execution.
     pub job_producer: Arc<J>,
     /// Repository for managing plugins.
@@ -91,6 +93,15 @@ impl<J: JobProducerTrait> AppState<J> {
         Arc::clone(&self.transaction_counter_store)
     }
 
+    /// Returns a clone of the sync state store.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc` pointing to the `InMemorySyncState`.
+    pub fn sync_state_store(&self) -> Arc<InMemorySyncState> {
+        Arc::clone(&self.sync_state_store)
+    }
+
     /// Returns a clone of the job producer.
     ///
     /// # Returns
@@ -147,6 +158,7 @@ mod tests {
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
             network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
+            sync_state_store: Arc::new(InMemorySyncState::default()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(InMemoryPluginRepository::new()),
         }

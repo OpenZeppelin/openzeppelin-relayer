@@ -331,9 +331,10 @@ async fn process_relayers<J: JobProducerTrait>(
             .find(|s| s.id == repo_model.signer_id)
             .ok_or_else(|| eyre::eyre!("Signer not found"))?;
         let network_type = repo_model.network_type;
-        let signer_service = SignerFactory::create_signer(&network_type, signer_model)
-            .await
-            .wrap_err("Failed to create signer service")?;
+        let signer_service =
+            SignerFactory::create_signer(&network_type, signer_model, &repo_model.network)
+                .await
+                .map_err(|e| eyre::eyre!("Failed to create signer service: {}", e))?;
 
         let address = signer_service.address().await?;
         repo_model.address = address.to_string();
@@ -386,8 +387,8 @@ mod tests {
         models::{NetworkType, PlainOrEnvValue, SecretString},
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage,
+            InMemoryRelayerRepository, InMemorySignerRepository, InMemorySyncState,
+            InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
         },
     };
     use serde_json::json;
@@ -425,6 +426,7 @@ mod tests {
             notification_repository: Arc::new(InMemoryNotificationRepository::default()),
             network_repository: Arc::new(InMemoryNetworkRepository::default()),
             transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
+            sync_state_store: Arc::new(InMemorySyncState::default()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(InMemoryPluginRepository::default()),
         }
@@ -1111,6 +1113,7 @@ mod tests {
         let network_repo = Arc::new(InMemoryNetworkRepository::default());
         let transaction_repo = Arc::new(InMemoryTransactionRepository::default());
         let transaction_counter = Arc::new(InMemoryTransactionCounter::default());
+        let sync_state_store = Arc::new(InMemorySyncState::default());
         let plugin_repo = Arc::new(InMemoryPluginRepository::default());
 
         // Create a mock job producer
@@ -1137,6 +1140,7 @@ mod tests {
             network_repository: network_repo.clone(),
             transaction_repository: transaction_repo.clone(),
             transaction_counter_store: transaction_counter.clone(),
+            sync_state_store: sync_state_store.clone(),
             job_producer: job_producer.clone(),
             plugin_repository: plugin_repo.clone(),
         });

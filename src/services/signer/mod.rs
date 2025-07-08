@@ -3,7 +3,7 @@
 //!
 //! This module provides:
 //! - Common signer traits for different blockchain networks
-//! - Network-specific signer implementations (EVM, Solana, Stellar)
+//! - Network-specific signer implementations (EVM, Solana, Stellar, Midnight)
 //! - Factory methods for creating signers
 //! - Error handling for signing operations
 //!
@@ -19,7 +19,10 @@
 //!   │   |── LocalSigner
 //!   |   |── GoogleCloudKmsSigner
 //!   │   └── VaultTransitSigner
-//!   └── StellarSigner
+//!   ├── StellarSigner
+//!   │   └── LocalSigner
+//!   └── MidnightSigner
+//!       └── LocalSigner
 
 #![allow(unused_imports)]
 use async_trait::async_trait;
@@ -38,8 +41,14 @@ pub use solana::*;
 mod stellar;
 pub use stellar::*;
 
+mod midnight;
+pub use midnight::*;
+
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
+    domain::{
+        to_midnight_network_id, SignDataRequest, SignDataResponse, SignTransactionResponse,
+        SignTypedDataRequest,
+    },
     models::{
         Address, NetworkTransactionData, NetworkType, SignerError, SignerFactoryError,
         SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
@@ -65,6 +74,7 @@ pub enum NetworkSigner {
     Evm(EvmSigner),
     Solana(SolanaSigner),
     Stellar(StellarSigner),
+    Midnight(MidnightSigner),
 }
 
 #[async_trait]
@@ -74,6 +84,7 @@ impl Signer for NetworkSigner {
             Self::Evm(signer) => signer.address().await,
             Self::Solana(signer) => signer.address().await,
             Self::Stellar(signer) => signer.address().await,
+            Self::Midnight(signer) => signer.address().await,
         }
     }
 
@@ -85,6 +96,7 @@ impl Signer for NetworkSigner {
             Self::Evm(signer) => signer.sign_transaction(transaction).await,
             Self::Solana(signer) => signer.sign_transaction(transaction).await,
             Self::Stellar(signer) => signer.sign_transaction(transaction).await,
+            Self::Midnight(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -107,6 +119,9 @@ impl DataSignerTrait for NetworkSigner {
             Self::Stellar(_) => Err(SignerError::UnsupportedTypeError(
                 "Stellar: sign data not supported".into(),
             )),
+            Self::Midnight(_) => Err(SignerError::UnsupportedTypeError(
+                "Midnight: sign data not supported".into(),
+            )),
         }
     }
 
@@ -125,6 +140,9 @@ impl DataSignerTrait for NetworkSigner {
             Self::Stellar(_) => Err(SignerError::UnsupportedTypeError(
                 "Stellar: Signing typed data not supported".into(),
             )),
+            Self::Midnight(_) => Err(SignerError::UnsupportedTypeError(
+                "Midnight: Signing typed data not supported".into(),
+            )),
         }
     }
 }
@@ -135,6 +153,7 @@ impl SignerFactory {
     pub async fn create_signer(
         network_type: &NetworkType,
         signer_model: &SignerRepoModel,
+        network: &str,
     ) -> Result<NetworkSigner, SignerFactoryError> {
         let signer = match network_type {
             NetworkType::Evm => {
@@ -148,6 +167,13 @@ impl SignerFactory {
             NetworkType::Stellar => {
                 let stellar_signer = StellarSignerFactory::create_stellar_signer(signer_model)?;
                 NetworkSigner::Stellar(stellar_signer)
+            }
+            NetworkType::Midnight => {
+                let midnight_signer = MidnightSignerFactory::create_midnight_signer(
+                    signer_model,
+                    to_midnight_network_id(network),
+                )?;
+                NetworkSigner::Midnight(midnight_signer)
             }
         };
 

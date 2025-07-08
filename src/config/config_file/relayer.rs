@@ -19,6 +19,7 @@ pub enum ConfigFileRelayerNetworkPolicy {
     Evm(ConfigFileRelayerEvmPolicy),
     Solana(ConfigFileRelayerSolanaPolicy),
     Stellar(ConfigFileRelayerStellarPolicy),
+    Midnight(ConfigFileRelayerMidnightPolicy),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -140,6 +141,12 @@ pub struct ConfigFileRelayerStellarPolicy {
     pub min_balance: Option<u64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFileRelayerMidnightPolicy {
+    pub min_balance: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct RelayerFileConfig {
     pub id: String,
@@ -229,6 +236,12 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
                 ConfigFileNetworkType::Stellar => {
                     serde_json::from_value::<ConfigFileRelayerStellarPolicy>(policy_value.clone())
                         .map(ConfigFileRelayerNetworkPolicy::Stellar)
+                        .map(Some)
+                        .map_err(de::Error::custom)
+                }
+                ConfigFileNetworkType::Midnight => {
+                    serde_json::from_value::<ConfigFileRelayerMidnightPolicy>(policy_value.clone())
+                        .map(ConfigFileRelayerNetworkPolicy::Midnight)
                         .map(Some)
                         .map_err(de::Error::custom)
                 }
@@ -427,6 +440,7 @@ impl RelayerFileConfig {
             }
             ConfigFileNetworkType::Evm => {}
             ConfigFileNetworkType::Stellar => {}
+            ConfigFileNetworkType::Midnight => {}
         }
         Ok(())
     }
