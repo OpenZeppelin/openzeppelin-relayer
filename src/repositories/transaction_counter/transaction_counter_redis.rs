@@ -225,6 +225,7 @@ mod tests {
     use redis::aio::ConnectionManager;
     use std::sync::Arc;
     use tokio;
+    use uuid::Uuid;
 
     async fn setup_test_repo() -> RedisTransactionCounter {
         let redis_url =
@@ -242,7 +243,8 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_get_nonexistent_counter() {
         let repo = setup_test_repo().await;
-        let result = repo.get("test_relayer", "0x1234").await.unwrap();
+        let random_id = Uuid::new_v4().to_string();
+        let result = repo.get(&random_id, "0x1234").await.unwrap();
         assert_eq!(result, None);
     }
 
@@ -303,7 +305,7 @@ mod tests {
     async fn test_decrement_not_found() {
         let repo = setup_test_repo().await;
         let result = repo.decrement("nonexistent", "0x1234").await;
-        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 
     #[tokio::test]

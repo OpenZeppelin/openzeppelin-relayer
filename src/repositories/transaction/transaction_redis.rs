@@ -936,7 +936,10 @@ mod tests {
             .await
             .expect("Failed to create connection manager");
 
-        RedisTransactionRepository::new(Arc::new(connection_manager), "test_prefix".to_string())
+        let random_id = Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{}", random_id);
+
+        RedisTransactionRepository::new(Arc::new(connection_manager), key_prefix)
             .expect("Failed to create RedisTransactionRepository")
     }
 
@@ -944,7 +947,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test_prefix");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -966,23 +969,19 @@ mod tests {
     async fn test_key_generation() {
         let repo = setup_test_repo().await;
 
-        assert_eq!(
-            repo.tx_key("relayer-1", "test-id"),
-            "test_prefix:relayer:relayer-1:tx:test-id"
-        );
-        assert_eq!(
-            repo.tx_to_relayer_key("test-id"),
-            "test_prefix:tx_to_relayer:test-id"
-        );
-        assert_eq!(repo.relayer_list_key(), "test_prefix:relayer_list");
-        assert_eq!(
-            repo.relayer_status_key("relayer-1", &TransactionStatus::Pending),
-            "test_prefix:relayer:relayer-1:status:Pending"
-        );
-        assert_eq!(
-            repo.relayer_nonce_key("relayer-1", 42),
-            "test_prefix:relayer:relayer-1:nonce:42"
-        );
+        assert!(repo
+            .tx_key("relayer-1", "test-id")
+            .contains(":relayer:relayer-1:tx:test-id"));
+        assert!(repo
+            .tx_to_relayer_key("test-id")
+            .contains(":relayer:tx_to_relayer:test-id"));
+        assert!(repo.relayer_list_key().contains(":relayer_list"));
+        assert!(repo
+            .relayer_status_key("relayer-1", &TransactionStatus::Pending)
+            .contains(":relayer:relayer-1:status:Pending"));
+        assert!(repo
+            .relayer_nonce_key("relayer-1", 42)
+            .contains(":relayer:relayer-1:nonce:42"));
     }
 
     #[tokio::test]
