@@ -62,7 +62,7 @@ mod tests {
             path: "test-path".to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
-        let app_state = create_mock_app_state(None, None, None, Some(vec![plugin])).await;
+        let app_state = create_mock_app_state(None, None, None, Some(vec![plugin]), None).await;
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({"key":"value"}),
         };

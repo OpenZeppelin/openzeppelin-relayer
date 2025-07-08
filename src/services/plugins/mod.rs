@@ -39,6 +39,10 @@ pub enum PluginError {
     PluginExecutionError(String),
     #[error("Script execution timed out after {0} seconds")]
     ScriptTimeout(u64),
+    #[error("Invalid method: {0}")]
+    InvalidMethod(String),
+    #[error("Invalid payload: {0}")]
+    InvalidPayload(String),
 }
 
 impl From<PluginError> for String {
@@ -175,7 +179,7 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
         let app_state: AppState<MockJobProducerTrait> =
-            create_mock_app_state(None, None, None, Some(vec![plugin.clone()])).await;
+            create_mock_app_state(None, None, None, Some(vec![plugin.clone()]), None).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 

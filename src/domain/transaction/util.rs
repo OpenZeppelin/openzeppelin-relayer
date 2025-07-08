@@ -7,7 +7,7 @@ use actix_web::web::ThinData;
 
 use crate::{
     domain::get_relayer_by_id,
-    jobs::JobProducer,
+    jobs::{JobProducer, JobProducerTrait},
     models::{ApiError, AppState, RelayerRepoModel, TransactionError, TransactionRepoModel},
     repositories::Repository,
 };
@@ -25,9 +25,9 @@ use super::{NetworkTransaction, RelayerTransactionFactory};
 ///
 /// A `Result` containing a `TransactionRepoModel` if successful, or an `ApiError` if an error
 /// occurs.
-pub async fn get_transaction_by_id(
+pub async fn get_transaction_by_id<J: JobProducerTrait + 'static>(
     transaction_id: String,
-    state: &ThinData<AppState<JobProducer>>,
+    state: &ThinData<AppState<J>>,
 ) -> Result<TransactionRepoModel, ApiError> {
     state
         .transaction_repository

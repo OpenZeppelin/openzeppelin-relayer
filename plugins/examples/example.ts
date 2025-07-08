@@ -2,7 +2,7 @@ import { Speed } from "@openzeppelin/relayer-sdk";
 import { PluginAPI, runPlugin } from "../lib/plugin";
 
 async function example(api: PluginAPI) {
-    console.log("Plugin started...");
+    console.info("Plugin started...");
     /**
      * Instances the relayer with the given id.
      */
@@ -19,7 +19,12 @@ async function example(api: PluginAPI) {
         speed: Speed.FAST,
     });
 
-    return result;
+    /*
+    * Waits for the transaction to be mined on chain.
+    */
+    const transaction = await result.wait();
+
+    return transaction.hash;
 }
 
 /**

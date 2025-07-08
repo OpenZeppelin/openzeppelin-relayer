@@ -30,22 +30,82 @@
 import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
 import { LogInterceptor } from "./logger";
-import { NetworkTransactionRequest } from "@openzeppelin/relayer-sdk";
+import { NetworkTransactionRequest, TransactionResponse, TransactionStatus } from "@openzeppelin/relayer-sdk";
 
+type TransactionWaitOptions = {
+  interval?: number;
+  timeout?: number;
+}
+
+/**
+ * The result of a sendTransaction call.
+ *
+ * @property id - The transaction ID.
+ * @property relayer_id - The relayer ID.
+ * @property status - The transaction status. Can be `submitted`, `pending`, `sent`, `mined`, `cancelled`, `confirmed`, `failed` or `expired`.
+ * @property confirmed_at - The date and time the transaction was confirmed.
+ * @property created_at - The date and time the transaction was created.
+ * @property from - The address of the sender.
+ * @property gas_limit - The gas limit of the transaction.
+ * @property gas_price - The gas price of the transaction.
+ * @property hash - The hash of the transaction.
+ * @property nonce - The nonce of the transaction.
+ * @property sent_at - The date and time the transaction was sent.
+ * @property status_reason - The reason for the transaction status.
+ * @property to - The address of the recipient.
+ * @property value - The value of the transaction.
+ * @property wait - A method to wait for the transaction to be mined on chain.
+ */
 type SendTransactionResult = {
   id: string;
   relayer_id: string;
   status: string;
+  confirmed_at: string | null;
+  created_at: string;
+  from: string;
+  gas_limit: number;
+  gas_price: string | null;
+  hash: string | null;
+  nonce: number | null;
+  sent_at: string | null;
+  status_reason: string | null;
+  to: string;
+  value: string;
+
+  /**
+   * Waits for the transaction to be mined on chain.
+   * @param options - Allows to specify the polling interval and the timeout.
+   *  - `interval` - The polling interval in milliseconds. Defaults to `5000`.
+   *  - `timeout` - The timeout in milliseconds. Defaults to `60000`.
+   * @returns The transaction response.
+   */
+  wait: (options?: TransactionWaitOptions) => Promise<TransactionResponse>;
 }
 
-type Result<T> = {
-  request_id: string;
-  result: T;
-  error: string | null;
+type GetTransactionRequest = {
+  transactionId: string;
 }
 
+/**
+ * The relayer API.
+ *
+ * @property sendTransaction - Sends a transaction to the relayer.
+ * @property getTransaction - Gets a transaction from the relayer.
+ */
 type Relayer = {
-  sendTransaction: (payload: NetworkTransactionRequest) => Promise<Result<SendTransactionResult>>;
+  /**
+   * Sends a transaction to the relayer.
+   * @param payload - The transaction request payload.
+   * @returns The transaction result.
+   */
+  sendTransaction: (payload: NetworkTransactionRequest) => Promise<SendTransactionResult>;
+
+  /**
+   * Fetches a transaction from the relayer.
+   * @param payload - including the transaction id.
+   * @returns The transaction response.
+   */
+  getTransaction: (payload: GetTransactionRequest) => Promise<TransactionResponse>;
 }
 
 function getPluginParams(): unknown {
@@ -60,6 +120,14 @@ function getPluginParams(): unknown {
   } else return {};
 }
 
+/**
+ * Entry point for plugin execution.
+ *
+ * @param main - The main function to run.
+ *  - `plugin` - The plugin API for interacting with the relayer.
+ *  - `pluginParams` - The plugin parameters passed as the request body of the call.
+ * @returns The result of the main function.
+ */
 export async function runPlugin(main: (plugin: PluginAPI, pluginParams: unknown) => Promise<any>) {
   const logInterceptor = new LogInterceptor();
 
@@ -103,6 +171,13 @@ export async function runPlugin(main: (plugin: PluginAPI, pluginParams: unknown)
   }
 }
 
+/**
+ * The plugin API.
+ *
+ * @property useRelayer - Creates a relayer API for the given relayer ID.
+ * @property sendTransaction - Sends a transaction to the relayer.
+ * @property getTransaction - Gets a transaction by id.
+ */
 export class PluginAPI {
   socket: net.Socket;
   pending: Map<string, { resolve: (value: any) => void, reject: (reason: any) => void }>;
@@ -138,13 +213,54 @@ export class PluginAPI {
     });
   }
 
+  /**
+   * Creates a relayer API for the given relayer ID.
+   * @param relayerId - The relayer ID.
+   * @returns The relayer API.
+   */
   useRelayer(relayerId: string): Relayer {
     return {
-      sendTransaction: (payload: NetworkTransactionRequest) => this._send<SendTransactionResult>(relayerId, "sendTransaction", payload),
+      sendTransaction: async (payload: NetworkTransactionRequest) => {
+        const result = await this._send<SendTransactionResult>(relayerId, "sendTransaction", payload);
+        // Add the wait method to the result
+        return {
+          ...result,
+          wait: (options?: TransactionWaitOptions) => this.transactionWait(result, options)
+        };
+      },
+      getTransaction: (payload: GetTransactionRequest) => this._send<TransactionResponse>(relayerId, "getTransaction", payload),
     };
   }
 
-  async _send<T>(relayerId: string, method: string, payload: any): Promise<Result<T>> {
+  async transactionWait(transaction: SendTransactionResult, options?: TransactionWaitOptions): Promise<TransactionResponse> {
+    const waitOptions: TransactionWaitOptions = {
+      interval: options?.interval || 5000,
+      timeout: options?.timeout || 60000,
+    };
+
+    const relayer = this.useRelayer(transaction.relayer_id);
+    let transactionResult: TransactionResponse = await relayer.getTransaction({ transactionId: transaction.id });
+
+    // timeout to avoid infinite waiting
+    const timeout = setTimeout(() => {
+      throw new Error(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`);
+    }, waitOptions.timeout);
+
+    // poll for transaction status until mined/confirmed, failed, cancelled or expired.
+    while (transactionResult.status !== TransactionStatus.MINED &&
+      transactionResult.status !== TransactionStatus.CONFIRMED &&
+      transactionResult.status !== TransactionStatus.CANCELED &&
+      transactionResult.status !== TransactionStatus.EXPIRED &&
+      transactionResult.status !== TransactionStatus.FAILED) {
+      transactionResult = await relayer.getTransaction({ transactionId: transaction.id });
+      await new Promise(resolve => setTimeout(resolve, waitOptions.interval));
+    }
+
+    clearTimeout(timeout);
+    return transactionResult;
+  }
+
+  async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
     const requestId = uuidv4();
     const message = JSON.stringify({ requestId, relayerId, method, payload }) + "\n";
 
