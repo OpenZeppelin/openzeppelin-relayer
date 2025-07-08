@@ -378,7 +378,9 @@ pub async fn replace_transaction(
         .replace_transaction(transaction_to_replace, new_tx_request)
         .await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(replaced_transaction)))
+    let transaction_response: TransactionResponse = replaced_transaction.into();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)))
 }
 
 /// Signs data using a specific relayer.

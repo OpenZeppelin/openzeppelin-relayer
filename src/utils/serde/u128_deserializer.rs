@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use serde::{de, Deserializer};
+use serde::{de, Deserialize, Deserializer};
 
 use super::deserialize_u64;
 
@@ -56,18 +56,28 @@ where
     deserializer.deserialize_any(U128Visitor)
 }
 
+// Deserialize optional u128
 pub fn deserialize_optional_u128<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Ok(Some(deserialize_u128(deserializer)?))
+    #[derive(Deserialize)]
+    struct Helper(#[serde(deserialize_with = "deserialize_u128")] u128);
+
+    let helper = Option::<Helper>::deserialize(deserializer)?;
+    Ok(helper.map(|Helper(value)| value))
 }
 
+// Deserialize optional u64
 pub fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Ok(Some(deserialize_u64(deserializer)?))
+    #[derive(Deserialize)]
+    struct Helper(#[serde(deserialize_with = "deserialize_u64")] u64);
+
+    let helper = Option::<Helper>::deserialize(deserializer)?;
+    Ok(helper.map(|Helper(value)| value))
 }
 
 #[cfg(test)]
@@ -129,21 +139,43 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[derive(Deserialize)]
+    struct TestStructOptionalU128 {
+        #[serde(deserialize_with = "deserialize_optional_u128")]
+        value: Option<u128>,
+    }
+
     #[test]
     fn test_deserialize_optional_u128() {
-        let input = "12345";
-        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
-        let result = deserialize_optional_u128(deserializer);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Some(12345u128));
+        let json = r#"{"value": "12345"}"#;
+        let result: TestStructOptionalU128 = serde_json::from_str(json).unwrap();
+        assert_eq!(result.value, Some(12345u128));
+    }
+
+    #[test]
+    fn test_deserialize_optional_u128_none() {
+        let json = r#"{"value": null}"#;
+        let result: TestStructOptionalU128 = serde_json::from_str(json).unwrap();
+        assert_eq!(result.value, None);
+    }
+
+    #[derive(Deserialize)]
+    struct TestStructOptionalU64 {
+        #[serde(deserialize_with = "deserialize_optional_u64")]
+        value: Option<u64>,
     }
 
     #[test]
     fn test_deserialize_optional_u64() {
-        let input = "12345";
-        let deserializer = StringDeserializer::<ValueError>::new(input.to_string());
-        let result = deserialize_optional_u64(deserializer);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Some(12345u64));
+        let json = r#"{"value": "12345"}"#;
+        let result: TestStructOptionalU64 = serde_json::from_str(json).unwrap();
+        assert_eq!(result.value, Some(12345u64));
+    }
+
+    #[test]
+    fn test_deserialize_optional_u64_none() {
+        let json = r#"{"value": null}"#;
+        let result: TestStructOptionalU64 = serde_json::from_str(json).unwrap();
+        assert_eq!(result.value, None);
     }
 }

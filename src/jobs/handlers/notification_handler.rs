@@ -89,6 +89,11 @@ mod tests {
                 from: "0xabc".to_string(),
                 to: Some("0xdef".to_string()),
                 relayer_id: "relayer-1".to_string(),
+                data: None,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                signature: None,
+                speed: None,
             }));
 
         // Create a notification
@@ -124,6 +129,11 @@ mod tests {
                 from: "0xabc".to_string(),
                 to: Some("0xdef".to_string()),
                 relayer_id: "relayer-1".to_string(),
+                data: None,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                signature: None,
+                speed: None,
             }));
 
         let string_notification =

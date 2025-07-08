@@ -153,6 +153,11 @@ mod tests {
             from: "0x123...".to_string(),
             to: Some("0x456...".to_string()),
             relayer_id: "relayer_123".to_string(),
+            data: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            signature: None,
+            speed: None,
         })
     }
 

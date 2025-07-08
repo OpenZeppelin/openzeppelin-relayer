@@ -134,7 +134,7 @@ impl NetworkTransactionData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct EvmTransactionDataSignature {
     pub r: String,
     pub s: String,

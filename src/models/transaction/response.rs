@@ -1,5 +1,8 @@
 use crate::{
-    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus, U256},
+    models::{
+        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
+        TransactionStatus, U256,
+    },
     utils::{deserialize_optional_u128, deserialize_optional_u64, deserialize_u64},
 };
 use serde::{Deserialize, Serialize};
@@ -39,6 +42,16 @@ pub struct EvmTransactionResponse {
     #[schema(nullable = false)]
     pub to: Option<String>,
     pub relayer_id: String,
+    #[schema(nullable = false)]
+    pub data: Option<String>,
+    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[schema(nullable = false)]
+    pub max_fee_per_gas: Option<u128>,
+    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[schema(nullable = false)]
+    pub max_priority_fee_per_gas: Option<u128>,
+    pub signature: Option<EvmTransactionDataSignature>,
+    pub speed: Option<Speed>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -91,6 +104,11 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     from: evm_data.from,
                     to: evm_data.to,
                     relayer_id: model.relayer_id,
+                    data: evm_data.data,
+                    max_fee_per_gas: evm_data.max_fee_per_gas,
+                    max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
+                    signature: evm_data.signature,
+                    speed: evm_data.speed,
                 })
             }
             NetworkTransactionData::Solana(solana_data) => {
