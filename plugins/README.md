@@ -1,3 +1,4 @@
+
 ## Relayer Plugins
 
 Relayer plugins are TypeScript functions that can be invoked through the relayer HTTP API.
@@ -6,7 +7,7 @@ Under the hood, the relayer will execute the plugin code in a separate process u
 
 ## Setup
 
-#### 1. Writing your plugin
+### 1. Writing your plugin
 
 ```typescript
 import { Speed } from "@openzeppelin/relayer-sdk";
@@ -49,7 +50,7 @@ runPlugin(example);
 ```
 
 
-#### 2. Adding extra dependencies
+### 2. Adding extra dependencies
 
 You can install any extra JS/TS dependencies in your plugins folder and access them upon execution.
 
@@ -63,17 +64,19 @@ And then just import them in your plugin.
 import { ethers } from "ethers";
 ```
 
-#### 3. Adding to config file
+### 3. Adding to config file
 
 - id: The id of the plugin. This is used to call a specific plugin through the HTTP API.
 - path: The path to the plugin file - relative to the `/plugins` folder.
+- timeout (optional): The timeout for the script execution *in seconds*. If not provided, the default timeout of 300 seconds (5 minutes) will be used.
 
 ```yaml
 {
   "plugins": [
     {
       "id": "example",
-      "path": "examples/example.ts"
+      "path": "examples/example.ts",
+      "timeout": 30
     }
   ]
 }

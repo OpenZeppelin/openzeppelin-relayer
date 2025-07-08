@@ -6,7 +6,7 @@
 //! 4. Waits for the relayer server to finish the execution - socket.rs
 //! 5. Returns the output of the script - script_executor.rs
 //!
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};
 use crate::{jobs::JobProducerTrait, models::AppState};
@@ -14,7 +14,7 @@ use crate::{jobs::JobProducerTrait, models::AppState};
 use super::PluginError;
 use actix_web::web;
 use async_trait::async_trait;
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, time::timeout};
 
 #[cfg(test)]
 use mockall::automock;
@@ -26,6 +26,7 @@ pub trait PluginRunnerTrait {
         &self,
         socket_path: &str,
         script_path: String,
+        timeout_duration: Duration,
         script_params: String,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<ScriptResult, PluginError>;
@@ -39,6 +40,7 @@ impl PluginRunner {
         &self,
         socket_path: &str,
         script_path: String,
+        timeout_duration: Duration,
         script_params: String,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<ScriptResult, PluginError> {
@@ -52,9 +54,19 @@ impl PluginRunner {
             socket_service.listen(shutdown_rx, state, relayer_api).await
         });
 
-        let mut script_result =
-            ScriptExecutor::execute_typescript(script_path, socket_path_clone, script_params)
-                .await?;
+        let mut script_result = match timeout(
+            timeout_duration,
+            ScriptExecutor::execute_typescript(script_path, socket_path_clone, script_params),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                // ensures the socket gets closed.
+                let _ = shutdown_tx.send(());
+                return Err(PluginError::ScriptTimeout(timeout_duration.as_secs()));
+            }
+        };
 
         let _ = shutdown_tx.send(());
 
@@ -81,11 +93,18 @@ impl PluginRunnerTrait for PluginRunner {
         &self,
         socket_path: &str,
         script_path: String,
+        timeout_duration: Duration,
         script_params: String,
         state: Arc<web::ThinData<AppState<J>>>,
     ) -> Result<ScriptResult, PluginError> {
-        self.run(socket_path, script_path, script_params, state)
-            .await
+        self.run(
+            socket_path,
+            script_path,
+            timeout_duration,
+            script_params,
+            state,
+        )
+        .await
     }
 }
 
@@ -136,6 +155,7 @@ mod tests {
             .run::<MockJobProducerTrait>(
                 &socket_path.display().to_string(),
                 script_path.display().to_string(),
+                Duration::from_secs(10),
                 "{ \"test\": \"test\" }".to_string(),
                 Arc::new(web::ThinData(state)),
             )
@@ -148,5 +168,51 @@ mod tests {
         assert_eq!(result.logs[1].level, LogLevel::Error);
         assert_eq!(result.logs[1].message, "test-error");
         assert_eq!(result.return_value, "test-result");
+    }
+
+    #[tokio::test]
+    async fn test_run_timeout() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir.path().join("test_simple_timeout.ts");
+        let socket_path = temp_dir.path().join("test_simple_timeout.sock");
+
+        // Script that takes 200ms
+        let content = r#"
+            function sleep(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+
+            async function main() {
+                await sleep(200); // 200ms
+                console.log(JSON.stringify({ level: 'result', message: 'Should not reach here' }));
+            }
+
+            main();
+        "#;
+
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let state = create_mock_app_state(None, None, None, None, None).await;
+        let plugin_runner = PluginRunner;
+
+        // Use 100ms timeout for a 200ms script
+        let result = plugin_runner
+            .run::<MockJobProducerTrait>(
+                &socket_path.display().to_string(),
+                script_path.display().to_string(),
+                Duration::from_millis(100), // 100ms timeout
+                "{}".to_string(),
+                Arc::new(web::ThinData(state)),
+            )
+            .await;
+
+        // Should timeout
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Script execution timed out after"));
     }
 }

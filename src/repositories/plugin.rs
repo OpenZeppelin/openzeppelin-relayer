@@ -4,6 +4,7 @@
 //! script paths for further execution.
 use crate::{
     config::PluginFileConfig,
+    constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
     models::PluginModel,
     repositories::{ConversionError, RepositoryError},
 };
@@ -12,7 +13,7 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
@@ -69,9 +70,12 @@ impl TryFrom<PluginFileConfig> for PluginModel {
     type Error = ConversionError;
 
     fn try_from(config: PluginFileConfig) -> Result<Self, Self::Error> {
+        let timeout = Duration::from_secs(config.timeout.unwrap_or(DEFAULT_PLUGIN_TIMEOUT_SECONDS));
+
         Ok(PluginModel {
             id: config.id.clone(),
             path: config.path.clone(),
+            timeout,
         })
     }
 }
@@ -95,6 +99,7 @@ mod tests {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(
@@ -116,6 +121,7 @@ mod tests {
         let plugin = PluginFileConfig {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: None,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());
@@ -124,6 +130,7 @@ mod tests {
             PluginModel {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
+                timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             }
         );
     }
@@ -135,6 +142,7 @@ mod tests {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(
