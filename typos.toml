@@ -1,3 +1,4 @@
 [default.extend-identifiers]
 HashiCorp = "HashiCorp"
 NOOPs = "NOOPs"
+StandardTrasactionInfo = "StandardTrasactionInfo"

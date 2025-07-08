@@ -2,7 +2,10 @@ use super::evm::Speed;
 use crate::{
     domain::{PriceParams, SignTransactionResponseEvm},
     models::{
-        transaction::stellar_types::{MemoSpec, OperationSpec},
+        transaction::{
+            request::midnight::{MidnightIntentRequest, MidnightOfferRequest},
+            stellar_types::{MemoSpec, OperationSpec},
+        },
         AddressError, EvmNetwork, NetworkRepoModel, NetworkTransactionRequest, NetworkType,
         RelayerError, RelayerRepoModel, SignerError, StellarNetwork, TransactionError, U256,
     },
@@ -309,11 +312,18 @@ impl StellarTransactionData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidnightTransactionData {
-    pub hash: Option<String>,
-    pub binding_randomness: Option<String>, // Fr serialized as hex
+    // Transaction lifecycle fields
+    pub hash: Option<String>,        // Extrinsic transaction hash
+    pub pallet_hash: Option<String>, // Midnight pallet transaction hash
+    pub block_hash: Option<String>,  // Hash of the block containing the transaction
     pub segment_results: Option<HashMap<u16, bool>>, // For partial success tracking
-    pub prover_request_id: Option<String>,  // To track async proof generation
-    pub raw: Option<Vec<u8>>,               // Serialized transaction
+    pub raw: Option<Vec<u8>>,
+    pub signature: Option<String>, // Signature of the transaction
+
+    // Request data stored for prepare_transaction
+    pub guaranteed_offer: Option<MidnightOfferRequest>,
+    pub intents: Vec<MidnightIntentRequest>,
+    pub fallible_offers: Vec<(u16, MidnightOfferRequest)>,
 }
 
 impl
@@ -416,8 +426,7 @@ impl
                 noop_count: None,
                 is_canceled: Some(false),
             }),
-            // TODO: Implement NetworkTransactionRequest
-            NetworkTransactionRequest::Midnight(_) => Ok(Self {
+            NetworkTransactionRequest::Midnight(midnight_request) => Ok(Self {
                 id: Uuid::new_v4().to_string(),
                 relayer_id: relayer_model.id.clone(),
                 status: TransactionStatus::Pending,
@@ -425,14 +434,18 @@ impl
                 created_at: now,
                 sent_at: None,
                 confirmed_at: None,
-                valid_until: None,
+                valid_until: midnight_request.ttl.clone(),
                 network_type: NetworkType::Midnight,
                 network_data: NetworkTransactionData::Midnight(MidnightTransactionData {
                     hash: None,
-                    binding_randomness: None,
+                    pallet_hash: None,
+                    block_hash: None,
                     segment_results: None,
-                    prover_request_id: None,
                     raw: None,
+                    signature: None,
+                    guaranteed_offer: midnight_request.guaranteed_offer.clone(),
+                    intents: midnight_request.intents.clone(),
+                    fallible_offers: midnight_request.fallible_offers.clone(),
                 }),
                 priced_at: None,
                 hashes: Vec::new(),

@@ -10,12 +10,16 @@ pub use stellar::*;
 mod evm;
 pub use evm::*;
 
+mod midnight;
+pub use midnight::*;
+
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(untagged)]
 pub enum NetworkRpcResult {
     Solana(SolanaRpcResult),
     Stellar(StellarRpcResult),
     Evm(EvmRpcResult),
+    Midnight(MidnightRpcResult),
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -25,4 +29,5 @@ pub enum NetworkRpcRequest {
     Solana(SolanaRpcRequest),
     Stellar(StellarRpcRequest),
     Evm(EvmRpcRequest),
+    Midnight(MidnightRpcRequest),
 }

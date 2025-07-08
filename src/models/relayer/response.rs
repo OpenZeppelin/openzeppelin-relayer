@@ -41,6 +41,15 @@ pub enum RelayerStatus {
         paused: bool,
         sequence_number: String,
     },
+    #[serde(rename = "midnight")]
+    Midnight {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        nonce: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
