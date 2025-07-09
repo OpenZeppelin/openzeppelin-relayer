@@ -84,6 +84,67 @@ impl RedisSignerRepository {
             RepositoryError::Other(format!("Failed to get signer IDs: {}", e))
         })
     }
+
+    /// Batch fetch signers by IDs
+    async fn get_signers_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<BatchRetrievalResult<SignerRepoModel>, RepositoryError> {
+        if ids.is_empty() {
+            debug!("No signer IDs provided for batch fetch");
+            return Ok(BatchRetrievalResult {
+                results: vec![],
+                failed_ids: vec![],
+            });
+        }
+
+        let mut conn = self.client.as_ref().clone();
+        let keys: Vec<String> = ids.iter().map(|id| self.signer_key(id)).collect();
+
+        debug!("Batch fetching {} signers", ids.len());
+
+        let values: Vec<Option<String>> = conn
+            .mget(&keys)
+            .await
+            .map_err(|e| self.map_redis_error(e, "batch_fetch_signers"))?;
+
+        let mut signers = Vec::new();
+        let mut failed_count = 0;
+        let mut failed_ids = Vec::new();
+
+        for (i, value) in values.into_iter().enumerate() {
+            match value {
+                Some(json) => {
+                    match self.deserialize_entity::<SignerRepoModel>(&json, &ids[i], "signer") {
+                        Ok(signer) => signers.push(signer),
+                        Err(e) => {
+                            failed_count += 1;
+                            error!("Failed to deserialize signer {}: {}", ids[i], e);
+                            failed_ids.push(ids[i].clone());
+                        }
+                    }
+                }
+                None => {
+                    warn!("Signer {} not found in batch fetch", ids[i]);
+                }
+            }
+        }
+
+        if failed_count > 0 {
+            warn!(
+                "Failed to deserialize {} out of {} signers in batch",
+                failed_count,
+                ids.len()
+            );
+            warn!("Failed to deserialize signers: {:?}", failed_ids);
+        }
+
+        debug!("Successfully fetched {} signers", signers.len());
+        Ok(BatchRetrievalResult {
+            results: signers,
+            failed_ids,
+        })
+    }
 }
 
 impl fmt::Debug for RedisSignerRepository {
@@ -283,66 +344,65 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
 
     async fn list_all(&self) -> Result<Vec<SignerRepoModel>, RepositoryError> {
         let ids = self.get_all_ids().await?;
-        let mut signers = Vec::new();
 
-        for id in ids {
-            match self.get_by_id(id.clone()).await {
-                Ok(signer) => signers.push(signer),
-                Err(RepositoryError::NotFound(_)) => {
-                    // Signer was deleted between getting the list and retrieving it
-                    warn!("Signer {} was not found when retrieving all signers", id);
-                    continue;
-                }
-                Err(e) => {
-                    error!("Failed to retrieve signer {} during list_all: {}", id, e);
-                    return Err(e);
-                }
-            }
+        if ids.is_empty() {
+            debug!("No networks found");
+            return Ok(Vec::new());
         }
 
-        debug!("Retrieved {} signers", signers.len());
-        Ok(signers)
+        let signers = self.get_signers_by_ids(&ids).await?;
+        debug!("Successfully fetched {} signers", signers.results.len());
+        Ok(signers.results)
     }
 
     async fn list_paginated(
         &self,
         query: PaginationQuery,
     ) -> Result<PaginatedResult<SignerRepoModel>, RepositoryError> {
-        let ids = self.get_all_ids().await?;
-        let total = ids.len();
-
-        let start = ((query.page - 1) * query.per_page) as usize;
-        let end = std::cmp::min(start + query.per_page as usize, total);
-
-        let mut signers = Vec::new();
-
-        for id in ids.iter().skip(start).take(end - start) {
-            match self.get_by_id(id.clone()).await {
-                Ok(signer) => signers.push(signer),
-                Err(RepositoryError::NotFound(_)) => {
-                    // Signer was deleted between getting the list and retrieving it
-                    warn!(
-                        "Signer {} was not found when retrieving paginated signers",
-                        id
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    error!("Failed to retrieve signer {} during pagination: {}", id, e);
-                    return Err(e);
-                }
-            }
+        if query.per_page == 0 {
+            return Err(RepositoryError::InvalidData(
+                "per_page must be greater than 0".to_string(),
+            ));
         }
 
         debug!(
-            "Retrieved {} signers for page {} with {} per page",
-            signers.len(),
-            query.page,
-            query.per_page
+            "Listing paginated signers: page {}, per_page {}",
+            query.page, query.per_page
+        );
+
+        let all_ids: Vec<String> = self.get_all_ids().await?;
+        let total = all_ids.len() as u64;
+        let per_page = query.per_page as usize;
+        let page = query.page as usize;
+        let total_pages = all_ids.len().div_ceil(per_page);
+
+        if page > total_pages && !all_ids.is_empty() {
+            debug!(
+                "Requested page {} exceeds total pages {}",
+                page, total_pages
+            );
+            return Ok(PaginatedResult {
+                items: Vec::new(),
+                total,
+                page: query.page,
+                per_page: query.per_page,
+            });
+        }
+
+        let start_idx = (page - 1) * per_page;
+        let end_idx = std::cmp::min(start_idx + per_page, all_ids.len());
+
+        let page_ids = all_ids[start_idx..end_idx].to_vec();
+        let signers = self.get_signers_by_ids(&page_ids).await?;
+
+        debug!(
+            "Successfully retrieved {} signers for page {}",
+            signers.results.len(),
+            query.page
         );
         Ok(PaginatedResult {
-            items: signers,
-            total: total as u64,
+            items: signers.results.clone(),
+            total,
             page: query.page,
             per_page: query.per_page,
         })
