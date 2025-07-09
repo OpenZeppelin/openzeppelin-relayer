@@ -84,7 +84,7 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
     }
 
     /// Restore the ledger context from serialized bytes
-    fn restore_context(&self, serialized_context: &[u8]) -> Result<(), SyncError> {
+    pub fn restore_context(&self, serialized_context: &[u8]) -> Result<(), SyncError> {
         // Deserialize the combined context
         match bincode::deserialize::<(Option<Vec<u8>>, Vec<u8>)>(serialized_context) {
             Ok((wallet_state_bytes, ledger_state_bytes)) => {
@@ -340,5 +340,312 @@ impl<S: SyncStrategy + Sync + Send> super::SyncManagerTrait for SyncManager<S> {
 
     fn get_context(&self) -> Arc<LedgerContext<DefaultDB>> {
         self.get_context()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        repositories::{InMemorySyncState, SyncStateTrait},
+        services::{
+            midnight::{
+                handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
+                indexer::MidnightIndexerClient,
+                SyncError,
+            },
+            sync::midnight::handler::{
+                EventDispatcher, ProgressTracker, SyncConfig, SyncEvent, SyncStrategy,
+            },
+        },
+    };
+    use midnight_node_ledger_helpers::{NetworkId, WalletSeed};
+    use std::sync::Arc;
+
+    fn setup_test_env() {
+        std::env::set_var(
+            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+            "/tmp/midnight-test-static",
+        );
+    }
+    // Mock sync strategy for testing
+    struct MockSyncStrategy {
+        _config: Option<SyncConfig>,
+        sync_called: std::sync::Mutex<bool>,
+        should_fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl SyncStrategy for MockSyncStrategy {
+        fn new(_indexer_client: &MidnightIndexerClient, config: Option<SyncConfig>) -> Self {
+            Self {
+                _config: config,
+                sync_called: std::sync::Mutex::new(false),
+                should_fail: false,
+            }
+        }
+
+        async fn sync(
+            &mut self,
+            start_index: u64,
+            dispatcher: &mut EventDispatcher,
+            progress_tracker: &mut ProgressTracker,
+        ) -> Result<(), SyncError> {
+            *self.sync_called.lock().unwrap() = true;
+
+            if self.should_fail {
+                return Err(SyncError::SyncError("Mock sync failed".to_string()));
+            }
+
+            // Simulate some sync activity
+            progress_tracker.record_transaction(start_index + 1);
+            dispatcher
+                .dispatch(&SyncEvent::SyncCompleted)
+                .await
+                .unwrap();
+
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_manager_new() {
+        setup_test_env();
+
+        let seed = WalletSeed::from([1u8; 32]);
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let relayer_id = "test-relayer".to_string();
+        let indexer_urls = crate::config::network::IndexerUrls {
+            http: "http://localhost:8080".to_string(),
+            ws: "ws://localhost:8080".to_string(),
+        };
+        let indexer_client = MidnightIndexerClient::new(indexer_urls);
+
+        let manager = SyncManager::<MockSyncStrategy>::new(
+            &indexer_client,
+            &seed,
+            NetworkId::TestNet,
+            sync_state_store,
+            relayer_id,
+        );
+
+        assert!(manager.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_manager_sync_from_specific_index() {
+        setup_test_env();
+
+        let seed = WalletSeed::from([1u8; 32]);
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let relayer_id = "test-relayer".to_string();
+        let indexer_urls = crate::config::network::IndexerUrls {
+            http: "http://localhost:8080".to_string(),
+            ws: "ws://localhost:8080".to_string(),
+        };
+        let indexer_client = MidnightIndexerClient::new(indexer_urls);
+
+        let mut manager = SyncManager::<MockSyncStrategy>::new(
+            &indexer_client,
+            &seed,
+            NetworkId::TestNet,
+            sync_state_store.clone(),
+            relayer_id.clone(),
+        )
+        .unwrap();
+
+        // Sync from index 100
+        let result = manager.sync(Some(100)).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_manager_sync_incremental() {
+        setup_test_env();
+
+        let seed = WalletSeed::from([1u8; 32]);
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let relayer_id = "test-relayer".to_string();
+
+        // Pre-set a sync state
+        sync_state_store
+            .set_last_synced_index(&relayer_id, 500)
+            .unwrap();
+
+        let indexer_urls = crate::config::network::IndexerUrls {
+            http: "http://localhost:8080".to_string(),
+            ws: "ws://localhost:8080".to_string(),
+        };
+        let indexer_client = MidnightIndexerClient::new(indexer_urls);
+
+        let mut manager = SyncManager::<MockSyncStrategy>::new(
+            &indexer_client,
+            &seed,
+            NetworkId::TestNet,
+            sync_state_store.clone(),
+            relayer_id.clone(),
+        )
+        .unwrap();
+
+        // Sync incrementally (should start from 500)
+        let result = manager.sync_incremental().await;
+        assert!(result.is_ok());
+
+        // Verify sync was called - the mock doesn't actually update the state
+        // because SyncManager only saves state when there are real chronological updates
+        let stored_index = sync_state_store.get_last_synced_index(&relayer_id).unwrap();
+        assert_eq!(stored_index, Some(500)); // Should remain at the pre-set value
+    }
+
+    #[tokio::test]
+    async fn test_sync_manager_get_context() {
+        setup_test_env();
+
+        let seed = WalletSeed::from([1u8; 32]);
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let relayer_id = "test-relayer".to_string();
+        let indexer_urls = crate::config::network::IndexerUrls {
+            http: "http://localhost:8080".to_string(),
+            ws: "ws://localhost:8080".to_string(),
+        };
+        let indexer_client = MidnightIndexerClient::new(indexer_urls);
+
+        let manager = SyncManager::<MockSyncStrategy>::new(
+            &indexer_client,
+            &seed,
+            NetworkId::TestNet,
+            sync_state_store,
+            relayer_id,
+        )
+        .unwrap();
+
+        let context = manager.get_context();
+        assert!(Arc::strong_count(&context) > 1); // Manager holds one, we hold one
+    }
+
+    #[tokio::test]
+    async fn test_sync_manager_trait_implementation() {
+        setup_test_env();
+
+        let seed = WalletSeed::from([1u8; 32]);
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let relayer_id = "test-relayer".to_string();
+        let indexer_urls = crate::config::network::IndexerUrls {
+            http: "http://localhost:8080".to_string(),
+            ws: "ws://localhost:8080".to_string(),
+        };
+        let indexer_client = MidnightIndexerClient::new(indexer_urls);
+
+        let mut manager: Box<dyn SyncManagerTrait> = Box::new(
+            SyncManager::<MockSyncStrategy>::new(
+                &indexer_client,
+                &seed,
+                NetworkId::TestNet,
+                sync_state_store,
+                relayer_id,
+            )
+            .unwrap(),
+        );
+
+        // Test trait methods
+        let result = manager.sync(200).await;
+        assert!(result.is_ok());
+
+        let context = manager.get_context();
+        assert!(Arc::strong_count(&context) > 1);
+    }
+
+    #[test]
+    fn test_sync_config_default() {
+        let config = SyncConfig::default();
+        assert!(config.viewing_key.is_none());
+        assert_eq!(config.idle_timeout, Some(std::time::Duration::from_secs(5)));
+        assert_eq!(config.send_progress_events, Some(true));
+    }
+
+    #[test]
+    fn test_sync_config_custom() {
+        let config = SyncConfig {
+            viewing_key: None,
+            idle_timeout: Some(std::time::Duration::from_secs(10)),
+            send_progress_events: Some(false),
+        };
+        assert!(config.viewing_key.is_none());
+        assert_eq!(
+            config.idle_timeout,
+            Some(std::time::Duration::from_secs(10))
+        );
+        assert_eq!(config.send_progress_events, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_serialize_and_restore_context() {
+        setup_test_env();
+
+        let seed = WalletSeed::from([1u8; 32]);
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let relayer_id = "test-relayer".to_string();
+        let indexer_urls = crate::config::network::IndexerUrls {
+            http: "http://localhost:8080".to_string(),
+            ws: "ws://localhost:8080".to_string(),
+        };
+        let indexer_client = MidnightIndexerClient::new(indexer_urls);
+
+        // Create first manager
+        let _manager1 = SyncManager::<QuickSyncStrategy>::new(
+            &indexer_client,
+            &seed,
+            NetworkId::TestNet,
+            sync_state_store.clone(),
+            relayer_id.clone(),
+        )
+        .unwrap();
+
+        // Can't test private serialize_context method directly
+        // Save some dummy context to sync state
+        let dummy_context = vec![1, 2, 3, 4, 5];
+        sync_state_store
+            .set_sync_state(&relayer_id, 100, Some(dummy_context.clone()))
+            .unwrap();
+
+        // Create second manager - should attempt to restore context
+        let manager2 = SyncManager::<QuickSyncStrategy>::new(
+            &indexer_client,
+            &seed,
+            NetworkId::TestNet,
+            sync_state_store.clone(),
+            relayer_id.clone(),
+        );
+
+        assert!(manager2.is_ok()); // Should handle invalid data gracefully
+    }
+
+    #[test]
+    fn test_restore_context_invalid_data() {
+        setup_test_env();
+
+        let seed = WalletSeed::from([1u8; 32]);
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let relayer_id = "test-relayer".to_string();
+        let indexer_urls = crate::config::network::IndexerUrls {
+            http: "http://localhost:8080".to_string(),
+            ws: "ws://localhost:8080".to_string(),
+        };
+        let indexer_client = MidnightIndexerClient::new(indexer_urls.clone());
+
+        // Save invalid data
+        sync_state_store
+            .set_ledger_context(&relayer_id, vec![1, 2, 3, 4, 5]) // Invalid serialized data
+            .unwrap();
+
+        // Create manager - should handle invalid data gracefully
+        let manager = SyncManager::<QuickSyncStrategy>::new(
+            &indexer_client,
+            &seed,
+            NetworkId::TestNet,
+            sync_state_store,
+            relayer_id,
+        );
+
+        assert!(manager.is_ok()); // Should not fail, just start fresh
     }
 }

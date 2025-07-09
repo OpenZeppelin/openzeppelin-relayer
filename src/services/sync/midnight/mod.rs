@@ -2,6 +2,9 @@ pub mod handler;
 pub mod indexer;
 pub mod utils;
 
+#[cfg(test)]
+pub mod test_utils;
+
 use crate::services::midnight::indexer::IndexerError;
 
 ///

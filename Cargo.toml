@@ -125,6 +125,10 @@ path = "src/main.rs"
 doc = true
 doctest = true
 
+[[bin]]
+name = "generate_midnight_fixtures"
+path = "scripts/fixtures/generate_midnight_fixtures.rs"
+
 [[example]]
 name = "test_tx"
 path = "helpers/test_tx.rs"

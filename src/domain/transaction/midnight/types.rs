@@ -237,9 +237,27 @@ pub const DUST_TOKEN_TYPE: TokenType = NATIVE_TOKEN;
 
 pub fn to_midnight_network_id(network: &str) -> NetworkId {
     match network.to_lowercase().as_str() {
+        "mainnet" => NetworkId::MainNet,
         "devnet" => NetworkId::DevNet,
         "testnet" => NetworkId::TestNet,
-        "mainnet" => NetworkId::MainNet,
         _ => NetworkId::Undeployed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use midnight_node_ledger_helpers::NetworkId;
+
+    #[test]
+    fn test_to_midnight_network_id() {
+        assert_eq!(to_midnight_network_id("mainnet"), NetworkId::MainNet);
+        assert_eq!(to_midnight_network_id("MAINNET"), NetworkId::MainNet);
+        assert_eq!(to_midnight_network_id("testnet"), NetworkId::TestNet);
+        assert_eq!(to_midnight_network_id("TESTNET"), NetworkId::TestNet);
+        assert_eq!(to_midnight_network_id("devnet"), NetworkId::DevNet);
+        assert_eq!(to_midnight_network_id("DEVNET"), NetworkId::DevNet);
+        assert_eq!(to_midnight_network_id("localnet"), NetworkId::Undeployed);
+        assert_eq!(to_midnight_network_id("random"), NetworkId::Undeployed);
     }
 }

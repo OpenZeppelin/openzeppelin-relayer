@@ -326,4 +326,99 @@ mod tests {
             assert_eq!(store.get_last_synced_index(&relayer_id).unwrap(), Some(99));
         }
     }
+
+    #[test]
+    fn test_set_sync_state_overwrite() {
+        let store = InMemorySyncState::new();
+        let relayer_id = "relayer_1";
+
+        // Set initial state
+        store
+            .set_sync_state(relayer_id, 100, Some(vec![1, 2, 3]))
+            .unwrap();
+        assert_eq!(store.get_last_synced_index(relayer_id).unwrap(), Some(100));
+        assert_eq!(
+            store.get_ledger_context(relayer_id).unwrap(),
+            Some(vec![1, 2, 3])
+        );
+
+        // Overwrite with new state
+        store
+            .set_sync_state(relayer_id, 200, Some(vec![4, 5, 6]))
+            .unwrap();
+        assert_eq!(store.get_last_synced_index(relayer_id).unwrap(), Some(200));
+        assert_eq!(
+            store.get_ledger_context(relayer_id).unwrap(),
+            Some(vec![4, 5, 6])
+        );
+
+        // Overwrite with no context
+        store.set_sync_state(relayer_id, 300, None).unwrap();
+        assert_eq!(store.get_last_synced_index(relayer_id).unwrap(), Some(300));
+        assert_eq!(store.get_ledger_context(relayer_id).unwrap(), None);
+    }
+
+    #[test]
+    fn test_ledger_context_independence() {
+        let store = InMemorySyncState::new();
+
+        // Set ledger context without index
+        store
+            .set_ledger_context("relayer_1", vec![1, 2, 3])
+            .unwrap();
+        assert_eq!(store.get_last_synced_index("relayer_1").unwrap(), Some(0));
+        assert_eq!(
+            store.get_ledger_context("relayer_1").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+
+        // Update index without affecting context
+        store.set_last_synced_index("relayer_1", 100).unwrap();
+        assert_eq!(store.get_last_synced_index("relayer_1").unwrap(), Some(100));
+        assert_eq!(
+            store.get_ledger_context("relayer_1").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+
+        // Update context without affecting index
+        store
+            .set_ledger_context("relayer_1", vec![4, 5, 6])
+            .unwrap();
+        assert_eq!(store.get_last_synced_index("relayer_1").unwrap(), Some(100));
+        assert_eq!(
+            store.get_ledger_context("relayer_1").unwrap(),
+            Some(vec![4, 5, 6])
+        );
+    }
+
+    #[test]
+    fn test_empty_ledger_context() {
+        let store = InMemorySyncState::new();
+        let relayer_id = "relayer_1";
+
+        // Set empty context
+        store.set_ledger_context(relayer_id, vec![]).unwrap();
+        assert_eq!(store.get_ledger_context(relayer_id).unwrap(), Some(vec![]));
+
+        // Empty context is different from None
+        store.reset(relayer_id).unwrap();
+        assert_eq!(store.get_ledger_context(relayer_id).unwrap(), None);
+    }
+
+    #[test]
+    fn test_large_ledger_context() {
+        let store = InMemorySyncState::new();
+        let relayer_id = "relayer_1";
+
+        // Create a large context (simulating serialized ledger state)
+        let large_context: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+
+        store
+            .set_ledger_context(relayer_id, large_context.clone())
+            .unwrap();
+        let retrieved = store.get_ledger_context(relayer_id).unwrap().unwrap();
+
+        assert_eq!(retrieved.len(), large_context.len());
+        assert_eq!(retrieved, large_context);
+    }
 }
