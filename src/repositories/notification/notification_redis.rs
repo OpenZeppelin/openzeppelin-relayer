@@ -2,7 +2,7 @@
 
 use crate::models::{NotificationRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
-use crate::repositories::{PaginatedResult, Repository};
+use crate::repositories::{BatchRetrievalResult, PaginatedResult, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
@@ -55,10 +55,13 @@ impl RedisNotificationRepository {
     async fn get_notifications_by_ids(
         &self,
         ids: &[String],
-    ) -> Result<Vec<NotificationRepoModel>, RepositoryError> {
+    ) -> Result<BatchRetrievalResult<NotificationRepoModel>, RepositoryError> {
         if ids.is_empty() {
             debug!("No notification IDs provided for batch fetch");
-            return Ok(vec![]);
+            return Ok(BatchRetrievalResult {
+                results: vec![],
+                failed_ids: vec![],
+            });
         }
 
         let mut conn = self.client.as_ref().clone();
@@ -73,7 +76,7 @@ impl RedisNotificationRepository {
 
         let mut notifications = Vec::new();
         let mut failed_count = 0;
-
+        let mut failed_ids = Vec::new();
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
@@ -86,6 +89,7 @@ impl RedisNotificationRepository {
                         Err(e) => {
                             failed_count += 1;
                             error!("Failed to deserialize notification {}: {}", ids[i], e);
+                            failed_ids.push(ids[i].clone());
                             // Continue processing other notifications
                         }
                     }
@@ -104,8 +108,13 @@ impl RedisNotificationRepository {
             );
         }
 
+        warn!("Failed to deserialize notifications: {:?}", failed_ids);
+
         debug!("Successfully fetched {} notifications", notifications.len());
-        Ok(notifications)
+        Ok(BatchRetrievalResult {
+            results: notifications,
+            failed_ids,
+        })
     }
 }
 
@@ -218,7 +227,8 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         debug!("Found {} notification IDs", notification_ids.len());
 
-        self.get_notifications_by_ids(&notification_ids).await
+        let notifications = self.get_notifications_by_ids(&notification_ids).await?;
+        Ok(notifications.results)
     }
 
     async fn list_paginated(
@@ -266,12 +276,12 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         debug!(
             "Successfully fetched {} notifications for page {}",
-            items.len(),
+            items.results.len(),
             query.page
         );
 
         Ok(PaginatedResult {
-            items,
+            items: items.results.clone(),
             total,
             page: query.page,
             per_page: query.per_page,

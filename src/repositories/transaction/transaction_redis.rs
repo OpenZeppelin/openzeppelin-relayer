@@ -5,7 +5,9 @@ use crate::models::{
     TransactionStatus, TransactionUpdateRequest,
 };
 use crate::repositories::redis_base::RedisRepository;
-use crate::repositories::{PaginatedResult, Repository, TransactionRepository};
+use crate::repositories::{
+    BatchRetrievalResult, PaginatedResult, Repository, TransactionRepository,
+};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
@@ -86,10 +88,13 @@ impl RedisTransactionRepository {
     async fn get_transactions_by_ids(
         &self,
         ids: &[String],
-    ) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
+    ) -> Result<BatchRetrievalResult<TransactionRepoModel>, RepositoryError> {
         if ids.is_empty() {
             debug!("No transaction IDs provided for batch fetch");
-            return Ok(vec![]);
+            return Ok(BatchRetrievalResult {
+                results: vec![],
+                failed_ids: vec![],
+            });
         }
 
         let mut conn = self.client.as_ref().clone();
@@ -105,7 +110,7 @@ impl RedisTransactionRepository {
 
         let mut tx_keys = Vec::new();
         let mut valid_ids = Vec::new();
-
+        let mut failed_ids = Vec::new();
         for (i, relayer_id) in relayer_ids.into_iter().enumerate() {
             match relayer_id {
                 Some(relayer_id) => {
@@ -114,13 +119,17 @@ impl RedisTransactionRepository {
                 }
                 None => {
                     warn!("No relayer found for transaction {}", ids[i]);
+                    failed_ids.push(ids[i].clone());
                 }
             }
         }
 
         if tx_keys.is_empty() {
             debug!("No valid transactions found for batch fetch");
-            return Ok(vec![]);
+            return Ok(BatchRetrievalResult {
+                results: vec![],
+                failed_ids,
+            });
         }
 
         debug!("Batch fetching {} transaction data", tx_keys.len());
@@ -132,7 +141,7 @@ impl RedisTransactionRepository {
 
         let mut transactions = Vec::new();
         let mut failed_count = 0;
-
+        let mut failed_ids = Vec::new();
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
@@ -151,6 +160,7 @@ impl RedisTransactionRepository {
                 }
                 None => {
                     warn!("Transaction {} not found in batch fetch", valid_ids[i]);
+                    failed_ids.push(valid_ids[i].clone());
                 }
             }
         }
@@ -164,7 +174,10 @@ impl RedisTransactionRepository {
         }
 
         debug!("Successfully fetched {} transactions", transactions.len());
-        Ok(transactions)
+        Ok(BatchRetrievalResult {
+            results: transactions,
+            failed_ids,
+        })
     }
 
     /// Extract nonce from EVM transaction data
@@ -438,7 +451,8 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         debug!("Found {} transaction IDs", all_tx_ids.len());
 
-        self.get_transactions_by_ids(&all_tx_ids).await
+        let transactions = self.get_transactions_by_ids(&all_tx_ids).await?;
+        Ok(transactions.results)
     }
 
     async fn list_paginated(
@@ -518,12 +532,12 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         debug!(
             "Successfully fetched {} transactions for page {}",
-            items.len(),
+            items.results.len(),
             query.page
         );
 
         Ok(PaginatedResult {
-            items,
+            items: items.results.clone(),
             total,
             page: query.page,
             per_page: query.per_page,
@@ -691,7 +705,7 @@ impl TransactionRepository for RedisTransactionRepository {
         let items = self.get_transactions_by_ids(page_ids).await?;
 
         Ok(PaginatedResult {
-            items,
+            items: items.results.clone(),
             total,
             page: query.page,
             per_page: query.per_page,
@@ -721,7 +735,8 @@ impl TransactionRepository for RedisTransactionRepository {
         all_ids.sort();
         all_ids.dedup();
 
-        self.get_transactions_by_ids(&all_ids).await
+        let transactions = self.get_transactions_by_ids(&all_ids).await?;
+        Ok(transactions.results)
     }
 
     async fn find_by_nonce(

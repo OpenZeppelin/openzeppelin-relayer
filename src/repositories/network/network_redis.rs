@@ -8,7 +8,7 @@
 use super::NetworkRepository;
 use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
-use crate::repositories::{PaginatedResult, PaginationQuery, Repository};
+use crate::repositories::{BatchRetrievalResult, PaginatedResult, PaginationQuery, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
@@ -186,10 +186,13 @@ impl RedisNetworkRepository {
     async fn get_networks_by_ids(
         &self,
         ids: &[String],
-    ) -> Result<Vec<NetworkRepoModel>, RepositoryError> {
+    ) -> Result<BatchRetrievalResult<NetworkRepoModel>, RepositoryError> {
         if ids.is_empty() {
             debug!("No network IDs provided for batch fetch");
-            return Ok(vec![]);
+            return Ok(BatchRetrievalResult {
+                results: vec![],
+                failed_ids: vec![],
+            });
         }
 
         let mut conn = self.client.as_ref().clone();
@@ -204,6 +207,7 @@ impl RedisNetworkRepository {
 
         let mut networks = Vec::new();
         let mut failed_count = 0;
+        let mut failed_ids = Vec::new();
 
         for (i, value) in values.into_iter().enumerate() {
             match value {
@@ -213,6 +217,7 @@ impl RedisNetworkRepository {
                         Err(e) => {
                             failed_count += 1;
                             error!("Failed to deserialize network {}: {}", ids[i], e);
+                            failed_ids.push(ids[i].clone());
                         }
                     }
                 }
@@ -228,10 +233,14 @@ impl RedisNetworkRepository {
                 failed_count,
                 ids.len()
             );
+            warn!("Failed to deserialize networks: {:?}", failed_ids);
         }
 
         debug!("Successfully fetched {} networks", networks.len());
-        Ok(networks)
+        Ok(BatchRetrievalResult {
+            results: networks,
+            failed_ids,
+        })
     }
 }
 
@@ -348,8 +357,8 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         }
 
         let networks = self.get_networks_by_ids(&ids).await?;
-        debug!("Successfully retrieved {} networks", networks.len());
-        Ok(networks)
+        debug!("Successfully retrieved {} networks", networks.results.len());
+        Ok(networks.results)
     }
 
     async fn list_paginated(
@@ -401,11 +410,11 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         debug!(
             "Successfully retrieved {} networks for page {}",
-            networks.len(),
+            networks.results.len(),
             query.page
         );
         Ok(PaginatedResult {
-            items: networks,
+            items: networks.results.clone(),
             total,
             page: query.page,
             per_page: query.per_page,

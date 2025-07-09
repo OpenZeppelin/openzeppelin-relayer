@@ -38,6 +38,12 @@ pub struct PaginatedResult<T> {
     pub page: u32,
     pub per_page: u32,
 }
+
+pub struct BatchRetrievalResult<T> {
+    pub results: Vec<T>,
+    pub failed_ids: Vec<String>,
+}
+
 #[cfg(test)]
 use mockall::automock;
 

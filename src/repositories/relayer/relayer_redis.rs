@@ -3,7 +3,7 @@
 use crate::domain::RelayerUpdateRequest;
 use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
-use crate::repositories::{PaginatedResult, RelayerRepository, Repository};
+use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
 use async_trait::async_trait;
 use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
@@ -53,10 +53,13 @@ impl RedisRelayerRepository {
     async fn get_relayers_by_ids(
         &self,
         ids: &[String],
-    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+    ) -> Result<BatchRetrievalResult<RelayerRepoModel>, RepositoryError> {
         if ids.is_empty() {
             debug!("No relayer IDs provided for batch fetch");
-            return Ok(vec![]);
+            return Ok(BatchRetrievalResult {
+                results: vec![],
+                failed_ids: vec![],
+            });
         }
 
         let mut conn = self.client.as_ref().clone();
@@ -71,7 +74,7 @@ impl RedisRelayerRepository {
 
         let mut relayers = Vec::new();
         let mut failed_count = 0;
-
+        let mut failed_ids = Vec::new();
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
@@ -80,6 +83,7 @@ impl RedisRelayerRepository {
                         Err(e) => {
                             failed_count += 1;
                             error!("Failed to deserialize relayer {}: {}", ids[i], e);
+                            failed_ids.push(ids[i].clone());
                             // Continue processing other relayers
                         }
                     }
@@ -99,7 +103,10 @@ impl RedisRelayerRepository {
         }
 
         debug!("Successfully fetched {} relayers", relayers.len());
-        Ok(relayers)
+        Ok(BatchRetrievalResult {
+            results: relayers,
+            failed_ids,
+        })
     }
 }
 
@@ -204,7 +211,8 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
 
         debug!("Found {} relayers in index", relayer_ids.len());
 
-        self.get_relayers_by_ids(&relayer_ids).await
+        let relayers = self.get_relayers_by_ids(&relayer_ids).await?;
+        Ok(relayers.results)
     }
 
     async fn list_paginated(
@@ -254,7 +262,7 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
         let items = self.get_relayers_by_ids(page_ids).await?;
 
         Ok(PaginatedResult {
-            items,
+            items: items.results.clone(),
             total,
             page: query.page,
             per_page: query.per_page,
