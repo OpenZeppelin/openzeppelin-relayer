@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -7,6 +9,8 @@ pub struct PluginModel {
     pub id: String,
     /// Plugin path
     pub path: String,
+    /// Plugin timeout
+    pub timeout: Duration,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

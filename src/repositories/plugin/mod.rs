@@ -30,13 +30,14 @@ pub use plugin_redis::*;
 
 use async_trait::async_trait;
 use redis::aio::ConnectionManager;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 #[cfg(test)]
 use mockall::automock;
 
 use crate::{
     config::PluginFileConfig,
+    constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
     models::{PluginModel, RepositoryError},
     repositories::ConversionError,
 };
@@ -91,9 +92,12 @@ impl TryFrom<PluginFileConfig> for PluginModel {
     type Error = ConversionError;
 
     fn try_from(config: PluginFileConfig) -> Result<Self, Self::Error> {
+        let timeout = Duration::from_secs(config.timeout.unwrap_or(DEFAULT_PLUGIN_TIMEOUT_SECONDS));
+
         Ok(PluginModel {
             id: config.id.clone(),
             path: config.path.clone(),
+            timeout,
         })
     }
 }
@@ -101,5 +105,32 @@ impl TryFrom<PluginFileConfig> for PluginModel {
 impl PartialEq for PluginModel {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id && self.path == other.path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{config::PluginFileConfig, constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS};
+    use std::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_try_from() {
+        let plugin = PluginFileConfig {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: None,
+        };
+        let result = PluginModel::try_from(plugin);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            PluginModel {
+                id: "test-plugin".to_string(),
+                path: "test-path".to_string(),
+                timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            }
+        );
     }
 }

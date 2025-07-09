@@ -5,8 +5,8 @@ use std::sync::Arc;
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        AppState, NetworkRepoModel, NotificationRepoModel, PluginCallRequest, RelayerRepoModel,
-        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        AppState, NetworkRepoModel, NotificationRepoModel, PluginCallRequest, PluginModel,
+        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -44,6 +44,12 @@ pub enum PluginError {
     RelayerError(String),
     #[error("Plugin execution error: {0}")]
     PluginExecutionError(String),
+    #[error("Script execution timed out after {0} seconds")]
+    ScriptTimeout(u64),
+    #[error("Invalid method: {0}")]
+    InvalidMethod(String),
+    #[error("Invalid payload: {0}")]
+    InvalidPayload(String),
 }
 
 impl From<PluginError> for String {
@@ -92,17 +98,23 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
     >(
         &self,
-        script_path: String,
+        plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<PluginCallResponse, PluginError> {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
-        let resolved_script_path = Self::resolve_plugin_path(&script_path);
+        let script_path = Self::resolve_plugin_path(&plugin.path);
         let script_params = plugin_call_request.params.to_string();
 
         let result = self
             .runner
-            .run(&socket_path, resolved_script_path, script_params, state)
+            .run(
+                &socket_path,
+                script_path,
+                plugin.timeout,
+                script_params,
+                state,
+            )
             .await;
 
         match result {
@@ -135,7 +147,7 @@ pub trait PluginServiceTrait<
     fn new(runner: PluginRunner) -> Self;
     async fn call_plugin(
         &self,
-        script_path: String,
+        plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError>;
@@ -159,18 +171,20 @@ impl<
 
     async fn call_plugin(
         &self,
-        script_path: String,
+        plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError> {
-        self.call_plugin(script_path, plugin_call_request, state)
-            .await
+        self.call_plugin(plugin, plugin_call_request, state).await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::{
+        constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
         models::PluginModel,
         repositories::{
@@ -206,6 +220,7 @@ mod tests {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
         let app_state: AppState<
             MockJobProducerTrait,
@@ -216,13 +231,13 @@ mod tests {
             SignerRepositoryStorage,
             TransactionCounterRepositoryStorage,
             PluginRepositoryStorage,
-        > = create_mock_app_state(None, None, None, Some(vec![plugin])).await;
+        > = create_mock_app_state(None, None, None, Some(vec![plugin.clone()]), None).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, TransactionRepositoryStorage, RelayerRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>()
-            .returning(|_, _, _, _| {
+            .returning(|_, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,
@@ -237,7 +252,7 @@ mod tests {
         let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
         let result = plugin_service
             .call_plugin(
-                "test-plugin".to_string(),
+                plugin,
                 PluginCallRequest {
                     params: serde_json::Value::Null,
                 },

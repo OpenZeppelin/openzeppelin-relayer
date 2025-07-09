@@ -229,7 +229,7 @@ mod tests {
 
         let service = SocketService::new(socket_path.to_str().unwrap()).unwrap();
 
-        let state = create_mock_app_state(None, None, None, None).await;
+        let state = create_mock_app_state(None, None, None, None, None).await;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let listen_handle = tokio::spawn(async move {
@@ -268,7 +268,7 @@ mod tests {
 
         let service = SocketService::new(socket_path.to_str().unwrap()).unwrap();
 
-        let state = create_mock_app_state(None, None, None, None).await;
+        let state = create_mock_app_state(None, None, None, None, None).await;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let listen_handle = tokio::spawn(async move {

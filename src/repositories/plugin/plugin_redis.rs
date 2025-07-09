@@ -144,13 +144,15 @@ impl PluginRepositoryTrait for RedisPluginRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS;
     use crate::models::PluginModel;
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     fn create_test_plugin(id: &str, path: &str) -> PluginModel {
         PluginModel {
             id: id.to_string(),
             path: path.to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         }
     }
 

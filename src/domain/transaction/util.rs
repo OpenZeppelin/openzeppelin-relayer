@@ -7,8 +7,15 @@ use actix_web::web::ThinData;
 
 use crate::{
     domain::get_relayer_by_id,
-    models::{ApiError, DefaultAppState, RelayerRepoModel, TransactionError, TransactionRepoModel},
-    repositories::Repository,
+    jobs::JobProducerTrait,
+    models::{
+        ApiError, DefaultAppState, NetworkRepoModel, NotificationRepoModel, RelayerRepoModel,
+        SignerRepoModel, ThinDataAppState, TransactionError, TransactionRepoModel,
+    },
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
 };
 
 use super::{NetworkTransaction, RelayerTransactionFactory};
@@ -24,9 +31,18 @@ use super::{NetworkTransaction, RelayerTransactionFactory};
 ///
 /// A `Result` containing a `TransactionRepoModel` if successful, or an `ApiError` if an error
 /// occurs.
-pub async fn get_transaction_by_id(
+pub async fn get_transaction_by_id<
+    J: JobProducerTrait + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+>(
     transaction_id: String,
-    state: &ThinData<DefaultAppState>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<TransactionRepoModel, ApiError> {
     state
         .transaction_repository

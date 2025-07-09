@@ -52,7 +52,7 @@ pub async fn call_plugin<
     let plugin_runner = PluginRunner;
     let plugin_service = PluginService::new(plugin_runner);
     let result = plugin_service
-        .call_plugin(plugin.path, plugin_call_request, Arc::new(state))
+        .call_plugin(plugin, plugin_call_request, Arc::new(state))
         .await;
 
     match result {
@@ -63,17 +63,24 @@ pub async fn call_plugin<
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use crate::{models::PluginModel, utils::mocks::mockutils::create_mock_app_state};
     use actix_web::web;
+
+    use crate::{
+        constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS, models::PluginModel,
+        utils::mocks::mockutils::create_mock_app_state,
+    };
 
     #[actix_web::test]
     async fn test_call_plugin() {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
-        let app_state = create_mock_app_state(None, None, None, Some(vec![plugin])).await;
+        let app_state = create_mock_app_state(None, None, None, Some(vec![plugin]), None).await;
         let plugin_call_request = PluginCallRequest {
             params: serde_json::json!({"key":"value"}),
         };

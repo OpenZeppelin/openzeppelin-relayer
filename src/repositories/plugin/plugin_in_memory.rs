@@ -6,6 +6,7 @@ use crate::{
     models::PluginModel,
     repositories::{PluginRepositoryTrait, RepositoryError},
 };
+
 use async_trait::async_trait;
 
 use std::collections::HashMap;
@@ -70,10 +71,10 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::PluginFileConfig;
+    use crate::{config::PluginFileConfig, constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS};
 
     use super::*;
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     #[tokio::test]
     async fn test_in_memory_plugin_repository() {
@@ -83,6 +84,7 @@ mod tests {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(
@@ -104,6 +106,7 @@ mod tests {
         let plugin = PluginFileConfig {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: None,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());
@@ -112,6 +115,7 @@ mod tests {
             PluginModel {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
+                timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             }
         );
     }
@@ -123,6 +127,7 @@ mod tests {
         let plugin = PluginModel {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
         plugin_repository.add(plugin.clone()).await.unwrap();
         assert_eq!(

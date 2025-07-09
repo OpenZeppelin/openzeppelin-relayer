@@ -3,15 +3,17 @@ pub mod mockutils {
     use std::sync::Arc;
 
     use alloy::primitives::U256;
+    use chrono::Utc;
     use secrets::SecretVec;
 
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
         models::{
-            AppState, EvmTransactionRequest, LocalSignerConfig, NetworkRepoModel, NetworkType,
-            PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfig,
-            SignerRepoModel,
+            AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfig,
+            NetworkRepoModel, NetworkTransactionData, NetworkType, PluginModel, RelayerEvmPolicy,
+            RelayerNetworkPolicy, RelayerRepoModel, SignerConfig, SignerRepoModel,
+            TransactionRepoModel, TransactionStatus,
         },
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
@@ -74,11 +76,31 @@ pub mod mockutils {
         }
     }
 
+    pub fn create_mock_transaction() -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData::default()),
+            priced_at: None,
+            hashes: vec![],
+            network_type: NetworkType::Evm,
+            noop_count: None,
+            is_canceled: None,
+        }
+    }
+
     pub async fn create_mock_app_state(
         relayers: Option<Vec<RelayerRepoModel>>,
         signers: Option<Vec<SignerRepoModel>>,
         networks: Option<Vec<NetworkRepoModel>>,
         plugins: Option<Vec<PluginModel>>,
+        transactions: Option<Vec<TransactionRepoModel>>,
     ) -> AppState<
         MockJobProducerTrait,
         RelayerRepositoryStorage,
@@ -117,6 +139,13 @@ pub mod mockutils {
             }
         }
 
+        let transaction_repository = Arc::new(TransactionRepositoryStorage::new_in_memory());
+        if let Some(transactions) = transactions {
+            for transaction in transactions {
+                transaction_repository.create(transaction).await.unwrap();
+            }
+        }
+
         let mut mock_job_producer = MockJobProducerTrait::new();
 
         mock_job_producer
@@ -141,7 +170,7 @@ pub mod mockutils {
 
         AppState {
             relayer_repository,
-            transaction_repository: Arc::new(TransactionRepositoryStorage::new_in_memory()),
+            transaction_repository,
             signer_repository,
             notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
             network_repository,
