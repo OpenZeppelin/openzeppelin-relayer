@@ -318,14 +318,11 @@ mod tests {
 
         let serialized = serde_json::to_string(&notification_send).unwrap();
 
-        println!("serialized: {}", serialized);
         match serde_json::from_str::<NotificationSend>(&serialized) {
             Ok(deserialized) => {
-                println!("deserialized: {:?}", deserialized);
                 assert_eq!(notification_send, deserialized);
             }
             Err(e) => {
-                eprintln!("Failed to deserialize NotificationSend: {}", e);
                 panic!("Deserialization error: {}", e);
             }
         }
@@ -362,14 +359,11 @@ mod tests {
 
         let serialized = serde_json::to_string(&notification_send).unwrap();
 
-        println!("serialized: {}", serialized);
         match serde_json::from_str::<NotificationSend>(&serialized) {
             Ok(deserialized) => {
-                println!("deserialized: {:?}", deserialized);
                 assert_eq!(notification_send, deserialized);
             }
             Err(e) => {
-                eprintln!("Failed to deserialize NotificationSend: {}", e);
                 panic!("Deserialization error: {}", e);
             }
         }
