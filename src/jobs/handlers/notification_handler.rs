@@ -73,8 +73,8 @@ mod tests {
     #[tokio::test]
     async fn test_notification_job_creation() {
         // Create a basic notification webhook payload
-        let payload =
-            WebhookPayload::Transaction(TransactionResponse::Evm(EvmTransactionResponse {
+        let payload = WebhookPayload::Transaction(TransactionResponse::Evm(Box::new(
+            EvmTransactionResponse {
                 id: "tx123".to_string(),
                 hash: Some("0x123".to_string()),
                 status: TransactionStatus::Confirmed,
@@ -94,7 +94,8 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 signature: None,
                 speed: None,
-            }));
+            },
+        )));
 
         // Create a notification
         let notification = WebhookNotification::new("test_event".to_string(), payload);
@@ -113,8 +114,8 @@ mod tests {
     async fn test_notification_job_with_different_payloads() {
         // Test with different payload types
 
-        let transaction_payload =
-            WebhookPayload::Transaction(TransactionResponse::Evm(EvmTransactionResponse {
+        let transaction_payload = WebhookPayload::Transaction(TransactionResponse::Evm(Box::new(
+            EvmTransactionResponse {
                 id: "tx123".to_string(),
                 hash: Some("0x123".to_string()),
                 status: TransactionStatus::Confirmed,
@@ -134,14 +135,15 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 signature: None,
                 speed: None,
-            }));
+            },
+        )));
 
         let string_notification =
             WebhookNotification::new("transaction_payload".to_string(), transaction_payload);
         let job = NotificationSend::new("notification-string".to_string(), string_notification);
         assert_eq!(job.notification.event, "transaction_payload");
 
-        let relayer_disabled = WebhookPayload::RelayerDisabled(RelayerDisabledPayload {
+        let relayer_disabled = WebhookPayload::RelayerDisabled(Box::new(RelayerDisabledPayload {
             relayer: RelayerResponse {
                 id: "relayer-1".to_string(),
                 name: "relayer-1".to_string(),
@@ -159,7 +161,7 @@ mod tests {
                 system_disabled: false,
             },
             disable_reason: "test".to_string(),
-        });
+        }));
         let object_notification =
             WebhookNotification::new("object_event".to_string(), relayer_disabled);
         let job = NotificationSend::new("notification-object".to_string(), object_notification);

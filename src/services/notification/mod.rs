@@ -138,7 +138,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn mock_transaction_response() -> TransactionResponse {
-        TransactionResponse::Evm(EvmTransactionResponse {
+        TransactionResponse::Evm(Box::new(EvmTransactionResponse {
             id: "tx_123".to_string(),
             hash: Some("0x123...".to_string()),
             status: TransactionStatus::Pending,
@@ -158,7 +158,7 @@ mod tests {
             max_priority_fee_per_gas: None,
             signature: None,
             speed: None,
-        })
+        }))
     }
 
     #[tokio::test]
