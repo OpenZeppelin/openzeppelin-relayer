@@ -346,7 +346,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let ids = self.get_all_ids().await?;
 
         if ids.is_empty() {
-            debug!("No networks found");
+            debug!("No signers found");
             return Ok(Vec::new());
         }
 
