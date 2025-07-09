@@ -29,7 +29,12 @@ use std::sync::Arc;
 /// # Returns
 ///
 /// The result of the plugin call.
-pub async fn call_plugin<
+pub async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    plugin_id: String,
+    plugin_call_request: PluginCallRequest,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -38,11 +43,7 @@ pub async fn call_plugin<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    plugin_id: String,
-    plugin_call_request: PluginCallRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<HttpResponse, ApiError> {
+{
     let plugin = state
         .plugin_repository
         .get_by_id(&plugin_id)

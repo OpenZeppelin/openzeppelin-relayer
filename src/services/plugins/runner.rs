@@ -32,23 +32,27 @@ use mockall::automock;
 #[async_trait]
 pub trait PluginRunnerTrait {
     #[allow(clippy::type_complexity)]
-    async fn run<
-        J: JobProducerTrait + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-    >(
+    async fn run<J, RR, TR, NR, NFR, SR, TCR, PR>(
         &self,
         socket_path: &str,
         script_path: String,
         timeout_duration: Duration,
         script_params: String,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
-    ) -> Result<ScriptResult, PluginError>;
+    ) -> Result<ScriptResult, PluginError>
+    where
+        J: JobProducerTrait + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static;
 }
 
 #[derive(Default)]
@@ -56,23 +60,28 @@ pub struct PluginRunner;
 
 #[allow(clippy::type_complexity)]
 impl PluginRunner {
-    async fn run<
-        J: JobProducerTrait + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-    >(
+    async fn run<J, RR, TR, NR, NFR, SR, TCR, PR>(
         &self,
         socket_path: &str,
         script_path: String,
         timeout_duration: Duration,
         script_params: String,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
-    ) -> Result<ScriptResult, PluginError> {
+    ) -> Result<ScriptResult, PluginError>
+    where
+        J: JobProducerTrait + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    {
         let socket_service = SocketService::new(socket_path)?;
         let socket_path_clone = socket_service.socket_path().to_string();
 
@@ -118,23 +127,28 @@ impl PluginRunner {
 
 #[async_trait]
 impl PluginRunnerTrait for PluginRunner {
-    async fn run<
-        J: JobProducerTrait + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-    >(
+    async fn run<J, RR, TR, NR, NFR, SR, TCR, PR>(
         &self,
         socket_path: &str,
         script_path: String,
         timeout_duration: Duration,
         script_params: String,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
-    ) -> Result<ScriptResult, PluginError> {
+    ) -> Result<ScriptResult, PluginError>
+    where
+        J: JobProducerTrait + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    {
         self.run(
             socket_path,
             script_path,
@@ -197,7 +211,7 @@ mod tests {
 
         let plugin_runner = PluginRunner;
         let result = plugin_runner
-            .run::<MockJobProducerTrait, TransactionRepositoryStorage, RelayerRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>(
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>(
                 &socket_path.display().to_string(),
                 script_path.display().to_string(),
                 Duration::from_secs(10),
@@ -244,7 +258,7 @@ mod tests {
 
         // Use 100ms timeout for a 200ms script
         let result = plugin_runner
-        .run::<MockJobProducerTrait, TransactionRepositoryStorage, RelayerRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>(
+        .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>(
             &socket_path.display().to_string(),
                 script_path.display().to_string(),
                 Duration::from_millis(100), // 100ms timeout

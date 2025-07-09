@@ -25,7 +25,11 @@ use secrets::SecretVec;
 use zeroize::Zeroizing;
 
 /// Process all plugins from the config file and store them in the repository.
-async fn process_plugins<
+async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    config_file: &Config,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<()>
+where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -34,10 +38,7 @@ async fn process_plugins<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<()> {
+{
     if let Some(plugins) = &config_file.plugins {
         let plugin_futures = plugins.iter().map(|plugin| async {
             let plugin_model = PluginModel::try_from(plugin.clone())
@@ -240,7 +241,11 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes signers in parallel using futures.
-async fn process_signers<
+async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    config_file: &Config,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<()>
+where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -249,10 +254,7 @@ async fn process_signers<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<()> {
+{
     let signer_futures = config_file.signers.iter().map(|signer| async {
         let signer_repo_model = process_signer(signer).await?;
 
@@ -277,7 +279,11 @@ async fn process_signers<
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes notifications in parallel using futures.
-async fn process_notifications<
+async fn process_notifications<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    config_file: &Config,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<()>
+where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -286,10 +292,7 @@ async fn process_notifications<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<()> {
+{
     let notification_futures = config_file.notifications.iter().map(|notification| async {
         let notification_repo_model = NotificationRepoModel::try_from(notification.clone())
             .wrap_err("Failed to convert notification config")?;
@@ -315,7 +318,11 @@ async fn process_notifications<
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes networks in parallel using futures.
-async fn process_networks<
+async fn process_networks<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    config_file: &Config,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<()>
+where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -324,10 +331,7 @@ async fn process_networks<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<()> {
+{
     let network_futures = config_file.networks.iter().map(|network| async move {
         let network_repo_model = NetworkRepoModel::try_from(network.clone())?;
 
@@ -355,7 +359,11 @@ async fn process_networks<
 /// 5. Store the resulting model in the repository
 ///
 /// This function processes relayers in parallel using futures.
-async fn process_relayers<
+async fn process_relayers<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    config_file: &Config,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<()>
+where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -364,10 +372,7 @@ async fn process_relayers<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<()> {
+{
     let signers = app_state.signer_repository.list_all().await?;
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
@@ -406,7 +411,11 @@ async fn process_relayers<
 /// 2. Process notifications
 /// 3. Process networks
 /// 4. Process relayers
-pub async fn process_config_file<
+pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    config_file: Config,
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<()>
+where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -415,10 +424,7 @@ pub async fn process_config_file<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    config_file: Config,
-    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<()> {
+{
     process_plugins(&config_file, &app_state).await?;
     process_signers(&config_file, &app_state).await?;
     process_notifications(&config_file, &app_state).await?;

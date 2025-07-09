@@ -31,19 +31,20 @@ use super::{NetworkTransaction, RelayerTransactionFactory};
 ///
 /// A `Result` containing a `TransactionRepoModel` if successful, or an `ApiError` if an error
 /// occurs.
-pub async fn get_transaction_by_id<
-    J: JobProducerTrait + 'static,
-    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    transaction_id: String,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<TransactionRepoModel, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->(
-    transaction_id: String,
-    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
-) -> Result<TransactionRepoModel, ApiError> {
+{
     state
         .transaction_repository
         .get_by_id(transaction_id)

@@ -87,21 +87,26 @@ impl<R: PluginRunnerTrait> PluginService<R> {
     }
 
     #[allow(clippy::type_complexity)]
-    async fn call_plugin<
-        J: JobProducerTrait + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR>(
+        &self,
+        plugin: PluginModel,
+        plugin_call_request: PluginCallRequest,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    ) -> Result<PluginCallResponse, PluginError>
+    where
+        J: JobProducerTrait + Send + Sync + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
         NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
-    >(
-        &self,
-        plugin: PluginModel,
-        plugin_call_request: PluginCallRequest,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
-    ) -> Result<PluginCallResponse, PluginError> {
+    {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
         let script_path = Self::resolve_plugin_path(&plugin.path);
         let script_params = plugin_call_request.params.to_string();
@@ -133,7 +138,8 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait PluginServiceTrait<
+pub trait PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>: Send + Sync
+where
     J: JobProducerTrait + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -142,7 +148,6 @@ pub trait PluginServiceTrait<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
->: Send + Sync
 {
     fn new(runner: PluginRunner) -> Self;
     async fn call_plugin(
@@ -154,16 +159,17 @@ pub trait PluginServiceTrait<
 }
 
 #[async_trait]
-impl<
-        J: JobProducerTrait + 'static,
-        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-    > PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR> for PluginService<PluginRunner>
+impl<J, TR, RR, NR, NFR, SR, TCR, PR> PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>
+    for PluginService<PluginRunner>
+where
+    J: JobProducerTrait + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     fn new(runner: PluginRunner) -> Self {
         Self::new(runner)
@@ -236,7 +242,7 @@ mod tests {
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, TransactionRepositoryStorage, RelayerRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>()
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>()
             .returning(|_, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
