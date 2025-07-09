@@ -482,22 +482,29 @@ mod tests {
         // Create a simple notification for testing
         let notification = WebhookNotification::new(
             "test_event".to_string(),
-            WebhookPayload::Transaction(TransactionResponse::Evm(EvmTransactionResponse {
-                id: "tx123".to_string(),
-                hash: Some("0x123".to_string()),
-                status: TransactionStatus::Confirmed,
-                status_reason: None,
-                created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
-                sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
-                confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
-                gas_price: Some(1000000000),
-                gas_limit: 21000,
-                nonce: Some(1),
-                value: U256::from(1000000000000000000_u64),
-                from: "0xabc".to_string(),
-                to: Some("0xdef".to_string()),
-                relayer_id: "relayer-1".to_string(),
-            })),
+            WebhookPayload::Transaction(TransactionResponse::Evm(Box::new(
+                EvmTransactionResponse {
+                    id: "tx123".to_string(),
+                    hash: Some("0x123".to_string()),
+                    status: TransactionStatus::Confirmed,
+                    status_reason: None,
+                    created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+                    sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+                    confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
+                    gas_price: Some(1000000000),
+                    gas_limit: 21000,
+                    nonce: Some(1),
+                    value: U256::from(1000000000000000000_u64),
+                    from: "0xabc".to_string(),
+                    to: Some("0xdef".to_string()),
+                    relayer_id: "relayer-1".to_string(),
+                    data: None,
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    signature: None,
+                    speed: None,
+                },
+            ))),
         );
         let job = NotificationSend::new("notification-1".to_string(), notification);
 

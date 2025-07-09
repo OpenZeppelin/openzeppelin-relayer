@@ -53,7 +53,7 @@ pub enum WebhookPayload {
     #[serde(rename = "transaction_failure")]
     TransactionFailure(TransactionFailurePayload),
     #[serde(rename = "relayer_disabled")]
-    RelayerDisabled(RelayerDisabledPayload),
+    RelayerDisabled(Box<RelayerDisabledPayload>),
     #[serde(rename = "solana_rpc")]
     SolanaRpc(SolanaWebhookRpcPayload),
     #[serde(rename = "solana_dex")]
@@ -94,7 +94,7 @@ pub fn produce_relayer_disabled_payload(
         notification_id.to_string(),
         WebhookNotification::new(
             "relayer_state_update".to_string(),
-            WebhookPayload::RelayerDisabled(payload),
+            WebhookPayload::RelayerDisabled(Box::new(payload)),
         ),
     )
 }

@@ -188,8 +188,8 @@ mod tests {
     use std::str::FromStr;
 
     use crate::models::{
-        EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookNotification,
-        WebhookPayload, U256,
+        evm::Speed, EvmTransactionDataSignature, EvmTransactionResponse, TransactionResponse,
+        TransactionStatus, WebhookNotification, WebhookPayload, U256,
     };
 
     use super::*;
@@ -284,8 +284,8 @@ mod tests {
 
     #[test]
     fn test_notification_send_serialization() {
-        let payload =
-            WebhookPayload::Transaction(TransactionResponse::Evm(EvmTransactionResponse {
+        let payload = WebhookPayload::Transaction(TransactionResponse::Evm(Box::new(
+            EvmTransactionResponse {
                 id: "tx123".to_string(),
                 hash: Some("0x123".to_string()),
                 status: TransactionStatus::Confirmed,
@@ -300,19 +300,72 @@ mod tests {
                 from: "0xabc".to_string(),
                 to: Some("0xdef".to_string()),
                 relayer_id: "relayer-1".to_string(),
-            }));
+                data: Some("0x123".to_string()),
+                max_fee_per_gas: Some(1000000000),
+                max_priority_fee_per_gas: Some(1000000000),
+                signature: Some(EvmTransactionDataSignature {
+                    r: "0x123".to_string(),
+                    s: "0x123".to_string(),
+                    v: 1,
+                    sig: "0x123".to_string(),
+                }),
+                speed: Some(Speed::Fast),
+            },
+        )));
 
         let notification = WebhookNotification::new("transaction".to_string(), payload);
         let notification_send =
             NotificationSend::new("notification-test".to_string(), notification);
 
         let serialized = serde_json::to_string(&notification_send).unwrap();
+
         match serde_json::from_str::<NotificationSend>(&serialized) {
             Ok(deserialized) => {
                 assert_eq!(notification_send, deserialized);
             }
             Err(e) => {
-                eprintln!("Failed to deserialize NotificationSend: {}", e);
+                panic!("Deserialization error: {}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_notification_send_serialization_none_values() {
+        let payload = WebhookPayload::Transaction(TransactionResponse::Evm(Box::new(
+            EvmTransactionResponse {
+                id: "tx123".to_string(),
+                hash: None,
+                status: TransactionStatus::Confirmed,
+                status_reason: None,
+                created_at: "2025-01-27T15:31:10.777083+00:00".to_string(),
+                sent_at: None,
+                confirmed_at: None,
+                gas_price: None,
+                gas_limit: 21000,
+                nonce: None,
+                value: U256::from_str("1000000000000000000").unwrap(),
+                from: "0xabc".to_string(),
+                to: None,
+                relayer_id: "relayer-1".to_string(),
+                data: None,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                signature: None,
+                speed: None,
+            },
+        )));
+
+        let notification = WebhookNotification::new("transaction".to_string(), payload);
+        let notification_send =
+            NotificationSend::new("notification-test".to_string(), notification);
+
+        let serialized = serde_json::to_string(&notification_send).unwrap();
+
+        match serde_json::from_str::<NotificationSend>(&serialized) {
+            Ok(deserialized) => {
+                assert_eq!(notification_send, deserialized);
+            }
+            Err(e) => {
                 panic!("Deserialization error: {}", e);
             }
         }

@@ -1,5 +1,8 @@
 use crate::{
-    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus, U256},
+    models::{
+        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
+        TransactionStatus, U256,
+    },
     utils::{deserialize_optional_u128, deserialize_optional_u64, deserialize_u64},
 };
 use serde::{Deserialize, Serialize};
@@ -8,9 +11,9 @@ use utoipa::ToSchema;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(untagged)]
 pub enum TransactionResponse {
-    Evm(EvmTransactionResponse),
-    Solana(SolanaTransactionResponse),
-    Stellar(StellarTransactionResponse),
+    Evm(Box<EvmTransactionResponse>),
+    Solana(Box<SolanaTransactionResponse>),
+    Stellar(Box<StellarTransactionResponse>),
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -39,6 +42,16 @@ pub struct EvmTransactionResponse {
     #[schema(nullable = false)]
     pub to: Option<String>,
     pub relayer_id: String,
+    #[schema(nullable = false)]
+    pub data: Option<String>,
+    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[schema(nullable = false)]
+    pub max_fee_per_gas: Option<u128>,
+    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[schema(nullable = false)]
+    pub max_priority_fee_per_gas: Option<u128>,
+    pub signature: Option<EvmTransactionDataSignature>,
+    pub speed: Option<Speed>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -76,7 +89,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
     fn from(model: TransactionRepoModel) -> Self {
         match model.network_data {
             NetworkTransactionData::Evm(evm_data) => {
-                TransactionResponse::Evm(EvmTransactionResponse {
+                TransactionResponse::Evm(Box::new(EvmTransactionResponse {
                     id: model.id,
                     hash: evm_data.hash,
                     status: model.status,
@@ -91,10 +104,15 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     from: evm_data.from,
                     to: evm_data.to,
                     relayer_id: model.relayer_id,
-                })
+                    data: evm_data.data,
+                    max_fee_per_gas: evm_data.max_fee_per_gas,
+                    max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
+                    signature: evm_data.signature,
+                    speed: evm_data.speed,
+                }))
             }
             NetworkTransactionData::Solana(solana_data) => {
-                TransactionResponse::Solana(SolanaTransactionResponse {
+                TransactionResponse::Solana(Box::new(SolanaTransactionResponse {
                     id: model.id,
                     hash: solana_data.hash,
                     status: model.status,
@@ -103,10 +121,10 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     confirmed_at: model.confirmed_at,
                     recent_blockhash: solana_data.recent_blockhash.unwrap_or_default(),
                     fee_payer: solana_data.fee_payer,
-                })
+                }))
             }
             NetworkTransactionData::Stellar(stellar_data) => {
-                TransactionResponse::Stellar(StellarTransactionResponse {
+                TransactionResponse::Stellar(Box::new(StellarTransactionResponse {
                     id: model.id,
                     hash: stellar_data.hash,
                     status: model.status,
@@ -116,7 +134,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     source_account: stellar_data.source_account,
                     fee: stellar_data.fee.unwrap_or(0),
                     sequence_number: stellar_data.sequence_number.unwrap_or(0),
-                })
+                }))
             }
         }
     }
