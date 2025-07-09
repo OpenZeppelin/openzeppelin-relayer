@@ -57,6 +57,7 @@ pub struct RelayerEvmPolicy {
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
+    pub gas_limit_estimation: Option<bool>,
 }
 
 impl Default for RelayerEvmPolicy {
@@ -67,6 +68,7 @@ impl Default for RelayerEvmPolicy {
             eip1559_pricing: None,
             private_transactions: false,
             min_balance: DEFAULT_EVM_MIN_BALANCE,
+            gas_limit_estimation: Some(true),
         }
     }
 }

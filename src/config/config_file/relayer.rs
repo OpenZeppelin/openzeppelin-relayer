@@ -29,6 +29,7 @@ pub struct ConfigFileRelayerEvmPolicy {
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: Option<bool>,
     pub min_balance: Option<u128>,
+    pub gas_limit_estimation: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

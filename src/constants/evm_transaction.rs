@@ -4,6 +4,8 @@ pub const DEFAULT_TX_VALID_TIMESPAN: i64 = 8 * 60 * 60 * 1000; // 8 hours in mil
 
 pub const DEFAULT_TRANSACTION_SPEED: Speed = Speed::Fast;
 
+pub const DEFAULT_GAS_LIMIT: u64 = 21000;
+
 /// Minimum gas price bump factor for transaction replacements (10% increase)
 pub const MIN_BUMP_FACTOR: f64 = 1.1;
 

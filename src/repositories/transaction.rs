@@ -408,7 +408,7 @@ mod tests {
             hashes: vec![],
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: Some(1000000000),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 nonce: Some(1),
                 value: U256::from_str("1000000000000000000").unwrap(),
                 data: Some("0x".to_string()),
@@ -442,7 +442,7 @@ mod tests {
             hashes: vec![],
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: Some(1000000000),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 nonce: Some(1),
                 value: U256::from_str("1000000000000000000").unwrap(),
                 data: Some("0x".to_string()),
@@ -773,7 +773,7 @@ mod tests {
         // Create new network data with updated values
         let updated_network_data = NetworkTransactionData::Evm(EvmTransactionData {
             gas_price: Some(2000000000),
-            gas_limit: 30000,
+            gas_limit: Some(30000),
             nonce: Some(2),
             value: U256::from_str("2000000000000000000").unwrap(),
             data: Some("0xUpdated".to_string()),
@@ -796,7 +796,7 @@ mod tests {
         // Verify the network data was updated
         if let NetworkTransactionData::Evm(data) = &updated.network_data {
             assert_eq!(data.gas_price, Some(2000000000));
-            assert_eq!(data.gas_limit, 30000);
+            assert_eq!(data.gas_limit, Some(30000));
             assert_eq!(data.nonce, Some(2));
             assert_eq!(data.hash, Some("0xUpdated".to_string()));
             assert_eq!(data.data, Some("0xUpdated".to_string()));

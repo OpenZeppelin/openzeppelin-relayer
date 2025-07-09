@@ -180,6 +180,7 @@ mod tests {
                 eip1559_pricing: Some(true),
                 min_balance: 1000,
                 private_transactions: true,
+                gas_limit_estimation: Some(true),
             }),
             address: "0xabc".to_string(),
             system_disabled: false,
