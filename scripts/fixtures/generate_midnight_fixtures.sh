@@ -32,7 +32,7 @@ echo
 # Generate complete context fixture
 echo "🏗️  Generating complete context fixture (wallet + ledger state)..."
 echo
-cargo run --bin generate_midnight_fixtures
+cargo run --example generate_midnight_fixtures
 
 echo
 echo "✅ Fixture generation complete!"

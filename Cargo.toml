@@ -2,7 +2,8 @@
 name = "openzeppelin-relayer"
 version = "1.0.0"
 edition = "2021"
-rust-version = "1.85"         #MSRV
+rust-version = "1.85"                #MSRV
+default-run = "openzeppelin-relayer"
 
 [profile.release]
 opt-level = 0
@@ -125,7 +126,7 @@ path = "src/main.rs"
 doc = true
 doctest = true
 
-[[bin]]
+[[example]]
 name = "generate_midnight_fixtures"
 path = "scripts/fixtures/generate_midnight_fixtures.rs"
 
