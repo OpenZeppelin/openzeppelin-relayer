@@ -47,27 +47,25 @@ impl RedisPluginRepository {
     fn plugin_list_key(&self) -> String {
         format!("{}:{}", self.key_prefix, PLUGIN_LIST_KEY)
     }
-}
 
-impl fmt::Debug for RedisPluginRepository {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RedisPluginRepository")
-            .field("client", &"<ConnectionManager>")
-            .field("key_prefix", &self.key_prefix)
-            .finish()
-    }
-}
-
-#[async_trait]
-impl PluginRepositoryTrait for RedisPluginRepository {
-    async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
+    /// Get plugin by ID using an existing connection.
+    /// This method is useful to prevent creating new connections for
+    /// getting individual plugins on list operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the plugin to get.
+    /// * `conn` - The connection to use.
+    async fn get_by_id_with_connection(
+        &self,
+        id: &str,
+        conn: &mut ConnectionManager,
+    ) -> Result<Option<PluginModel>, RepositoryError> {
         if id.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Plugin ID cannot be empty".to_string(),
             ));
         }
-
-        let mut conn = self.client.as_ref().clone();
         let key = self.plugin_key(id);
 
         debug!("Fetching plugin data for ID: {}", id);
@@ -88,6 +86,42 @@ impl PluginRepositoryTrait for RedisPluginRepository {
                 Ok(None)
             }
         }
+    }
+}
+
+impl fmt::Debug for RedisPluginRepository {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RedisPluginRepository")
+            .field("client", &"<ConnectionManager>")
+            .field("key_prefix", &self.key_prefix)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl PluginRepositoryTrait for RedisPluginRepository {
+    async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        self.get_by_id_with_connection(id, &mut conn).await
+    }
+
+    async fn get_all(&self) -> Result<Vec<PluginModel>, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let list_key: String = self.plugin_list_key();
+        let plugin_ids: Vec<String> = conn
+            .smembers(&list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "list_all_plugins"))?;
+
+        let mut plugins = Vec::new();
+        for id in plugin_ids {
+            match self.get_by_id_with_connection(&id, &mut conn).await {
+                Ok(Some(plugin)) => plugins.push(plugin),
+                Ok(None) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(plugins)
     }
 
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError> {
@@ -297,6 +331,26 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("ID cannot be empty"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_all_plugins() {
+        let repo = setup_test_repo().await;
+        let plugin_name1 = uuid::Uuid::new_v4().to_string();
+        let plugin_name2 = uuid::Uuid::new_v4().to_string();
+        let plugin1 = create_test_plugin(&plugin_name1, "/path/to/plugin1");
+        let plugin2 = create_test_plugin(&plugin_name2, "/path/to/plugin2");
+
+        repo.add(plugin1.clone()).await.unwrap();
+        repo.add(plugin2.clone()).await.unwrap();
+
+        let retrieved = repo.get_all().await.unwrap();
+        assert!(retrieved.len() == 2);
+        assert_eq!(retrieved[0].id, plugin1.id);
+        assert_eq!(retrieved[0].path, plugin1.path);
+        assert_eq!(retrieved[1].id, plugin2.id);
+        assert_eq!(retrieved[1].path, plugin2.path);
     }
 
     #[tokio::test]

@@ -62,6 +62,32 @@ where
     }
 }
 
+/// List plugins
+///
+/// # Arguments
+///
+/// * `state` - The application state containing the plugin repository.
+///
+/// # Returns
+///
+/// The result of the plugin list.
+pub async fn list_plugins<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
+    let plugins = state.plugin_repository.get_all().await?;
+    Ok(HttpResponse::Ok().json(plugins))
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

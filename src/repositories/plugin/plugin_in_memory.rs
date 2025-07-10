@@ -67,6 +67,11 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
         store.insert(plugin.id.clone(), plugin);
         Ok(())
     }
+
+    async fn get_all(&self) -> Result<Vec<PluginModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(store.values().cloned().collect())
+    }
 }
 
 #[cfg(test)]
@@ -134,5 +139,34 @@ mod tests {
             plugin_repository.get_by_id("test-plugin").await.unwrap(),
             Some(plugin)
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_all_plugins() {
+        let plugin_repository = Arc::new(InMemoryPluginRepository::new());
+
+        let plugin1 = PluginModel {
+            id: "test-plugin1".to_string(),
+            path: "test-path1".to_string(),
+            timeout: Duration::from_secs(69),
+        };
+
+        let plugin2 = PluginModel {
+            id: "test-plugin2".to_string(),
+            path: "test-path2".to_string(),
+            timeout: Duration::from_secs(69),
+        };
+
+        plugin_repository.add(plugin1.clone()).await.unwrap();
+        plugin_repository.add(plugin2.clone()).await.unwrap();
+
+        let retrieved = plugin_repository.get_all().await.unwrap();
+        assert_eq!(retrieved.len(), 2);
+        assert_eq!(retrieved[0].id, plugin1.id);
+        assert_eq!(retrieved[0].path, plugin1.path);
+        assert_eq!(retrieved[0].timeout, plugin1.timeout);
+        assert_eq!(retrieved[1].id, plugin2.id);
+        assert_eq!(retrieved[1].path, plugin2.path);
+        assert_eq!(retrieved[1].timeout, plugin2.timeout);
     }
 }

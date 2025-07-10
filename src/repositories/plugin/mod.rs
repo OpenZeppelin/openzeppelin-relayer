@@ -48,6 +48,7 @@ use crate::{
 pub trait PluginRepositoryTrait {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError>;
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError>;
+    async fn get_all(&self) -> Result<Vec<PluginModel>, RepositoryError>;
 }
 
 /// Enum wrapper for different plugin repository implementations
@@ -84,6 +85,13 @@ impl PluginRepositoryTrait for PluginRepositoryStorage {
         match self {
             PluginRepositoryStorage::InMemory(repo) => repo.add(plugin).await,
             PluginRepositoryStorage::Redis(repo) => repo.add(plugin).await,
+        }
+    }
+
+    async fn get_all(&self) -> Result<Vec<PluginModel>, RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.get_all().await,
+            PluginRepositoryStorage::Redis(repo) => repo.get_all().await,
         }
     }
 }
