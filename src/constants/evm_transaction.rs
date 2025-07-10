@@ -9,6 +9,7 @@ pub const ERC20_TRANSFER_GAS_LIMIT: u64 = 65_000;
 pub const ERC721_TRANSFER_GAS_LIMIT: u64 = 80_000;
 pub const COMPLEX_GAS_LIMIT: u64 = 200_000;
 
+/// Gas limit buffer multiplier for automatic gas limit estimation, 10% increase
 pub const GAS_LIMIT_BUFFER_MULTIPLIER: u64 = 110;
 
 /// Minimum gas price bump factor for transaction replacements (10% increase)
