@@ -139,3 +139,100 @@ impl<D: DB> Default for MidnightTransactionBuilder<D> {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
+    use std::sync::Arc;
+
+    fn create_test_context() -> Arc<LedgerContext<DefaultDB>> {
+        // Set required environment variable for Midnight tests
+        std::env::set_var(
+            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+            "/tmp/midnight-test-static",
+        );
+
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        Arc::new(LedgerContext::new_from_wallet_seeds(&[wallet_seed]))
+    }
+
+    #[test]
+    fn test_builder_new() {
+        let builder = MidnightTransactionBuilder::<DefaultDB>::new();
+        assert!(builder.context.is_none());
+        assert!(builder.proof_provider.is_none());
+        assert!(builder.rng_seed.is_none());
+        assert!(builder.guaranteed_offer.is_none());
+        assert!(builder.intent_info.is_none());
+    }
+
+    #[test]
+    fn test_builder_default() {
+        let builder = MidnightTransactionBuilder::<DefaultDB>::default();
+        assert!(builder.context.is_none());
+        assert!(builder.proof_provider.is_none());
+        assert!(builder.rng_seed.is_none());
+        assert!(builder.guaranteed_offer.is_none());
+        assert!(builder.intent_info.is_none());
+    }
+
+    #[test]
+    fn test_builder_with_context() {
+        let builder = MidnightTransactionBuilder::<DefaultDB>::new();
+        let context = create_test_context();
+        let builder_with_context = builder.with_context(context.clone());
+        assert!(builder_with_context.context.is_some());
+    }
+
+    #[test]
+    fn test_builder_with_rng_seed() {
+        let builder = MidnightTransactionBuilder::<DefaultDB>::new();
+        let seed = [42u8; 32];
+        let builder_with_seed = builder.with_rng_seed(seed);
+        assert!(builder_with_seed.rng_seed.is_some());
+        assert_eq!(builder_with_seed.rng_seed.unwrap(), seed);
+    }
+
+    #[tokio::test]
+    async fn test_builder_build_without_context_fails() {
+        let builder = MidnightTransactionBuilder::<DefaultDB>::new();
+        let result = builder.build().await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Context not provided"));
+            }
+            _ => panic!("Expected ValidationError for missing context"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_builder_build_without_proof_provider_fails() {
+        let builder = MidnightTransactionBuilder::<DefaultDB>::new();
+        let context = create_test_context();
+        let builder_with_context = builder.with_context(context);
+        let result = builder_with_context.build().await;
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("Proof provider not provided"));
+            }
+            _ => panic!("Expected ValidationError for missing proof provider"),
+        }
+    }
+
+    #[test]
+    fn test_builder_chain_methods() {
+        let context = create_test_context();
+        let seed = [42u8; 32];
+
+        let builder = MidnightTransactionBuilder::<DefaultDB>::new()
+            .with_context(context)
+            .with_rng_seed(seed);
+
+        assert!(builder.context.is_some());
+        assert!(builder.rng_seed.is_some());
+        assert_eq!(builder.rng_seed.unwrap(), seed);
+    }
+}

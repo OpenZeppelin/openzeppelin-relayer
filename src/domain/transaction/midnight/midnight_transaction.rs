@@ -801,3 +801,1291 @@ pub type DefaultMidnightTransaction = MidnightTransaction<
     MidnightSigner,
     InMemoryTransactionCounter,
 >;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Address;
+    use crate::{
+        config::network::IndexerUrls,
+        domain::{SignTransactionResponse, SignTransactionResponseMidnight},
+        jobs::MockJobProducerTrait,
+        models::{
+            midnight::{MidnightInputRequest, MidnightOutputRequest},
+            MidnightNetwork, MidnightOfferRequest, MidnightTransactionData,
+            MidnightTransactionRequest, NetworkTransactionData, NetworkTransactionRequest,
+            NetworkType, RelayerMidnightPolicy, RelayerNetworkPolicy, RelayerRepoModel,
+            SignerError, TransactionRepoModel, TransactionStatus, U256,
+        },
+        repositories::{
+            InMemorySyncState, MockRepository, MockTransactionCounterTrait,
+            MockTransactionRepository,
+        },
+        services::{
+            midnight::{handler::SyncManager, indexer::MidnightIndexerClient},
+            provider::MockMidnightProviderTrait,
+            MidnightSignerTrait, Signer,
+        },
+    };
+    use chrono::Utc;
+    use midnight_node_ledger_helpers::{NetworkId, WalletSeed};
+    use mockall::predicate::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    // Helper functions for loading test fixtures
+    fn get_context_fixture_path(seed: &WalletSeed) -> Option<PathBuf> {
+        let seed_hex = hex::encode(seed.0);
+        let fixture_dir = PathBuf::from("tests/fixtures/midnight");
+
+        // Look for any context fixture for this seed
+        if let Ok(entries) = fs::read_dir(&fixture_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with(&format!("context_{}_", seed_hex)) && name.ends_with(".bin")
+                    {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    // Helper to create a sync manager with context from fixture
+    fn create_sync_manager_with_fixture(
+        seed: &WalletSeed,
+        network: &MidnightNetwork,
+        relayer_id: String,
+    ) -> SyncManager<crate::services::midnight::handler::QuickSyncStrategy> {
+        let sync_state_store = Arc::new(InMemorySyncState::new());
+
+        // Create sync manager first
+        let sync_manager = SyncManager::new(
+            &MidnightIndexerClient::new(network.indexer_urls.clone()),
+            seed,
+            NetworkId::TestNet,
+            sync_state_store,
+            relayer_id,
+        )
+        .unwrap();
+
+        // Try to load and restore context from fixture
+        if let Some(fixture_path) = get_context_fixture_path(seed) {
+            if let Ok(context_bytes) = fs::read(&fixture_path) {
+                eprintln!("Loading context fixture from: {:?}", fixture_path);
+                eprintln!("Context fixture size: {} bytes", context_bytes.len());
+
+                // Restore the context directly
+                if let Err(e) = sync_manager.restore_context(&context_bytes) {
+                    eprintln!("Warning: Failed to restore context from fixture: {:?}", e);
+                } else {
+                    eprintln!("Successfully restored context from fixture");
+                }
+            }
+        }
+
+        sync_manager
+    }
+
+    // Test implementation for MidnightSignerTrait
+    struct TestMidnightSigner {
+        wallet_seed: WalletSeed,
+    }
+
+    #[async_trait]
+    impl Signer for TestMidnightSigner {
+        async fn address(&self) -> Result<Address, SignerError> {
+            Ok(Address::Midnight("test_midnight_address".to_string()))
+        }
+
+        async fn sign_transaction(
+            &self,
+            _transaction: NetworkTransactionData,
+        ) -> Result<SignTransactionResponse, SignerError> {
+            Ok(SignTransactionResponse::Midnight(
+                SignTransactionResponseMidnight {
+                    signature: "test_signature".to_string(),
+                },
+            ))
+        }
+    }
+
+    impl MidnightSignerTrait for TestMidnightSigner {
+        fn wallet_seed(&self) -> &midnight_node_ledger_helpers::WalletSeed {
+            &self.wallet_seed
+        }
+    }
+
+    fn create_test_relayer() -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "testnet".to_string(),
+            address: "test_midnight_address".to_string(),
+            paused: false,
+            system_disabled: false,
+            signer_id: "test-signer-id".to_string(),
+            notification_id: Some("test-notification-id".to_string()),
+            policies: RelayerNetworkPolicy::Midnight(RelayerMidnightPolicy {
+                min_balance: 100_000_000, // 0.1 tDUST
+            }),
+            network_type: NetworkType::Midnight,
+            custom_rpc_urls: None,
+        }
+    }
+
+    fn create_test_transaction_request() -> NetworkTransactionRequest {
+        NetworkTransactionRequest::Midnight(MidnightTransactionRequest {
+            ttl: Some((Utc::now() + chrono::Duration::minutes(5)).to_rfc3339()),
+            guaranteed_offer: Some(MidnightOfferRequest {
+                inputs: vec![MidnightInputRequest {
+                    origin: hex::encode([1u8; 32]),
+                    token_type: hex::encode([2u8; 34]),
+                    value: "100000000".to_string(), // 0.1 tDUST
+                }],
+                outputs: vec![MidnightOutputRequest {
+                    destination: hex::encode([2u8; 32]),
+                    token_type: hex::encode([2u8; 34]),
+                    value: "50000000".to_string(), // 0.05 tDUST
+                }],
+            }),
+            intents: vec![],
+            fallible_offers: vec![],
+        })
+    }
+
+    fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "test-tx-id".to_string(),
+            relayer_id: relayer_id.to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_type: NetworkType::Midnight,
+            network_data: NetworkTransactionData::Midnight(MidnightTransactionData {
+                guaranteed_offer: Some(MidnightOfferRequest {
+                    inputs: vec![MidnightInputRequest {
+                        origin: hex::encode([1u8; 32]),
+                        token_type: hex::encode([2u8; 34]),
+                        value: "100000000".to_string(), // 0.1 tDUST
+                    }],
+                    outputs: vec![MidnightOutputRequest {
+                        destination: hex::encode([2u8; 32]),
+                        token_type: hex::encode([2u8; 34]),
+                        value: "50000000".to_string(), // 0.05 tDUST
+                    }],
+                }),
+                intents: vec![],
+                fallible_offers: vec![],
+                raw: None,
+                signature: None,
+                hash: None,
+                pallet_hash: None,
+                block_hash: None,
+                segment_results: None,
+            }),
+            priced_at: None,
+            hashes: vec![],
+            noop_count: None,
+            is_canceled: Some(false),
+        }
+    }
+
+    fn create_test_network() -> MidnightNetwork {
+        MidnightNetwork {
+            network: "testnet".to_string(),
+            rpc_urls: vec!["https://rpc.testnet.midnight.org".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 5000,
+            is_testnet: true,
+            tags: vec![],
+            prover_url: "https://prover.testnet.midnight.org".to_string(),
+            indexer_urls: IndexerUrls {
+                http: "https://indexer.testnet.midnight.org".to_string(),
+                ws: "wss://indexer.testnet.midnight.org".to_string(),
+            },
+        }
+    }
+
+    fn setup_midnight_test() {
+        // Set required environment variable for Midnight tests
+        std::env::set_var(
+            "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+            "/tmp/midnight-test-static",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_submit() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Set up expectations
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .withf(|job, delay| {
+                job.transaction_id == "test-tx-id"
+                    && job.relayer_id == "test-relayer-id"
+                    && delay.is_none()
+            })
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Create a minimal context for the sync manager - we won't use it in this test
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+
+        // Create transaction handler without using sync manager in this test
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction.enqueue_submit(&test_tx).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_transaction_update_notification() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Set up expectations
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .withf(|payload, _| payload.notification_id == "test-notification-id")
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction
+            .send_transaction_update_notification(&test_tx)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_schedule_status_check() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Set up expectations
+        mock_job_producer
+            .expect_produce_check_transaction_status_job()
+            .withf(|job, delay| {
+                job.transaction_id == "test-tx-id"
+                    && job.relayer_id == "test-relayer-id"
+                    && delay.is_some()
+            })
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction
+            .schedule_status_check(&test_tx, Some(10))
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_transaction_not_supported() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction.cancel_transaction(test_tx).await;
+        assert!(matches!(result, Err(TransactionError::NotSupported(_))));
+    }
+
+    #[tokio::test]
+    async fn test_replace_transaction_not_supported() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let new_request = create_test_transaction_request();
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction
+            .replace_transaction(test_tx, new_request)
+            .await;
+        assert!(matches!(result, Err(TransactionError::NotSupported(_))));
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_insufficient_balance() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Wallet seed is already set in test_signer
+
+        // Mock provider with insufficient balance
+        mock_provider
+            .expect_get_balance()
+            .returning(|_, _| Box::pin(async { Ok(U256::from(1000u128)) })); // 0.001 tDUST (insufficient)
+
+        // Create transaction handler
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test - should fail during offer conversion due to insufficient balance
+        let result = midnight_transaction.prepare_transaction(test_tx).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_submit_transaction_missing_raw_data() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    midnight_node_ledger_helpers::NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test - should fail because raw data is missing
+        let result = midnight_transaction.submit_transaction(test_tx).await;
+        assert!(result.is_err());
+        assert!(matches!(result, Err(TransactionError::UnexpectedError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_handle_transaction_status_success_entirely() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction(&relayer.id);
+        test_tx.status = TransactionStatus::Submitted;
+        let network = create_test_network();
+
+        // Add pallet hash
+        if let NetworkTransactionData::Midnight(ref mut data) = test_tx.network_data {
+            data.pallet_hash = Some("0xdef456".to_string());
+        }
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mut mock_transaction_repo = MockTransactionRepository::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Mock provider get_transaction_by_hash
+        mock_provider
+            .expect_get_transaction_by_hash()
+            .withf(|hash| hash == "0xdef456")
+            .returning(|_| {
+                let mut tx_data = serde_json::Map::new();
+                tx_data.insert(
+                    "applyStage".to_string(),
+                    serde_json::to_value(ApplyStage::SucceedEntirely).unwrap(),
+                );
+                Box::pin(async move { Ok(Some(serde_json::Value::Object(tx_data))) })
+            });
+
+        // Mock transaction repository update
+        mock_transaction_repo
+            .expect_partial_update()
+            .withf(|id, update| {
+                id == "test-tx-id" && update.status == Some(TransactionStatus::Confirmed)
+            })
+            .returning(|id, _| {
+                let mut tx = create_test_transaction("test-relayer-id");
+                tx.id = id;
+                tx.status = TransactionStatus::Confirmed;
+                Ok(tx)
+            });
+
+        // Mock job producer
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    midnight_node_ledger_helpers::NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction
+            .handle_transaction_status(test_tx)
+            .await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    async fn test_handle_transaction_status_fail_entirely() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction(&relayer.id);
+        test_tx.status = TransactionStatus::Submitted;
+        let network = create_test_network();
+
+        // Add pallet hash
+        if let NetworkTransactionData::Midnight(ref mut data) = test_tx.network_data {
+            data.pallet_hash = Some("0xdef456".to_string());
+        }
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mut mock_transaction_repo = MockTransactionRepository::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Mock provider get_transaction_by_hash
+        mock_provider
+            .expect_get_transaction_by_hash()
+            .withf(|hash| hash == "0xdef456")
+            .returning(|_| {
+                let mut tx_data = serde_json::Map::new();
+                tx_data.insert(
+                    "applyStage".to_string(),
+                    serde_json::to_value(ApplyStage::FailEntirely).unwrap(),
+                );
+                Box::pin(async move { Ok(Some(serde_json::Value::Object(tx_data))) })
+            });
+
+        // Mock transaction repository update
+        mock_transaction_repo
+            .expect_partial_update()
+            .withf(|id, update| {
+                id == "test-tx-id" && update.status == Some(TransactionStatus::Failed)
+            })
+            .returning(|id, _| {
+                let mut tx = create_test_transaction("test-relayer-id");
+                tx.id = id;
+                tx.status = TransactionStatus::Failed;
+                Ok(tx)
+            });
+
+        // Mock job producer
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    midnight_node_ledger_helpers::NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction
+            .handle_transaction_status(test_tx)
+            .await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_handle_transaction_status_pending() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction(&relayer.id);
+        test_tx.status = TransactionStatus::Submitted;
+        let network = create_test_network();
+
+        // Add pallet hash
+        if let NetworkTransactionData::Midnight(ref mut data) = test_tx.network_data {
+            data.pallet_hash = Some("0xdef456".to_string());
+        }
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Mock provider get_transaction_by_hash
+        mock_provider
+            .expect_get_transaction_by_hash()
+            .withf(|hash| hash == "0xdef456")
+            .returning(|_| {
+                let mut tx_data = serde_json::Map::new();
+                tx_data.insert(
+                    "applyStage".to_string(),
+                    serde_json::to_value(ApplyStage::Pending).unwrap(),
+                );
+                Box::pin(async move { Ok(Some(serde_json::Value::Object(tx_data))) })
+            });
+
+        // Mock job producer - expect schedule_status_check
+        mock_job_producer
+            .expect_produce_check_transaction_status_job()
+            .withf(|job, delay| job.transaction_id == "test-tx-id" && delay.is_some())
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    midnight_node_ledger_helpers::NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction
+            .handle_transaction_status(test_tx.clone())
+            .await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Submitted); // Status unchanged
+    }
+
+    #[tokio::test]
+    async fn test_handle_transaction_status_not_found() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction(&relayer.id);
+        test_tx.status = TransactionStatus::Submitted;
+        let network = create_test_network();
+
+        // Add pallet hash
+        if let NetworkTransactionData::Midnight(ref mut data) = test_tx.network_data {
+            data.pallet_hash = Some("0xdef456".to_string());
+        }
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Mock provider get_transaction_by_hash - transaction not found
+        mock_provider
+            .expect_get_transaction_by_hash()
+            .withf(|hash| hash == "0xdef456")
+            .returning(|_| Box::pin(async move { Ok(None) }));
+
+        // Mock job producer - expect schedule_status_check
+        mock_job_producer
+            .expect_produce_check_transaction_status_job()
+            .withf(|job, delay| job.transaction_id == "test-tx-id" && delay.is_some())
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    midnight_node_ledger_helpers::NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction
+            .handle_transaction_status(test_tx.clone())
+            .await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Submitted); // Status unchanged
+    }
+
+    #[tokio::test]
+    async fn test_handle_transaction_status_final_state() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction(&relayer.id);
+        test_tx.status = TransactionStatus::Confirmed; // Already in final state
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    midnight_node_ledger_helpers::NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test - should return immediately without checking status
+        let result = midnight_transaction
+            .handle_transaction_status(test_tx.clone())
+            .await;
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Confirmed);
+    }
+
+    // This test requires a fixture with actual funded wallet (coins in the wallet state)
+    // Uses funded wallet fixture from testnet
+    #[tokio::test]
+    async fn test_convert_offer_request_to_offer_info_success() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let network = create_test_network();
+
+        // Use funded wallet seed for test
+        let wallet_seed =
+            WalletSeed::from("0e0cc7db98c60a39a6b0888795ba3f1bb1d61298cce264d4beca1529650e9041");
+
+        // Check if context fixture exists
+        if get_context_fixture_path(&wallet_seed).is_none() {
+            eprintln!(
+                "Skipping test: No context fixture found for seed {}",
+                hex::encode(wallet_seed.0)
+            );
+            eprintln!("To run this test, generate a fixture using:");
+            eprintln!(
+                "  WALLET_SEED={} cargo run --bin generate_midnight_fixtures",
+                hex::encode(wallet_seed.0)
+            );
+            return;
+        }
+
+        // Create offer request (origin must match wallet seed)
+        let offer_request = MidnightOfferRequest {
+            inputs: vec![MidnightInputRequest {
+                origin: hex::encode(wallet_seed.0),
+                token_type: hex::encode([2u8; 34]),
+                value: "100000000".to_string(), // 0.1 tDUST
+            }],
+            outputs: vec![MidnightOutputRequest {
+                destination: hex::encode([2u8; 32]),
+                token_type: hex::encode([2u8; 34]),
+                value: "30000000".to_string(), // 0.03 tDUST
+            }],
+        };
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler with fixture-loaded sync manager
+        let sync_manager =
+            create_sync_manager_with_fixture(&wallet_seed, &network, relayer.id.clone());
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(sync_manager)),
+            network.clone(),
+        )
+        .unwrap();
+
+        // Get the context
+        let sync_manager = midnight_transaction.sync_manager();
+        let sync_guard = sync_manager.lock().await;
+        let context = sync_guard.get_context();
+        drop(sync_guard);
+
+        // Execute test
+        let result = midnight_transaction
+            .convert_offer_request_to_offer_info(&offer_request, wallet_seed, &context)
+            .await;
+
+        if result.is_err() {
+            eprintln!("Test failed with error: {:?}", result.as_ref().err());
+        }
+        assert!(result.is_ok());
+        let offer_info = result.unwrap();
+        assert_eq!(offer_info.inputs.len(), 1);
+        assert_eq!(offer_info.outputs.len(), 2); // Original output + change output
+    }
+
+    #[tokio::test]
+    async fn test_convert_offer_request_to_offer_info_invalid_origin() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let network = create_test_network();
+
+        // Create offer request with different origin
+        let offer_request = MidnightOfferRequest {
+            inputs: vec![MidnightInputRequest {
+                origin: hex::encode([3u8; 32]), // Different from wallet seed
+                token_type: hex::encode([2u8; 34]),
+                value: "100000000".to_string(),
+            }],
+            outputs: vec![MidnightOutputRequest {
+                destination: hex::encode([2u8; 32]),
+                token_type: hex::encode([2u8; 34]),
+                value: "30000000".to_string(),
+            }],
+        };
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    midnight_node_ledger_helpers::NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network.clone(),
+        )
+        .unwrap();
+
+        // Get the context
+        let sync_manager = midnight_transaction.sync_manager();
+        let sync_guard = sync_manager.lock().await;
+        let context = sync_guard.get_context();
+        drop(sync_guard);
+
+        // Execute test
+        let result = midnight_transaction
+            .convert_offer_request_to_offer_info(&offer_request, wallet_seed, &context)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(TransactionError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_convert_offer_request_empty_inputs() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let network = create_test_network();
+
+        // Create offer request with no inputs
+        let offer_request = MidnightOfferRequest {
+            inputs: vec![],
+            outputs: vec![MidnightOutputRequest {
+                destination: hex::encode([2u8; 32]),
+                token_type: hex::encode([2u8; 34]),
+                value: "30000000".to_string(),
+            }],
+        };
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network.clone(),
+        )
+        .unwrap();
+
+        // Get the context
+        let sync_manager = midnight_transaction.sync_manager();
+        let sync_guard = sync_manager.lock().await;
+        let context = sync_guard.get_context();
+        drop(sync_guard);
+
+        // Execute test
+        let result = midnight_transaction
+            .convert_offer_request_to_offer_info(&offer_request, wallet_seed, &context)
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(TransactionError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_success() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mut mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // No need to mock sign_transaction - TestMidnightSigner already returns test_signature
+
+        // Mock transaction repository update
+        mock_transaction_repo
+            .expect_partial_update()
+            .withf(|id, update| id == "test-tx-id" && update.network_data.is_some())
+            .returning(|id, update| {
+                let mut tx = create_test_transaction("test-relayer-id");
+                tx.id = id;
+                if let Some(NetworkTransactionData::Midnight(mut data)) = update.network_data {
+                    data.signature = Some("test_signature".to_string());
+                    tx.network_data = NetworkTransactionData::Midnight(data);
+                }
+                Ok(tx)
+            });
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test
+        let result = midnight_transaction.sign_transaction(test_tx).await;
+        assert!(result.is_ok());
+        let signed_tx = result.unwrap();
+        if let NetworkTransactionData::Midnight(data) = signed_tx.network_data {
+            assert_eq!(data.signature, Some("test_signature".to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_transaction() {
+        setup_midnight_test();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction(&relayer.id);
+        let network = create_test_network();
+
+        // Mock repositories
+        let mock_relayer_repo = MockRepository::new();
+        let mock_transaction_repo = MockTransactionRepository::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_provider = MockMidnightProviderTrait::new();
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let test_signer = TestMidnightSigner { wallet_seed };
+        let mock_counter = MockTransactionCounterTrait::new();
+
+        // Create transaction handler
+        let wallet_seed = WalletSeed::from([1u8; 32]);
+        let midnight_transaction = MidnightTransaction::new(
+            relayer.clone(),
+            Arc::new(mock_provider),
+            Arc::new(mock_relayer_repo),
+            Arc::new(mock_transaction_repo),
+            Arc::new(mock_job_producer),
+            Arc::new(test_signer),
+            Arc::new(mock_counter),
+            Arc::new(tokio::sync::Mutex::new(
+                SyncManager::new(
+                    &MidnightIndexerClient::new(network.indexer_urls.clone()),
+                    &wallet_seed,
+                    NetworkId::TestNet,
+                    Arc::new(InMemorySyncState::new()),
+                    relayer.id.clone(),
+                )
+                .unwrap(),
+            )),
+            network,
+        )
+        .unwrap();
+
+        // Execute test - validate_transaction always returns true for Midnight
+        let result = midnight_transaction.validate_transaction(test_tx).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+}

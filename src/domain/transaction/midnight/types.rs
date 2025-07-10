@@ -237,9 +237,55 @@ pub const DUST_TOKEN_TYPE: TokenType = NATIVE_TOKEN;
 
 pub fn to_midnight_network_id(network: &str) -> NetworkId {
     match network.to_lowercase().as_str() {
+        "mainnet" => NetworkId::MainNet,
         "devnet" => NetworkId::DevNet,
         "testnet" => NetworkId::TestNet,
-        "mainnet" => NetworkId::MainNet,
         _ => NetworkId::Undeployed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use midnight_node_ledger_helpers::NetworkId;
+
+    #[test]
+    fn test_to_midnight_network_id() {
+        assert_eq!(to_midnight_network_id("mainnet"), NetworkId::MainNet);
+        assert_eq!(to_midnight_network_id("MAINNET"), NetworkId::MainNet);
+        assert_eq!(to_midnight_network_id("testnet"), NetworkId::TestNet);
+        assert_eq!(to_midnight_network_id("TESTNET"), NetworkId::TestNet);
+        assert_eq!(to_midnight_network_id("devnet"), NetworkId::DevNet);
+        assert_eq!(to_midnight_network_id("DEVNET"), NetworkId::DevNet);
+        assert_eq!(to_midnight_network_id("localnet"), NetworkId::Undeployed);
+        assert_eq!(to_midnight_network_id("random"), NetworkId::Undeployed);
+    }
+
+    #[test]
+    fn test_either_enum() {
+        let left: Either<i32, String> = Either::Left(42);
+        let right: Either<i32, String> = Either::Right("hello".to_string());
+
+        match left {
+            Either::Left(val) => assert_eq!(val, 42),
+            Either::Right(_) => panic!("Expected Left variant"),
+        }
+
+        match right {
+            Either::Left(_) => panic!("Expected Right variant"),
+            Either::Right(val) => assert_eq!(val, "hello"),
+        }
+    }
+
+    #[test]
+    fn test_either_serialization() {
+        let left: Either<i32, String> = Either::Left(42);
+        let json = serde_json::to_string(&left).unwrap();
+        let deserialized: Either<i32, String> = serde_json::from_str(&json).unwrap();
+
+        match deserialized {
+            Either::Left(val) => assert_eq!(val, 42),
+            Either::Right(_) => panic!("Expected Left variant after deserialization"),
+        }
     }
 }
