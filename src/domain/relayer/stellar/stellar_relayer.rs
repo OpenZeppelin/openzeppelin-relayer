@@ -29,15 +29,11 @@ use crate::{
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcRequest,
-        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
-        NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError, StellarNetwork,
-        StellarRpcResult, TransactionRepoModel, TransactionStatus,
+        JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
+        StellarNetwork, StellarRpcResult, TransactionRepoModel, TransactionStatus,
     },
-    repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository, TransactionRepository,
-    },
+    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
         StellarProvider, StellarProviderTrait, TransactionCounterService,
         TransactionCounterServiceTrait,
@@ -51,28 +47,28 @@ use std::sync::Arc;
 use crate::domain::relayer::{Relayer, RelayerError};
 
 /// Dependencies container for `StellarRelayer` construction.
-pub struct StellarRelayerDependencies<R, N, T, J, C>
+pub struct StellarRelayerDependencies<RR, NR, TR, J, TCS>
 where
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
-    pub relayer_repository: Arc<R>,
-    pub network_repository: Arc<N>,
-    pub transaction_repository: Arc<T>,
-    pub transaction_counter_service: Arc<C>,
+    pub relayer_repository: Arc<RR>,
+    pub network_repository: Arc<NR>,
+    pub transaction_repository: Arc<TR>,
+    pub transaction_counter_service: Arc<TCS>,
     pub job_producer: Arc<J>,
 }
 
-impl<R, N, T, J, C> StellarRelayerDependencies<R, N, T, J, C>
+impl<RR, NR, TR, J, TCS> StellarRelayerDependencies<RR, NR, TR, J, TCS>
 where
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     /// Creates a new dependencies container for `StellarRelayer`.
     ///
@@ -88,10 +84,10 @@ where
     ///
     /// Returns a new `StellarRelayerDependencies` instance containing all provided dependencies.
     pub fn new(
-        relayer_repository: Arc<R>,
-        network_repository: Arc<N>,
-        transaction_repository: Arc<T>,
-        transaction_counter_service: Arc<C>,
+        relayer_repository: Arc<RR>,
+        network_repository: Arc<NR>,
+        transaction_repository: Arc<TR>,
+        transaction_counter_service: Arc<TCS>,
         job_producer: Arc<J>,
     ) -> Self {
         Self {
@@ -105,42 +101,36 @@ where
 }
 
 #[allow(dead_code)]
-pub struct StellarRelayer<P, R, N, T, J, C>
+pub struct StellarRelayer<P, RR, NR, TR, J, TCS>
 where
     P: StellarProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
     network: StellarNetwork,
     provider: P,
-    relayer_repository: Arc<R>,
-    network_repository: Arc<N>,
-    transaction_repository: Arc<T>,
-    transaction_counter_service: Arc<C>,
+    relayer_repository: Arc<RR>,
+    network_repository: Arc<NR>,
+    transaction_repository: Arc<TR>,
+    transaction_counter_service: Arc<TCS>,
     job_producer: Arc<J>,
 }
 
-pub type DefaultStellarRelayer<J> = StellarRelayer<
-    StellarProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryNetworkRepository,
-    InMemoryTransactionRepository,
-    J,
-    TransactionCounterService<InMemoryTransactionCounter>,
->;
+pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> =
+    StellarRelayer<StellarProvider, RR, NR, TR, J, TransactionCounterService<TCR>>;
 
-impl<P, R, N, T, J, C> StellarRelayer<P, R, N, T, J, C>
+impl<P, RR, NR, TR, J, TCS> StellarRelayer<P, RR, NR, TR, J, TCS>
 where
     P: StellarProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     /// Creates a new `StellarRelayer` instance.
     ///
@@ -162,7 +152,7 @@ where
     pub async fn new(
         relayer: RelayerRepoModel,
         provider: P,
-        dependencies: StellarRelayerDependencies<R, N, T, J, C>,
+        dependencies: StellarRelayerDependencies<RR, NR, TR, J, TCS>,
     ) -> Result<Self, RelayerError> {
         let network_repo = dependencies
             .network_repository
@@ -235,14 +225,14 @@ where
 }
 
 #[async_trait]
-impl<P, R, N, T, J, C> Relayer for StellarRelayer<P, R, N, T, J, C>
+impl<P, RR, NR, TR, J, TCS> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS>
 where
     P: StellarProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     async fn process_transaction_request(
         &self,

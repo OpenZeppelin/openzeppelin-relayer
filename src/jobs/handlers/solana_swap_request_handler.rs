@@ -11,8 +11,8 @@ use log::info;
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     domain::{create_solana_relayer, get_relayer_by_id, SolanaRelayerDexTrait},
-    jobs::{handle_result, Job, JobProducer, SolanaTokenSwapRequest},
-    models::AppState,
+    jobs::{handle_result, Job, SolanaTokenSwapRequest},
+    models::DefaultAppState,
     repositories::Repository,
 };
 
@@ -26,7 +26,7 @@ use crate::{
 /// * `Result<(), Error>` - Success or failure of notification processing
 pub async fn solana_token_swap_request_handler(
     job: Job<SolanaTokenSwapRequest>,
-    context: Data<ThinData<AppState<JobProducer>>>,
+    context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
     info!("handling solana token swap request: {:?}", job.data);
@@ -48,7 +48,7 @@ pub struct CronReminder();
 pub async fn solana_token_swap_cron_handler(
     job: CronReminder,
     relayer_id: Data<String>,
-    data: Data<ThinData<AppState<JobProducer>>>,
+    data: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
     info!("handling solana token swap cron request: {:?}", job);
@@ -71,7 +71,7 @@ pub async fn solana_token_swap_cron_handler(
 
 async fn handle_request(
     request: SolanaTokenSwapRequest,
-    context: Data<ThinData<AppState<JobProducer>>>,
+    context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
     info!("handling solana token swap request: {:?}", request);
 

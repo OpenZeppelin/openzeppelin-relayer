@@ -4,10 +4,17 @@
 //! - Calling plugins
 use crate::{
     jobs::JobProducerTrait,
-    models::{ApiError, ApiResponse, AppState, PluginCallRequest},
+    models::{
+        ApiError, ApiResponse, NetworkRepoModel, NotificationRepoModel, PluginCallRequest,
+        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+    },
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
     services::plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
 };
-use actix_web::{web, HttpResponse};
+use actix_web::HttpResponse;
 use eyre::Result;
 use std::sync::Arc;
 
@@ -22,11 +29,21 @@ use std::sync::Arc;
 /// # Returns
 ///
 /// The result of the plugin call.
-pub async fn call_plugin<J: JobProducerTrait + 'static>(
+pub async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR>(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
-    state: web::ThinData<AppState<J>>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let plugin = state
         .plugin_repository
         .get_by_id(&plugin_id)
@@ -50,6 +67,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use actix_web::web;
+
     use crate::{
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS, models::PluginModel,
         utils::mocks::mockutils::create_mock_app_state,

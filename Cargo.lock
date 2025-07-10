@@ -6100,13 +6100,22 @@ version = "0.32.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2f6fd3fd5bb3a9a48819ae5cbad501968f208c1abd139649e7e2cf5d7f4b40b"
 dependencies = [
+ "arc-swap",
+ "backon",
+ "bytes",
+ "cfg-if",
  "combine",
+ "futures-channel",
+ "futures-util",
  "itoa",
  "num-bigint 0.4.6",
  "percent-encoding",
+ "pin-project-lite",
  "ryu",
  "sha1_smol",
  "socket2",
+ "tokio",
+ "tokio-util",
  "url",
 ]
 

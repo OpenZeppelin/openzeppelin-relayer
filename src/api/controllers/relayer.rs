@@ -12,9 +12,8 @@ use crate::{
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
         RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest, Transaction,
     },
-    jobs::JobProducer,
     models::{
-        convert_to_internal_rpc_request, ApiError, ApiResponse, AppState,
+        convert_to_internal_rpc_request, ApiError, ApiResponse, DefaultAppState,
         NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery, RelayerResponse,
         TransactionResponse,
     },
@@ -35,7 +34,7 @@ use eyre::Result;
 /// A paginated list of relayers.
 pub async fn list_relayers(
     query: PaginationQuery,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayers = state.relayer_repository.list_paginated(query).await?;
 
@@ -64,7 +63,7 @@ pub async fn list_relayers(
 /// The details of the specified relayer.
 pub async fn get_relayer(
     relayer_id: String,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
 
@@ -87,7 +86,7 @@ pub async fn get_relayer(
 pub async fn update_relayer(
     relayer_id: String,
     update_req: RelayerUpdateRequest,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -122,7 +121,7 @@ pub async fn update_relayer(
 /// The status of the specified relayer.
 pub async fn get_relayer_status(
     relayer_id: String,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
@@ -143,7 +142,7 @@ pub async fn get_relayer_status(
 /// The balance of the specified relayer.
 pub async fn get_relayer_balance(
     relayer_id: String,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
@@ -166,7 +165,7 @@ pub async fn get_relayer_balance(
 pub async fn send_transaction(
     relayer_id: String,
     request: serde_json::Value,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
     relayer_repo_model.validate_active_state()?;
@@ -199,7 +198,7 @@ pub async fn send_transaction(
 pub async fn get_transaction_by_id(
     relayer_id: String,
     transaction_id: String,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     if relayer_id.is_empty() || transaction_id.is_empty() {
         return Ok(HttpResponse::Ok().json(ApiResponse::<()>::error(
@@ -230,7 +229,7 @@ pub async fn get_transaction_by_id(
 pub async fn get_transaction_by_nonce(
     relayer_id: String,
     nonce: u64,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -266,7 +265,7 @@ pub async fn get_transaction_by_nonce(
 pub async fn list_transactions(
     relayer_id: String,
     query: PaginationQuery,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -300,7 +299,7 @@ pub async fn list_transactions(
 /// A success response with details about cancelled and failed transactions.
 pub async fn delete_pending_transactions(
     relayer_id: String,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
     relayer.validate_active_state()?;
@@ -325,7 +324,7 @@ pub async fn delete_pending_transactions(
 pub async fn cancel_transaction(
     relayer_id: String,
     transaction_id: String,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -359,7 +358,7 @@ pub async fn replace_transaction(
     relayer_id: String,
     transaction_id: String,
     request: serde_json::Value,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -397,7 +396,7 @@ pub async fn replace_transaction(
 pub async fn sign_data(
     relayer_id: String,
     request: SignDataRequest,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -426,7 +425,7 @@ pub async fn sign_data(
 pub async fn sign_typed_data(
     relayer_id: String,
     request: SignTypedDataRequest,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
@@ -451,7 +450,7 @@ pub async fn sign_typed_data(
 pub async fn relayer_rpc(
     relayer_id: String,
     request: serde_json::Value,
-    state: web::ThinData<AppState<JobProducer>>,
+    state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;

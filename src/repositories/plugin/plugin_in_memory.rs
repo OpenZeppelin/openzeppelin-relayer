@@ -3,22 +3,33 @@
 //! The `InMemoryPluginRepository` struct is used to store and retrieve plugins
 //! script paths for further execution.
 use crate::{
-    config::PluginFileConfig,
-    constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
     models::PluginModel,
-    repositories::{ConversionError, RepositoryError},
+    repositories::{PluginRepositoryTrait, RepositoryError},
 };
+
 use async_trait::async_trait;
 
-#[cfg(test)]
-use mockall::automock;
-
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemoryPluginRepository {
     store: Mutex<HashMap<String, PluginModel>>,
+}
+
+impl Clone for InMemoryPluginRepository {
+    fn clone(&self) -> Self {
+        // Try to get the current data, or use empty HashMap if lock fails
+        let data = self
+            .store
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
+        Self {
+            store: Mutex::new(data),
+        }
+    }
 }
 
 impl InMemoryPluginRepository {
@@ -45,14 +56,6 @@ impl Default for InMemoryPluginRepository {
 }
 
 #[async_trait]
-#[allow(dead_code)]
-#[cfg_attr(test, automock)]
-pub trait PluginRepositoryTrait {
-    async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError>;
-    async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError>;
-}
-
-#[async_trait]
 impl PluginRepositoryTrait for InMemoryPluginRepository {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
@@ -66,30 +69,12 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
     }
 }
 
-impl TryFrom<PluginFileConfig> for PluginModel {
-    type Error = ConversionError;
-
-    fn try_from(config: PluginFileConfig) -> Result<Self, Self::Error> {
-        let timeout = Duration::from_secs(config.timeout.unwrap_or(DEFAULT_PLUGIN_TIMEOUT_SECONDS));
-
-        Ok(PluginModel {
-            id: config.id.clone(),
-            path: config.path.clone(),
-            timeout,
-        })
-    }
-}
-
-impl PartialEq for PluginModel {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.path == other.path
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::{config::PluginFileConfig, constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS};
+
     use super::*;
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     #[tokio::test]
     async fn test_in_memory_plugin_repository() {

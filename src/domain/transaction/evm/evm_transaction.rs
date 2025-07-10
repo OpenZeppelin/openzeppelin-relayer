@@ -22,14 +22,14 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
-        NetworkTransactionData, NetworkTransactionRequest, NetworkType, RelayerEvmPolicy,
-        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        NetworkRepoModel, NetworkTransactionData, NetworkTransactionRequest, NetworkType,
+        RelayerEvmPolicy, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        NetworkRepository, RelayerRepositoryStorage, Repository, TransactionCounterTrait,
-        TransactionRepository,
+        NetworkRepository, NetworkRepositoryStorage, RelayerRepository, RelayerRepositoryStorage,
+        Repository, TransactionCounterRepositoryStorage, TransactionCounterTrait,
+        TransactionRepository, TransactionRepositoryStorage,
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
     utils::get_evm_default_gas_limit_for_tx,
@@ -38,38 +38,38 @@ use crate::{
 use super::PriceParams;
 
 #[allow(dead_code)]
-pub struct EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+pub struct EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
     P: EvmProviderTrait,
-    R: Repository<RelayerRepoModel, String>,
-    N: NetworkRepository,
-    T: TransactionRepository,
-    J: JobProducerTrait,
-    S: Signer,
-    C: TransactionCounterTrait,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
     PC: PriceCalculatorTrait,
 {
     provider: P,
-    relayer_repository: Arc<R>,
-    network_repository: Arc<N>,
-    transaction_repository: Arc<T>,
+    relayer_repository: Arc<RR>,
+    network_repository: Arc<NR>,
+    transaction_repository: Arc<TR>,
     job_producer: Arc<J>,
     signer: S,
     relayer: RelayerRepoModel,
-    transaction_counter_service: Arc<C>,
+    transaction_counter_service: Arc<TCR>,
     price_calculator: PC,
 }
 
 #[allow(dead_code, clippy::too_many_arguments)]
-impl<P, R, N, T, J, S, C, PC> EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+impl<P, RR, NR, TR, J, S, TCR, PC> EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
     P: EvmProviderTrait,
-    R: Repository<RelayerRepoModel, String>,
-    N: NetworkRepository,
-    T: TransactionRepository,
-    J: JobProducerTrait,
-    S: Signer,
-    C: TransactionCounterTrait,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
     PC: PriceCalculatorTrait,
 {
     /// Creates a new `EvmRelayerTransaction`.
@@ -91,10 +91,10 @@ where
     pub fn new(
         relayer: RelayerRepoModel,
         provider: P,
-        relayer_repository: Arc<R>,
-        network_repository: Arc<N>,
-        transaction_repository: Arc<T>,
-        transaction_counter_service: Arc<C>,
+        relayer_repository: Arc<RR>,
+        network_repository: Arc<NR>,
+        transaction_repository: Arc<TR>,
+        transaction_counter_service: Arc<TCR>,
         job_producer: Arc<J>,
         price_calculator: PC,
         signer: S,
@@ -123,7 +123,7 @@ where
     }
 
     /// Returns a reference to the network repository.
-    pub fn network_repository(&self) -> &N {
+    pub fn network_repository(&self) -> &NR {
         &self.network_repository
     }
 
@@ -132,7 +132,7 @@ where
         &self.job_producer
     }
 
-    pub fn transaction_repository(&self) -> &T {
+    pub fn transaction_repository(&self) -> &TR {
         &self.transaction_repository
     }
 
@@ -288,16 +288,17 @@ where
 }
 
 #[async_trait]
-impl<P, R, N, T, J, S, C, PC> Transaction for EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+impl<P, RR, NR, TR, J, S, TCR, PC> Transaction
+    for EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
-    P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
-    C: TransactionCounterTrait + Send + Sync,
-    PC: PriceCalculatorTrait + Send + Sync,
+    P: EvmProviderTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PC: PriceCalculatorTrait + Send + Sync + 'static,
 {
     /// Prepares a transaction for submission.
     ///
@@ -352,6 +353,7 @@ where
         let nonce = self
             .transaction_counter_service
             .get_and_increment(&self.relayer.id, &self.relayer.address)
+            .await
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
         let updated_evm_data = evm_data
@@ -772,12 +774,12 @@ where
 // we define concrete type for the evm transaction
 pub type DefaultEvmTransaction = EvmRelayerTransaction<
     EvmProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryNetworkRepository,
-    crate::repositories::transaction::InMemoryTransactionRepository,
+    RelayerRepositoryStorage,
+    NetworkRepositoryStorage,
+    TransactionRepositoryStorage,
     JobProducer,
     EvmSigner,
-    InMemoryTransactionCounter,
+    TransactionCounterRepositoryStorage,
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
 >;
 #[cfg(test)]
@@ -792,7 +794,7 @@ mod tests {
             RelayerNetworkPolicy, U256,
         },
         repositories::{
-            MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
+            MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
         services::{MockEvmProviderTrait, MockSigner},
@@ -886,7 +888,7 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_transaction_with_sufficient_balance() {
         let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mut mock_signer = MockSigner::new();
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -898,7 +900,7 @@ mod tests {
 
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(42));
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let price_params = PriceParams {
             gas_price: Some(30000000000),
@@ -982,7 +984,7 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_transaction_with_insufficient_balance() {
         let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mut mock_signer = MockSigner::new();
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -998,7 +1000,7 @@ mod tests {
 
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(42));
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let price_params = PriceParams {
             gas_price: Some(30000000000),
@@ -1078,7 +1080,7 @@ mod tests {
         {
             // Create mocks for all dependencies
             let mut mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mock_signer = MockSigner::new();
             let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1135,7 +1137,7 @@ mod tests {
         {
             // Create mocks for all dependencies
             let mut mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mut mock_signer = MockSigner::new();
             let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1245,7 +1247,7 @@ mod tests {
         {
             // Create minimal mocks for failure case
             let mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mock_signer = MockSigner::new();
             let mock_job_producer = MockJobProducerTrait::new();
@@ -1289,7 +1291,7 @@ mod tests {
         {
             // Create mocks for all dependencies
             let mut mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mut mock_provider = MockEvmProviderTrait::new();
             let mut mock_signer = MockSigner::new();
             let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1447,7 +1449,7 @@ mod tests {
         {
             // Create minimal mocks for failure case
             let mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mock_signer = MockSigner::new();
             let mock_job_producer = MockJobProducerTrait::new();
@@ -1503,7 +1505,7 @@ mod tests {
     #[tokio::test]
     async fn test_estimate_tx_gas_limit_success() {
         let mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mock_signer = MockSigner::new();
         let mock_job_producer = MockJobProducerTrait::new();
@@ -1564,7 +1566,7 @@ mod tests {
     #[tokio::test]
     async fn test_estimate_tx_gas_limit_disabled() {
         let mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mock_signer = MockSigner::new();
         let mock_job_producer = MockJobProducerTrait::new();
@@ -1625,7 +1627,7 @@ mod tests {
     #[tokio::test]
     async fn test_estimate_tx_gas_limit_default_enabled() {
         let mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mock_signer = MockSigner::new();
         let mock_job_producer = MockJobProducerTrait::new();
@@ -1686,7 +1688,7 @@ mod tests {
     #[tokio::test]
     async fn test_estimate_tx_gas_limit_provider_error() {
         let mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mock_signer = MockSigner::new();
         let mock_job_producer = MockJobProducerTrait::new();
@@ -1752,7 +1754,7 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_transaction_uses_gas_estimation_and_stores_result() {
         let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mut mock_signer = MockSigner::new();
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1808,7 +1810,7 @@ mod tests {
         counter_service
             .expect_get_and_increment()
             .times(1)
-            .returning(|_, _| Ok(42));
+            .returning(|_, _| Box::pin(async { Ok(42) }));
 
         // Mock signer to return a signed transaction
         mock_signer.expect_sign_transaction().returning(|_| {

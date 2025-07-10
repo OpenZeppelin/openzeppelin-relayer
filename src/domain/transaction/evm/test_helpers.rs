@@ -11,7 +11,7 @@ pub mod test_utils {
             RelayerNetworkPolicy, RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
-            MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
+            MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
         services::{MockEvmProviderTrait, MockSigner},
@@ -22,7 +22,7 @@ pub mod test_utils {
     /// Helper struct holding all the mocks we often need
     pub struct TestMocks {
         pub provider: MockEvmProviderTrait,
-        pub relayer_repo: MockRepository<RelayerRepoModel, String>,
+        pub relayer_repo: MockRelayerRepository,
         pub network_repo: MockNetworkRepository,
         pub tx_repo: MockTransactionRepository,
         pub job_producer: MockJobProducerTrait,
@@ -36,7 +36,7 @@ pub mod test_utils {
     pub fn default_test_mocks() -> TestMocks {
         TestMocks {
             provider: MockEvmProviderTrait::new(),
-            relayer_repo: MockRepository::new(),
+            relayer_repo: MockRelayerRepository::new(),
             network_repo: MockNetworkRepository::new(),
             tx_repo: MockTransactionRepository::new(),
             job_producer: MockJobProducerTrait::new(),
@@ -107,7 +107,7 @@ pub mod test_utils {
         mocks: TestMocks,
     ) -> EvmRelayerTransaction<
         MockEvmProviderTrait,
-        MockRepository<RelayerRepoModel, String>,
+        MockRelayerRepository,
         MockNetworkRepository,
         MockTransactionRepository,
         MockJobProducerTrait,

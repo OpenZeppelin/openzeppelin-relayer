@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginModel {
     /// Plugin ID
     pub id: String,

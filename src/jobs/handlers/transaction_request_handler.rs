@@ -11,13 +11,13 @@ use log::info;
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, JobProducer, TransactionRequest},
-    models::AppState,
+    jobs::{handle_result, Job, TransactionRequest},
+    models::DefaultAppState,
 };
 
 pub async fn transaction_request_handler(
     job: Job<TransactionRequest>,
-    state: Data<ThinData<AppState<JobProducer>>>,
+    state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
     worker: Worker<Context>,
     task_id: TaskId,
@@ -41,7 +41,7 @@ pub async fn transaction_request_handler(
 
 async fn handle_request(
     request: TransactionRequest,
-    state: Data<ThinData<AppState<JobProducer>>>,
+    state: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
     let relayer_transaction = get_relayer_transaction(request.relayer_id, &state).await?;
 

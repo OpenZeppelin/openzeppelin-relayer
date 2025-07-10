@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
     let server_config = Arc::clone(&config); // clone for use in binding below
     let config_file = load_config_file(&config.config_file_path)?;
 
-    let app_state = initialize_app_state().await?;
+    let app_state = initialize_app_state(server_config.clone()).await?;
 
     // Setup workers for processing jobs
     initialize_workers(app_state.clone()).await?;

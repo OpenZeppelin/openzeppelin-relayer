@@ -33,6 +33,9 @@ pub enum RepositoryError {
 
     #[error("Not supported: {0}")]
     NotSupported(String),
+
+    #[error("Other error: {0}")]
+    Other(String),
 }
 
 impl From<RepositoryError> for ApiError {

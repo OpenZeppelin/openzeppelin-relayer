@@ -11,13 +11,17 @@
 ///
 /// These utilities are essential for the application's relayer management and
 /// interaction with the underlying repositories and factories.
-use actix_web::web::ThinData;
-
 use crate::{
     domain::{RelayerFactory, RelayerFactoryTrait},
     jobs::JobProducerTrait,
-    models::{ApiError, AppState, RelayerError, RelayerRepoModel},
-    repositories::Repository,
+    models::{
+        ApiError, NetworkRepoModel, NotificationRepoModel, RelayerError, RelayerRepoModel,
+        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+    },
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
 };
 
 use super::NetworkRelayer;
@@ -33,12 +37,19 @@ use super::NetworkRelayer;
 ///
 /// * `Result<RelayerRepoModel, ApiError>` - Returns a `RelayerRepoModel` on success, or an
 ///   `ApiError` on failure.
-pub async fn get_relayer_by_id<P>(
+pub async fn get_relayer_by_id<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
-    state: &ThinData<AppState<P>>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<RelayerRepoModel, ApiError>
 where
-    P: JobProducerTrait + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     state
         .relayer_repository
@@ -58,11 +69,21 @@ where
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer<P: JobProducerTrait + 'static>(
+pub async fn get_network_relayer<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
-    state: &ThinData<AppState<P>>,
-) -> Result<NetworkRelayer<P>, ApiError> {
-    let relayer_model = get_relayer_by_id(relayer_id, state).await?;
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
+    let relayer_model = get_relayer_by_id(relayer_id.clone(), state).await?;
     let signer_model = state
         .signer_repository
         .get_by_id(relayer_model.signer_id.clone())
@@ -84,10 +105,20 @@ pub async fn get_network_relayer<P: JobProducerTrait + 'static>(
 ///
 /// * `Result<NetworkRelayer, ApiError>` - Returns a `NetworkRelayer` on success, or an `ApiError`
 ///   on failure.
-pub async fn get_network_relayer_by_model<P: JobProducerTrait + 'static>(
+pub async fn get_network_relayer_by_model<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_model: RelayerRepoModel,
-    state: &ThinData<AppState<P>>,
-) -> Result<NetworkRelayer<P>, ApiError> {
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let signer_model = state
         .signer_repository
         .get_by_id(relayer_model.signer_id.clone())

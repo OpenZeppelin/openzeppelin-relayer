@@ -10,8 +10,8 @@ use log::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
-    jobs::{handle_result, Job, JobProducer, NotificationSend},
-    models::AppState,
+    jobs::{handle_result, Job, NotificationSend},
+    models::DefaultAppState,
     repositories::Repository,
     services::WebhookNotificationService,
 };
@@ -26,7 +26,7 @@ use crate::{
 /// * `Result<(), Error>` - Success or failure of notification processing
 pub async fn notification_handler(
     job: Job<NotificationSend>,
-    context: Data<ThinData<AppState<JobProducer>>>,
+    context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
     info!("handling notification: {:?}", job.data);
@@ -43,7 +43,7 @@ pub async fn notification_handler(
 
 async fn handle_request(
     request: NotificationSend,
-    context: Data<ThinData<AppState<JobProducer>>>,
+    context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
     info!("sending notification: {:?}", request);
     let notification = context

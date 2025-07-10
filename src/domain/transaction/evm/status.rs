@@ -11,8 +11,8 @@ use super::{
     get_age_of_sent_at, has_enough_confirmations, is_noop, is_transaction_valid, make_noop,
     too_many_attempts, too_many_noop_attempts,
 };
-use crate::models::{EvmNetwork, NetworkType};
-use crate::repositories::NetworkRepository;
+use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
+use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
     domain::transaction::evm::price_calculator::PriceCalculatorTrait,
     jobs::JobProducerTrait,
@@ -25,15 +25,15 @@ use crate::{
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
-impl<P, R, N, T, J, S, C, PC> EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+impl<P, RR, NR, TR, J, S, TCR, PC> EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
-    C: TransactionCounterTrait + Send + Sync,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
     PC: PriceCalculatorTrait + Send + Sync,
 {
     pub(super) async fn check_transaction_status(
@@ -349,7 +349,7 @@ mod tests {
             RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
-            MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
+            MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
         services::{MockEvmProviderTrait, MockSigner},
@@ -365,7 +365,7 @@ mod tests {
     /// Helper struct holding all the mocks we often need
     pub struct TestMocks {
         pub provider: MockEvmProviderTrait,
-        pub relayer_repo: MockRepository<RelayerRepoModel, String>,
+        pub relayer_repo: MockRelayerRepository,
         pub network_repo: MockNetworkRepository,
         pub tx_repo: MockTransactionRepository,
         pub job_producer: MockJobProducerTrait,
@@ -379,7 +379,7 @@ mod tests {
     pub fn default_test_mocks() -> TestMocks {
         TestMocks {
             provider: MockEvmProviderTrait::new(),
-            relayer_repo: MockRepository::new(),
+            relayer_repo: MockRelayerRepository::new(),
             network_repo: MockNetworkRepository::new(),
             tx_repo: MockTransactionRepository::new(),
             job_producer: MockJobProducerTrait::new(),
@@ -458,7 +458,7 @@ mod tests {
         mocks: TestMocks,
     ) -> EvmRelayerTransaction<
         MockEvmProviderTrait,
-        MockRepository<RelayerRepoModel, String>,
+        MockRelayerRepository,
         MockNetworkRepository,
         MockTransactionRepository,
         MockJobProducerTrait,

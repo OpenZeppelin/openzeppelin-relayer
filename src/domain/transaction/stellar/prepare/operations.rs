@@ -46,7 +46,7 @@ where
     S: Signer + Send + Sync,
 {
     // Get the next sequence number
-    let sequence_i64 = get_next_sequence(counter_service, relayer_id, relayer_address)?;
+    let sequence_i64 = get_next_sequence(counter_service, relayer_id, relayer_address).await?;
 
     info!(
         "Using sequence number {} for operations transaction {}",
@@ -86,12 +86,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::future::ready;
+
     use super::*;
     use crate::{
         domain::{SignTransactionResponse, SignTransactionResponseStellar},
         models::{
             AssetSpec, DecoratedSignature, NetworkTransactionData, NetworkType, OperationSpec,
-            TransactionInput, TransactionStatus,
+            RepositoryError, TransactionInput, TransactionStatus,
         },
         repositories::MockTransactionCounterTrait,
         services::{MockSigner, MockStellarProviderTrait},
@@ -151,7 +153,9 @@ mod tests {
         let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
         let mut counter = MockTransactionCounterTrait::new();
-        counter.expect_get_and_increment().returning(|_, _| Ok(42));
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let provider = MockStellarProviderTrait::new();
 
@@ -195,7 +199,9 @@ mod tests {
         let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
         let mut counter = MockTransactionCounterTrait::new();
-        counter.expect_get_and_increment().returning(|_, _| Ok(42));
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let mut provider = MockStellarProviderTrait::new();
         // Mock simulation response for Soroban operations
@@ -262,9 +268,7 @@ mod tests {
 
         let mut counter = MockTransactionCounterTrait::new();
         counter.expect_get_and_increment().returning(|_, _| {
-            Err(crate::repositories::TransactionCounterError::NotFound(
-                "Counter not found".to_string(),
-            ))
+            Box::pin(async { Err(RepositoryError::NotFound("Counter not found".to_string())) })
         });
 
         let provider = MockStellarProviderTrait::new();
@@ -298,7 +302,9 @@ mod tests {
         let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
         let mut counter = MockTransactionCounterTrait::new();
-        counter.expect_get_and_increment().returning(|_, _| Ok(42));
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let provider = MockStellarProviderTrait::new();
         let mut signer = MockSigner::new();
@@ -338,7 +344,9 @@ mod tests {
         let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
         let mut counter = MockTransactionCounterTrait::new();
-        counter.expect_get_and_increment().returning(|_, _| Ok(42));
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let provider = MockStellarProviderTrait::new();
 

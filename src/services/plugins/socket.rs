@@ -48,8 +48,15 @@
 //! 6. The server closes the socket connection.
 //!
 
-use crate::{jobs::JobProducerTrait, models::AppState};
-use actix_web::web;
+use crate::jobs::JobProducerTrait;
+use crate::models::{
+    NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
+    TransactionRepoModel,
+};
+use crate::repositories::{
+    NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+    TransactionCounterTrait, TransactionRepository,
+};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -99,15 +106,28 @@ impl SocketService {
     /// # Returns
     ///
     /// A vector of traces.
-    pub async fn listen<
-        J: JobProducerTrait + 'static,
-        R: RelayerApiTrait + 'static + Send + Sync,
-    >(
+    #[allow(clippy::type_complexity)]
+    pub async fn listen<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        state: Arc<web::ThinData<AppState<J>>>,
-        relayer_api: Arc<R>,
-    ) -> Result<Vec<serde_json::Value>, PluginError> {
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        relayer_api: Arc<RA>,
+    ) -> Result<Vec<serde_json::Value>, PluginError>
+    where
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
+        J: JobProducerTrait + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    {
         let mut shutdown = shutdown_rx;
 
         let mut traces = Vec::new();
@@ -117,7 +137,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    let result = tokio::spawn(Self::handle_connection::<J, R>(stream, state, relayer_api))
+                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(stream, state, relayer_api))
                         .await
                         .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
@@ -147,14 +167,27 @@ impl SocketService {
     /// # Returns
     ///
     /// A vector of traces.
-    async fn handle_connection<
-        J: JobProducerTrait + 'static,
-        R: RelayerApiTrait + 'static + Send + Sync,
-    >(
+    #[allow(clippy::type_complexity)]
+    async fn handle_connection<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(
         stream: UnixStream,
-        state: Arc<web::ThinData<AppState<J>>>,
-        relayer_api: Arc<R>,
-    ) -> Result<Vec<serde_json::Value>, PluginError> {
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        relayer_api: Arc<RA>,
+    ) -> Result<Vec<serde_json::Value>, PluginError>
+    where
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
+        J: JobProducerTrait + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
         let mut traces = Vec::new();
@@ -182,13 +215,12 @@ impl SocketService {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use crate::{
-        jobs::MockJobProducerTrait,
         services::plugins::{MockRelayerApiTrait, PluginMethod, Response},
         utils::mocks::mockutils::{create_mock_app_state, create_mock_evm_transaction_request},
     };
+    use actix_web::web;
+    use std::time::Duration;
 
     use super::*;
 
@@ -234,13 +266,15 @@ mod tests {
 
         let mut mock_relayer = MockRelayerApiTrait::default();
 
-        mock_relayer
-            .expect_handle_request::<MockJobProducerTrait>()
-            .returning(|_, _| Response {
-                request_id: "test".to_string(),
-                result: Some(serde_json::json!("test")),
-                error: None,
-            });
+        mock_relayer.expect_handle_request().returning(|_, _| {
+            Box::pin(async move {
+                Response {
+                    request_id: "test".to_string(),
+                    result: Some(serde_json::json!("test")),
+                    error: None,
+                }
+            })
+        });
 
         let service = SocketService::new(socket_path.to_str().unwrap()).unwrap();
 

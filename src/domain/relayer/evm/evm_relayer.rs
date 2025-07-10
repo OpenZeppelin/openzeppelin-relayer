@@ -35,15 +35,11 @@ use crate::{
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, EvmNetwork,
-        JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult,
+        JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
         NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
         RpcErrorCodes, TransactionRepoModel, TransactionStatus,
     },
-    repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository, TransactionRepository,
-    },
+    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
         TransactionCounterServiceTrait,
@@ -58,37 +54,36 @@ use super::{
 };
 
 #[allow(dead_code)]
-pub struct EvmRelayer<P, R, N, T, J, S, C>
+pub struct EvmRelayer<P, RR, NR, TR, J, S, TCS>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: DataSignerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: DataSignerTrait + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
     signer: S,
     network: EvmNetwork,
     provider: P,
-    relayer_repository: Arc<R>,
-    network_repository: Arc<N>,
-    transaction_repository: Arc<T>,
-    transaction_counter_service: Arc<C>,
+    relayer_repository: Arc<RR>,
+    network_repository: Arc<NR>,
+    transaction_repository: Arc<TR>,
     job_producer: Arc<J>,
+    transaction_counter_service: Arc<TCS>,
 }
 
 #[allow(clippy::too_many_arguments)]
-impl<P, R, N, T, J, S, C> EvmRelayer<P, R, N, T, J, S, C>
+impl<P, RR, NR, TR, J, S, TCS> EvmRelayer<P, RR, NR, TR, J, S, TCS>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: DataSignerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: DataSignerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     /// Constructs a new `EvmRelayer` instance.
     ///
@@ -111,10 +106,10 @@ where
         signer: S,
         provider: P,
         network: EvmNetwork,
-        relayer_repository: Arc<R>,
-        network_repository: Arc<N>,
-        transaction_repository: Arc<T>,
-        transaction_counter_service: Arc<C>,
+        relayer_repository: Arc<RR>,
+        network_repository: Arc<NR>,
+        transaction_repository: Arc<TR>,
+        transaction_counter_service: Arc<TCS>,
         job_producer: Arc<J>,
     ) -> Result<Self, RelayerError> {
         Ok(Self {
@@ -197,26 +192,19 @@ where
 }
 
 // Define a concrete type alias for common usage
-pub type DefaultEvmRelayer<J> = EvmRelayer<
-    EvmProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryNetworkRepository,
-    InMemoryTransactionRepository,
-    J,
-    EvmSigner,
-    TransactionCounterService<InMemoryTransactionCounter>,
->;
+pub type DefaultEvmRelayer<J, T, RR, NR, TCR> =
+    EvmRelayer<EvmProvider, RR, NR, T, J, EvmSigner, TransactionCounterService<TCR>>;
 
 #[async_trait]
-impl<P, R, N, T, J, S, C> Relayer for EvmRelayer<P, R, N, T, J, S, C>
+impl<P, RR, NR, TR, J, S, TCS> Relayer for EvmRelayer<P, RR, NR, TR, J, S, TCS>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: DataSignerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: DataSignerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     /// Processes a transaction request and creates a job for it.
     ///

@@ -66,7 +66,7 @@ where
     }
 
     // Step 3: Get the next sequence number and update the envelope
-    let sequence = get_next_sequence(counter_service, relayer_id, relayer_address)?;
+    let sequence = get_next_sequence(counter_service, relayer_id, relayer_address).await?;
     info!(
         "Using sequence number {} for unsigned XDR transaction",
         sequence
@@ -116,8 +116,7 @@ mod tests {
     use super::*;
     use crate::{
         domain::SignTransactionResponse,
-        models::{DecoratedSignature, NetworkTransactionData},
-        repositories::TransactionCounterError,
+        models::{DecoratedSignature, NetworkTransactionData, RepositoryError},
     };
     use soroban_rs::xdr::{
         BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
@@ -130,37 +129,38 @@ mod tests {
         sequence: u64,
     }
 
+    #[async_trait::async_trait]
     impl TransactionCounterTrait for MockCounter {
-        fn get_and_increment(
+        async fn get_and_increment(
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<u64, TransactionCounterError> {
+        ) -> Result<u64, RepositoryError> {
             Ok(self.sequence)
         }
 
-        fn get(
+        async fn get(
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<Option<u64>, TransactionCounterError> {
+        ) -> Result<Option<u64>, RepositoryError> {
             Ok(Some(self.sequence))
         }
 
-        fn decrement(
+        async fn decrement(
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<u64, TransactionCounterError> {
+        ) -> Result<u64, RepositoryError> {
             Ok(self.sequence - 1)
         }
 
-        fn set(
+        async fn set(
             &self,
             _relayer_id: &str,
             _address: &str,
             _value: u64,
-        ) -> Result<(), TransactionCounterError> {
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
     }
@@ -516,6 +516,8 @@ mod tests {
 
 #[cfg(test)]
 mod xdr_transaction_tests {
+    use std::future::ready;
+
     use super::*;
     use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
     use crate::domain::transaction::stellar::test_helpers::*;
@@ -565,7 +567,7 @@ mod xdr_transaction_tests {
         mocks
             .counter
             .expect_get_and_increment()
-            .returning(move |_, _| Ok(expected_sequence as u64));
+            .returning(move |_, _| Box::pin(ready(Ok(expected_sequence as u64))));
 
         // Mock signer for unsigned XDR
         mocks
@@ -668,7 +670,7 @@ mod xdr_transaction_tests {
         mocks
             .counter
             .expect_get_and_increment()
-            .returning(|_, _| Ok(1));
+            .returning(|_, _| Box::pin(ready(Ok(1))));
 
         // Mock finalize_transaction_state for failure handling
         mocks
@@ -739,7 +741,7 @@ mod xdr_transaction_tests {
             .counter
             .expect_get_and_increment()
             .withf(move |id, _| id == relayer_id)
-            .returning(move |_, _| Ok(expected_sequence as u64));
+            .returning(move |_, _| Box::pin(ready(Ok(expected_sequence as u64))));
 
         // Mock signer that verifies fee was updated
         mocks

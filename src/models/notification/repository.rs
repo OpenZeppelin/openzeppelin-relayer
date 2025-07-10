@@ -8,7 +8,7 @@ pub enum NotificationType {
     Webhook,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationRepoModel {
     pub id: String,
     pub notification_type: NotificationType,

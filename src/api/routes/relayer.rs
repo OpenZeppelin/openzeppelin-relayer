@@ -4,8 +4,7 @@
 use crate::{
     api::controllers::relayer,
     domain::{RelayerUpdateRequest, SignDataRequest, SignTypedDataRequest},
-    jobs::JobProducer,
-    models::{AppState, PaginationQuery},
+    models::{DefaultAppState, PaginationQuery},
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -15,7 +14,7 @@ use utoipa::ToSchema;
 #[get("/relayers")]
 async fn list_relayers(
     query: web::Query<PaginationQuery>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::list_relayers(query.into_inner(), data).await
 }
@@ -24,7 +23,7 @@ async fn list_relayers(
 #[get("/relayers/{relayer_id}")]
 async fn get_relayer(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::get_relayer(relayer_id.into_inner(), data).await
 }
@@ -34,7 +33,7 @@ async fn get_relayer(
 async fn update_relayer(
     relayer_id: web::Path<String>,
     update_req: web::Json<RelayerUpdateRequest>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::update_relayer(relayer_id.into_inner(), update_req.into_inner(), data).await
 }
@@ -43,7 +42,7 @@ async fn update_relayer(
 #[get("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::get_relayer_status(relayer_id.into_inner(), data).await
 }
@@ -52,7 +51,7 @@ async fn get_relayer_status(
 #[get("/relayers/{relayer_id}/balance")]
 async fn get_relayer_balance(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::get_relayer_balance(relayer_id.into_inner(), data).await
 }
@@ -62,7 +61,7 @@ async fn get_relayer_balance(
 async fn send_transaction(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::send_transaction(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -77,7 +76,7 @@ pub struct TransactionPath {
 #[get("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn get_transaction_by_id(
     path: web::Path<TransactionPath>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::get_transaction_by_id(path.relayer_id, path.transaction_id, data).await
@@ -87,7 +86,7 @@ async fn get_transaction_by_id(
 #[get("/relayers/{relayer_id}/transactions/by-nonce/{nonce}")]
 async fn get_transaction_by_nonce(
     params: web::Path<(String, u64)>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     let params = params.into_inner();
     relayer::get_transaction_by_nonce(params.0, params.1, data).await
@@ -98,7 +97,7 @@ async fn get_transaction_by_nonce(
 async fn list_transactions(
     relayer_id: web::Path<String>,
     query: web::Query<PaginationQuery>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::list_transactions(relayer_id.into_inner(), query.into_inner(), data).await
 }
@@ -107,7 +106,7 @@ async fn list_transactions(
 #[delete("/relayers/{relayer_id}/transactions/pending")]
 async fn delete_pending_transactions(
     relayer_id: web::Path<String>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::delete_pending_transactions(relayer_id.into_inner(), data).await
 }
@@ -116,7 +115,7 @@ async fn delete_pending_transactions(
 #[delete("/relayers/{relayer_id}/transactions/{transaction_id}")]
 async fn cancel_transaction(
     path: web::Path<TransactionPath>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::cancel_transaction(path.relayer_id, path.transaction_id, data).await
@@ -127,7 +126,7 @@ async fn cancel_transaction(
 async fn replace_transaction(
     path: web::Path<TransactionPath>,
     req: web::Json<serde_json::Value>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     let path = path.into_inner();
     relayer::replace_transaction(path.relayer_id, path.transaction_id, req.into_inner(), data).await
@@ -138,7 +137,7 @@ async fn replace_transaction(
 async fn sign(
     relayer_id: web::Path<String>,
     req: web::Json<SignDataRequest>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::sign_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -148,7 +147,7 @@ async fn sign(
 async fn sign_typed_data(
     relayer_id: web::Path<String>,
     req: web::Json<SignTypedDataRequest>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -158,7 +157,7 @@ async fn sign_typed_data(
 async fn rpc(
     relayer_id: web::Path<String>,
     req: web::Json<serde_json::Value>,
-    data: web::ThinData<AppState<JobProducer>>,
+    data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::relayer_rpc(relayer_id.into_inner(), req.into_inner(), data).await
 }
@@ -191,23 +190,31 @@ mod tests {
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
+        models::AppState,
         repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemoryTransactionCounter,
-            InMemoryTransactionRepository, RelayerRepositoryStorage, Repository,
+            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+            RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};
     use std::sync::Arc;
 
     // Simple mock for AppState
-    async fn get_test_app_state() -> AppState<MockJobProducerTrait> {
-        let relayer_repo = Arc::new(RelayerRepositoryStorage::in_memory(
-            InMemoryRelayerRepository::new(),
-        ));
-        let transaction_repo = Arc::new(InMemoryTransactionRepository::new());
-        let signer_repo = Arc::new(InMemorySignerRepository::new());
-        let network_repo = Arc::new(InMemoryNetworkRepository::new());
+    async fn get_test_app_state() -> AppState<
+        MockJobProducerTrait,
+        RelayerRepositoryStorage,
+        TransactionRepositoryStorage,
+        NetworkRepositoryStorage,
+        NotificationRepositoryStorage,
+        SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage,
+        PluginRepositoryStorage,
+    > {
+        let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
+        let transaction_repo = Arc::new(TransactionRepositoryStorage::new_in_memory());
+        let signer_repo = Arc::new(SignerRepositoryStorage::new_in_memory());
+        let network_repo = Arc::new(NetworkRepositoryStorage::new_in_memory());
 
         // Create test entities so routes don't return 404
 
@@ -301,11 +308,13 @@ mod tests {
             relayer_repository: relayer_repo,
             transaction_repository: transaction_repo,
             signer_repository: signer_repo,
-            notification_repository: Arc::new(InMemoryNotificationRepository::new()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
             network_repository: network_repo,
-            transaction_counter_store: Arc::new(InMemoryTransactionCounter::new()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
             job_producer: Arc::new(MockJobProducerTrait::new()),
-            plugin_repository: Arc::new(InMemoryPluginRepository::new()),
+            plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
         }
     }
 
