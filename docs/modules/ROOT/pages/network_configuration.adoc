@@ -11,6 +11,7 @@ Networks are defined in JSON configuration files, allowing you to:
 * Configure **any EVM-compatible network** (Ethereum, Polygon, BSC, Arbitrum, Optimism, etc.)
 * Set up **Solana networks** (mainnet-beta, devnet, testnet, custom RPC endpoints)
 * Configure **Stellar networks** (Pubnet, Testnet, custom networks)
+* Configure **Midnight networks** (Testnet)
 * Create **custom network configurations** with specific RPC endpoints, chain IDs, and network parameters
 * Use **inheritance** to create network variants without duplicating configuration
 
@@ -28,6 +29,9 @@ Networks are defined in JSON configuration files, allowing you to:
 
 |`stellar`
 |Stellar blockchain networks. Supports Stellar Public Network and Testnet.
+
+|`midnight`
+|Midnight blockchain networks. Supports Midnight testnet with indexer and prover integration.
 |===
 
 == Configuration Methods
@@ -83,6 +87,7 @@ networks/
 ├── evm.json        # {"networks": [...]}
 ├── solana.json     # {"networks": [...]}
 └── stellar.json    # {"networks": [...]}
+└── midnight.json    # {"networks": [...]}
 ```
 
 === Method 2: Direct Configuration
@@ -121,7 +126,7 @@ All network types support these configuration fields:
 |`type`
 |string
 |Yes
-|Network type: `"evm"`, `"solana"`, or `"stellar"`
+|Network type: `"evm"`, `"solana"`, `"stellar"` or `"midnight"`
 
 |`network`
 |string
@@ -285,6 +290,44 @@ Here's an example showing a Stellar network configuration with passphrase:
 }
 ----
 
+=== Midnight-Specific Fields
+
+[cols="1,1,1,3"]
+|===
+|Field |Type |Required |Description
+
+|`indexer_urls`
+|object
+|Yes*
+|Indexer service URLs with `ws` and `http` endpoints (*Required for base networks, optional for inherited)
+
+|`prover_url`
+|string
+|Yes*
+|URL for the Midnight prover service (*Required for base networks, optional for inherited)
+|===
+
+==== Example: Midnight Network Configuration
+
+Here's an example showing a Midnight network configuration:
+
+[source,json]
+----
+{
+  "type": "midnight",
+  "network": "testnet",
+  "rpc_urls": ["wss://rpc.testnet-02.midnight.network/"],
+  "explorer_urls": ["https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.testnet-02.midnight.network#/explorer"],
+  "indexer_urls": {
+    "ws": "wss://indexer.testnet-02.midnight.network/api/v1/graphql/ws",
+    "http": "https://indexer.testnet-02.midnight.network/api/v1/graphql"
+  },
+  "prover_url": "http://localhost:6300",
+  "average_blocktime_ms": 6000,
+  "is_testnet": true
+}
+----
+
 == Configuration Examples
 
 === Basic EVM Network
@@ -354,6 +397,30 @@ Here's an example showing a Stellar network configuration with passphrase:
   "average_blocktime_ms": 5000,
   "is_testnet": false,
   "tags": ["mainnet", "stellar"]
+}
+----
+
+=== Midnight Network
+
+[source,json]
+----
+{
+  "type": "midnight",
+  "network": "testnet",
+  "rpc_urls": [
+    "wss://rpc.testnet-02.midnight.network/"
+  ],
+  "explorer_urls": [
+    "https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.testnet-02.midnight.network#/explorer"
+  ],
+  "indexer_urls": {
+    "ws": "wss://indexer.testnet-02.midnight.network/api/v1/graphql/ws",
+    "http": "https://indexer.testnet-02.midnight.network/api/v1/graphql"
+  },
+  "prover_url": "http://localhost:6300",
+  "average_blocktime_ms": 6000,
+  "is_testnet": true,
+  "tags": ["testnet", "midnight"]
 }
 ----
 

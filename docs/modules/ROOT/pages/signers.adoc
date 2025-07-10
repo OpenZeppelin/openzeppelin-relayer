@@ -43,11 +43,12 @@ OpenZeppelin Relayer supports the following signer types:
 
 The following table shows which signer types are compatible with each network type:
 
-[cols="1,1,1,1"]
+[cols="1,1,1,1,1"]
 |===
-|Signer Type |EVM Networks |Solana Networks |Stellar Networks
+|Signer Type |EVM Networks |Solana Networks |Stellar Networks |Midnight Networks
 
 |`local`
+|✅ Supported
 |✅ Supported
 |✅ Supported
 |✅ Supported
@@ -56,29 +57,35 @@ The following table shows which signer types are compatible with each network ty
 |✅ Supported
 |✅ Supported
 |❌ Not supported
+|❌ Not supported
 
 |`vault_cloud`
 |✅ Supported
 |✅ Supported
+|❌ Not supported
 |❌ Not supported
 
 |`vault_transit`
 |❌ Not supported
 |✅ Supported
 |❌ Not supported
+|❌ Not supported
 
 |`turnkey`
 |✅ Supported
 |✅ Supported
+|❌ Not supported
 |❌ Not supported
 
 |`google_cloud_kms`
 |✅ Supported
 |✅ Supported
 |❌ Not supported
+|❌ Not supported
 
 |`aws_kms`
 |✅ Supported
+|❌ Not supported
 |❌ Not supported
 |❌ Not supported
 |===
