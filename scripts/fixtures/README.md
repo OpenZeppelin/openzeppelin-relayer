@@ -10,57 +10,57 @@ This directory contains scripts for generating test fixtures for the Midnight bl
 
 ## Scripts
 
-### generate_midnight_fixtures
+### generate_midnight_fixtures.rs
 
-The unified fixture generator that can create both wallet state and complete context fixtures.
+A unified fixture generator that creates complete context fixtures (including both wallet state and ledger state) for testing.
 
 ```bash
-# Generate wallet state fixture only (default)
+# Generate complete context fixture
 WALLET_SEED=your_32_byte_hex_seed cargo run --bin generate_midnight_fixtures
-
-# Generate complete context fixture only
-WALLET_SEED=your_seed CONTEXT=true cargo run --bin generate_midnight_fixtures
-
-# Generate both wallet and context fixtures
-WALLET_SEED=your_seed CONTEXT=both cargo run --bin generate_midnight_fixtures
 
 # Starting sync from a specific height
 WALLET_SEED=your_seed START_HEIGHT=1000 cargo run --bin generate_midnight_fixtures
 
-# With progress tracking (context mode only)
-WALLET_SEED=your_seed CONTEXT=true SAVE_INTERVAL=1000 cargo run --bin generate_midnight_fixtures
+# With progress tracking
+WALLET_SEED=your_seed SAVE_INTERVAL=1000 cargo run --bin generate_midnight_fixtures
+```
+
+### generate_midnight_fixtures.sh
+
+A convenient shell script wrapper that provides a user-friendly interface to the fixture generator:
+
+```bash
+# Run the script (it will check for WALLET_SEED)
+./scripts/fixtures/generate_midnight_fixtures.sh
+
+# Or with environment variables
+WALLET_SEED=your_seed START_HEIGHT=1000 ./scripts/fixtures/generate_midnight_fixtures.sh
 ```
 
 Environment variables:
 
 - `WALLET_SEED`: 32-byte hex string (required)
 - `START_HEIGHT`: Blockchain height to start sync from (default: 0)
-- `CONTEXT`: "true" for context only, "both" for both types (default: wallet only)
-- `SAVE_INTERVAL`: Save progress every N blocks (context mode only)
+- `SAVE_INTERVAL`: Save progress every N blocks (optional)
 - `RUST_LOG`: Log level (default: info)
 
 The fixtures will be saved to: `tests/fixtures/midnight/`
 
-- `wallet_<seed_hex>.bin` - Wallet state fixture
-- `context_<seed_hex>_<height>.bin` - Complete context fixture
-- `stored_context_<seed_hex>_<height>.bin` - Context from sync state (if available)
+- `context_<seed_hex>_<height>.bin` - Complete context fixture (includes wallet + ledger state)
 
 ## Using the Fixtures
 
 Once generated, these fixtures can be used in tests:
 
 ```rust
-use openzeppelin_relayer::services::sync::midnight::test_utils::{
-    create_funded_test_context,
-    create_context_from_serialized,
-};
+use openzeppelin_relayer::services::sync::midnight::test_utils::create_context_from_serialized;
 
-// The test_utils will automatically load wallet fixtures
-let context = create_funded_test_context(&[seed], initial_balance);
-
-// Or load a complete context
-let context_bytes = fs::read("tests/fixtures/midnight/context_..._....bin")?;
+// Load a complete context fixture
+let context_bytes = fs::read("tests/fixtures/midnight/context_<seed>_<height>.bin")?;
 let context = create_context_from_serialized(&context_bytes, &[seed], NetworkId::TestNet)?;
+
+// Or in transaction tests, the helper functions will automatically load context fixtures:
+let sync_manager = create_sync_manager_with_fixture(&wallet_seed, &network, relayer_id);
 ```
 
 ## Important Notes
