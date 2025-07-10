@@ -260,4 +260,32 @@ mod tests {
         assert_eq!(to_midnight_network_id("localnet"), NetworkId::Undeployed);
         assert_eq!(to_midnight_network_id("random"), NetworkId::Undeployed);
     }
+
+    #[test]
+    fn test_either_enum() {
+        let left: Either<i32, String> = Either::Left(42);
+        let right: Either<i32, String> = Either::Right("hello".to_string());
+
+        match left {
+            Either::Left(val) => assert_eq!(val, 42),
+            Either::Right(_) => panic!("Expected Left variant"),
+        }
+
+        match right {
+            Either::Left(_) => panic!("Expected Right variant"),
+            Either::Right(val) => assert_eq!(val, "hello"),
+        }
+    }
+
+    #[test]
+    fn test_either_serialization() {
+        let left: Either<i32, String> = Either::Left(42);
+        let json = serde_json::to_string(&left).unwrap();
+        let deserialized: Either<i32, String> = serde_json::from_str(&json).unwrap();
+
+        match deserialized {
+            Either::Left(val) => assert_eq!(val, 42),
+            Either::Right(_) => panic!("Expected Left variant after deserialization"),
+        }
+    }
 }
