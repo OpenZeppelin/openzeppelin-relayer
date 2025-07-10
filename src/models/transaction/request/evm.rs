@@ -1,6 +1,7 @@
 use crate::{
     constants::ZERO_ADDRESS,
     models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel, U256},
+    utils::calculate_intrinsic_gas,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{schema, ToSchema};
@@ -62,6 +63,17 @@ pub fn validate_evm_transaction_request(
             return Err(ApiError::BadRequest(
                 "gas_limit is required when gas_limit_estimation policy is disabled".to_string(),
             ));
+        }
+    }
+
+    // Validate intrinsic gas if gas_limit is provided
+    if let Some(gas_limit) = request.gas_limit {
+        let intrinsic_gas = calculate_intrinsic_gas(request);
+        if gas_limit < intrinsic_gas {
+            return Err(ApiError::BadRequest(format!(
+                "gas_limit is too low, intrinsic gas is {} and gas_limit is {}",
+                intrinsic_gas, gas_limit
+            )));
         }
     }
 
@@ -293,6 +305,23 @@ mod tests {
         request.to = Some(relayer.address.clone());
 
         assert!(validate_target_address(&request, &relayer).is_ok());
+    }
+
+    #[test]
+    fn test_validate_evm_transaction_request_gas_limit_too_low() {
+        let mut request = create_basic_request();
+        request.gas_limit = Some(20000);
+        let result = validate_evm_transaction_request(&request, &create_test_relayer(false, false));
+        assert!(result.is_err());
+
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert_eq!(
+                msg,
+                "gas_limit is too low, intrinsic gas is 21000 and gas_limit is 20000".to_string()
+            );
+        } else {
+            panic!("Expected BadRequest error");
+        }
     }
 
     #[test]
