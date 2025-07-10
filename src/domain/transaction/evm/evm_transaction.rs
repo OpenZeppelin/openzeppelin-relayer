@@ -7,10 +7,11 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 
 use crate::{
+    constants::GAS_LIMIT_BUFFER_MULTIPLIER,
     domain::{
         transaction::{
             evm::{is_pending_transaction, PriceCalculator, PriceCalculatorTrait},
@@ -31,6 +32,7 @@ use crate::{
         TransactionRepository,
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
+    utils::get_evm_default_gas_limit_for_tx,
 };
 
 use super::PriceParams;
@@ -281,11 +283,7 @@ where
             TransactionError::UnexpectedError(format!("Failed to estimate gas: {}", e))
         })?;
 
-        // Add 10% buffer to estimated gas
-        const GAS_BUFFER_MULTIPLIER: u64 = 110;
-        const GAS_BUFFER_DIVISOR: u64 = 100;
-
-        Ok(estimated_gas * GAS_BUFFER_MULTIPLIER / GAS_BUFFER_DIVISOR)
+        Ok(estimated_gas * GAS_LIMIT_BUFFER_MULTIPLIER / 100)
     }
 }
 
@@ -328,21 +326,17 @@ where
                     evm_data.gas_limit = Some(estimated_gas_limit);
                 }
                 Err(estimation_error) => {
-                    let update = TransactionUpdateRequest {
-                        status: Some(TransactionStatus::Failed),
-                        status_reason: Some("gas_limit_estimation_failed".to_string()),
-                        ..Default::default()
-                    };
+                    error!(
+                        "Failed to estimate gas limit for tx: {} : {:?}",
+                        tx.id, estimation_error
+                    );
 
-                    let updated_tx = self
-                        .transaction_repository
-                        .partial_update(tx.id.clone(), update)
-                        .await?;
-
-                    self.send_transaction_update_notification(&updated_tx)
-                        .await?;
-
-                    return Err(estimation_error);
+                    let default_gas_limit = get_evm_default_gas_limit_for_tx(&evm_data);
+                    info!(
+                        "Fallback to default gas limit: {} for tx: {}",
+                        default_gas_limit, tx.id
+                    );
+                    evm_data.gas_limit = Some(default_gas_limit);
                 }
             }
         }
