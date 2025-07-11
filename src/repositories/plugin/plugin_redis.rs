@@ -1,10 +1,10 @@
 //! Redis-backed implementation of the PluginRepository.
 
-use crate::models::{PluginModel, RepositoryError};
+use crate::models::{PaginationQuery, PluginModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
-use crate::repositories::PluginRepositoryTrait;
+use crate::repositories::{BatchRetrievalResult, PaginatedResult, PluginRepositoryTrait};
 use async_trait::async_trait;
-use log::{debug, error};
+use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
@@ -43,31 +43,29 @@ impl RedisPluginRepository {
         format!("{}:{}:{}", self.key_prefix, PLUGIN_PREFIX, plugin_id)
     }
 
-    /// Generate key for plugin list: plugin_list (set of all plugin IDs)
+    /// Generate key for plugin list: plugin_list (paginated list of plugin IDs)
     fn plugin_list_key(&self) -> String {
         format!("{}:{}", self.key_prefix, PLUGIN_LIST_KEY)
     }
-}
 
-impl fmt::Debug for RedisPluginRepository {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RedisPluginRepository")
-            .field("client", &"<ConnectionManager>")
-            .field("key_prefix", &self.key_prefix)
-            .finish()
-    }
-}
-
-#[async_trait]
-impl PluginRepositoryTrait for RedisPluginRepository {
-    async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
+    /// Get plugin by ID using an existing connection.
+    /// This method is useful to prevent creating new connections for
+    /// getting individual plugins on list operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the plugin to get.
+    /// * `conn` - The connection to use.
+    async fn get_by_id_with_connection(
+        &self,
+        id: &str,
+        conn: &mut ConnectionManager,
+    ) -> Result<Option<PluginModel>, RepositoryError> {
         if id.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "Plugin ID cannot be empty".to_string(),
             ));
         }
-
-        let mut conn = self.client.as_ref().clone();
         let key = self.plugin_key(id);
 
         debug!("Fetching plugin data for ID: {}", id);
@@ -88,6 +86,76 @@ impl PluginRepositoryTrait for RedisPluginRepository {
                 Ok(None)
             }
         }
+    }
+
+    async fn get_by_ids(
+        &self,
+        ids: &[String],
+    ) -> Result<BatchRetrievalResult<PluginModel>, RepositoryError> {
+        if ids.is_empty() {
+            debug!("No plugin IDs provided for batch fetch");
+            return Ok(BatchRetrievalResult {
+                results: vec![],
+                failed_ids: vec![],
+            });
+        }
+
+        let mut conn = self.client.as_ref().clone();
+        let keys: Vec<String> = ids.iter().map(|id| self.plugin_key(id)).collect();
+
+        let values: Vec<Option<String>> = conn
+            .mget(&keys)
+            .await
+            .map_err(|e| self.map_redis_error(e, "batch_fetch_plugins"))?;
+
+        let mut plugins = Vec::new();
+        let mut failed_count = 0;
+        let mut failed_ids = Vec::new();
+        for (i, value) in values.into_iter().enumerate() {
+            match value {
+                Some(json) => match self.deserialize_entity(&json, &ids[i], "plugin") {
+                    Ok(plugin) => plugins.push(plugin),
+                    Err(e) => {
+                        failed_count += 1;
+                        error!("Failed to deserialize plugin {}: {}", ids[i], e);
+                        failed_ids.push(ids[i].clone());
+                    }
+                },
+                None => {
+                    warn!("Plugin {} not found in batch fetch", ids[i]);
+                }
+            }
+        }
+
+        if failed_count > 0 {
+            warn!(
+                "Failed to deserialize {} out of {} plugins in batch",
+                failed_count,
+                ids.len()
+            );
+        }
+
+        Ok(BatchRetrievalResult {
+            results: plugins,
+            failed_ids,
+        })
+    }
+}
+
+impl fmt::Debug for RedisPluginRepository {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RedisPluginRepository")
+            .field("client", &"<ConnectionManager>")
+            .field("key_prefix", &self.key_prefix)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl PluginRepositoryTrait for RedisPluginRepository {
+    async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        self.get_by_id_with_connection(id, &mut conn).await
     }
 
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError> {
@@ -139,6 +207,72 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         debug!("Successfully added plugin with ID: {}", plugin.id);
         Ok(())
     }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<PluginModel>, RepositoryError> {
+        if query.page == 0 {
+            return Err(RepositoryError::InvalidData(
+                "Page number must be greater than 0".to_string(),
+            ));
+        }
+
+        if query.per_page == 0 {
+            return Err(RepositoryError::InvalidData(
+                "Per page count must be greater than 0".to_string(),
+            ));
+        }
+
+        let mut conn = self.client.as_ref().clone();
+        let plugin_list_key = self.plugin_list_key();
+
+        // Get total count
+        let total: u64 = conn
+            .scard(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
+
+        if total == 0 {
+            return Ok(PaginatedResult {
+                items: vec![],
+                total: 0,
+                page: query.page,
+                per_page: query.per_page,
+            });
+        }
+
+        // Get all IDs and paginate in memory
+        let all_ids: Vec<String> = conn
+            .smembers(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
+
+        let start = ((query.page - 1) * query.per_page) as usize;
+        let end = (start + query.per_page as usize).min(all_ids.len());
+
+        let ids_to_query = &all_ids[start..end];
+        let items = self.get_by_ids(ids_to_query).await?;
+
+        Ok(PaginatedResult {
+            items: items.results.clone(),
+            total,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
+    async fn count(&self) -> Result<usize, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let plugin_list_key = self.plugin_list_key();
+
+        let count: u64 = conn
+            .scard(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "count_plugins"))?;
+
+        Ok(count as usize)
+    }
 }
 
 #[cfg(test)]
@@ -157,11 +291,18 @@ mod tests {
     }
 
     async fn setup_test_repo() -> RedisPluginRepository {
-        let client =
-            redis::Client::open("redis://127.0.0.1:6379/").expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
+        let mut connection_manager = ConnectionManager::new(client)
             .await
             .expect("Failed to create Redis connection manager");
+
+        // Clear the plugin lists
+        connection_manager
+            .del::<&str, ()>("test_plugin:plugin_list")
+            .await
+            .unwrap();
 
         RedisPluginRepository::new(Arc::new(connection_manager), "test_plugin".to_string())
             .expect("Failed to create Redis plugin repository")
@@ -325,5 +466,54 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("path cannot be empty"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_by_ids_plugins() {
+        let repo = setup_test_repo().await;
+        let plugin_name1 = uuid::Uuid::new_v4().to_string();
+        let plugin_name2 = uuid::Uuid::new_v4().to_string();
+        let plugin1 = create_test_plugin(&plugin_name1, "/path/to/plugin1");
+        let plugin2 = create_test_plugin(&plugin_name2, "/path/to/plugin2");
+
+        repo.add(plugin1.clone()).await.unwrap();
+        repo.add(plugin2.clone()).await.unwrap();
+
+        let retrieved = repo
+            .get_by_ids(&[plugin1.id.clone(), plugin2.id.clone()])
+            .await
+            .unwrap();
+        assert!(retrieved.results.len() == 2);
+        assert_eq!(retrieved.results[0].id, plugin2.id);
+        assert_eq!(retrieved.results[1].id, plugin1.id);
+        assert_eq!(retrieved.failed_ids.len(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_list_paginated_plugins() {
+        let repo = setup_test_repo().await;
+
+        let plugin_id1 = uuid::Uuid::new_v4().to_string();
+        let plugin_id2 = uuid::Uuid::new_v4().to_string();
+        let plugin_id3 = uuid::Uuid::new_v4().to_string();
+        let plugin1 = create_test_plugin(&plugin_id1, "/path/to/plugin1");
+        let plugin2 = create_test_plugin(&plugin_id2, "/path/to/plugin2");
+        let plugin3 = create_test_plugin(&plugin_id3, "/path/to/plugin3");
+
+        repo.add(plugin1.clone()).await.unwrap();
+        repo.add(plugin2.clone()).await.unwrap();
+        repo.add(plugin3.clone()).await.unwrap();
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 2,
+        };
+
+        let result = repo.list_paginated(query).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.items.len() == 2);
     }
 }
