@@ -141,7 +141,7 @@ The relayer uses a two-tier approach for gas limit estimation:
 
 2. **Fallback Method**: When RPC estimation fails, default gas limits are applied based on transaction type:
    - **Simple ETH transfer** (no data): 21,000 gas
-   - **ERC20 transfer** (`0xa9059cbb`): 65,000 gas  
+   - **ERC20 transfer** (`0xa9059cbb`): 65,000 gas
    - **ERC721/ERC20 transferFrom** (`0x23b872dd`): 80,000 gas
    - **Complex contracts** (all other function calls): 200,000 gas
 
@@ -323,4 +323,4 @@ For help with EVM integration:
 
 == License
 
-This project is licensed under the GNU Affero General Public License v3.0. 
+This project is licensed under the GNU Affero General Public License v3.0.
