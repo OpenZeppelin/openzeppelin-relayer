@@ -1,5 +1,6 @@
 use crate::{
     models::{ApiResponse, PluginCallRequest, PluginModel},
+    repositories::PaginatedResult,
     services::plugins::PluginCallResponse,
 };
 
@@ -86,11 +87,15 @@ fn doc_call_plugin() {}
     security(
         ("bearer_auth" = [])
     ),
+    params(
+        ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),
+        ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)")
+    ),
     responses(
         (
             status = 200,
             description = "Plugins listed successfully",
-            body = ApiResponse<Vec<PluginModel>>
+            body = ApiResponse<PaginatedResult<PluginModel>>
         ),
         (
             status = 400,

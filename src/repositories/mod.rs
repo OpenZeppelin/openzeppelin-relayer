@@ -5,6 +5,7 @@
 use crate::models::{PaginationQuery, RepositoryError};
 use async_trait::async_trait;
 use eyre::Result;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod relayer;
@@ -31,7 +32,7 @@ pub use plugin::*;
 // Redis base utilities for shared functionality
 pub mod redis_base;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct PaginatedResult<T> {
     pub items: Vec<T>,
     pub total: u64,
@@ -46,6 +47,7 @@ pub struct BatchRetrievalResult<T> {
 
 #[cfg(test)]
 use mockall::automock;
+use utoipa::ToSchema;
 
 #[async_trait]
 #[allow(dead_code)]

@@ -5,8 +5,9 @@
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        ApiError, ApiResponse, NetworkRepoModel, NotificationRepoModel, PluginCallRequest,
-        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        ApiError, ApiResponse, NetworkRepoModel, NotificationRepoModel, PaginationMeta,
+        PaginationQuery, PluginCallRequest, PluginModel, RelayerRepoModel, SignerRepoModel,
+        ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -66,12 +67,16 @@ where
 ///
 /// # Arguments
 ///
+/// * `query` - The pagination query parameters.
+///     * `page` - The page number.
+///     * `per_page` - The number of items per page.
 /// * `state` - The application state containing the plugin repository.
 ///
 /// # Returns
 ///
 /// The result of the plugin list.
 pub async fn list_plugins<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    query: PaginationQuery,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -84,8 +89,18 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
-    let plugins = state.plugin_repository.get_all().await?;
-    Ok(HttpResponse::Ok().json(plugins))
+    let plugins = state.plugin_repository.list_paginated(query).await?;
+
+    let plugin_items: Vec<PluginModel> = plugins.items.into_iter().collect();
+
+    Ok(HttpResponse::Ok().json(ApiResponse::paginated(
+        plugin_items,
+        PaginationMeta {
+            total_items: plugins.total,
+            current_page: plugins.page,
+            per_page: plugins.per_page,
+        },
+    )))
 }
 
 #[cfg(test)]

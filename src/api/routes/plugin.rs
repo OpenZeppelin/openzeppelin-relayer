@@ -3,14 +3,17 @@
 //! The routes are integrated with the Actix-web framework and interact with the plugin controller.
 use crate::{
     api::controllers::plugin,
-    models::{DefaultAppState, PluginCallRequest},
+    models::{DefaultAppState, PaginationQuery, PluginCallRequest},
 };
 use actix_web::{get, post, web, Responder};
 
 /// List plugins
 #[get("/plugins")]
-async fn list_plugins(data: web::ThinData<DefaultAppState>) -> impl Responder {
-    plugin::list_plugins(data).await
+async fn list_plugins(
+    query: web::Query<PaginationQuery>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    plugin::list_plugins(query.into_inner(), data).await
 }
 
 /// Calls a plugin method.

@@ -3,8 +3,8 @@
 //! The `InMemoryPluginRepository` struct is used to store and retrieve plugins
 //! script paths for further execution.
 use crate::{
-    models::PluginModel,
-    repositories::{PluginRepositoryTrait, RepositoryError},
+    models::{PaginationQuery, PluginModel},
+    repositories::{PaginatedResult, PluginRepositoryTrait, RepositoryError},
 };
 
 use async_trait::async_trait;
@@ -68,9 +68,34 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
         Ok(())
     }
 
-    async fn get_all(&self) -> Result<Vec<PluginModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        Ok(store.values().cloned().collect())
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<PluginModel>, RepositoryError> {
+        let total = self.count().await?;
+        let start = ((query.page - 1) * query.per_page) as usize;
+
+        let items = self
+            .store
+            .lock()
+            .await
+            .values()
+            .skip(start)
+            .take(query.per_page as usize)
+            .cloned()
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total: total as u64,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
+    async fn count(&self) -> Result<usize, RepositoryError> {
+        let store = self.store.lock().await;
+        Ok(store.len())
     }
 }
 
@@ -142,31 +167,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_all_plugins() {
+    async fn test_list_paginated() {
         let plugin_repository = Arc::new(InMemoryPluginRepository::new());
 
         let plugin1 = PluginModel {
             id: "test-plugin1".to_string(),
             path: "test-path1".to_string(),
-            timeout: Duration::from_secs(69),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
 
         let plugin2 = PluginModel {
             id: "test-plugin2".to_string(),
             path: "test-path2".to_string(),
-            timeout: Duration::from_secs(69),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
         };
 
         plugin_repository.add(plugin1.clone()).await.unwrap();
         plugin_repository.add(plugin2.clone()).await.unwrap();
 
-        let retrieved = plugin_repository.get_all().await.unwrap();
-        assert_eq!(retrieved.len(), 2);
-        assert_eq!(retrieved[0].id, plugin1.id);
-        assert_eq!(retrieved[0].path, plugin1.path);
-        assert_eq!(retrieved[0].timeout, plugin1.timeout);
-        assert_eq!(retrieved[1].id, plugin2.id);
-        assert_eq!(retrieved[1].path, plugin2.path);
-        assert_eq!(retrieved[1].timeout, plugin2.timeout);
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 2,
+        };
+
+        let result = plugin_repository.list_paginated(query).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.items.len(), 2);
     }
 }
