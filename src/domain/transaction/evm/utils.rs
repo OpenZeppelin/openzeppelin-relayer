@@ -1,5 +1,5 @@
 use crate::constants::{
-    DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
+    DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
 use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
@@ -11,7 +11,7 @@ use eyre::Result;
 /// This is commonly used for cancellation and replacement transactions
 pub async fn make_noop(evm_data: &mut EvmTransactionData) -> Result<(), TransactionError> {
     // Update the transaction to be a noop
-    evm_data.gas_limit = 21_000;
+    evm_data.gas_limit = Some(DEFAULT_GAS_LIMIT);
     evm_data.value = U256::from(0u64);
     evm_data.data = Some("0x".to_string());
     evm_data.to = Some(evm_data.from.clone());
@@ -100,7 +100,7 @@ mod tests {
             to: Some("0xoriginal_destination".to_string()),
             value: U256::from(1000000000000000000u64), // 1 ETH
             data: Some("0xoriginal_data".to_string()),
-            gas_limit: 50000,
+            gas_limit: Some(50000),
             gas_price: Some(10_000_000_000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
@@ -116,7 +116,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly
-        assert_eq!(evm_data.gas_limit, 21_000); // Standard gas limit
+        assert_eq!(evm_data.gas_limit, Some(21_000)); // Standard gas limit
         assert_eq!(evm_data.to.unwrap(), evm_data.from); // Should send to self
         assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
         assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
@@ -131,7 +131,7 @@ mod tests {
             to: Some("0x1234567890123456789012345678901234567890".to_string()), // Same as from
             value: U256::from(0u64),
             data: Some("0x".to_string()),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             gas_price: Some(10_000_000_000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
@@ -179,7 +179,7 @@ mod tests {
                 to: Some("0x5678".to_string()),
                 value: U256::from(0u64),
                 data: Some("0x".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(10_000_000_000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -225,7 +225,7 @@ mod tests {
                 to: Some("0x5678".to_string()),
                 value: U256::from(0u64),
                 data: Some("0x".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(10_000_000_000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -402,7 +402,7 @@ mod tests {
                 to: Some("0x5678".to_string()),
                 value: U256::from(0u64),
                 data: Some("0x".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(10_000_000_000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -443,7 +443,7 @@ mod tests {
                 to: Some("0x5678".to_string()),
                 value: U256::from(0u64),
                 data: Some("0x".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(10_000_000_000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -487,7 +487,7 @@ mod tests {
                 to: Some("0x5678".to_string()),
                 value: U256::from(0u64),
                 data: Some("0x".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(10_000_000_000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,

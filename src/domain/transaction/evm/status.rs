@@ -434,7 +434,7 @@ mod tests {
                 to: Some("0xRecipient".to_string()),
                 value: U256::from(0),
                 data: Some("0xData".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(20000000000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,

@@ -757,6 +757,7 @@ mod tests {
             eip1559_pricing: Some(true),
             private_transactions: true,
             min_balance: 1000000000000000000,
+            gas_limit_estimation: Some(true),
         });
 
         let result = repo.update_policy(relayer.id.clone(), new_policy).await;

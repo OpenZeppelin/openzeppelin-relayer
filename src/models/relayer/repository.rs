@@ -57,6 +57,7 @@ pub struct RelayerEvmPolicy {
     pub eip1559_pricing: Option<bool>,
     pub private_transactions: bool,
     pub min_balance: u128,
+    pub gas_limit_estimation: Option<bool>,
 }
 
 impl Default for RelayerEvmPolicy {
@@ -67,6 +68,7 @@ impl Default for RelayerEvmPolicy {
             eip1559_pricing: None,
             private_transactions: false,
             min_balance: DEFAULT_EVM_MIN_BALANCE,
+            gas_limit_estimation: Some(true),
         }
     }
 }
@@ -349,6 +351,7 @@ impl TryFrom<crate::config::RelayerFileConfig> for RelayerRepoModel {
                     eip1559_pricing: evm_policy.eip1559_pricing,
                     private_transactions: evm_policy.private_transactions.unwrap_or(false),
                     min_balance: evm_policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
+                    gas_limit_estimation: evm_policy.gas_limit_estimation,
                 })
             }
             Some(ConfigFileRelayerNetworkPolicy::Solana(solana_policy)) => {

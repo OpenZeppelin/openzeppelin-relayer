@@ -213,6 +213,7 @@ mod tests {
                 eip1559_pricing: Some(false),
                 private_transactions: false,
                 min_balance: 0,
+                gas_limit_estimation: Some(true),
             }),
             signer_id: "test".to_string(),
             address: "0x".to_string(),
@@ -295,6 +296,7 @@ mod tests {
             eip1559_pricing: Some(true),
             private_transactions: false,
             min_balance: 1000000000000000000,
+            gas_limit_estimation: Some(true),
         });
         let policy_updated = impl_repo
             .update_policy(relayer.id.clone(), new_policy)

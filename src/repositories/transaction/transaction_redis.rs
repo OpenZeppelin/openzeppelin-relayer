@@ -894,7 +894,7 @@ mod tests {
             hashes: vec![],
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 gas_price: Some(1000000000),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 nonce: Some(1),
                 value: U256::from_str("1000000000000000000").unwrap(),
                 data: Some("0x".to_string()),
@@ -1404,7 +1404,7 @@ mod tests {
 
         let new_network_data = NetworkTransactionData::Evm(EvmTransactionData {
             gas_price: Some(2000000000),
-            gas_limit: 42000,
+            gas_limit: Some(42000),
             nonce: Some(2),
             value: U256::from_str("2000000000000000000").unwrap(),
             data: Some("0x1234".to_string()),
