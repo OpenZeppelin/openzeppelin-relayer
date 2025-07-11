@@ -26,5 +26,8 @@ pub use der::*;
 mod secp256k;
 pub use secp256k::*;
 
+mod redis;
+pub use redis::*;
+
 #[cfg(test)]
 pub mod mocks;

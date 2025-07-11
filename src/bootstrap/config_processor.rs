@@ -1,9 +1,9 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use crate::{
-    config::{Config, SignerFileConfig, SignerFileConfigEnum},
+    config::{Config, RepositoryStorageType, ServerConfig, SignerFileConfig, SignerFileConfigEnum},
     jobs::JobProducerTrait,
     models::{
         AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
@@ -20,7 +20,9 @@ use crate::{
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
+use log::info;
 use oz_keystore::{HashicorpCloudClient, LocalClient};
+use redis::{aio::ConnectionManager, AsyncCommands};
 use secrets::SecretVec;
 use zeroize::Zeroizing;
 
@@ -404,6 +406,36 @@ where
     Ok(())
 }
 
+/// Check if Redis database is populated with existing configuration data.
+///
+/// This function checks if any of the main repository list keys exist in Redis.
+/// If they exist, it means Redis already contains data from a previous configuration load.
+async fn is_redis_populated(
+    server_config: &ServerConfig,
+    connection_manager: Arc<ConnectionManager>,
+) -> Result<bool> {
+    let mut conn = connection_manager.as_ref().clone();
+
+    let key_prefix = &server_config.redis_key_prefix;
+    let list_keys = vec![
+        format!("{}:relayer_list", key_prefix),
+        format!("{}:signer_list", key_prefix),
+        format!("{}:notification_list", key_prefix),
+        format!("{}:plugin_list", key_prefix),
+        format!("{}:network_list", key_prefix),
+    ];
+
+    // Check if any of the main list keys exist
+    for key in list_keys {
+        let exists: bool = conn.exists(&key).await?;
+        if exists {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 /// Process a complete configuration file by initializing all repositories.
 ///
 /// This function processes the entire configuration file in the following order:
@@ -413,6 +445,8 @@ where
 /// 4. Process relayers
 pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: Config,
+    server_config: Arc<ServerConfig>,
+    connection_manager: Arc<ConnectionManager>,
     app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
@@ -425,11 +459,21 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
-    process_plugins(&config_file, &app_state).await?;
-    process_signers(&config_file, &app_state).await?;
-    process_notifications(&config_file, &app_state).await?;
-    process_networks(&config_file, &app_state).await?;
-    process_relayers(&config_file, &app_state).await?;
+    let should_process_config_file = match server_config.repository_storage_type {
+        RepositoryStorageType::Redis => {
+            !is_redis_populated(&server_config, connection_manager.clone()).await?
+        }
+        RepositoryStorageType::InMemory => true,
+    };
+
+    if should_process_config_file {
+        info!("Processing config file");
+        process_plugins(&config_file, &app_state).await?;
+        process_signers(&config_file, &app_state).await?;
+        process_notifications(&config_file, &app_state).await?;
+        process_networks(&config_file, &app_state).await?;
+        process_relayers(&config_file, &app_state).await?;
+    }
     Ok(())
 }
 
@@ -1215,8 +1259,19 @@ mod tests {
             plugin_repository: plugin_repo.clone(),
         });
 
+        // Create Redis client and connection manager for testing
+        let redis_url = std::env::var("REDIS_TEST_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let redis_client = redis::Client::open(redis_url)?;
+        let connection_manager = Arc::new(ConnectionManager::new(redis_client).await?);
+
         // Process the entire config file
-        process_config_file(config, app_state).await?;
+        let server_config = Arc::new(
+            crate::utils::mocks::mockutils::create_test_server_config(
+                RepositoryStorageType::InMemory,
+            ),
+        );
+        process_config_file(config, server_config, connection_manager.clone(), app_state).await?;
 
         // Verify all repositories were populated
         let stored_signers = signer_repo.list_all().await?;
