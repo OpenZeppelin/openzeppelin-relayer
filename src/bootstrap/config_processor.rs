@@ -443,6 +443,10 @@ where
         return Ok(true);
     }
 
+    if app_state.plugin_repository.has_entries().await? {
+        return Ok(true);
+    }
+
     Ok(false)
 }
 
@@ -487,6 +491,7 @@ where
         app_state.signer_repository.drop_all_entries().await?;
         app_state.notification_repository.drop_all_entries().await?;
         app_state.network_repository.drop_all_entries().await?;
+        app_state.plugin_repository.drop_all_entries().await?;
     }
 
     if should_process_config_file {
