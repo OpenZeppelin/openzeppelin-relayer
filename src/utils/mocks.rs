@@ -11,9 +11,9 @@ pub mod mockutils {
         jobs::MockJobProducerTrait,
         models::{
             AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfig,
-            NetworkRepoModel, NetworkTransactionData, NetworkType, PluginModel, RelayerEvmPolicy,
-            RelayerNetworkPolicy, RelayerRepoModel, SecretString, SignerConfig, SignerRepoModel,
-            TransactionRepoModel, TransactionStatus,
+            NetworkRepoModel, NetworkTransactionData, NetworkType, NotificationRepoModel,
+            PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SecretString,
+            SignerConfig, SignerRepoModel, TransactionRepoModel, TransactionStatus,
         },
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
@@ -41,6 +41,15 @@ pub mod mockutils {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+        }
+    }
+
+    pub fn create_mock_notification(id: String) -> NotificationRepoModel {
+        NotificationRepoModel {
+            id,
+            notification_type: crate::models::NotificationType::Webhook,
+            url: "https://example.com/webhook".to_string(),
+            signing_key: None,
         }
     }
 
@@ -215,6 +224,7 @@ pub mod mockutils {
             provider_retry_max_delay_ms: 2000,
             provider_max_failovers: 3,
             repository_storage_type: storage_type,
+            reset_storage_on_start: false,
         }
     }
 }

@@ -29,6 +29,7 @@ async fn test_authorization_middleware_success() {
         provider_retry_max_delay_ms: 2000,
         provider_max_failovers: 3,
         repository_storage_type: RepositoryStorageType::InMemory,
+        reset_storage_on_start: false,
     });
 
     let app = test::init_service(
@@ -84,6 +85,7 @@ async fn test_authorization_middleware_failure() {
         provider_retry_max_delay_ms: 2000,
         provider_max_failovers: 3,
         repository_storage_type: RepositoryStorageType::InMemory,
+        reset_storage_on_start: false,
     });
 
     let app = test::init_service(

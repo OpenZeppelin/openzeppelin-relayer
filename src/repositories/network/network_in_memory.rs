@@ -120,6 +120,17 @@ impl Repository<NetworkRepoModel, String> for InMemoryNetworkRepository {
         let store = Self::acquire_lock(&self.store).await?;
         Ok(store.len())
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -129,13 +140,7 @@ impl NetworkRepository for InMemoryNetworkRepository {
         network_type: NetworkType,
         name: &str,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        for (_, network) in store.iter() {
-            if network.network_type == network_type && network.name == name {
-                return Ok(Some(network.clone()));
-            }
-        }
-        Ok(None)
+        self.get(network_type, name).await
     }
 
     async fn get_by_chain_id(
@@ -143,27 +148,21 @@ impl NetworkRepository for InMemoryNetworkRepository {
         network_type: NetworkType,
         chain_id: u64,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-
-        // Only EVM networks have chain_id, so we filter by network type first
+        // Only EVM networks have chain_id
         if network_type != NetworkType::Evm {
             return Ok(None);
         }
 
-        // Search through all networks to find one with matching chain_id and network_type
-        for network in store.values() {
+        let store = Self::acquire_lock(&self.store).await?;
+        for (_, network) in store.iter() {
             if network.network_type == network_type {
-                // For EVM networks, check if the chain_id matches
                 if let crate::models::NetworkConfigData::Evm(evm_config) = &network.config {
-                    if let Some(network_chain_id) = evm_config.chain_id {
-                        if network_chain_id == chain_id {
-                            return Ok(Some(network.clone()));
-                        }
+                    if evm_config.chain_id == Some(chain_id) {
+                        return Ok(Some(network.clone()));
                     }
                 }
             }
         }
-
         Ok(None)
     }
 }
@@ -312,5 +311,28 @@ mod tests {
             pagination_result,
             Err(RepositoryError::NotSupported(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn test_has_entries() {
+        let repo = InMemoryNetworkRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
+
+        let network = create_test_network("test".to_string(), NetworkType::Evm);
+
+        repo.create(network.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemoryNetworkRepository::new();
+        let network = create_test_network("test".to_string(), NetworkType::Evm);
+
+        repo.create(network.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

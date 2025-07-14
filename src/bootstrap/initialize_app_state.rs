@@ -11,11 +11,11 @@ use crate::{
         RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
         TransactionRepositoryStorage,
     },
+    utils::initialize_redis_connection,
 };
 use actix_web::web;
 use color_eyre::Result;
 use log::warn;
-use redis::aio::ConnectionManager;
 use std::sync::Arc;
 
 pub struct RepositoryCollection {
@@ -35,10 +35,7 @@ pub struct RepositoryCollection {
 /// * `Result<RepositoryCollection>` - Initialized repositories
 ///
 /// # Errors
-pub async fn initialize_repositories(
-    config: &ServerConfig,
-    redis_connection_manager: Arc<ConnectionManager>,
-) -> eyre::Result<RepositoryCollection> {
+pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<RepositoryCollection> {
     let repositories = match config.repository_storage_type {
         RepositoryStorageType::InMemory => RepositoryCollection {
             relayer: Arc::new(RelayerRepositoryStorage::new_in_memory()),
@@ -51,6 +48,8 @@ pub async fn initialize_repositories(
         },
         RepositoryStorageType::Redis => {
             warn!("Redis repository storage support is experimental");
+            let redis_connection_manager = initialize_redis_connection(config).await?;
+
             let connection_manager = redis_connection_manager.clone();
 
             RepositoryCollection {
@@ -102,10 +101,8 @@ pub async fn initialize_repositories(
 /// - Configuration loading fails
 pub async fn initialize_app_state(
     server_config: Arc<ServerConfig>,
-    redis_connection_manager: Arc<ConnectionManager>,
 ) -> Result<web::ThinData<DefaultAppState>> {
-    let repositories =
-        initialize_repositories(&server_config, redis_connection_manager.clone()).await?;
+    let repositories = initialize_repositories(&server_config).await?;
 
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
@@ -129,99 +126,77 @@ mod tests {
     use super::*;
     use crate::{
         config::RepositoryStorageType,
-        models::SecretString,
         repositories::Repository,
-        utils::mocks::mockutils::{create_mock_network, create_mock_relayer, create_mock_signer},
+        utils::mocks::mockutils::{
+            create_mock_network, create_mock_relayer, create_mock_signer, create_test_server_config,
+        },
     };
     use std::sync::Arc;
 
-    /// Helper function to create a test ServerConfig
-    fn create_test_server_config(storage_type: RepositoryStorageType) -> ServerConfig {
-        ServerConfig {
-            host: "localhost".to_string(),
-            port: 8080,
-            redis_url: "redis://localhost:6379".to_string(),
-            config_file_path: "./config/test.json".to_string(),
-            api_key: SecretString::new("test_api_key_1234567890_test_key_32"),
-            rate_limit_requests_per_second: 100,
-            rate_limit_burst_size: 300,
-            metrics_port: 8081,
-            enable_swagger: false,
-            redis_connection_timeout_ms: 5000,
-            redis_key_prefix: "test-oz-relayer".to_string(),
-            rpc_timeout_ms: 10000,
-            provider_max_retries: 3,
-            provider_retry_base_delay_ms: 100,
-            provider_retry_max_delay_ms: 2000,
-            provider_max_failovers: 3,
-            repository_storage_type: storage_type,
-        }
+    #[tokio::test]
+    async fn test_initialize_repositories_in_memory() {
+        let config = create_test_server_config(RepositoryStorageType::InMemory);
+        let result = initialize_repositories(&config).await;
+
+        assert!(result.is_ok());
+        let repositories = result.unwrap();
+
+        // Verify all repositories are created
+        assert!(Arc::strong_count(&repositories.relayer) >= 1);
+        assert!(Arc::strong_count(&repositories.transaction) >= 1);
+        assert!(Arc::strong_count(&repositories.signer) >= 1);
+        assert!(Arc::strong_count(&repositories.notification) >= 1);
+        assert!(Arc::strong_count(&repositories.network) >= 1);
+        assert!(Arc::strong_count(&repositories.transaction_counter) >= 1);
+        assert!(Arc::strong_count(&repositories.plugin) >= 1);
     }
 
-    // #[tokio::test]
-    // async fn test_initialize_repositories_in_memory() {
-    //     let config = create_test_server_config(RepositoryStorageType::InMemory);
-    //     let result = initialize_repositories(&config).await;
+    #[tokio::test]
+    async fn test_repository_collection_functionality() {
+        let config = create_test_server_config(RepositoryStorageType::InMemory);
+        let repositories = initialize_repositories(&config).await.unwrap();
 
-    //     assert!(result.is_ok());
-    //     let repositories = result.unwrap();
+        // Test basic repository operations
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let signer = create_mock_signer();
+        let network = create_mock_network();
 
-    //     // Verify all repositories are created
-    //     assert!(Arc::strong_count(&repositories.relayer) >= 1);
-    //     assert!(Arc::strong_count(&repositories.transaction) >= 1);
-    //     assert!(Arc::strong_count(&repositories.signer) >= 1);
-    //     assert!(Arc::strong_count(&repositories.notification) >= 1);
-    //     assert!(Arc::strong_count(&repositories.network) >= 1);
-    //     assert!(Arc::strong_count(&repositories.transaction_counter) >= 1);
-    //     assert!(Arc::strong_count(&repositories.plugin) >= 1);
-    // }
+        // Test creating and retrieving items
+        repositories.relayer.create(relayer.clone()).await.unwrap();
+        repositories.signer.create(signer.clone()).await.unwrap();
+        repositories.network.create(network.clone()).await.unwrap();
 
-    // #[tokio::test]
-    // async fn test_repository_collection_functionality() {
-    //     let config = create_test_server_config(RepositoryStorageType::InMemory);
-    //     let repositories = initialize_repositories(&config).await.unwrap();
+        let retrieved_relayer = repositories
+            .relayer
+            .get_by_id("test-relayer".to_string())
+            .await
+            .unwrap();
+        let retrieved_signer = repositories
+            .signer
+            .get_by_id("test".to_string())
+            .await
+            .unwrap();
+        let retrieved_network = repositories
+            .network
+            .get_by_id("test".to_string())
+            .await
+            .unwrap();
 
-    //     // Test basic repository operations
-    //     let relayer = create_mock_relayer("test-relayer".to_string(), false);
-    //     let signer = create_mock_signer();
-    //     let network = create_mock_network();
+        assert_eq!(retrieved_relayer.id, "test-relayer");
+        assert_eq!(retrieved_signer.id, "test");
+        assert_eq!(retrieved_network.id, "test");
+    }
 
-    //     // Test creating and retrieving items
-    //     repositories.relayer.create(relayer.clone()).await.unwrap();
-    //     repositories.signer.create(signer.clone()).await.unwrap();
-    //     repositories.network.create(network.clone()).await.unwrap();
+    #[tokio::test]
+    async fn test_initialize_app_state_repository_error() {
+        let mut config = create_test_server_config(RepositoryStorageType::Redis);
+        config.redis_url = "redis://invalid_url".to_string();
 
-    //     let retrieved_relayer = repositories
-    //         .relayer
-    //         .get_by_id("test-relayer".to_string())
-    //         .await
-    //         .unwrap();
-    //     let retrieved_signer = repositories
-    //         .signer
-    //         .get_by_id("test".to_string())
-    //         .await
-    //         .unwrap();
-    //     let retrieved_network = repositories
-    //         .network
-    //         .get_by_id("test".to_string())
-    //         .await
-    //         .unwrap();
+        let result = initialize_app_state(Arc::new(config)).await;
 
-    //     assert_eq!(retrieved_relayer.id, "test-relayer");
-    //     assert_eq!(retrieved_signer.id, "test");
-    //     assert_eq!(retrieved_network.id, "test");
-    // }
-
-    // #[tokio::test]
-    // async fn test_initialize_app_state_repository_error() {
-    //     let mut config = create_test_server_config(RepositoryStorageType::Redis);
-    //     config.redis_url = "redis://invalid_url".to_string();
-
-    //     let result = initialize_app_state(Arc::new(config)).await;
-
-    //     // Should fail during repository initialization
-    //     assert!(result.is_err());
-    //     let error = result.unwrap_err();
-    //     assert!(error.to_string().contains("Redis") || error.to_string().contains("connection"));
-    // }
+        // Should fail during repository initialization
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Redis") || error.to_string().contains("connection"));
+    }
 }

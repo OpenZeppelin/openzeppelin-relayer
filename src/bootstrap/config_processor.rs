@@ -22,7 +22,7 @@ use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use log::info;
 use oz_keystore::{HashicorpCloudClient, LocalClient};
-use redis::{aio::ConnectionManager, AsyncCommands};
+
 use secrets::SecretVec;
 use zeroize::Zeroizing;
 
@@ -410,27 +410,38 @@ where
 ///
 /// This function checks if any of the main repository list keys exist in Redis.
 /// If they exist, it means Redis already contains data from a previous configuration load.
-async fn is_redis_populated(
-    server_config: &ServerConfig,
-    connection_manager: Arc<ConnectionManager>,
-) -> Result<bool> {
-    let mut conn = connection_manager.as_ref().clone();
+async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    _server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<bool>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
+    if app_state.relayer_repository.has_entries().await? {
+        return Ok(true);
+    }
 
-    let key_prefix = &server_config.redis_key_prefix;
-    let list_keys = vec![
-        format!("{}:relayer_list", key_prefix),
-        format!("{}:signer_list", key_prefix),
-        format!("{}:notification_list", key_prefix),
-        format!("{}:plugin_list", key_prefix),
-        format!("{}:network_list", key_prefix),
-    ];
+    if app_state.transaction_repository.has_entries().await? {
+        return Ok(true);
+    }
 
-    // Check if any of the main list keys exist
-    for key in list_keys {
-        let exists: bool = conn.exists(&key).await?;
-        if exists {
-            return Ok(true);
-        }
+    if app_state.signer_repository.has_entries().await? {
+        return Ok(true);
+    }
+
+    if app_state.notification_repository.has_entries().await? {
+        return Ok(true);
+    }
+
+    if app_state.network_repository.has_entries().await? {
+        return Ok(true);
     }
 
     Ok(false)
@@ -446,8 +457,7 @@ async fn is_redis_populated(
 pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
-    connection_manager: Arc<ConnectionManager>,
-    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -460,19 +470,34 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     let should_process_config_file = match server_config.repository_storage_type {
-        RepositoryStorageType::Redis => {
-            !is_redis_populated(&server_config, connection_manager.clone()).await?
-        }
         RepositoryStorageType::InMemory => true,
+        RepositoryStorageType::Redis => {
+            server_config.reset_storage_on_start
+                || !is_redis_populated(&server_config, app_state).await?
+        }
     };
+
+    if !should_process_config_file {
+        info!("Skipping config file processing");
+        return Ok(());
+    }
+
+    if server_config.reset_storage_on_start {
+        info!("Resetting storage on start due to server config flag RESET_STORAGE_ON_START = true");
+        app_state.relayer_repository.drop_all_entries().await?;
+        app_state.transaction_repository.drop_all_entries().await?;
+        app_state.signer_repository.drop_all_entries().await?;
+        app_state.notification_repository.drop_all_entries().await?;
+        app_state.network_repository.drop_all_entries().await?;
+    }
 
     if should_process_config_file {
         info!("Processing config file");
-        process_plugins(&config_file, &app_state).await?;
-        process_signers(&config_file, &app_state).await?;
-        process_notifications(&config_file, &app_state).await?;
-        process_networks(&config_file, &app_state).await?;
-        process_relayers(&config_file, &app_state).await?;
+        process_plugins(&config_file, app_state).await?;
+        process_signers(&config_file, app_state).await?;
+        process_notifications(&config_file, app_state).await?;
+        process_networks(&config_file, app_state).await?;
+        process_relayers(&config_file, app_state).await?;
     }
     Ok(())
 }
@@ -496,6 +521,10 @@ mod tests {
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
             RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
             TransactionRepositoryStorage,
+        },
+        utils::mocks::mockutils::{
+            create_mock_network, create_mock_notification, create_mock_relayer, create_mock_signer,
+            create_test_server_config,
         },
     };
     use actix_web::web::ThinData;
@@ -1259,19 +1288,11 @@ mod tests {
             plugin_repository: plugin_repo.clone(),
         });
 
-        // Create Redis client and connection manager for testing
-        let redis_url = std::env::var("REDIS_TEST_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let redis_client = redis::Client::open(redis_url)?;
-        let connection_manager = Arc::new(ConnectionManager::new(redis_client).await?);
-
         // Process the entire config file
-        let server_config = Arc::new(
-            crate::utils::mocks::mockutils::create_test_server_config(
-                RepositoryStorageType::InMemory,
-            ),
-        );
-        process_config_file(config, server_config, connection_manager.clone(), app_state).await?;
+        let server_config = Arc::new(crate::utils::mocks::mockutils::create_test_server_config(
+            RepositoryStorageType::InMemory,
+        ));
+        process_config_file(config, server_config, &app_state).await?;
 
         // Verify all repositories were populated
         let stored_signers = signer_repo.list_all().await?;
@@ -1337,5 +1358,387 @@ mod tests {
         let model = result.unwrap();
 
         assert_eq!(model.id, "gcp-kms-signer");
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_empty_repositories() -> Result<()> {
+        // Create fresh app state with all empty repositories
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // All repositories should be empty
+        assert!(!app_state.relayer_repository.has_entries().await?);
+        assert!(!app_state.transaction_repository.has_entries().await?);
+        assert!(!app_state.signer_repository.has_entries().await?);
+        assert!(!app_state.notification_repository.has_entries().await?);
+        assert!(!app_state.network_repository.has_entries().await?);
+
+        // is_redis_populated should return false when all repositories are empty
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(!result, "Expected false when all repositories are empty");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_relayer_repository_has_entries() -> Result<()> {
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // Add a relayer to the repository
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        app_state.relayer_repository.create(relayer).await?;
+
+        // Verify relayer repository has entries
+        assert!(app_state.relayer_repository.has_entries().await?);
+
+        // is_redis_populated should return true
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(result, "Expected true when relayer repository has entries");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_transaction_repository_has_entries() -> Result<()> {
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // Add a transaction to the repository
+        let transaction = TransactionRepoModel::default();
+        app_state.transaction_repository.create(transaction).await?;
+
+        // Verify transaction repository has entries
+        assert!(app_state.transaction_repository.has_entries().await?);
+
+        // is_redis_populated should return true
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(
+            result,
+            "Expected true when transaction repository has entries"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_signer_repository_has_entries() -> Result<()> {
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // Add a signer to the repository
+        let signer = create_mock_signer();
+        app_state.signer_repository.create(signer).await?;
+
+        // Verify signer repository has entries
+        assert!(app_state.signer_repository.has_entries().await?);
+
+        // is_redis_populated should return true
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(result, "Expected true when signer repository has entries");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_notification_repository_has_entries() -> Result<()> {
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // Add a notification to the repository
+        let notification = create_mock_notification("test-notification".to_string());
+        app_state
+            .notification_repository
+            .create(notification)
+            .await?;
+
+        // Verify notification repository has entries
+        assert!(app_state.notification_repository.has_entries().await?);
+
+        // is_redis_populated should return true
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(
+            result,
+            "Expected true when notification repository has entries"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_network_repository_has_entries() -> Result<()> {
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // Add a network to the repository
+        let network = create_mock_network();
+        app_state.network_repository.create(network).await?;
+
+        // Verify network repository has entries
+        assert!(app_state.network_repository.has_entries().await?);
+
+        // is_redis_populated should return true
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(result, "Expected true when network repository has entries");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_multiple_repositories_have_entries() -> Result<()> {
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // Add entries to multiple repositories
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let signer = create_mock_signer();
+        let notification = create_mock_notification("test-notification".to_string());
+        let network = create_mock_network();
+
+        app_state.relayer_repository.create(relayer).await?;
+        app_state.signer_repository.create(signer).await?;
+        app_state
+            .notification_repository
+            .create(notification)
+            .await?;
+        app_state.network_repository.create(network).await?;
+
+        // Verify multiple repositories have entries
+        assert!(app_state.relayer_repository.has_entries().await?);
+        assert!(app_state.signer_repository.has_entries().await?);
+        assert!(app_state.notification_repository.has_entries().await?);
+        assert!(app_state.network_repository.has_entries().await?);
+
+        // is_redis_populated should return true
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(
+            result,
+            "Expected true when multiple repositories have entries"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_redis_populated_comprehensive_scenario() -> Result<()> {
+        let app_state = ThinData(create_test_app_state());
+        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
+
+        // Test 1: Start with all empty repositories
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(!result, "Expected false when all repositories are empty");
+
+        // Test 2: Add entry to one repository
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        app_state.relayer_repository.create(relayer).await?;
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(result, "Expected true after adding one entry");
+
+        // Test 3: Clear all repositories
+        app_state.relayer_repository.drop_all_entries().await?;
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(!result, "Expected false after clearing all repositories");
+
+        // Test 4: Add entries to different repositories and verify each time
+        let signer = create_mock_signer();
+        app_state.signer_repository.create(signer).await?;
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(result, "Expected true after adding signer");
+
+        let notification = create_mock_notification("test-notification".to_string());
+        app_state
+            .notification_repository
+            .create(notification)
+            .await?;
+        let result = is_redis_populated(&server_config, &app_state).await?;
+        assert!(result, "Expected true after adding notification");
+
+        Ok(())
+    }
+
+    // Helper function to create test server config with specific settings
+    fn create_test_server_config_with_settings(
+        storage_type: RepositoryStorageType,
+        reset_storage_on_start: bool,
+    ) -> ServerConfig {
+        ServerConfig {
+            repository_storage_type: storage_type.clone(),
+            reset_storage_on_start,
+            ..create_test_server_config(storage_type)
+        }
+    }
+
+    // Helper function to create minimal test config
+    fn create_minimal_test_config() -> Config {
+        Config {
+            signers: vec![SignerFileConfig {
+                id: "test-signer-1".to_string(),
+                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+            }],
+            relayers: vec![RelayerFileConfig {
+                id: "test-relayer-1".to_string(),
+                network_type: ConfigFileNetworkType::Evm,
+                signer_id: "test-signer-1".to_string(),
+                name: "test-relayer-1".to_string(),
+                network: "test-network".to_string(),
+                paused: false,
+                policies: None,
+                notification_id: None,
+                custom_rpc_urls: None,
+            }],
+            notifications: vec![NotificationFileConfig {
+                id: "test-notification-1".to_string(),
+                r#type: crate::config::NotificationFileConfigType::Webhook,
+                url: "https://hooks.slack.com/test1".to_string(),
+                signing_key: None,
+            }],
+            networks: NetworksFileConfig::new(vec![]).unwrap(),
+            plugins: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_should_process_config_file_inmemory_storage() -> Result<()> {
+        let config = create_minimal_test_config();
+
+        // Test 1: InMemory storage with reset_storage_on_start = false
+        let server_config = Arc::new(create_test_server_config_with_settings(
+            RepositoryStorageType::InMemory,
+            false,
+        ));
+
+        let app_state = ThinData(create_test_app_state());
+        process_config_file(config.clone(), server_config.clone(), &app_state).await?;
+
+        let stored_relayers = app_state.relayer_repository.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
+
+        // Test 2: InMemory storage with reset_storage_on_start = true
+        let server_config2 = Arc::new(create_test_server_config_with_settings(
+            RepositoryStorageType::InMemory,
+            true,
+        ));
+
+        let app_state2 = ThinData(create_test_app_state());
+        process_config_file(config.clone(), server_config2, &app_state2).await?;
+
+        let stored_relayers = app_state2.relayer_repository.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_should_process_config_file_redis_storage_empty_repositories() -> Result<()> {
+        let config = create_minimal_test_config();
+        let server_config = Arc::new(create_test_server_config_with_settings(
+            RepositoryStorageType::Redis,
+            false,
+        ));
+
+        let app_state = ThinData(create_test_app_state());
+        process_config_file(config, server_config, &app_state).await?;
+
+        let stored_relayers = app_state.relayer_repository.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_should_not_process_config_file_redis_storage_populated_repositories() -> Result<()>
+    {
+        let config = create_minimal_test_config();
+        let server_config = Arc::new(create_test_server_config_with_settings(
+            RepositoryStorageType::Redis,
+            false,
+        ));
+
+        // Create two identical app states to test the decision logic
+        let app_state1 = ThinData(create_test_app_state());
+        let app_state2 = ThinData(create_test_app_state());
+
+        // Pre-populate repositories to simulate Redis already having data
+        let existing_relayer1 = create_mock_relayer("existing-relayer".to_string(), false);
+        let existing_relayer2 = create_mock_relayer("existing-relayer".to_string(), false);
+        app_state1
+            .relayer_repository
+            .create(existing_relayer1)
+            .await?;
+        app_state2
+            .relayer_repository
+            .create(existing_relayer2)
+            .await?;
+
+        // Check initial state
+        assert!(app_state1.relayer_repository.has_entries().await?);
+        assert!(!app_state1.signer_repository.has_entries().await?);
+
+        // Process config file - should NOT process because Redis is populated
+        process_config_file(config, server_config, &app_state2).await?;
+
+        let relayer_from_config = app_state2
+            .relayer_repository
+            .get_by_id("test-relayer-1".to_string())
+            .await;
+        assert!(
+            relayer_from_config.is_err(),
+            "Relayer from config should not be found"
+        );
+
+        let existing_relayer = app_state2
+            .relayer_repository
+            .get_by_id("existing-relayer".to_string())
+            .await?;
+        assert_eq!(existing_relayer.id, "existing-relayer");
+
+        // The test passes if no errors occurred, which means the decision logic worked
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_should_process_config_file_redis_storage_with_reset_flag() -> Result<()> {
+        let config = create_minimal_test_config();
+        let server_config = Arc::new(create_test_server_config_with_settings(
+            RepositoryStorageType::Redis,
+            true, // reset_storage_on_start = true
+        ));
+
+        let app_state = ThinData(create_test_app_state());
+
+        // Pre-populate repositories to simulate Redis already having data
+        let existing_relayer = create_mock_relayer("existing-relayer".to_string(), false);
+        let existing_signer = create_mock_signer();
+        app_state
+            .relayer_repository
+            .create(existing_relayer)
+            .await?;
+        app_state.signer_repository.create(existing_signer).await?;
+
+        // Should process config file because reset_storage_on_start = true
+        process_config_file(config, server_config, &app_state).await?;
+
+        let stored_relayer = app_state
+            .relayer_repository
+            .get_by_id("existing-relayer".to_string())
+            .await;
+        assert!(
+            stored_relayer.is_err(),
+            "Existing relayer should not be found"
+        );
+
+        let stored_signer = app_state
+            .signer_repository
+            .get_by_id("existing-signer".to_string())
+            .await;
+        assert!(
+            stored_signer.is_err(),
+            "Existing signer should not be found"
+        );
+
+        Ok(())
     }
 }

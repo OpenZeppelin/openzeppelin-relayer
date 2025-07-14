@@ -137,6 +137,17 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
         let store = Self::acquire_lock(&self.store).await?;
         Ok(store.len())
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -915,5 +926,28 @@ mod tests {
         assert_eq!(result[0].created_at, "2025-01-27T15:00:00.000000+00:00");
         assert_eq!(result[1].created_at, "2025-01-27T16:00:00.000000+00:00");
         assert_eq!(result[2].created_at, "2025-01-27T17:00:00.000000+00:00");
+    }
+
+    #[tokio::test]
+    async fn test_has_entries() {
+        let repo = InMemoryTransactionRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
+
+        let tx = create_test_transaction("test");
+        repo.create(tx.clone()).await.unwrap();
+
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test");
+        repo.create(tx.clone()).await.unwrap();
+
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

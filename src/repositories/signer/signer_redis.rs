@@ -412,6 +412,59 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let ids = self.get_all_ids().await?;
         Ok(ids.len())
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let signer_list_key = self.signer_list_key();
+
+        debug!("Checking if signer entries exist");
+
+        let exists: bool = conn
+            .exists(&signer_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
+
+        debug!("Signer entries exist: {}", exists);
+        Ok(exists)
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let signer_list_key = self.signer_list_key();
+
+        debug!("Dropping all signer entries");
+
+        // Get all signer IDs first
+        let signer_ids: Vec<String> = conn
+            .smembers(&signer_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
+
+        if signer_ids.is_empty() {
+            debug!("No signer entries to drop");
+            return Ok(());
+        }
+
+        // Use pipeline for atomic operations
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Delete all individual signer entries
+        for signer_id in &signer_ids {
+            let signer_key = self.signer_key(signer_id);
+            pipe.del(&signer_key);
+        }
+
+        // Delete the signer list key
+        pipe.del(&signer_list_key);
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
+
+        debug!("Dropped {} signer entries", signer_ids.len());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -745,5 +798,30 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("ID in data does not match"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries() {
+        let repo = setup_test_repo().await;
+
+        let signer_id = uuid::Uuid::new_v4().to_string();
+        let signer = create_test_signer(&signer_id);
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries() {
+        let repo = setup_test_repo().await;
+        let signer_id = uuid::Uuid::new_v4().to_string();
+        let signer = create_test_signer(&signer_id);
+
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

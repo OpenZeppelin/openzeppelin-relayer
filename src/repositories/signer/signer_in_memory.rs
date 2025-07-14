@@ -144,6 +144,17 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
         let length = store.len();
         Ok(length)
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -229,5 +240,27 @@ mod tests {
 
         let result = repo.get_by_id("test".to_string()).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[actix_web::test]
+    async fn test_has_entries() {
+        let repo = InMemorySignerRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
+
+        let signer = create_test_signer("test".to_string());
+
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[actix_web::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemorySignerRepository::new();
+        let signer = create_test_signer("test".to_string());
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }
