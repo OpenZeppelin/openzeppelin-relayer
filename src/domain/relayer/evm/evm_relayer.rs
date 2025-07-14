@@ -910,7 +910,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-
     #[tokio::test]
     async fn test_validate_rpc() {
         let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
