@@ -69,6 +69,9 @@ async fn main() -> Result<()> {
     dotenv().ok();
     setup_logging();
 
+    // Log service information at startup
+    openzeppelin_relayer::utils::log_service_info();
+
     // Set metrics enabled flag to false by default
     let metrics_enabled = env::var("METRICS_ENABLED")
         .map(|v| v.to_lowercase() == "true")

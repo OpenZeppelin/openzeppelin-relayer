@@ -819,7 +819,7 @@ mod tests {
         // Update network data
         let new_evm_data = EvmTransactionData {
             nonce: Some(42),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             ..Default::default()
         };
         let new_network_data = NetworkTransactionData::Evm(new_evm_data);
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(updated.id, "test-tx");
         if let NetworkTransactionData::Evm(evm_data) = updated.network_data {
             assert_eq!(evm_data.nonce, Some(42));
-            assert_eq!(evm_data.gas_limit, 21000);
+            assert_eq!(evm_data.gas_limit, Some(21000));
         } else {
             panic!("Expected EVM network data");
         }

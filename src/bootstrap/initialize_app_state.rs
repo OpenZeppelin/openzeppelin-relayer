@@ -47,7 +47,7 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
             plugin: Arc::new(PluginRepositoryStorage::new_in_memory()),
         },
         RepositoryStorageType::Redis => {
-            warn!("Redis repository storage support is experimental");
+            warn!("⚠️ Redis repository storage support is experimental. Use with caution.");
             let connection_manager = initialize_redis_connection(config).await?;
 
             RepositoryCollection {

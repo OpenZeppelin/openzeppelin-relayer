@@ -29,5 +29,8 @@ pub use secp256k::*;
 mod redis;
 pub use redis::*;
 
+mod service_info_log;
+pub use service_info_log::*;
+
 #[cfg(test)]
 pub mod mocks;
