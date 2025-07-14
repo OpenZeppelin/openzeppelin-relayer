@@ -411,7 +411,6 @@ where
 /// This function checks if any of the main repository list keys exist in Redis.
 /// If they exist, it means Redis already contains data from a previous configuration load.
 async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, PR>(
-    _server_config: &ServerConfig,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<bool>
 where
@@ -472,8 +471,7 @@ where
     let should_process_config_file = match server_config.repository_storage_type {
         RepositoryStorageType::InMemory => true,
         RepositoryStorageType::Redis => {
-            server_config.reset_storage_on_start
-                || !is_redis_populated(&server_config, app_state).await?
+            server_config.reset_storage_on_start || !is_redis_populated(app_state).await?
         }
     };
 
@@ -1364,7 +1362,6 @@ mod tests {
     async fn test_is_redis_populated_empty_repositories() -> Result<()> {
         // Create fresh app state with all empty repositories
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // All repositories should be empty
         assert!(!app_state.relayer_repository.has_entries().await?);
@@ -1374,7 +1371,7 @@ mod tests {
         assert!(!app_state.network_repository.has_entries().await?);
 
         // is_redis_populated should return false when all repositories are empty
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(!result, "Expected false when all repositories are empty");
 
         Ok(())
@@ -1383,7 +1380,6 @@ mod tests {
     #[tokio::test]
     async fn test_is_redis_populated_relayer_repository_has_entries() -> Result<()> {
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // Add a relayer to the repository
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
@@ -1393,7 +1389,7 @@ mod tests {
         assert!(app_state.relayer_repository.has_entries().await?);
 
         // is_redis_populated should return true
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(result, "Expected true when relayer repository has entries");
 
         Ok(())
@@ -1402,7 +1398,6 @@ mod tests {
     #[tokio::test]
     async fn test_is_redis_populated_transaction_repository_has_entries() -> Result<()> {
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // Add a transaction to the repository
         let transaction = TransactionRepoModel::default();
@@ -1412,7 +1407,7 @@ mod tests {
         assert!(app_state.transaction_repository.has_entries().await?);
 
         // is_redis_populated should return true
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(
             result,
             "Expected true when transaction repository has entries"
@@ -1424,7 +1419,6 @@ mod tests {
     #[tokio::test]
     async fn test_is_redis_populated_signer_repository_has_entries() -> Result<()> {
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // Add a signer to the repository
         let signer = create_mock_signer();
@@ -1434,7 +1428,7 @@ mod tests {
         assert!(app_state.signer_repository.has_entries().await?);
 
         // is_redis_populated should return true
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(result, "Expected true when signer repository has entries");
 
         Ok(())
@@ -1443,7 +1437,6 @@ mod tests {
     #[tokio::test]
     async fn test_is_redis_populated_notification_repository_has_entries() -> Result<()> {
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // Add a notification to the repository
         let notification = create_mock_notification("test-notification".to_string());
@@ -1456,7 +1449,7 @@ mod tests {
         assert!(app_state.notification_repository.has_entries().await?);
 
         // is_redis_populated should return true
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(
             result,
             "Expected true when notification repository has entries"
@@ -1468,7 +1461,6 @@ mod tests {
     #[tokio::test]
     async fn test_is_redis_populated_network_repository_has_entries() -> Result<()> {
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // Add a network to the repository
         let network = create_mock_network();
@@ -1478,7 +1470,7 @@ mod tests {
         assert!(app_state.network_repository.has_entries().await?);
 
         // is_redis_populated should return true
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(result, "Expected true when network repository has entries");
 
         Ok(())
@@ -1487,7 +1479,6 @@ mod tests {
     #[tokio::test]
     async fn test_is_redis_populated_multiple_repositories_have_entries() -> Result<()> {
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // Add entries to multiple repositories
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
@@ -1510,7 +1501,7 @@ mod tests {
         assert!(app_state.network_repository.has_entries().await?);
 
         // is_redis_populated should return true
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(
             result,
             "Expected true when multiple repositories have entries"
@@ -1522,27 +1513,26 @@ mod tests {
     #[tokio::test]
     async fn test_is_redis_populated_comprehensive_scenario() -> Result<()> {
         let app_state = ThinData(create_test_app_state());
-        let server_config = create_test_server_config(RepositoryStorageType::InMemory);
 
         // Test 1: Start with all empty repositories
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(!result, "Expected false when all repositories are empty");
 
         // Test 2: Add entry to one repository
         let relayer = create_mock_relayer("test-relayer".to_string(), false);
         app_state.relayer_repository.create(relayer).await?;
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(result, "Expected true after adding one entry");
 
         // Test 3: Clear all repositories
         app_state.relayer_repository.drop_all_entries().await?;
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(!result, "Expected false after clearing all repositories");
 
         // Test 4: Add entries to different repositories and verify each time
         let signer = create_mock_signer();
         app_state.signer_repository.create(signer).await?;
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(result, "Expected true after adding signer");
 
         let notification = create_mock_notification("test-notification".to_string());
@@ -1550,7 +1540,7 @@ mod tests {
             .notification_repository
             .create(notification)
             .await?;
-        let result = is_redis_populated(&server_config, &app_state).await?;
+        let result = is_redis_populated(&app_state).await?;
         assert!(result, "Expected true after adding notification");
 
         Ok(())

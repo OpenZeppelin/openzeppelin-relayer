@@ -821,7 +821,6 @@ mod tests {
         assert!(repo.has_entries().await.unwrap());
     }
 
-    // test drop_all_entries
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_drop_all_entries() {

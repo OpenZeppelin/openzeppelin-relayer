@@ -448,7 +448,6 @@ mod tests {
         assert!(repo.has_entries().await.unwrap());
     }
 
-    // test drop_all_entries
     #[actix_web::test]
     async fn test_drop_all_entries() {
         let repo = InMemoryRelayerRepository::new();

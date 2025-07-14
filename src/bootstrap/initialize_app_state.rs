@@ -48,9 +48,7 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
         },
         RepositoryStorageType::Redis => {
             warn!("Redis repository storage support is experimental");
-            let redis_connection_manager = initialize_redis_connection(config).await?;
-
-            let connection_manager = redis_connection_manager.clone();
+            let connection_manager = initialize_redis_connection(config).await?;
 
             RepositoryCollection {
                 relayer: Arc::new(RelayerRepositoryStorage::new_redis(
