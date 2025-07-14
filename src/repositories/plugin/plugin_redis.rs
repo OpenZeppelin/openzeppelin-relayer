@@ -273,6 +273,59 @@ impl PluginRepositoryTrait for RedisPluginRepository {
 
         Ok(count as usize)
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let plugin_list_key = self.plugin_list_key();
+
+        debug!("Checking if plugin entries exist");
+
+        let exists: bool = conn
+            .exists(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
+
+        debug!("Plugin entries exist: {}", exists);
+        Ok(exists)
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let plugin_list_key = self.plugin_list_key();
+
+        debug!("Dropping all plugin entries");
+
+        // Get all plugin IDs first
+        let plugin_ids: Vec<String> = conn
+            .smembers(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
+
+        if plugin_ids.is_empty() {
+            debug!("No plugin entries to drop");
+            return Ok(());
+        }
+
+        // Use pipeline for atomic operations
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Delete all individual plugin entries
+        for plugin_id in &plugin_ids {
+            let plugin_key = self.plugin_key(plugin_id);
+            pipe.del(&plugin_key);
+        }
+
+        // Delete the plugin list key
+        pipe.del(&plugin_list_key);
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
+
+        debug!("Dropped {} plugin entries", plugin_ids.len());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -515,5 +568,30 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.items.len() == 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries() {
+        let repo = setup_test_repo().await;
+        assert!(!repo.has_entries().await.unwrap());
+        repo.add(create_test_plugin("test-plugin", "/path/to/plugin"))
+            .await
+            .unwrap();
+        assert!(repo.has_entries().await.unwrap());
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries() {
+        let repo = setup_test_repo().await;
+        repo.add(create_test_plugin("test-plugin", "/path/to/plugin"))
+            .await
+            .unwrap();
+        assert!(repo.has_entries().await.unwrap());
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }
