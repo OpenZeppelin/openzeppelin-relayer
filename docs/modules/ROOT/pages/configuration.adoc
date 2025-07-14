@@ -398,6 +398,12 @@ Policies
 |Specify a maximum gas price for every transaction sent with the Relayer. When enabled, any transaction exceeding the cap will have its gasPrice or maxFeePerGas overwritten. (Optional)
 
 |evm
+|gas_limit_estimation
+|bool
+|Automatic gas_limit calculation. Enabled by default. (Optional)
+
+
+|evm
 |whitelist_receivers
 |Vector<String>
 |A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional)

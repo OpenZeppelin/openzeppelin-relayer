@@ -1,6 +1,6 @@
 use super::evm::Speed;
 use crate::{
-    constants::DEFAULT_TRANSACTION_SPEED,
+    constants::{DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED},
     domain::{
         evm::PriceParams,
         stellar::validation::{validate_operations, validate_soroban_memo_restriction},
@@ -147,7 +147,7 @@ pub struct EvmTransactionDataSignature {
 
 pub struct EvmTransactionData {
     pub gas_price: Option<u128>,
-    pub gas_limit: u64,
+    pub gas_limit: Option<u64>,
     pub nonce: Option<u64>,
     pub value: U256,
     pub data: Option<String>,
@@ -227,7 +227,7 @@ impl EvmTransactionData {
     /// # Returns
     /// The updated `EvmTransactionData` with the new gas limit
     pub fn with_gas_estimate(mut self, gas_limit: u64) -> Self {
-        self.gas_limit = gas_limit;
+        self.gas_limit = Some(gas_limit);
         self
     }
 
@@ -269,7 +269,7 @@ impl Default for EvmTransactionData {
             data: Some("0x".to_string()),
             nonce: Some(1),
             chain_id: 1,
-            gas_limit: 21000,
+            gas_limit: Some(DEFAULT_GAS_LIMIT),
             hash: None,
             signature: None,
             speed: None,
@@ -791,7 +791,7 @@ impl TryFrom<NetworkTransactionData> for TxLegacy {
                 Ok(Self {
                     chain_id: Some(tx.chain_id),
                     nonce: tx.nonce.unwrap_or(0),
-                    gas_limit: tx.gas_limit,
+                    gas_limit: tx.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
                     gas_price: tx.gas_price.unwrap_or(0),
                     to: tx_kind,
                     value: tx.value,
@@ -819,7 +819,7 @@ impl TryFrom<NetworkTransactionData> for TxEip1559 {
                 Ok(Self {
                     chain_id: tx.chain_id,
                     nonce: tx.nonce.unwrap_or(0),
-                    gas_limit: tx.gas_limit,
+                    gas_limit: tx.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
                     max_fee_per_gas: tx.max_fee_per_gas.unwrap_or(0),
                     max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or(0),
                     to: tx_kind,
@@ -847,7 +847,7 @@ impl TryFrom<&EvmTransactionData> for TxLegacy {
         Ok(Self {
             chain_id: Some(tx.chain_id),
             nonce: tx.nonce.unwrap_or(0),
-            gas_limit: tx.gas_limit,
+            gas_limit: tx.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
             gas_price: tx.gas_price.unwrap_or(0),
             to: tx_kind,
             value: tx.value,
@@ -876,7 +876,7 @@ impl TryFrom<&EvmTransactionData> for TxEip1559 {
         Ok(Self {
             chain_id: tx.chain_id,
             nonce: tx.nonce.unwrap_or(0),
-            gas_limit: tx.gas_limit,
+            gas_limit: tx.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
             max_fee_per_gas: tx.max_fee_per_gas.unwrap_or(0),
             max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or(0),
             to: tx_kind,
@@ -946,7 +946,7 @@ mod tests {
     fn create_sample_evm_tx_data() -> EvmTransactionData {
         EvmTransactionData {
             gas_price: Some(20_000_000_000),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             nonce: Some(5),
             value: U256::from(1000000000000000000u128), // 1 ETH
             data: Some("0x".to_string()),
@@ -988,7 +988,7 @@ mod tests {
 
         let updated_tx = tx_data.with_gas_estimate(new_gas_limit);
 
-        assert_eq!(updated_tx.gas_limit, new_gas_limit);
+        assert_eq!(updated_tx.gas_limit, Some(new_gas_limit));
     }
 
     #[test]
@@ -1217,7 +1217,7 @@ mod tests {
         // Verify fields
         assert_eq!(tx_legacy.chain_id, Some(evm_tx_data.chain_id));
         assert_eq!(tx_legacy.nonce, evm_tx_data.nonce.unwrap());
-        assert_eq!(tx_legacy.gas_limit, evm_tx_data.gas_limit);
+        assert_eq!(tx_legacy.gas_limit, evm_tx_data.gas_limit.unwrap_or(21000));
         assert_eq!(tx_legacy.gas_price, evm_tx_data.gas_price.unwrap());
         assert_eq!(tx_legacy.value, evm_tx_data.value);
 
@@ -1244,7 +1244,7 @@ mod tests {
         // Verify fields
         assert_eq!(tx_legacy.chain_id, Some(evm_tx_data.chain_id));
         assert_eq!(tx_legacy.nonce, evm_tx_data.nonce.unwrap());
-        assert_eq!(tx_legacy.gas_limit, evm_tx_data.gas_limit);
+        assert_eq!(tx_legacy.gas_limit, evm_tx_data.gas_limit.unwrap_or(21000));
         assert_eq!(tx_legacy.gas_price, evm_tx_data.gas_price.unwrap());
         assert_eq!(tx_legacy.value, evm_tx_data.value);
     }
@@ -1343,7 +1343,7 @@ mod tests {
             to: Some("0xNewRecipient".to_string()),
             value: U256::from(2000000000000000000u64), // 2 ETH
             data: Some("0xNewData".to_string()),
-            gas_limit: 25000,
+            gas_limit: Some(25000),
             gas_price: Some(30000000000), // 30 Gwei (should be ignored)
             max_fee_per_gas: Some(40000000000), // Should be ignored
             max_priority_fee_per_gas: Some(2000000000), // Should be ignored
@@ -1391,7 +1391,7 @@ mod tests {
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: U256::from(1000000000000000000u128),
             data: Some("0x1234".to_string()),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             gas_price: Some(20000000000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
@@ -1455,7 +1455,7 @@ mod tests {
             );
             assert_eq!(evm_data.value, U256::from(1000000000000000000u128));
             assert_eq!(evm_data.chain_id, 1);
-            assert_eq!(evm_data.gas_limit, 21000);
+            assert_eq!(evm_data.gas_limit, Some(21000));
             assert_eq!(evm_data.gas_price, Some(20000000000));
             assert_eq!(evm_data.speed, Some(Speed::Fast));
         } else {
@@ -1658,7 +1658,7 @@ mod tests {
         // Verify fields
         assert_eq!(tx_eip1559.chain_id, evm_tx_data.chain_id);
         assert_eq!(tx_eip1559.nonce, evm_tx_data.nonce.unwrap());
-        assert_eq!(tx_eip1559.gas_limit, evm_tx_data.gas_limit);
+        assert_eq!(tx_eip1559.gas_limit, evm_tx_data.gas_limit.unwrap_or(21000));
         assert_eq!(
             tx_eip1559.max_fee_per_gas,
             evm_tx_data.max_fee_per_gas.unwrap()
@@ -1697,7 +1697,7 @@ mod tests {
         assert_eq!(default_data.data, Some("0x".to_string()));
         assert_eq!(default_data.nonce, Some(1));
         assert_eq!(default_data.chain_id, 1);
-        assert_eq!(default_data.gas_limit, 21000);
+        assert_eq!(default_data.gas_limit, Some(21000));
         assert_eq!(default_data.hash, None);
         assert_eq!(default_data.signature, None);
         assert_eq!(default_data.speed, None);
@@ -1738,7 +1738,7 @@ mod tests {
             to: Some("0xNewRecipient".to_string()),
             value: U256::from(2000000000000000000u64),
             data: Some("0xNewData".to_string()),
-            gas_limit: 25000,
+            gas_limit: Some(25000),
             gas_price: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,

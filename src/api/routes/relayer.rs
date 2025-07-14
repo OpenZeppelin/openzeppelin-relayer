@@ -281,7 +281,7 @@ mod tests {
             network_data: crate::models::NetworkTransactionData::Evm(
                 crate::models::EvmTransactionData {
                     gas_price: Some(20000000000u128),
-                    gas_limit: 21000u64,
+                    gas_limit: Some(21000u64),
                     nonce: Some(1u64),
                     value: crate::models::U256::from(0u64),
                     data: Some("0x".to_string()),

@@ -3,7 +3,7 @@ use crate::{
         evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
         TransactionStatus, U256,
     },
-    utils::{deserialize_optional_u128, deserialize_optional_u64, deserialize_u64},
+    utils::{deserialize_optional_u128, deserialize_optional_u64},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -31,8 +31,8 @@ pub struct EvmTransactionResponse {
     #[serde(deserialize_with = "deserialize_optional_u128", default)]
     #[schema(nullable = false)]
     pub gas_price: Option<u128>,
-    #[serde(deserialize_with = "deserialize_u64")]
-    pub gas_limit: u64,
+    #[serde(deserialize_with = "deserialize_optional_u64", default)]
+    pub gas_limit: Option<u64>,
     #[serde(deserialize_with = "deserialize_optional_u64", default)]
     #[schema(nullable = false)]
     pub nonce: Option<u64>,
@@ -165,7 +165,7 @@ mod tests {
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 hash: Some("0xabc123".to_string()),
                 gas_price: Some(20_000_000_000),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 nonce: Some(5),
                 value: U256::from(1000000000000000000u128), // 1 ETH
                 from: "0xsender".to_string(),
@@ -195,7 +195,7 @@ mod tests {
                 assert_eq!(evm.sent_at, Some(now.clone()));
                 assert_eq!(evm.confirmed_at, None);
                 assert_eq!(evm.gas_price, Some(20_000_000_000));
-                assert_eq!(evm.gas_limit, 21000);
+                assert_eq!(evm.gas_limit, Some(21000));
                 assert_eq!(evm.nonce, Some(5));
                 assert_eq!(evm.value, U256::from(1000000000000000000u128));
                 assert_eq!(evm.from, "0xsender");

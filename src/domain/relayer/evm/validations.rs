@@ -88,6 +88,7 @@ mod tests {
             eip1559_pricing: None,
             private_transactions: false,
             min_balance,
+            gas_limit_estimation: Some(true),
         }
     }
 

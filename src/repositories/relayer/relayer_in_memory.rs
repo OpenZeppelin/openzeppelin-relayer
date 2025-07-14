@@ -253,6 +253,7 @@ mod tests {
                 eip1559_pricing: Some(false),
                 private_transactions: false,
                 min_balance: 0,
+                gas_limit_estimation: Some(true),
             }),
             signer_id: "test".to_string(),
             address: "0x".to_string(),
@@ -415,6 +416,7 @@ mod tests {
             eip1559_pricing: Some(true),
             private_transactions: true,
             min_balance: 1000000,
+            gas_limit_estimation: Some(true),
         });
 
         // Update the policy

@@ -147,7 +147,7 @@ mod tests {
             sent_at: Some("2024-03-20T10:00:01Z".to_string()),
             confirmed_at: None,
             gas_price: Some(0u128),
-            gas_limit: 21000u64,
+            gas_limit: Some(21000u64),
             nonce: Some(1u64),
             value: U256::from(0),
             from: "0x123...".to_string(),

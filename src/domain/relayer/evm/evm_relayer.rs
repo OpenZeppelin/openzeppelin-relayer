@@ -627,6 +627,7 @@ mod tests {
                 gas_price_cap: Some(100000000000), // 100 Gwei
                 eip1559_pricing: Some(false),
                 private_transactions: false,
+                gas_limit_estimation: Some(true),
             }),
             network_type: NetworkType::Evm,
             custom_rpc_urls: None,
@@ -699,7 +700,7 @@ mod tests {
             to: Some("0xRecipient".to_string()),
             value: U256::from(1000000000000000000u64),
             data: Some("0xData".to_string()),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             gas_price: Some(20000000000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
