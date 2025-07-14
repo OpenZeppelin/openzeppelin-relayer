@@ -3,8 +3,8 @@
 //! The `InMemoryPluginRepository` struct is used to store and retrieve plugins
 //! script paths for further execution.
 use crate::{
-    models::PluginModel,
-    repositories::{PluginRepositoryTrait, RepositoryError},
+    models::{PaginationQuery, PluginModel},
+    repositories::{PaginatedResult, PluginRepositoryTrait, RepositoryError},
 };
 
 use async_trait::async_trait;
@@ -66,6 +66,36 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
         let mut store = Self::acquire_lock(&self.store).await?;
         store.insert(plugin.id.clone(), plugin);
         Ok(())
+    }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<PluginModel>, RepositoryError> {
+        let total = self.count().await?;
+        let start = ((query.page - 1) * query.per_page) as usize;
+
+        let items = self
+            .store
+            .lock()
+            .await
+            .values()
+            .skip(start)
+            .take(query.per_page as usize)
+            .cloned()
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total: total as u64,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
+    async fn count(&self) -> Result<usize, RepositoryError> {
+        let store = self.store.lock().await;
+        Ok(store.len())
     }
 }
 
@@ -134,5 +164,35 @@ mod tests {
             plugin_repository.get_by_id("test-plugin").await.unwrap(),
             Some(plugin)
         );
+    }
+
+    #[tokio::test]
+    async fn test_list_paginated() {
+        let plugin_repository = Arc::new(InMemoryPluginRepository::new());
+
+        let plugin1 = PluginModel {
+            id: "test-plugin1".to_string(),
+            path: "test-path1".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+        };
+
+        let plugin2 = PluginModel {
+            id: "test-plugin2".to_string(),
+            path: "test-path2".to_string(),
+            timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+        };
+
+        plugin_repository.add(plugin1.clone()).await.unwrap();
+        plugin_repository.add(plugin2.clone()).await.unwrap();
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 2,
+        };
+
+        let result = plugin_repository.list_paginated(query).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.items.len(), 2);
     }
 }

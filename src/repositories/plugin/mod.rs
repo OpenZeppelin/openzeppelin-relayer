@@ -38,8 +38,8 @@ use mockall::automock;
 use crate::{
     config::PluginFileConfig,
     constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
-    models::{PluginModel, RepositoryError},
-    repositories::ConversionError,
+    models::{PaginationQuery, PluginModel, RepositoryError},
+    repositories::{ConversionError, PaginatedResult},
 };
 
 #[async_trait]
@@ -48,6 +48,11 @@ use crate::{
 pub trait PluginRepositoryTrait {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError>;
     async fn add(&self, plugin: PluginModel) -> Result<(), RepositoryError>;
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<PluginModel>, RepositoryError>;
+    async fn count(&self) -> Result<usize, RepositoryError>;
 }
 
 /// Enum wrapper for different plugin repository implementations
@@ -84,6 +89,23 @@ impl PluginRepositoryTrait for PluginRepositoryStorage {
         match self {
             PluginRepositoryStorage::InMemory(repo) => repo.add(plugin).await,
             PluginRepositoryStorage::Redis(repo) => repo.add(plugin).await,
+        }
+    }
+
+    async fn list_paginated(
+        &self,
+        query: PaginationQuery,
+    ) -> Result<PaginatedResult<PluginModel>, RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
+            PluginRepositoryStorage::Redis(repo) => repo.list_paginated(query).await,
+        }
+    }
+
+    async fn count(&self) -> Result<usize, RepositoryError> {
+        match self {
+            PluginRepositoryStorage::InMemory(repo) => repo.count().await,
+            PluginRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
 }
