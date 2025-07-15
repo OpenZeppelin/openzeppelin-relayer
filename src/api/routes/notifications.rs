@@ -65,3 +65,81 @@ pub fn init(cfg: &mut web::ServiceConfig) {
         .service(update_notification)
         .service(delete_notification);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::mocks::mockutils::create_mock_app_state;
+    use actix_web::{http::StatusCode, test, web, App};
+
+    #[actix_web::test]
+    async fn test_notification_routes_are_registered() {
+        // Arrange - Create app with notification routes
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(app_state))
+                .configure(init),
+        )
+        .await;
+
+        // Test GET /notifications - should not return 404 (route exists)
+        let req = test::TestRequest::get().uri("/notifications").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "GET /notifications route not registered"
+        );
+
+        // Test GET /notifications/{id} - should not return 404
+        let req = test::TestRequest::get()
+            .uri("/notifications/test-id")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "GET /notifications/{{id}} route not registered"
+        );
+
+        // Test POST /notifications - should not return 404
+        let req = test::TestRequest::post()
+            .uri("/notifications")
+            .set_json(serde_json::json!({
+                "id": "test",
+                "type": "webhook",
+                "url": "https://example.com"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "POST /notifications route not registered"
+        );
+
+        // Test PATCH /notifications/{id} - should not return 404
+        let req = test::TestRequest::patch()
+            .uri("/notifications/test-id")
+            .set_json(serde_json::json!({"url": "https://updated.com"}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "PATCH /notifications/{{id}} route not registered"
+        );
+
+        // Test DELETE /notifications/{id} - should not return 404
+        let req = test::TestRequest::delete()
+            .uri("/notifications/test-id")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "DELETE /notifications/{{id}} route not registered"
+        );
+    }
+}

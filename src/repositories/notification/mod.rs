@@ -319,7 +319,6 @@ mod tests {
         let retrieved = storage.get_by_id("test-notification".to_string()).await?;
         assert_eq!(retrieved.id, "test-notification");
 
-        // Delete it - should now succeed
         let result = storage.delete_by_id("test-notification".to_string()).await;
         assert!(result.is_ok());
 

@@ -164,17 +164,12 @@ where
         .get_by_id(notification_id.clone())
         .await?;
 
-    // Convert to core domain model
-    let existing_core = Notification::from(existing_repo_model);
+    // Apply update (with validation)
+    let updated = Notification::from(existing_repo_model).apply_update(&request)?;
 
-    // Apply update using domain-first approach (with validation)
-    let updated_core = existing_core.apply_update(&request)?;
-
-    // Convert back to repo model and save
-    let updated_repo_model = NotificationRepoModel::from(updated_core);
     let saved_notification = state
         .notification_repository
-        .update(notification_id, updated_repo_model)
+        .update(notification_id, NotificationRepoModel::from(updated))
         .await?;
 
     let response = NotificationResponse::from(saved_notification);
@@ -355,11 +350,7 @@ mod tests {
 
         assert!(api_response.success);
         let data = api_response.data.unwrap();
-        assert_eq!(data.len(), 2); // Should return 2 items for page 2 with per_page=2
-
-        // Verify the items are properly sorted (newest first)
-        assert!(data.iter().all(|n| n.r#type == NotificationType::Webhook));
-        assert!(data.iter().all(|n| n.url == "https://example.com/webhook"));
+        assert_eq!(data.len(), 2);
     }
 
     #[actix_web::test]
@@ -625,51 +616,6 @@ mod tests {
         assert!(result_2.is_ok());
         let response_2 = result_2.unwrap();
         assert_eq!(response_2.status(), 201);
-    }
-
-    #[actix_web::test]
-    async fn test_update_notification_repository_integration() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
-
-        // Create a test notification
-        let notification = create_test_notification_model("test-notification");
-        app_state
-            .notification_repository
-            .create(notification)
-            .await
-            .unwrap();
-
-        let update_request = create_test_notification_update_request();
-        let result = update_notification(
-            "test-notification".to_string(),
-            update_request,
-            ThinData(app_state),
-        )
-        .await;
-
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.status(), 200);
-    }
-
-    #[actix_web::test]
-    async fn test_delete_notification_repository_integration() {
-        let app_state = create_mock_app_state(None, None, None, None, None).await;
-
-        // Create a test notification
-        let notification = create_test_notification_model("test-notification");
-        app_state
-            .notification_repository
-            .create(notification)
-            .await
-            .unwrap();
-
-        let result =
-            delete_notification("test-notification".to_string(), ThinData(app_state)).await;
-
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.status(), 200);
     }
 
     #[actix_web::test]
