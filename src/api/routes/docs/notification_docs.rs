@@ -1,7 +1,6 @@
 use crate::models::{
     ApiResponse, NotificationCreateRequest, NotificationResponse, NotificationUpdateRequest,
 };
-use serde_json::json;
 
 /// Notification routes implementation
 ///

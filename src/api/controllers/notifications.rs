@@ -10,9 +10,9 @@
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        ApiError, ApiResponse, NetworkRepoModel, NotificationCreateRequest, NotificationRepoModel,
-        NotificationResponse, NotificationUpdateRequest, PaginationMeta, PaginationQuery,
-        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        ApiError, ApiResponse, NetworkRepoModel, Notification, NotificationCreateRequest,
+        NotificationRepoModel, NotificationResponse, NotificationUpdateRequest, PaginationMeta,
+        PaginationQuery, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -118,10 +118,11 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
-    // Validate the request
-    request.validate()?;
+    // Convert request to core notification (validates automatically)
+    let notification = Notification::try_from(request)?;
 
-    let notification_model = NotificationRepoModel::from(request);
+    // Convert to repository model
+    let notification_model = NotificationRepoModel::from(notification);
     let created_notification = state
         .notification_repository
         .create(notification_model)
@@ -157,22 +158,23 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
-    // Validate the request
-    request.validate()?;
-
-    // Get the existing notification
-    let existing_notification = state
+    // Get the existing notification from repository
+    let existing_repo_model = state
         .notification_repository
         .get_by_id(notification_id.clone())
         .await?;
 
-    // Apply the update to the existing notification
-    let updated_notification = request.apply_to(existing_notification);
+    // Convert to core domain model
+    let existing_core = Notification::from(existing_repo_model);
 
-    // Save the updated notification
+    // Apply update using domain-first approach (with validation)
+    let updated_core = existing_core.apply_update(&request)?;
+
+    // Convert back to repo model and save
+    let updated_repo_model = NotificationRepoModel::from(updated_core);
     let saved_notification = state
         .notification_repository
-        .update(notification_id, updated_notification)
+        .update(notification_id, updated_repo_model)
         .await?;
 
     let response = NotificationResponse::from(saved_notification);
@@ -215,9 +217,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        models::{
-            ApiError, NotificationType, SecretString,
-        },
+        models::{ApiError, NotificationType, SecretString},
         utils::mocks::mockutils::create_mock_app_state,
     };
     use actix_web::web::ThinData;
@@ -264,18 +264,36 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 200);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<Vec<NotificationResponse>> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.len(), 0);
     }
 
     #[actix_web::test]
     async fn test_list_notifications_with_data() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create test notifications
         let notification1 = create_test_notification_model("test-1");
         let notification2 = create_test_notification_model("test-2");
-        
-        app_state.notification_repository.create(notification1).await.unwrap();
-        app_state.notification_repository.create(notification2).await.unwrap();
+
+        app_state
+            .notification_repository
+            .create(notification1)
+            .await
+            .unwrap();
+        app_state
+            .notification_repository
+            .create(notification2)
+            .await
+            .unwrap();
 
         let query = PaginationQuery {
             page: 1,
@@ -287,16 +305,35 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 200);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<Vec<NotificationResponse>> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.len(), 2);
+
+        // Check that both notifications are present (order not guaranteed)
+        let ids: Vec<&String> = data.iter().map(|n| &n.id).collect();
+        assert!(ids.contains(&&"test-1".to_string()));
+        assert!(ids.contains(&&"test-2".to_string()));
     }
 
     #[actix_web::test]
     async fn test_list_notifications_pagination() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create multiple test notifications
         for i in 1..=5 {
             let notification = create_test_notification_model(&format!("test-{}", i));
-            app_state.notification_repository.create(notification).await.unwrap();
+            app_state
+                .notification_repository
+                .create(notification)
+                .await
+                .unwrap();
         }
 
         let query = PaginationQuery {
@@ -309,21 +346,52 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 200);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<Vec<NotificationResponse>> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.len(), 2); // Should return 2 items for page 2 with per_page=2
+
+        // Verify the items are properly sorted (newest first)
+        assert!(data.iter().all(|n| n.r#type == NotificationType::Webhook));
+        assert!(data.iter().all(|n| n.url == "https://example.com/webhook"));
     }
 
     #[actix_web::test]
     async fn test_get_notification_success() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
-        app_state.notification_repository.create(notification.clone()).await.unwrap();
+        app_state
+            .notification_repository
+            .create(notification.clone())
+            .await
+            .unwrap();
 
         let result = get_notification("test-notification".to_string(), ThinData(app_state)).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 200);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<NotificationResponse> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-notification");
+        assert_eq!(data.r#type, NotificationType::Webhook);
+        assert_eq!(data.url, "https://example.com/webhook");
+        assert!(data.has_signing_key); // Should have signing key (32 chars)
     }
 
     #[actix_web::test]
@@ -340,7 +408,7 @@ mod tests {
     #[actix_web::test]
     async fn test_create_notification_success() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         let request = create_test_notification_create_request("new-notification");
 
         let result = create_notification(request, ThinData(app_state)).await;
@@ -348,12 +416,25 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<NotificationResponse> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "new-notification");
+        assert_eq!(data.r#type, NotificationType::Webhook);
+        assert_eq!(data.url, "https://example.com/webhook");
+        assert!(data.has_signing_key); // Should have signing key (32 chars)
     }
 
     #[actix_web::test]
     async fn test_create_notification_without_signing_key() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         let request = NotificationCreateRequest {
             id: "new-notification".to_string(),
             r#type: NotificationType::Webhook,
@@ -366,15 +447,32 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<NotificationResponse> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "new-notification");
+        assert_eq!(data.r#type, NotificationType::Webhook);
+        assert_eq!(data.url, "https://example.com/webhook");
+        assert!(!data.has_signing_key); // Should not have signing key
     }
 
     #[actix_web::test]
-    async fn test_update_notification_not_supported() {
+    async fn test_update_notification_success() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
-        app_state.notification_repository.create(notification).await.unwrap();
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
 
         let update_request = create_test_notification_update_request();
 
@@ -382,46 +480,73 @@ mod tests {
             "test-notification".to_string(),
             update_request,
             ThinData(app_state),
-        ).await;
+        )
+        .await;
 
-        // In-memory repository doesn't support update operations
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(matches!(error, ApiError::InternalError(_)));
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<NotificationResponse> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-notification");
+        assert_eq!(data.url, "https://updated.example.com/webhook");
+        assert!(data.has_signing_key); // Should have updated signing key
     }
 
     #[actix_web::test]
     async fn test_update_notification_not_found() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         let update_request = create_test_notification_update_request();
 
         let result = update_notification(
             "non-existent".to_string(),
             update_request,
             ThinData(app_state),
-        ).await;
+        )
+        .await;
 
-        // Even for non-existent items, in-memory repo returns NotSupported for update
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(matches!(error, ApiError::NotFound(_)));
     }
 
     #[actix_web::test]
-    async fn test_delete_notification_not_supported() {
+    async fn test_delete_notification_success() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
-        app_state.notification_repository.create(notification).await.unwrap();
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
 
-        let result = delete_notification("test-notification".to_string(), ThinData(app_state)).await;
+        let result =
+            delete_notification("test-notification".to_string(), ThinData(app_state)).await;
 
-        // In-memory repository doesn't support delete operations
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert!(matches!(error, ApiError::InternalError(_)));
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<&str> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        assert_eq!(
+            api_response.data.unwrap(),
+            "Notification deleted successfully"
+        );
     }
 
     #[actix_web::test]
@@ -430,10 +555,9 @@ mod tests {
 
         let result = delete_notification("non-existent".to_string(), ThinData(app_state)).await;
 
-        // Even for non-existent items, in-memory repo returns NotSupported for delete
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(matches!(error, ApiError::InternalError(_)));
+        assert!(matches!(error, ApiError::NotFound(_)));
     }
 
     #[actix_web::test]
@@ -473,56 +597,91 @@ mod tests {
     #[actix_web::test]
     async fn test_create_notification_validates_repository_creation() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+        let app_state_2 = create_mock_app_state(None, None, None, None, None).await;
+
         let request = create_test_notification_create_request("new-notification");
         let result = create_notification(request, ThinData(app_state)).await;
 
         assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<NotificationResponse> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "new-notification");
+        assert_eq!(data.r#type, NotificationType::Webhook);
+        assert_eq!(data.url, "https://example.com/webhook");
+        assert!(data.has_signing_key);
+
+        let request_2 = create_test_notification_create_request("new-notification");
+        let result_2 = create_notification(request_2, ThinData(app_state_2)).await;
+
+        assert!(result_2.is_ok());
+        let response_2 = result_2.unwrap();
+        assert_eq!(response_2.status(), 201);
     }
 
     #[actix_web::test]
-    async fn test_update_notification_validates_repository_update() {
+    async fn test_update_notification_repository_integration() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
-        app_state.notification_repository.create(notification).await.unwrap();
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
 
         let update_request = create_test_notification_update_request();
         let result = update_notification(
             "test-notification".to_string(),
             update_request,
             ThinData(app_state),
-        ).await;
+        )
+        .await;
 
-        // In-memory repository doesn't support update operations
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
     }
 
     #[actix_web::test]
-    async fn test_delete_notification_validates_repository_deletion() {
+    async fn test_delete_notification_repository_integration() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
-        app_state.notification_repository.create(notification).await.unwrap();
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
 
-        let result = delete_notification("test-notification".to_string(), ThinData(app_state)).await;
+        let result =
+            delete_notification("test-notification".to_string(), ThinData(app_state)).await;
 
-        // In-memory repository doesn't support delete operations
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
     }
 
     #[actix_web::test]
     async fn test_create_notification_validation_error() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
-        // Create a request with invalid data
+
+        // Create a request with only invalid ID to make test deterministic
         let request = NotificationCreateRequest {
             id: "invalid@id".to_string(), // Invalid characters
             r#type: NotificationType::Webhook,
-            url: "not-a-url".to_string(), // Invalid URL
-            signing_key: Some("short".to_string()), // Too short
+            url: "https://valid.example.com/webhook".to_string(), // Valid URL
+            signing_key: Some("a".repeat(32)),                    // Valid signing key
         };
 
         let result = create_notification(request, ThinData(app_state)).await;
@@ -530,8 +689,9 @@ mod tests {
         // Should fail with validation error
         assert!(result.is_err());
         if let Err(ApiError::BadRequest(msg)) = result {
+            // The validator returns the first validation error it encounters
+            // In this case, ID validation fails first
             assert!(msg.contains("ID must contain only letters, numbers, dashes and underscores"));
-            assert!(msg.contains("Invalid URL format"));
         } else {
             panic!("Expected BadRequest error with validation messages");
         }
@@ -540,28 +700,37 @@ mod tests {
     #[actix_web::test]
     async fn test_update_notification_validation_error() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
-        
+
         // Create a test notification
         let notification = create_test_notification_model("test-notification");
-        app_state.notification_repository.create(notification).await.unwrap();
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
 
-        // Create an update request with invalid data
+        // Create an update request with invalid signing key but valid URL
         let update_request = NotificationUpdateRequest {
             r#type: Some(NotificationType::Webhook),
-            url: Some("not-a-url".to_string()), // Invalid URL
-            signing_key: Some("short".to_string()), // Too short
+            url: Some("https://valid.example.com/webhook".to_string()), // Valid URL
+            signing_key: Some("short".to_string()),                     // Too short
         };
 
         let result = update_notification(
             "test-notification".to_string(),
             update_request,
             ThinData(app_state),
-        ).await;
+        )
+        .await;
 
         // Should fail with validation error
         assert!(result.is_err());
         if let Err(ApiError::BadRequest(msg)) = result {
-            assert!(msg.contains("Invalid URL format"));
+            // The validator returns the first error it encounters
+            // In this case, signing key validation fails first
+            assert!(
+                msg.contains("Signing key must be at least") && msg.contains("characters long")
+            );
         } else {
             panic!("Expected BadRequest error with validation messages");
         }

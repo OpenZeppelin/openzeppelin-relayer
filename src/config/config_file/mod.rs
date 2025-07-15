@@ -21,7 +21,10 @@
 //! To use this module, load a configuration file using `load_config`, which will parse
 //! the file and validate its contents. If the configuration is valid, it can be used
 //! to initialize the application components.
-use crate::config::ConfigFileError;
+use crate::{
+    config::ConfigFileError,
+    models::{NotificationConfig, NotificationConfigs},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -33,9 +36,6 @@ pub use relayer::*;
 
 mod signer;
 pub use signer::*;
-
-mod notification;
-pub use notification::*;
 
 mod plugin;
 pub use plugin::*;
@@ -58,7 +58,7 @@ pub enum ConfigFileNetworkType {
 pub struct Config {
     pub relayers: Vec<RelayerFileConfig>,
     pub signers: Vec<SignerFileConfig>,
-    pub notifications: Vec<NotificationFileConfig>,
+    pub notifications: Vec<NotificationConfig>,
     pub networks: NetworksFileConfig,
     pub plugins: Option<Vec<PluginFileConfig>>,
 }
@@ -184,7 +184,7 @@ impl Config {
 
     /// Validates that all notifications are valid and have unique IDs.
     fn validate_notifications(&self) -> Result<(), ConfigFileError> {
-        NotificationsFileConfig::new(self.notifications.clone()).validate()
+        NotificationConfigs::new(self.notifications.clone()).validate()
     }
 
     /// Validates that all networks are valid and have unique IDs.
@@ -226,7 +226,7 @@ pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{PlainOrEnvValue, SecretString};
+    use crate::models::{NotificationType, PlainOrEnvValue, SecretString};
     use std::path::Path;
 
     use super::*;
@@ -259,9 +259,9 @@ mod tests {
                     config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
                 },
             ],
-            notifications: vec![NotificationFileConfig {
+            notifications: vec![NotificationConfig {
                 id: "test-1".to_string(),
-                r#type: NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://api.example.com/notifications".to_string(),
                 signing_key: None,
             }],
@@ -1482,9 +1482,9 @@ mod tests {
         let config = Config {
             relayers: vec![],
             signers: vec![],
-            notifications: vec![NotificationFileConfig {
+            notifications: vec![NotificationConfig {
                 id: "test-notification".to_string(),
-                r#type: NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://api.example.com/notifications".to_string(),
                 signing_key: None,
             }],
@@ -1660,10 +1660,10 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
+
+        // With validator-based validation, empty ID now triggers InvalidFormat error
+        let error = result.unwrap_err();
+        assert!(matches!(error, ConfigFileError::InvalidFormat(_)));
     }
 
     #[test]
