@@ -75,9 +75,6 @@ impl Notification {
             for (field, errors) in validation_errors.field_errors() {
                 if let Some(error) = errors.first() {
                     let field_str = field.as_ref();
-                    println!("field_str: {}", field_str);
-                    println!("error.code: {}", error.code);
-                    println!("error.message: {:?}", error.message);
                     return match (field_str, error.code.as_ref()) {
                         ("id", "length") => NotificationValidationError::InvalidIdFormat,
                         ("id", "regex") => NotificationValidationError::InvalidIdFormat,

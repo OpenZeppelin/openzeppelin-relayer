@@ -1,3 +1,14 @@
+//! API request models and validation for notification endpoints.
+//!
+//! This module handles incoming HTTP requests for notification operations, providing:
+//!
+//! - **Request Models**: Structures for creating and updating notifications via API
+//! - **Input Validation**: Sanitization and validation of user-provided data
+//! - **Domain Conversion**: Transformation from API requests to domain objects
+//!
+//! Serves as the entry point for notification data from external clients, ensuring
+//! all input is properly validated before reaching the core business logic.
+
 use crate::models::{ ApiError, notification::Notification, NotificationType, SecretString};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -1,3 +1,11 @@
+//! This module handles outgoing HTTP responses for notification operations, providing:
+//!
+//! - **Response Models**: Structures for representing notification data in API responses
+//! - **Security Handling**: Obfuscation of sensitive data (e.g., signing keys)
+//! - **Serialization**: Conversion to JSON format for HTTP responses
+//!
+//! Serves as the output format for notification data to external clients, ensuring
+//! all sensitive information is properly masked and formatted correctly.
 use crate::models::{NotificationRepoModel, NotificationType};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

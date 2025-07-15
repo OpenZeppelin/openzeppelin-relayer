@@ -1,9 +1,18 @@
+//! Repository layer models and data persistence for notifications.
+//!
+//! This module provides the data layer representation of notifications, including:
+//!
+//! - **Repository Models**: Data structures optimized for storage and retrieval
+//! - **Data Conversions**: Mapping between domain objects and repository representations
+//! - **Persistence Logic**: Storage-specific validation and constraints
+//!
+//! Acts as the bridge between the domain layer and actual data storage implementations
+//! (in-memory, Redis, etc.), ensuring consistent data representation across repositories.
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use crate::models::{notification::Notification, NotificationType, NotificationValidationError};
 
-
-// Repository model is now just an alias to the core model with additional traits
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct NotificationRepoModel {
     pub id: String,

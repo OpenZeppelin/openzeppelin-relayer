@@ -1,8 +1,13 @@
-//! This module contains the configuration file representation of a notification.
-//! It also contains the validation logic for the notification configuration.
-//! It also contains the conversion logic to and from the core notification model.
-//! It also contains the collection of notification configurations.
-
+//! Configuration file representation and parsing for notifications.
+//!
+//! This module handles the configuration file format for notifications, providing:
+//!
+//! - **Config Models**: Structures that match the configuration file schema
+//! - **Validation**: Config-specific validation rules and constraints
+//! - **Conversions**: Bidirectional mapping between config and domain models
+//! - **Collections**: Container types for managing multiple notification configurations
+//!
+//! Used primarily during application startup to parse notification settings from config files.
 use crate::{
     config::ConfigFileError,
     models::{notification::Notification, NotificationType, PlainOrEnvValue, SecretString, NotificationValidationError},
