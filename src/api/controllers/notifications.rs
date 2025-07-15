@@ -10,15 +10,15 @@
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        ApiError, ApiResponse, NetworkRepoModel, Notification, NotificationCreateRequest,
-        NotificationRepoModel, NotificationResponse, NotificationUpdateRequest, PaginationMeta,
-        PaginationQuery, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        ApiError, ApiResponse, NetworkRepoModel, Notification, NotificationCreateRequest, NotificationUpdateRequest, NotificationResponse,
+        NotificationRepoModel, PaginationMeta, PaginationQuery, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
         TransactionCounterTrait, TransactionRepository,
     },
 };
+
 use actix_web::HttpResponse;
 use eyre::Result;
 

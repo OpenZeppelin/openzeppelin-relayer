@@ -1,5 +1,5 @@
-mod core;
-pub use core::*;
+mod notification;
+pub use notification::*;
 
 mod config;
 pub use config::*;
@@ -16,5 +16,3 @@ pub use repository::NotificationRepoModel;
 mod webhook_notification;
 pub use webhook_notification::*;
 
-// Legacy re-exports for backward compatibility
-pub use core::NotificationType;

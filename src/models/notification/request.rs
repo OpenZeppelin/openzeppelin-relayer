@@ -1,4 +1,4 @@
-use crate::models::{notification::core::*, ApiError, NotificationType, SecretString};
+use crate::models::{ ApiError, notification::Notification, NotificationType, SecretString};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -12,6 +12,19 @@ pub struct NotificationCreateRequest {
     pub signing_key: Option<String>,
 }
 
+/// Request structure for updating an existing notification
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct NotificationUpdateRequest {
+    pub r#type: Option<NotificationType>,
+    pub url: Option<String>,
+    /// Optional signing key for securing webhook notifications.
+    /// - None: don't change the existing signing key
+    /// - Some(""): remove the signing key
+    /// - Some("key"): set the signing key to the provided value
+    pub signing_key: Option<String>,
+}
+
+
 impl TryFrom<NotificationCreateRequest> for Notification {
     type Error = ApiError;
 
@@ -21,31 +34,11 @@ impl TryFrom<NotificationCreateRequest> for Notification {
         let notification = Notification::new(request.id, request.r#type, request.url, signing_key);
 
         // Validate using core validation logic
-        notification.validate().map_err(|e| {
-            ApiError::BadRequest(match e {
-                NotificationValidationError::EmptyId => "ID cannot be empty".to_string(),
-                NotificationValidationError::IdTooLong => {
-                    "ID must be at most 36 characters long".to_string()
-                }
-                NotificationValidationError::InvalidIdFormat => {
-                    "ID must contain only letters, numbers, dashes and underscores".to_string()
-                }
-                NotificationValidationError::EmptyUrl => "URL cannot be empty".to_string(),
-                NotificationValidationError::InvalidUrl => "Invalid URL format".to_string(),
-                NotificationValidationError::SigningKeyTooShort(min_len) => {
-                    format!("Signing key must be at least {} characters long", min_len)
-                }
-            })
-        })?;
+        notification.validate().map_err(ApiError::from)?;
 
         Ok(notification)
     }
 }
-
-// NotificationUpdateRequest is now a pure data structure without business logic
-// Business logic has been moved to the core Notification::apply_update method
-
-// Note: From<Notification> for NotificationRepoModel is implemented in repository.rs
 
 #[cfg(test)]
 mod tests {

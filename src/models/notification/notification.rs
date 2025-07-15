@@ -1,31 +1,30 @@
+//! Notification domain model and business logic.
+//!
+//! This module provides the central `Notification` type that represents notifications
+//! throughout the relayer system, including:
+//!
+//! - **Domain Model**: Core `Notification` struct with validation
+//! - **Business Logic**: Update operations and validation rules  
+//! - **Error Handling**: Comprehensive validation error types
+//! - **Interoperability**: Conversions between API, config, and repository representations
+//!
+//! The notification model supports webhook-based notifications with optional message signing.
 use crate::{
     constants::{ID_REGEX, MINIMUM_SECRET_VALUE_LENGTH},
-    models::SecretString,
+    models::{NotificationUpdateRequest, SecretString},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use validator::{Validate, ValidationError};
 
-/// Core notification type enum used by both config file and API
+/// Notification type enum used by both config file and API
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationType {
     Webhook,
 }
 
-/// Request structure for updating an existing notification
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-pub struct NotificationUpdateRequest {
-    pub r#type: Option<NotificationType>,
-    pub url: Option<String>,
-    /// Optional signing key for securing webhook notifications.
-    /// - None: don't change the existing signing key
-    /// - Some(""): remove the signing key
-    /// - Some("key"): set the signing key to the provided value
-    pub signing_key: Option<String>,
-}
-
-/// Core notification model used by both config file and API
+/// Notification model used by both config file and API
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct Notification {
     #[validate(
@@ -76,8 +75,11 @@ impl Notification {
             for (field, errors) in validation_errors.field_errors() {
                 if let Some(error) = errors.first() {
                     let field_str = field.as_ref();
+                    println!("field_str: {}", field_str);
+                    println!("error.code: {}", error.code);
+                    println!("error.message: {:?}", error.message);
                     return match (field_str, error.code.as_ref()) {
-                        ("id", "length") => NotificationValidationError::IdTooLong,
+                        ("id", "length") => NotificationValidationError::InvalidIdFormat,
                         ("id", "regex") => NotificationValidationError::InvalidIdFormat,
                         ("url", _) => NotificationValidationError::InvalidUrl,
                         ("signing_key", "signing_key_too_short") => {
@@ -141,9 +143,7 @@ impl Notification {
 pub enum NotificationValidationError {
     #[error("Notification ID cannot be empty")]
     EmptyId,
-    #[error("Notification ID must be at most 36 characters long")]
-    IdTooLong,
-    #[error("Notification ID must contain only letters, numbers, dashes and underscores")]
+    #[error("Notification ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long")]
     InvalidIdFormat,
     #[error("Notification URL cannot be empty")]
     EmptyUrl,
@@ -166,11 +166,8 @@ impl From<NotificationValidationError> for crate::models::ApiError {
 
         ApiError::BadRequest(match error {
             NotificationValidationError::EmptyId => "ID cannot be empty".to_string(),
-            NotificationValidationError::IdTooLong => {
-                "ID must be at most 36 characters long".to_string()
-            }
             NotificationValidationError::InvalidIdFormat => {
-                "ID must contain only letters, numbers, dashes and underscores".to_string()
+                "ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long".to_string()
             }
             NotificationValidationError::EmptyUrl => "URL cannot be empty".to_string(),
             NotificationValidationError::InvalidUrl => "Invalid URL format".to_string(),
@@ -206,10 +203,9 @@ mod tests {
             None,
         );
 
-        // With validator, empty string will trigger length validation error
         assert!(matches!(
             notification.validate(),
-            Err(NotificationValidationError::IdTooLong) // validator maps length errors to this
+            Err(NotificationValidationError::InvalidIdFormat)
         ));
     }
 
@@ -224,7 +220,7 @@ mod tests {
 
         assert!(matches!(
             notification.validate(),
-            Err(NotificationValidationError::IdTooLong)
+            Err(NotificationValidationError::InvalidIdFormat)
         ));
     }
 

@@ -1,6 +1,7 @@
-use crate::models::notification::core::*;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use crate::models::{notification::Notification, NotificationType, NotificationValidationError};
+
 
 // Repository model is now just an alias to the core model with additional traits
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]

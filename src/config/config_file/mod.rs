@@ -1661,7 +1661,6 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
 
-        // With validator-based validation, empty ID now triggers InvalidFormat error
         let error = result.unwrap_err();
         assert!(matches!(error, ConfigFileError::InvalidFormat(_)));
     }
