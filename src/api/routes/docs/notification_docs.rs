@@ -57,6 +57,7 @@ use crate::models::{
         )
     )
 )]
+#[allow(dead_code)]
 fn doc_list_notifications() {}
 
 /// Retrieves details of a specific notification by ID.
@@ -119,6 +120,7 @@ fn doc_list_notifications() {}
         )
     )
 )]
+#[allow(dead_code)]
 fn doc_get_notification() {}
 
 /// Creates a new notification.
@@ -179,6 +181,7 @@ fn doc_get_notification() {}
         )
     )
 )]
+#[allow(dead_code)]
 fn doc_create_notification() {}
 
 /// Updates an existing notification.
@@ -242,6 +245,7 @@ fn doc_create_notification() {}
         )
     )
 )]
+#[allow(dead_code)]
 fn doc_update_notification() {}
 
 /// Deletes a notification by ID.
@@ -309,4 +313,5 @@ fn doc_update_notification() {}
         )
     )
 )]
+#[allow(dead_code)]
 fn doc_delete_notification() {}
