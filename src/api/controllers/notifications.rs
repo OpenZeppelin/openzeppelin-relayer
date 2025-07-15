@@ -10,8 +10,9 @@
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        ApiError, ApiResponse, NetworkRepoModel, Notification, NotificationCreateRequest, NotificationUpdateRequest, NotificationResponse,
-        NotificationRepoModel, PaginationMeta, PaginationQuery, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        ApiError, ApiResponse, NetworkRepoModel, Notification, NotificationCreateRequest,
+        NotificationRepoModel, NotificationResponse, NotificationUpdateRequest, PaginationMeta,
+        PaginationQuery, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -230,8 +231,8 @@ mod tests {
     /// Helper function to create a test notification create request
     fn create_test_notification_create_request(id: &str) -> NotificationCreateRequest {
         NotificationCreateRequest {
-            id: id.to_string(),
-            r#type: NotificationType::Webhook,
+            id: Some(id.to_string()),
+            r#type: Some(NotificationType::Webhook),
             url: "https://example.com/webhook".to_string(),
             signing_key: Some("a".repeat(32)), // 32 chars minimum
         }
@@ -427,8 +428,8 @@ mod tests {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
 
         let request = NotificationCreateRequest {
-            id: "new-notification".to_string(),
-            r#type: NotificationType::Webhook,
+            id: Some("new-notification".to_string()),
+            r#type: Some(NotificationType::Webhook),
             url: "https://example.com/webhook".to_string(),
             signing_key: None,
         };
@@ -624,8 +625,8 @@ mod tests {
 
         // Create a request with only invalid ID to make test deterministic
         let request = NotificationCreateRequest {
-            id: "invalid@id".to_string(), // Invalid characters
-            r#type: NotificationType::Webhook,
+            id: Some("invalid@id".to_string()), // Invalid characters
+            r#type: Some(NotificationType::Webhook),
             url: "https://valid.example.com/webhook".to_string(), // Valid URL
             signing_key: Some("a".repeat(32)),                    // Valid signing key
         };

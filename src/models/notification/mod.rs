@@ -15,4 +15,3 @@ pub use repository::NotificationRepoModel;
 
 mod webhook_notification;
 pub use webhook_notification::*;
-

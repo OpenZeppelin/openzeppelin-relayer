@@ -10,7 +10,10 @@
 //! Used primarily during application startup to parse notification settings from config files.
 use crate::{
     config::ConfigFileError,
-    models::{notification::Notification, NotificationType, PlainOrEnvValue, SecretString, NotificationValidationError},
+    models::{
+        notification::Notification, NotificationType, NotificationValidationError, PlainOrEnvValue,
+        SecretString,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

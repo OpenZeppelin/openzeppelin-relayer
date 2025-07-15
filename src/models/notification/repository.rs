@@ -9,9 +9,9 @@
 //! Acts as the bridge between the domain layer and actual data storage implementations
 //! (in-memory, Redis, etc.), ensuring consistent data representation across repositories.
 
+use crate::models::{notification::Notification, NotificationType, NotificationValidationError};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use crate::models::{notification::Notification, NotificationType, NotificationValidationError};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct NotificationRepoModel {

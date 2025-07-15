@@ -9,15 +9,15 @@
 //! Serves as the entry point for notification data from external clients, ensuring
 //! all input is properly validated before reaching the core business logic.
 
-use crate::models::{ ApiError, notification::Notification, NotificationType, SecretString};
+use crate::models::{notification::Notification, ApiError, NotificationType, SecretString};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Request structure for creating a new notification
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct NotificationCreateRequest {
-    pub id: String,
-    pub r#type: NotificationType,
+    pub id: Option<String>,
+    pub r#type: Option<NotificationType>,
     pub url: String,
     /// Optional signing key for securing webhook notifications
     pub signing_key: Option<String>,
@@ -35,14 +35,17 @@ pub struct NotificationUpdateRequest {
     pub signing_key: Option<String>,
 }
 
-
 impl TryFrom<NotificationCreateRequest> for Notification {
     type Error = ApiError;
 
     fn try_from(request: NotificationCreateRequest) -> Result<Self, Self::Error> {
         let signing_key = request.signing_key.map(|s| SecretString::new(&s));
+        let id = request
+            .id
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let notification_type = request.r#type.unwrap_or(NotificationType::Webhook);
 
-        let notification = Notification::new(request.id, request.r#type, request.url, signing_key);
+        let notification = Notification::new(id, notification_type, request.url, signing_key);
 
         // Validate using core validation logic
         notification.validate().map_err(ApiError::from)?;
@@ -60,8 +63,8 @@ mod tests {
     #[test]
     fn test_valid_create_request_conversion() {
         let request = NotificationCreateRequest {
-            id: "test-notification".to_string(),
-            r#type: NotificationType::Webhook,
+            id: Some("test-notification".to_string()),
+            r#type: Some(NotificationType::Webhook),
             url: "https://example.com/webhook".to_string(),
             signing_key: Some("a".repeat(32)), // Minimum length
         };
@@ -79,8 +82,8 @@ mod tests {
     #[test]
     fn test_invalid_create_request_conversion() {
         let request = NotificationCreateRequest {
-            id: "invalid@id".to_string(), // Invalid characters
-            r#type: NotificationType::Webhook,
+            id: Some("invalid@id".to_string()), // Invalid characters
+            r#type: Some(NotificationType::Webhook),
             url: "https://example.com/webhook".to_string(),
             signing_key: None,
         };
@@ -98,8 +101,8 @@ mod tests {
     #[test]
     fn test_signing_key_too_short() {
         let request = NotificationCreateRequest {
-            id: "test-notification".to_string(),
-            r#type: NotificationType::Webhook,
+            id: Some("test-notification".to_string()),
+            r#type: Some(NotificationType::Webhook),
             url: "https://example.com/webhook".to_string(),
             signing_key: Some("short".to_string()), // Too short
         };
@@ -117,8 +120,8 @@ mod tests {
     #[test]
     fn test_invalid_url() {
         let request = NotificationCreateRequest {
-            id: "test-notification".to_string(),
-            r#type: NotificationType::Webhook,
+            id: Some("test-notification".to_string()),
+            r#type: Some(NotificationType::Webhook),
             url: "not-a-url".to_string(),
             signing_key: None,
         };
