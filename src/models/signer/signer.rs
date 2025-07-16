@@ -11,10 +11,7 @@
 //! The signer model supports multiple signer types including local keys, AWS KMS,
 //! Google Cloud KMS, Vault, and Turnkey service integrations.
 
-use crate::{
-    constants::ID_REGEX,
-    models::{SecretString, SignerUpdateRequest},
-};
+use crate::{constants::ID_REGEX, models::SecretString};
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize, Serializer};
 use utoipa::ToSchema;
@@ -39,11 +36,11 @@ impl LocalSignerConfig {
     /// Validates the raw key for cryptographic requirements
     pub fn validate(&self) -> Result<(), SignerValidationError> {
         let key_bytes = self.raw_key.borrow();
-        
+
         // Check key length - must be exactly 32 bytes for crypto operations
         if key_bytes.len() != 32 {
             return Err(SignerValidationError::InvalidConfig(format!(
-                "Raw key must be exactly 32 bytes, got {} bytes", 
+                "Raw key must be exactly 32 bytes, got {} bytes",
                 key_bytes.len()
             )));
         }
@@ -51,10 +48,10 @@ impl LocalSignerConfig {
         // Check if key is all zeros (cryptographically invalid)
         if key_bytes.iter().all(|&b| b == 0) {
             return Err(SignerValidationError::InvalidConfig(
-                "Raw key cannot be all zeros".to_string()
+                "Raw key cannot be all zeros".to_string(),
             ));
         }
-        
+
         Ok(())
     }
 }
@@ -397,8 +394,6 @@ pub struct Signer {
     )]
     pub id: String,
     pub config: SignerConfig,
-    pub name: Option<String>,
-    pub description: Option<String>,
 }
 
 /// Signer type enum used for validation and API responses
@@ -420,18 +415,8 @@ pub enum SignerType {
 
 impl Signer {
     /// Creates a new signer with configuration
-    pub fn new(
-        id: String,
-        config: SignerConfig,
-        name: Option<String>,
-        description: Option<String>,
-    ) -> Self {
-        Self {
-            id,
-            config,
-            name,
-            description,
-        }
+    pub fn new(id: String, config: SignerConfig) -> Self {
+        Self { id, config }
     }
 
     /// Gets the signer type from the configuration
@@ -464,50 +449,6 @@ impl Signer {
 
         Ok(())
     }
-
-    /// Applies an update request to create a new validated signer
-    ///
-    /// This method provides a domain-first approach where the core model handles
-    /// its own business rules and validation rather than having update logic
-    /// scattered across request models.
-    ///
-    /// # Arguments
-    /// * `request` - The update request containing partial data to apply
-    ///
-    /// # Returns
-    /// * `Ok(Signer)` - A new validated signer with updates applied
-    /// * `Err(SignerValidationError)` - If the resulting signer would be invalid
-    pub fn apply_update(
-        &self,
-        request: &SignerUpdateRequest,
-    ) -> Result<Self, SignerValidationError> {
-        let mut updated = self.clone();
-
-        // Apply updates from request (only metadata fields can be updated)
-        if let Some(name) = &request.name {
-            updated.name = if name.trim().is_empty() {
-                None
-            } else {
-                Some(name.clone())
-            };
-        }
-
-        if let Some(description) = &request.description {
-            updated.description = if description.trim().is_empty() {
-                None
-            } else {
-                Some(description.clone())
-            };
-        }
-
-        // Note: config is immutable after creation for security reasons
-        // If someone needs to change the signer config, they should create a new signer
-
-        // Validate the updated model
-        updated.validate()?;
-
-        Ok(updated)
-    }
 }
 
 /// Validation errors for signers
@@ -517,10 +458,6 @@ pub enum SignerValidationError {
     EmptyId,
     #[error("Signer ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long")]
     InvalidIdFormat,
-    #[error("Signer name cannot be empty when provided")]
-    EmptyName,
-    #[error("Signer description cannot be empty when provided")]
-    EmptyDescription,
     #[error("Invalid signer configuration: {0}")]
     InvalidConfig(String),
 }
@@ -535,8 +472,6 @@ impl From<SignerValidationError> for crate::models::ApiError {
             SignerValidationError::InvalidIdFormat => {
                 "ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long".to_string()
             }
-            SignerValidationError::EmptyName => "Name cannot be empty when provided".to_string(),
-            SignerValidationError::EmptyDescription => "Description cannot be empty when provided".to_string(),
             SignerValidationError::InvalidConfig(msg) => format!("Invalid signer configuration: {}", msg),
         })
     }
@@ -552,12 +487,7 @@ mod tests {
             raw_key: SecretVec::new(32, |v| v.fill(1)),
         });
 
-        let signer = Signer::new(
-            "valid-id".to_string(),
-            config,
-            Some("Test Signer".to_string()),
-            Some("A test signer for development".to_string()),
-        );
+        let signer = Signer::new("valid-id".to_string(), config);
 
         assert!(signer.validate().is_ok());
         assert_eq!(signer.signer_type(), SignerType::Local);
@@ -570,7 +500,7 @@ mod tests {
             key_id: "test-key-id".to_string(),
         });
 
-        let signer = Signer::new("aws-signer".to_string(), config, None, None);
+        let signer = Signer::new("aws-signer".to_string(), config);
 
         assert!(signer.validate().is_ok());
         assert_eq!(signer.signer_type(), SignerType::AwsKms);
@@ -582,7 +512,7 @@ mod tests {
             raw_key: SecretVec::new(32, |v| v.fill(1)), // Use valid non-zero key
         });
 
-        let signer = Signer::new("".to_string(), config, None, None);
+        let signer = Signer::new("".to_string(), config);
 
         assert!(matches!(
             signer.validate(),
@@ -596,7 +526,7 @@ mod tests {
             raw_key: SecretVec::new(32, |v| v.fill(1)), // Use valid non-zero key
         });
 
-        let signer = Signer::new("a".repeat(37), config, None, None);
+        let signer = Signer::new("a".repeat(37), config);
 
         assert!(matches!(
             signer.validate(),
@@ -610,7 +540,7 @@ mod tests {
             raw_key: SecretVec::new(32, |v| v.fill(1)), // Use valid non-zero key
         });
 
-        let signer = Signer::new("invalid@id".to_string(), config, None, None);
+        let signer = Signer::new("invalid@id".to_string(), config);
 
         assert!(matches!(
             signer.validate(),
@@ -624,7 +554,7 @@ mod tests {
             raw_key: SecretVec::new(16, |v| v.fill(1)), // Invalid length: 16 bytes instead of 32
         });
 
-        let signer = Signer::new("valid-id".to_string(), config, None, None);
+        let signer = Signer::new("valid-id".to_string(), config);
 
         let result = signer.validate();
         assert!(result.is_err());
@@ -642,7 +572,7 @@ mod tests {
             raw_key: SecretVec::new(32, |v| v.fill(0)), // Invalid: all zeros
         });
 
-        let signer = Signer::new("valid-id".to_string(), config, None, None);
+        let signer = Signer::new("valid-id".to_string(), config);
 
         let result = signer.validate();
         assert!(result.is_err());
@@ -659,65 +589,9 @@ mod tests {
             raw_key: SecretVec::new(32, |v| v.fill(1)), // Valid: 32 bytes, non-zero
         });
 
-        let signer = Signer::new("valid-id".to_string(), config, None, None);
+        let signer = Signer::new("valid-id".to_string(), config);
 
         assert!(signer.validate().is_ok());
-    }
-
-    #[test]
-    fn test_apply_update_success() {
-        let config = SignerConfig::Local(LocalSignerConfig {
-            raw_key: SecretVec::new(32, |v| v.fill(1)),
-        });
-
-        let original = Signer::new(
-            "test-id".to_string(),
-            config,
-            Some("Original Name".to_string()),
-            None,
-        );
-
-        let update_request = SignerUpdateRequest {
-            name: Some("Updated Name".to_string()),
-            description: Some("Updated description".to_string()),
-        };
-
-        let result = original.apply_update(&update_request);
-        assert!(result.is_ok());
-
-        let updated = result.unwrap();
-        assert_eq!(updated.id, "test-id"); // ID should remain unchanged
-        assert_eq!(updated.signer_type(), SignerType::Local); // Type should remain unchanged
-        assert_eq!(updated.name, Some("Updated Name".to_string())); // Name updated
-        assert_eq!(updated.description, Some("Updated description".to_string()));
-        // Description updated
-    }
-
-    #[test]
-    fn test_apply_update_clear_fields() {
-        let config = SignerConfig::AwsKms(AwsKmsSignerConfig {
-            region: Some("us-east-1".to_string()),
-            key_id: "test-key".to_string(),
-        });
-
-        let original = Signer::new(
-            "test-id".to_string(),
-            config,
-            Some("Original Name".to_string()),
-            Some("Original description".to_string()),
-        );
-
-        let update_request = SignerUpdateRequest {
-            name: Some("".to_string()),           // Empty string clears the field
-            description: Some("   ".to_string()), // Whitespace clears the field
-        };
-
-        let result = original.apply_update(&update_request);
-        assert!(result.is_ok());
-
-        let updated = result.unwrap();
-        assert_eq!(updated.name, None); // Name cleared
-        assert_eq!(updated.description, None); // Description cleared
     }
 
     #[test]

@@ -8,9 +8,18 @@
 //!
 //! Acts as the bridge between the domain layer and actual data storage implementations
 //! (in-memory, Redis, etc.), ensuring consistent data representation across repositories.
+//!
 
 use crate::{
-    models::signer::signer::{Signer, SignerConfig, SignerValidationError},
+    models::{
+        signer::signer::{
+            AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+            GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
+            SignerValidationError, TurnkeySignerConfig, VaultCloudSignerConfig, VaultSignerConfig,
+            VaultTransitSignerConfig,
+        },
+        SecretString,
+    },
     utils::{base64_decode, base64_encode},
 };
 use secrets::SecretVec;
@@ -178,8 +187,6 @@ impl From<SignerRepoModel> for Signer {
         Self {
             id: repo_model.id,
             config: repo_model.config,
-            name: None,        // Repository doesn't store metadata
-            description: None, // Repository doesn't store metadata
         }
     }
 }
@@ -221,14 +228,6 @@ impl From<SignerConfigStorage> for SignerConfig {
         }
     }
 }
-
-// Individual config type conversions - these handle the mapping between domain and storage representations
-use crate::models::signer::signer::{
-    AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-    GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, TurnkeySignerConfig,
-    VaultCloudSignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
-};
-use crate::models::SecretString;
 
 impl From<LocalSignerConfig> for LocalSignerConfigStorage {
     fn from(config: LocalSignerConfig) -> Self {
@@ -469,8 +468,6 @@ mod tests {
         let core = crate::models::signer::signer::Signer::new(
             "test-id".to_string(),
             SignerConfig::Local(config),
-            Some("Test Signer".to_string()),
-            Some("A test signer".to_string()),
         );
 
         let repo_model = SignerRepoModel::from(core);
@@ -498,9 +495,6 @@ mod tests {
             core.signer_type(),
             crate::models::signer::signer::SignerType::AwsKms
         );
-        // Note: metadata (name, description) is None when coming from repository
-        assert_eq!(core.name, None);
-        assert_eq!(core.description, None);
     }
 
     #[test]

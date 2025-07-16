@@ -80,70 +80,70 @@ pub struct VaultTransitSignerFileConfig {
     pub namespace: Option<String>,
 }
 
-fn default_auth_uri() -> String {
+fn google_cloud_default_auth_uri() -> String {
     "https://accounts.google.com/o/oauth2/auth".to_string()
 }
 
-fn default_token_uri() -> String {
+fn google_cloud_default_token_uri() -> String {
     "https://oauth2.googleapis.com/token".to_string()
 }
 
-fn default_auth_provider_x509_cert_url() -> String {
+fn google_cloud_default_auth_provider_x509_cert_url() -> String {
     "https://www.googleapis.com/oauth2/v1/certs".to_string()
 }
 
-fn default_client_x509_cert_url() -> String {
+fn google_cloud_default_client_x509_cert_url() -> String {
     "https://www.googleapis.com/robot/v1/metadata/x509/solana-signer%40forward-emitter-459820-r7.iam.gserviceaccount.com".to_string()
 }
 
-fn default_universe_domain() -> String {
+fn google_cloud_default_universe_domain() -> String {
     "googleapis.com".to_string()
 }
 
-fn default_key_version() -> u32 {
+fn google_cloud_default_key_version() -> u32 {
     1
 }
 
-fn default_location() -> String {
+fn google_cloud_default_location() -> String {
     "global".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct ServiceAccountFileConfig {
+pub struct GoogleCloudKmsServiceAccountFileConfig {
     pub project_id: String,
     pub private_key_id: PlainOrEnvValue,
     pub private_key: PlainOrEnvValue,
     pub client_email: PlainOrEnvValue,
     pub client_id: String,
-    #[serde(default = "default_auth_uri")]
+    #[serde(default = "google_cloud_default_auth_uri")]
     pub auth_uri: String,
-    #[serde(default = "default_token_uri")]
+    #[serde(default = "google_cloud_default_token_uri")]
     pub token_uri: String,
-    #[serde(default = "default_auth_provider_x509_cert_url")]
+    #[serde(default = "google_cloud_default_auth_provider_x509_cert_url")]
     pub auth_provider_x509_cert_url: String,
-    #[serde(default = "default_client_x509_cert_url")]
+    #[serde(default = "google_cloud_default_client_x509_cert_url")]
     pub client_x509_cert_url: String,
-    #[serde(default = "default_universe_domain")]
+    #[serde(default = "google_cloud_default_universe_domain")]
     pub universe_domain: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct KmsKeyFileConfig {
-    #[serde(default = "default_location")]
+pub struct GoogleCloudKmsKeyFileConfig {
+    #[serde(default = "google_cloud_default_location")]
     pub location: String,
     pub key_ring_id: String,
     pub key_id: String,
-    #[serde(default = "default_key_version")]
+    #[serde(default = "google_cloud_default_key_version")]
     pub key_version: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleCloudKmsSignerFileConfig {
-    pub service_account: ServiceAccountFileConfig,
-    pub key: KmsKeyFileConfig,
+    pub service_account: GoogleCloudKmsServiceAccountFileConfig,
+    pub key: GoogleCloudKmsKeyFileConfig,
 }
 
 /// Main enum for all signer config types
@@ -210,8 +210,6 @@ impl SignersFileConfig {
         Ok(())
     }
 }
-
-// ===== CONVERSION IMPLEMENTATIONS =====
 
 impl TryFrom<LocalSignerFileConfig> for LocalSignerConfig {
     type Error = ConfigFileError;
@@ -445,7 +443,7 @@ impl TryFrom<SignerFileConfig> for Signer {
         let signer_config = SignerConfig::try_from(config.config)?;
 
         // Create core signer with configuration
-        let signer = Signer::new(config.id, signer_config, None, None);
+        let signer = Signer::new(config.id, signer_config);
 
         // Validate using domain model validation logic
         signer.validate().map_err(|e| match e {
@@ -454,12 +452,6 @@ impl TryFrom<SignerFileConfig> for Signer {
             }
             crate::models::signer::signer::SignerValidationError::InvalidIdFormat => {
                 ConfigFileError::InvalidFormat("Invalid signer ID format".into())
-            }
-            crate::models::signer::signer::SignerValidationError::EmptyName => {
-                ConfigFileError::InvalidFormat("Signer name cannot be empty".into())
-            }
-            crate::models::signer::signer::SignerValidationError::EmptyDescription => {
-                ConfigFileError::InvalidFormat("Signer description cannot be empty".into())
             }
             crate::models::signer::signer::SignerValidationError::InvalidConfig(msg) => {
                 ConfigFileError::InvalidFormat(format!("Invalid signer configuration: {}", msg))

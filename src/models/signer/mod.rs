@@ -1,25 +1,18 @@
+//! Signer models
 mod repository;
 pub use repository::{
-    AwsKmsSignerConfigStorage,
-    GoogleCloudKmsSignerConfigStorage,
-    GoogleCloudKmsSignerKeyConfigStorage,
-    GoogleCloudKmsSignerServiceAccountConfigStorage,
-    // Don't re-export SignerConfig or config structs from repository to avoid conflicts with domain
-    LocalSignerConfigStorage,
-    SignerConfigStorage,
-    SignerRepoModel,
-    SignerRepoModelStorage,
-    TurnkeySignerConfigStorage,
-    VaultCloudSignerConfigStorage,
-    VaultSignerConfigStorage,
+    AwsKmsSignerConfigStorage, GoogleCloudKmsSignerConfigStorage,
+    GoogleCloudKmsSignerKeyConfigStorage, GoogleCloudKmsSignerServiceAccountConfigStorage,
+    LocalSignerConfigStorage, SignerConfigStorage, SignerRepoModel, SignerRepoModelStorage,
+    TurnkeySignerConfigStorage, VaultCloudSignerConfigStorage, VaultSignerConfigStorage,
     VaultTransitSignerConfigStorage,
 };
 
 mod config;
-pub use config::*; // Export config file models
+pub use config::*;
 
-pub mod signer; // Make public for access from other modules
-pub use signer::*; // This exports domain models including Signer, SignerConfig, SignerType, etc.
+pub mod signer;
+pub use signer::*;
 
 mod request;
 pub use request::*;

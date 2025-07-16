@@ -344,11 +344,11 @@ mod tests {
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
         models::{
-            AppState, AwsKmsSignerFileConfig, GoogleCloudKmsSignerFileConfig, KmsKeyFileConfig,
+            AppState, AwsKmsSignerFileConfig, GoogleCloudKmsKeyFileConfig,
+            GoogleCloudKmsServiceAccountFileConfig, GoogleCloudKmsSignerFileConfig,
             LocalSignerFileConfig, NetworkType, NotificationConfig, NotificationType,
-            PlainOrEnvValue, SecretString, ServiceAccountFileConfig, SignerConfig,
-            SignerFileConfig, SignerFileConfigEnum, VaultSignerFileConfig,
-            VaultTransitSignerFileConfig,
+            PlainOrEnvValue, SecretString, SignerConfig, SignerFileConfig, SignerFileConfigEnum,
+            VaultSignerFileConfig, VaultTransitSignerFileConfig,
         },
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
@@ -1181,7 +1181,7 @@ mod tests {
         let signer = SignerFileConfig {
             id: "gcp-kms-signer".to_string(),
             config: SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
-                service_account: ServiceAccountFileConfig {
+                service_account: GoogleCloudKmsServiceAccountFileConfig {
                     private_key: PlainOrEnvValue::Plain {
                         value: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                     },
@@ -1199,7 +1199,7 @@ mod tests {
                     auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
                     universe_domain: "googleapis.com".to_string(),
                 },
-                key: KmsKeyFileConfig {
+                key: GoogleCloudKmsKeyFileConfig {
                     location: "global".to_string(),
                     key_id: "fake-key-id".to_string(),
                     key_ring_id: "fake-key-ring-id".to_string(),

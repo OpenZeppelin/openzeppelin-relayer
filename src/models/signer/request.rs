@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use zeroize::Zeroize;
 
-
 /// AWS KMS signer configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
 pub struct PlainSignerRequestConfig {
@@ -149,21 +148,12 @@ pub struct SignerCreateRequest {
     /// The signer configuration including type and config data
     #[serde(flatten)]
     pub config: SignerConfigRequest,
-    /// Optional human-readable name for the signer
-    pub name: Option<String>,
-    /// Optional description of the signer's purpose
-    pub description: Option<String>,
 }
 
 /// Request model for updating an existing signer
+/// At the moment, we don't allow updating signers
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
-pub struct SignerUpdateRequest {
-    /// Optional updated name for the signer
-    pub name: Option<String>,
-    /// Optional updated description for the signer
-    pub description: Option<String>,
-    // Note: signer_type and config are immutable after creation for security
-}
+pub struct SignerUpdateRequest {}
 
 impl From<AwsKmsSignerRequestConfig> for AwsKmsSignerConfig {
     fn from(config: AwsKmsSignerRequestConfig) -> Self {
@@ -276,14 +266,12 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                     .map_err(|e| ApiError::BadRequest(format!(
                         "Invalid hex key format: {}. Key must be a 64-character hex string (32 bytes).", e
                     )))?;
-                
+
                 let raw_key = SecretVec::new(key_bytes.len(), |buffer| {
                     buffer.copy_from_slice(&key_bytes);
                 });
-                
-                SignerConfig::Local(LocalSignerConfig {
-                    raw_key,
-                })
+
+                SignerConfig::Local(LocalSignerConfig { raw_key })
             }
             SignerConfigRequest::AwsKms { config } => SignerConfig::AwsKms(config.into()),
             SignerConfigRequest::Vault { config } => SignerConfig::Vault(config.into()),
@@ -317,7 +305,7 @@ impl TryFrom<SignerCreateRequest> for Signer {
         let config = SignerConfig::try_from(request.config)?;
 
         // Create the signer
-        let signer = Signer::new(id, config, request.name, request.description);
+        let signer = Signer::new(id, config);
 
         // Validate using domain model validation (this will also validate the config)
         signer.validate().map_err(ApiError::from)?;
@@ -341,8 +329,6 @@ mod tests {
                     key_id: "test-key-id".to_string(),
                 },
             },
-            name: Some("Test AWS KMS Signer".to_string()),
-            description: Some("A test AWS KMS signer".to_string()),
         };
 
         let result = Signer::try_from(request);
@@ -351,7 +337,6 @@ mod tests {
         let signer = result.unwrap();
         assert_eq!(signer.id, "test-aws-signer");
         assert_eq!(signer.signer_type(), SignerType::AwsKms);
-        assert_eq!(signer.name, Some("Test AWS KMS Signer".to_string()));
 
         // Verify the config was properly converted
         if let Some(aws_config) = signer.config.get_aws_kms() {
@@ -376,8 +361,6 @@ mod tests {
                     mount_point: None,
                 },
             },
-            name: Some("Test Vault Signer".to_string()),
-            description: None,
         };
 
         let result = Signer::try_from(request);
@@ -398,8 +381,6 @@ mod tests {
                     key_id: "".to_string(), // Empty key ID should fail validation
                 },
             },
-            name: None,
-            description: None,
         };
 
         let result = Signer::try_from(request);
@@ -426,8 +407,6 @@ mod tests {
                     mount_point: None,
                 },
             },
-            name: None,
-            description: None,
         };
 
         let result = Signer::try_from(request);
@@ -448,8 +427,6 @@ mod tests {
                     mount_point: None,
                 },
             },
-            name: None,
-            description: None,
         };
 
         let result = Signer::try_from(request);
@@ -466,11 +443,12 @@ mod tests {
     fn test_create_request_generates_uuid_when_no_id() {
         let request = SignerCreateRequest {
             id: None,
-            config: SignerConfigRequest::Local { config: PlainSignerRequestConfig { 
-                key: "1111111111111111111111111111111111111111111111111111111111111111".to_string() // 32 bytes as hex
-            } },
-            name: Some("Test Signer".to_string()),
-            description: None,
+            config: SignerConfigRequest::Local {
+                config: PlainSignerRequestConfig {
+                    key: "1111111111111111111111111111111111111111111111111111111111111111"
+                        .to_string(), // 32 bytes as hex
+                },
+            },
         };
 
         let result = Signer::try_from(request);
@@ -488,11 +466,12 @@ mod tests {
     fn test_invalid_id_format() {
         let request = SignerCreateRequest {
             id: Some("invalid@id".to_string()), // Invalid characters
-            config: SignerConfigRequest::Local { config: PlainSignerRequestConfig { 
-                key: "2222222222222222222222222222222222222222222222222222222222222222".to_string() // 32 bytes as hex
-            } },
-            name: None,
-            description: None,
+            config: SignerConfigRequest::Local {
+                config: PlainSignerRequestConfig {
+                    key: "2222222222222222222222222222222222222222222222222222222222222222"
+                        .to_string(), // 32 bytes as hex
+                },
+            },
         };
 
         let result = Signer::try_from(request);
@@ -509,11 +488,12 @@ mod tests {
     fn test_test_signer_creation() {
         let request = SignerCreateRequest {
             id: Some("test-signer".to_string()),
-            config: SignerConfigRequest::Local { config: PlainSignerRequestConfig { 
-                key: "3333333333333333333333333333333333333333333333333333333333333333".to_string() // 32 bytes as hex
-            } },
-            name: None,
-            description: None,
+            config: SignerConfigRequest::Local {
+                config: PlainSignerRequestConfig {
+                    key: "3333333333333333333333333333333333333333333333333333333333333333"
+                        .to_string(), // 32 bytes as hex
+                },
+            },
         };
 
         let result = Signer::try_from(request);
@@ -528,11 +508,12 @@ mod tests {
     fn test_local_signer_creation() {
         let request = SignerCreateRequest {
             id: Some("local-signer".to_string()),
-            config: SignerConfigRequest::Local { config: PlainSignerRequestConfig { 
-                key: "4444444444444444444444444444444444444444444444444444444444444444".to_string() // 32 bytes as hex
-            }},
-            name: Some("Local Test Signer".to_string()),
-            description: None,
+            config: SignerConfigRequest::Local {
+                config: PlainSignerRequestConfig {
+                    key: "4444444444444444444444444444444444444444444444444444444444444444"
+                        .to_string(), // 32 bytes as hex
+                },
+            },
         };
 
         let result = Signer::try_from(request);
