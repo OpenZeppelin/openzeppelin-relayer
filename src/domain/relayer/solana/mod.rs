@@ -16,25 +16,30 @@ pub use token::*;
 
 use crate::{
     jobs::JobProducerTrait,
-    models::{NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel, SolanaNetwork},
-    repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionRepository,
-        RelayerRepositoryStorage,
+    models::{
+        NetworkRepoModel, NetworkType, RelayerError, RelayerRepoModel, SignerRepoModel,
+        SolanaNetwork, TransactionRepoModel,
     },
+    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{get_network_provider, JupiterService, SolanaSignerFactory},
 };
 
 /// Function to create a Solana relayer instance
-pub async fn create_solana_relayer<J: JobProducerTrait + 'static>(
+pub async fn create_solana_relayer<
+    J: JobProducerTrait + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+>(
     relayer: RelayerRepoModel,
     signer: SignerRepoModel,
-    relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-    network_repository: Arc<InMemoryNetworkRepository>,
-    transaction_repository: Arc<InMemoryTransactionRepository>,
+    relayer_repository: Arc<RR>,
+    network_repository: Arc<NR>,
+    transaction_repository: Arc<TR>,
     job_producer: Arc<J>,
-) -> Result<DefaultSolanaRelayer<J>, RelayerError> {
+) -> Result<DefaultSolanaRelayer<J, TR, RR, NR>, RelayerError> {
     let network_repo = network_repository
-        .get(NetworkType::Solana, &relayer.network)
+        .get_by_name(NetworkType::Solana, &relayer.network)
         .await
         .ok()
         .flatten()
@@ -64,7 +69,7 @@ pub async fn create_solana_relayer<J: JobProducerTrait + 'static>(
         jupiter_service.clone(),
     )?;
 
-    let relayer = DefaultSolanaRelayer::<J>::new(
+    let relayer = DefaultSolanaRelayer::<J, TR, RR, NR>::new(
         relayer,
         signer_service,
         relayer_repository,

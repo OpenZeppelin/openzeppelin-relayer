@@ -189,6 +189,8 @@ where
 
 #[cfg(test)]
 mod prepare_transaction_tests {
+    use std::future::ready;
+
     use super::*;
     use crate::{
         domain::SignTransactionResponse,
@@ -207,7 +209,7 @@ mod prepare_transaction_tests {
         mocks
             .counter
             .expect_get_and_increment()
-            .returning(|_, _| Ok(1));
+            .returning(|_, _| Box::pin(ready(Ok(1))));
 
         // signer
         mocks.signer.expect_sign_transaction().returning(|_| {
@@ -262,7 +264,7 @@ mod prepare_transaction_tests {
         mocks
             .counter
             .expect_get_and_increment()
-            .returning(|_, _| Ok(1));
+            .returning(|_, _| Box::pin(ready(Ok(1))));
 
         // signer
         mocks.signer.expect_sign_transaction().returning(|_| {
@@ -346,9 +348,11 @@ mod prepare_transaction_tests {
 
         // Mock sequence counter to fail
         mocks.counter.expect_get_and_increment().returning(|_, _| {
-            Err(crate::repositories::TransactionCounterError::NotFound(
-                "Counter service failure".to_string(),
-            ))
+            Box::pin(async {
+                Err(RepositoryError::NotFound(
+                    "Counter service failure".to_string(),
+                ))
+            })
         });
 
         // Mock finalize_transaction_state for failure handling
@@ -402,7 +406,7 @@ mod prepare_transaction_tests {
         mocks
             .counter
             .expect_get_and_increment()
-            .returning(|_, _| Ok(1));
+            .returning(|_, _| Box::pin(ready(Ok(1))));
 
         // signer fails
         mocks.signer.expect_sign_transaction().returning(|_| {

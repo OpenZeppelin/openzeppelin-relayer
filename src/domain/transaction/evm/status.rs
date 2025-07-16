@@ -11,8 +11,8 @@ use super::{
     get_age_of_sent_at, has_enough_confirmations, is_noop, is_transaction_valid, make_noop,
     too_many_attempts, too_many_noop_attempts,
 };
-use crate::models::{EvmNetwork, NetworkType};
-use crate::repositories::NetworkRepository;
+use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
+use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
     domain::transaction::evm::price_calculator::PriceCalculatorTrait,
     jobs::JobProducerTrait,
@@ -25,15 +25,15 @@ use crate::{
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
-impl<P, R, N, T, J, S, C, PC> EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+impl<P, RR, NR, TR, J, S, TCR, PC> EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
-    C: TransactionCounterTrait + Send + Sync,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
     PC: PriceCalculatorTrait + Send + Sync,
 {
     pub(super) async fn check_transaction_status(
@@ -223,7 +223,9 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         if self.should_resubmit(&tx).await? {
-            return self.handle_resubmission(tx).await;
+            let resubmitted_tx = self.handle_resubmission(tx).await?;
+            self.schedule_status_check(&resubmitted_tx, None).await?;
+            return Ok(resubmitted_tx);
         }
 
         self.schedule_status_check(&tx, Some(5)).await?;
@@ -282,6 +284,8 @@ where
             self.send_transaction_update_notification(&updated_tx)
                 .await?;
             return Ok(updated_tx);
+        } else {
+            self.schedule_status_check(&tx, Some(5)).await?;
         }
         Ok(tx)
     }
@@ -345,7 +349,7 @@ mod tests {
             RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
-            MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
+            MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
         services::{MockEvmProviderTrait, MockSigner},
@@ -361,7 +365,7 @@ mod tests {
     /// Helper struct holding all the mocks we often need
     pub struct TestMocks {
         pub provider: MockEvmProviderTrait,
-        pub relayer_repo: MockRepository<RelayerRepoModel, String>,
+        pub relayer_repo: MockRelayerRepository,
         pub network_repo: MockNetworkRepository,
         pub tx_repo: MockTransactionRepository,
         pub job_producer: MockJobProducerTrait,
@@ -375,7 +379,7 @@ mod tests {
     pub fn default_test_mocks() -> TestMocks {
         TestMocks {
             provider: MockEvmProviderTrait::new(),
-            relayer_repo: MockRepository::new(),
+            relayer_repo: MockRelayerRepository::new(),
             network_repo: MockNetworkRepository::new(),
             tx_repo: MockTransactionRepository::new(),
             job_producer: MockJobProducerTrait::new(),
@@ -430,7 +434,7 @@ mod tests {
                 to: Some("0xRecipient".to_string()),
                 value: U256::from(0),
                 data: Some("0xData".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(20000000000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -454,7 +458,7 @@ mod tests {
         mocks: TestMocks,
     ) -> EvmRelayerTransaction<
         MockEvmProviderTrait,
-        MockRepository<RelayerRepoModel, String>,
+        MockRelayerRepository,
         MockNetworkRepository,
         MockTransactionRepository,
         MockJobProducerTrait,
@@ -798,6 +802,12 @@ mod tests {
                 .expect_produce_submit_transaction_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
+            // Expect status check to be scheduled
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let updated_tx = evm_transaction.handle_submitted_state(tx).await.unwrap();
 
@@ -823,6 +833,12 @@ mod tests {
                 .network_repo
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            // Expect status check to be scheduled when not doing NOOP
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction

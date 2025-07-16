@@ -18,8 +18,8 @@ use crate::{
         SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, RelayerRepositoryStorage,
+        NetworkRepository, NetworkRepositoryStorage, RelayerRepositoryStorage,
+        TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
@@ -352,7 +352,7 @@ pub trait RelayerTransactionFactoryTrait {
     ///
     /// * `relayer` - A `RelayerRepoModel` representing the relayer.
     /// * `relayer_repository` - An `Arc` to the `RelayerRepositoryStorage`.
-    /// * `transaction_repository` - An `Arc` to the `InMemoryTransactionRepository`.
+    /// * `transaction_repository` - An `Arc` to the `TransactionRepositoryStorage`.
     /// * `job_producer` - An `Arc` to the `JobProducer`.
     ///
     /// # Returns
@@ -360,8 +360,8 @@ pub trait RelayerTransactionFactoryTrait {
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
     fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
+        transaction_repository: Arc<TransactionRepositoryStorage>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
 }
@@ -387,16 +387,16 @@ impl RelayerTransactionFactory {
     pub async fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        network_repository: Arc<InMemoryNetworkRepository>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-        transaction_counter_store: Arc<InMemoryTransactionCounter>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
+        network_repository: Arc<NetworkRepositoryStorage>,
+        transaction_repository: Arc<TransactionRepositoryStorage>,
+        transaction_counter_store: Arc<TransactionCounterRepositoryStorage>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
             NetworkType::Evm => {
                 let network_repo = network_repository
-                    .get(NetworkType::Evm, &relayer.network)
+                    .get_by_name(NetworkType::Evm, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -435,7 +435,7 @@ impl RelayerTransactionFactory {
             }
             NetworkType::Solana => {
                 let network_repo = network_repository
-                    .get(NetworkType::Solana, &relayer.network)
+                    .get_by_name(NetworkType::Solana, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -467,7 +467,7 @@ impl RelayerTransactionFactory {
                     Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
 
                 let network_repo = network_repository
-                    .get(NetworkType::Stellar, &relayer.network)
+                    .get_by_name(NetworkType::Stellar, &relayer.network)
                     .await
                     .ok()
                     .flatten()

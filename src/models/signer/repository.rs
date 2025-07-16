@@ -1,13 +1,24 @@
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::models::SecretString;
+use crate::{
+    models::SecretString,
+    utils::{base64_decode, base64_encode},
+};
 
-fn serialize_secretvec<S>(_secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_secret_redacted<S>(_secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
     serializer.serialize_str("[REDACTED]")
+}
+
+fn serialize_secret_base64<S>(_secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let base64 = base64_encode(_secret.borrow().as_ref());
+    serializer.serialize_str(&base64)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -21,25 +32,97 @@ pub enum SignerType {
     Turnkey,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignerRepoModel {
     pub id: String,
     pub config: SignerConfig,
 }
 
+/// This is the model used for storing the signer config in the database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignerRepoModelStorage {
+    pub id: String,
+    pub config: SignerConfigStorage,
+}
+
+impl From<SignerRepoModel> for SignerRepoModelStorage {
+    fn from(model: SignerRepoModel) -> Self {
+        Self {
+            id: model.id,
+            config: model.config.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalSignerConfig {
-    #[serde(serialize_with = "serialize_secretvec")]
+    #[serde(serialize_with = "serialize_secret_redacted")]
     pub raw_key: SecretVec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LocalSignerConfigStorage {
+    #[serde(serialize_with = "serialize_secret_base64")]
+    pub raw_key: SecretVec<u8>,
+}
+
+impl<'de> Deserialize<'de> for LocalSignerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct LocalSignerConfigHelper {
+            raw_key: String,
+        }
+
+        let helper = LocalSignerConfigHelper::deserialize(deserializer)?;
+        let raw_key = if helper.raw_key == "[REDACTED]" {
+            // Return a zero-filled SecretVec when deserializing redacted data
+            SecretVec::zero(32)
+        } else {
+            // For actual data, try to decode as base64
+            let decoded = base64_decode(&helper.raw_key)
+                .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+            SecretVec::new(decoded.len(), |v| v.copy_from_slice(&decoded))
+        };
+
+        Ok(LocalSignerConfig { raw_key })
+    }
+}
+
+impl<'de> Deserialize<'de> for LocalSignerConfigStorage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct LocalSignerConfigHelper {
+            raw_key: String,
+        }
+
+        let helper = LocalSignerConfigHelper::deserialize(deserializer)?;
+        let raw_key = if helper.raw_key == "[REDACTED]" {
+            // Return a zero-filled SecretVec when deserializing redacted data
+            SecretVec::zero(32)
+        } else {
+            // For actual data, try to decode as base64
+            let decoded = base64_decode(&helper.raw_key)
+                .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+            SecretVec::new(decoded.len(), |v| v.copy_from_slice(&decoded))
+        };
+
+        Ok(LocalSignerConfigStorage { raw_key })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AwsKmsSignerConfig {
     pub region: Option<String>,
     pub key_id: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultTransitSignerConfig {
     pub key_name: String,
     pub address: String,
@@ -50,7 +133,7 @@ pub struct VaultTransitSignerConfig {
     pub mount_point: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnkeySignerConfig {
     pub api_public_key: String,
     pub api_private_key: SecretString,
@@ -59,7 +142,7 @@ pub struct TurnkeySignerConfig {
     pub public_key: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerServiceAccountConfig {
     pub private_key: SecretString,
     pub private_key_id: SecretString,
@@ -73,7 +156,7 @@ pub struct GoogleCloudKmsSignerServiceAccountConfig {
     pub universe_domain: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerKeyConfig {
     pub location: String,
     pub key_ring_id: String,
@@ -81,13 +164,13 @@ pub struct GoogleCloudKmsSignerKeyConfig {
     pub key_version: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerConfig {
     pub service_account: GoogleCloudKmsSignerServiceAccountConfig,
     pub key: GoogleCloudKmsSignerKeyConfig,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SignerConfig {
     Test(LocalSignerConfig),
     Local(LocalSignerConfig),
@@ -97,6 +180,47 @@ pub enum SignerConfig {
     AwsKms(AwsKmsSignerConfig),
     Turnkey(TurnkeySignerConfig),
     GoogleCloudKms(GoogleCloudKmsSignerConfig),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SignerConfigStorage {
+    Test(LocalSignerConfigStorage),
+    Local(LocalSignerConfigStorage),
+    Vault(LocalSignerConfig),
+    VaultCloud(LocalSignerConfigStorage),
+    VaultTransit(VaultTransitSignerConfig),
+    AwsKms(AwsKmsSignerConfig),
+    Turnkey(TurnkeySignerConfig),
+    GoogleCloudKms(GoogleCloudKmsSignerConfig),
+}
+
+impl From<SignerConfig> for SignerConfigStorage {
+    fn from(config: SignerConfig) -> Self {
+        match config {
+            SignerConfig::Local(local_config) => SignerConfigStorage::Local(local_config.into()),
+            SignerConfig::AwsKms(aws_config) => SignerConfigStorage::AwsKms(aws_config),
+            SignerConfig::GoogleCloudKms(gcp_config) => {
+                SignerConfigStorage::GoogleCloudKms(gcp_config)
+            }
+            SignerConfig::Turnkey(turnkey_config) => SignerConfigStorage::Turnkey(turnkey_config),
+            SignerConfig::Vault(vault_config) => SignerConfigStorage::Vault(vault_config),
+            SignerConfig::Test(test_config) => SignerConfigStorage::Test(test_config.into()),
+            SignerConfig::VaultCloud(vault_cloud_config) => {
+                SignerConfigStorage::VaultCloud(vault_cloud_config.into())
+            }
+            SignerConfig::VaultTransit(vault_transit_config) => {
+                SignerConfigStorage::VaultTransit(vault_transit_config)
+            }
+        }
+    }
+}
+
+impl From<LocalSignerConfig> for LocalSignerConfigStorage {
+    fn from(config: LocalSignerConfig) -> Self {
+        Self {
+            raw_key: config.raw_key, // SecretVec can be moved directly
+        }
+    }
 }
 
 impl SignerConfig {

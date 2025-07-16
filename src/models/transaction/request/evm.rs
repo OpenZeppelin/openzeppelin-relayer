@@ -1,6 +1,7 @@
 use crate::{
     constants::ZERO_ADDRESS,
     models::{ApiError, RelayerNetworkPolicy, RelayerRepoModel, U256},
+    utils::calculate_intrinsic_gas,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{schema, ToSchema};
@@ -13,7 +14,7 @@ pub struct EvmTransactionRequest {
     pub value: U256,
     #[schema(nullable = false)]
     pub data: Option<String>,
-    pub gas_limit: u64,
+    pub gas_limit: Option<u64>,
     #[schema(nullable = false)]
     pub gas_price: Option<u128>,
     #[schema(nullable = false)]
@@ -38,18 +39,42 @@ pub enum Speed {
 impl EvmTransactionRequest {
     pub fn validate(&self, relayer: &RelayerRepoModel) -> Result<(), ApiError> {
         validate_target_address(self, relayer)?;
-        validate_evm_transaction_request(self)?;
+        validate_evm_transaction_request(self, relayer)?;
         validate_price_params(self, relayer)?;
         Ok(())
     }
 }
 
-pub fn validate_evm_transaction_request(request: &EvmTransactionRequest) -> Result<(), ApiError> {
+pub fn validate_evm_transaction_request(
+    request: &EvmTransactionRequest,
+    relayer: &RelayerRepoModel,
+) -> Result<(), ApiError> {
     if request.to.is_none() && request.data.is_none() {
         return Err(ApiError::BadRequest(
             "Both txs `to` and `data` fields are missing. At least one of them has to be set."
                 .to_string(),
         ));
+    }
+
+    // Validate gas_limit based on gas_limit_estimation policy
+    if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
+        // If gas_limit_estimation is disabled (Some(false)), gas_limit must be provided
+        if evm_policy.gas_limit_estimation == Some(false) && request.gas_limit.is_none() {
+            return Err(ApiError::BadRequest(
+                "gas_limit is required when gas_limit_estimation policy is disabled".to_string(),
+            ));
+        }
+    }
+
+    // Validate intrinsic gas if gas_limit is provided
+    if let Some(gas_limit) = request.gas_limit {
+        let intrinsic_gas = calculate_intrinsic_gas(request);
+        if gas_limit < intrinsic_gas {
+            return Err(ApiError::BadRequest(format!(
+                "gas_limit is too low, intrinsic gas is {} and gas_limit is {}",
+                intrinsic_gas, gas_limit
+            )));
+        }
     }
 
     if let Some(valid_until) = &request.valid_until {
@@ -172,7 +197,7 @@ mod tests {
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: U256::from(0),
             data: Some("0x".to_string()),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             gas_price: Some(0),
             speed: None,
             max_fee_per_gas: None,
@@ -200,7 +225,9 @@ mod tests {
     #[test]
     fn test_validate_evm_transaction_request_valid() {
         let request = create_basic_request();
-        assert!(validate_evm_transaction_request(&request).is_ok());
+        assert!(
+            validate_evm_transaction_request(&request, &create_test_relayer(false, false)).is_ok()
+        );
     }
 
     #[test]
@@ -209,7 +236,7 @@ mod tests {
         request.to = None;
         request.data = None;
 
-        let result = validate_evm_transaction_request(&request);
+        let result = validate_evm_transaction_request(&request, &create_test_relayer(false, false));
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -220,7 +247,7 @@ mod tests {
         let past_time = Utc::now() - Duration::hours(1);
         request.valid_until = Some(past_time.to_rfc3339());
 
-        let result = validate_evm_transaction_request(&request);
+        let result = validate_evm_transaction_request(&request, &create_test_relayer(false, false));
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -231,7 +258,9 @@ mod tests {
         let future_time = Utc::now() + Duration::hours(1);
         request.valid_until = Some(future_time.to_rfc3339());
 
-        assert!(validate_evm_transaction_request(&request).is_ok());
+        assert!(
+            validate_evm_transaction_request(&request, &create_test_relayer(false, false)).is_ok()
+        );
     }
 
     #[test]
@@ -279,9 +308,28 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_evm_transaction_request_gas_limit_too_low() {
+        let mut request = create_basic_request();
+        request.gas_limit = Some(20000);
+        let result = validate_evm_transaction_request(&request, &create_test_relayer(false, false));
+        assert!(result.is_err());
+
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert_eq!(
+                msg,
+                "gas_limit is too low, intrinsic gas is 21000 and gas_limit is 20000".to_string()
+            );
+        } else {
+            panic!("Expected BadRequest error");
+        }
+    }
+
+    #[test]
     fn test_validate_legacy_transaction() {
         let request = create_basic_request();
-        assert!(validate_evm_transaction_request(&request).is_ok());
+        assert!(
+            validate_evm_transaction_request(&request, &create_test_relayer(false, false)).is_ok()
+        );
     }
 
     #[test]
@@ -290,7 +338,9 @@ mod tests {
         request.max_fee_per_gas = Some(30000000000);
         request.max_priority_fee_per_gas = Some(20000000000);
 
-        assert!(validate_evm_transaction_request(&request).is_ok());
+        assert!(
+            validate_evm_transaction_request(&request, &create_test_relayer(false, false)).is_ok()
+        );
     }
 
     #[test]
@@ -308,7 +358,9 @@ mod tests {
         let mut request = create_basic_request();
         request.speed = Some(Speed::Fast);
 
-        assert!(validate_evm_transaction_request(&request).is_ok());
+        assert!(
+            validate_evm_transaction_request(&request, &create_test_relayer(false, false)).is_ok()
+        );
     }
 
     #[test]
@@ -317,7 +369,7 @@ mod tests {
         request.to = None;
         request.data = None;
 
-        let result = validate_evm_transaction_request(&request);
+        let result = validate_evm_transaction_request(&request, &create_test_relayer(false, false));
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -327,7 +379,7 @@ mod tests {
         let mut request = create_basic_request();
         request.valid_until = Some("invalid-date-format".to_string());
 
-        let result = validate_evm_transaction_request(&request);
+        let result = validate_evm_transaction_request(&request, &create_test_relayer(false, false));
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
     }
@@ -420,5 +472,103 @@ mod tests {
         let result = validate_price_params(&request, &relayer);
         assert!(result.is_err());
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn test_validate_gas_limit_optional_when_estimation_enabled() {
+        let mut request = create_basic_request();
+        request.gas_limit = None; // No gas_limit provided
+
+        // Create relayer with gas_limit_estimation enabled (default)
+        let relayer = create_test_relayer(false, false);
+        // Default RelayerEvmPolicy has gas_limit_estimation = Some(true)
+
+        let result = validate_evm_transaction_request(&request, &relayer);
+        assert!(
+            result.is_ok(),
+            "gas_limit should be optional when gas_limit_estimation is enabled"
+        );
+    }
+
+    #[test]
+    fn test_validate_gas_limit_optional_when_estimation_explicitly_enabled() {
+        let mut request = create_basic_request();
+        request.gas_limit = None; // No gas_limit provided
+
+        // Create relayer with gas_limit_estimation explicitly enabled
+        let mut relayer = create_test_relayer(false, false);
+        if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
+            evm_policy.gas_limit_estimation = Some(true);
+        }
+
+        let result = validate_evm_transaction_request(&request, &relayer);
+        assert!(
+            result.is_ok(),
+            "gas_limit should be optional when gas_limit_estimation is explicitly enabled"
+        );
+    }
+
+    #[test]
+    fn test_validate_gas_limit_required_when_estimation_disabled() {
+        let mut request = create_basic_request();
+        request.gas_limit = None; // No gas_limit provided
+
+        // Create relayer with gas_limit_estimation disabled
+        let mut relayer = create_test_relayer(false, false);
+        if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
+            evm_policy.gas_limit_estimation = Some(false);
+        }
+
+        let result = validate_evm_transaction_request(&request, &relayer);
+        assert!(
+            result.is_err(),
+            "gas_limit should be required when gas_limit_estimation is disabled"
+        );
+
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(
+                msg.contains("gas_limit is required when gas_limit_estimation policy is disabled"),
+                "Expected specific error message, got: {}",
+                msg
+            );
+        } else {
+            panic!("Expected BadRequest error");
+        }
+    }
+
+    #[test]
+    fn test_validate_gas_limit_provided_when_estimation_disabled() {
+        let mut request = create_basic_request();
+        request.gas_limit = Some(21000); // gas_limit provided
+
+        // Create relayer with gas_limit_estimation disabled
+        let mut relayer = create_test_relayer(false, false);
+        if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
+            evm_policy.gas_limit_estimation = Some(false);
+        }
+
+        let result = validate_evm_transaction_request(&request, &relayer);
+        assert!(
+            result.is_ok(),
+            "validation should pass when gas_limit is provided and estimation is disabled"
+        );
+    }
+
+    #[test]
+    fn test_validate_gas_limit_provided_when_estimation_enabled() {
+        let mut request = create_basic_request();
+        request.gas_limit = Some(21000); // gas_limit provided
+
+        // Create relayer with gas_limit_estimation enabled
+        let mut relayer = create_test_relayer(false, false);
+        if let RelayerNetworkPolicy::Evm(ref mut evm_policy) = relayer.policies {
+            evm_policy.gas_limit_estimation = Some(true);
+        }
+
+        let result = validate_evm_transaction_request(&request, &relayer);
+        assert!(
+            result.is_ok(),
+            "validation should pass when gas_limit is provided even when estimation is enabled"
+        );
     }
 }

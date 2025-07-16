@@ -15,6 +15,21 @@ pub struct InMemorySignerRepository {
     store: Mutex<HashMap<String, SignerRepoModel>>,
 }
 
+impl Clone for InMemorySignerRepository {
+    fn clone(&self) -> Self {
+        // Try to get the current data, or use empty HashMap if lock fails
+        let data = self
+            .store
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
+        Self {
+            store: Mutex::new(data),
+        }
+    }
+}
+
 #[allow(dead_code)]
 impl InMemorySignerRepository {
     pub fn new() -> Self {
@@ -64,14 +79,32 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
     #[allow(clippy::map_entry)]
     async fn update(
         &self,
-        _id: String,
-        _relayer: SignerRepoModel,
+        id: String,
+        signer: SignerRepoModel,
     ) -> Result<SignerRepoModel, RepositoryError> {
-        Err(RepositoryError::NotSupported("Not supported".to_string()))
+        let mut store: MutexGuard<'_, HashMap<String, SignerRepoModel>> =
+            Self::acquire_lock(&self.store).await?;
+        if !store.contains_key(&id) {
+            return Err(RepositoryError::NotFound(format!(
+                "Signer with ID {} not found",
+                id
+            )));
+        }
+        store.insert(id, signer.clone());
+        Ok(signer)
     }
 
-    async fn delete_by_id(&self, _id: String) -> Result<(), RepositoryError> {
-        Err(RepositoryError::NotSupported("Not supported".to_string()))
+    async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError> {
+        let mut store: MutexGuard<'_, HashMap<String, SignerRepoModel>> =
+            Self::acquire_lock(&self.store).await?;
+        if !store.contains_key(&id) {
+            return Err(RepositoryError::NotFound(format!(
+                "Signer with ID {} not found",
+                id
+            )));
+        }
+        store.remove(&id);
+        Ok(())
     }
 
     async fn list_all(&self) -> Result<Vec<SignerRepoModel>, RepositoryError> {
@@ -110,6 +143,17 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
             Self::acquire_lock(&self.store).await?;
         let length = store.len();
         Ok(length)
+    }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
     }
 }
 
@@ -153,8 +197,19 @@ mod tests {
         let repo = InMemorySignerRepository::new();
         let signer = create_test_signer("test".to_string());
 
-        let result = repo.update("test".to_string(), signer).await;
-        assert!(matches!(result, Err(RepositoryError::NotSupported(_))));
+        // Create the signer first
+        repo.create(signer.clone()).await.unwrap();
+
+        // Update the signer
+        let updated_signer = SignerRepoModel {
+            id: "test".to_string(),
+            config: SignerConfig::Test(LocalSignerConfig {
+                raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[2; 32])),
+            }),
+        };
+
+        let result = repo.update("test".to_string(), updated_signer).await;
+        assert!(result.is_ok());
     }
 
     #[actix_web::test]
@@ -176,7 +231,7 @@ mod tests {
         let signer = create_test_signer("test".to_string());
 
         let result = repo.update("test2".to_string(), signer).await;
-        assert!(matches!(result, Err(RepositoryError::NotSupported(_))));
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 
     #[actix_web::test]
@@ -185,5 +240,27 @@ mod tests {
 
         let result = repo.get_by_id("test".to_string()).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[actix_web::test]
+    async fn test_has_entries() {
+        let repo = InMemorySignerRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
+
+        let signer = create_test_signer("test".to_string());
+
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[actix_web::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemorySignerRepository::new();
+        let signer = create_test_signer("test".to_string());
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

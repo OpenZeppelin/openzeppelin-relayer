@@ -1,7 +1,26 @@
 /// Configuration for the server, including network and rate limiting settings.
-use std::env;
+use std::{env, str::FromStr};
+use strum::Display;
 
 use crate::{constants::MINIMUM_SECRET_VALUE_LENGTH, models::SecretString};
+
+#[derive(Debug, Clone, PartialEq, Eq, Display)]
+pub enum RepositoryStorageType {
+    InMemory,
+    Redis,
+}
+
+impl FromStr for RepositoryStorageType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "inmemory" | "in_memory" => Ok(Self::InMemory),
+            "redis" => Ok(Self::Redis),
+            _ => Err(format!("Invalid repository storage type: {}", s)),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -25,6 +44,8 @@ pub struct ServerConfig {
     pub enable_swagger: bool,
     /// The number of seconds to wait for a Redis connection.
     pub redis_connection_timeout_ms: u64,
+    /// The prefix for the Redis key.
+    pub redis_key_prefix: String,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -35,6 +56,10 @@ pub struct ServerConfig {
     pub provider_retry_max_delay_ms: u64,
     /// Maximum number of failovers (switching to different providers).
     pub provider_max_failovers: u8,
+    /// The type of repository storage to use.
+    pub repository_storage_type: RepositoryStorageType,
+    /// Flag to force config file processing.
+    pub reset_storage_on_start: bool,
 }
 
 impl ServerConfig {
@@ -57,6 +82,7 @@ impl ServerConfig {
     /// - `PROVIDER_RETRY_BASE_DELAY_MS` defaults to `100`.
     /// - `PROVIDER_RETRY_MAX_DELAY_MS` defaults to `2000`.
     /// - `PROVIDER_MAX_FAILOVERS` defaults to `3`.
+    /// - `REPOSITORY_STORAGE_TYPE` defaults to `"in_memory"`.
     pub fn from_env() -> Self {
         let conf_dir = if env::var("IN_DOCKER")
             .map(|val| val == "true")
@@ -113,6 +139,8 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse()
                 .unwrap_or(10000),
+            redis_key_prefix: env::var("REDIS_KEY_PREFIX")
+                .unwrap_or_else(|_| "oz-relayer".to_string()),
             rpc_timeout_ms: env::var("RPC_TIMEOUT_MS")
                 .unwrap_or_else(|_| "10000".to_string())
                 .parse()
@@ -133,6 +161,13 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
                 .unwrap_or(3),
+            repository_storage_type: env::var("REPOSITORY_STORAGE_TYPE")
+                .unwrap_or_else(|_| "in_memory".to_string())
+                .parse()
+                .unwrap_or(RepositoryStorageType::InMemory),
+            reset_storage_on_start: env::var("RESET_STORAGE_ON_START")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
         }
     }
 }
@@ -167,6 +202,8 @@ mod tests {
         env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
         env::remove_var("PROVIDER_RETRY_MAX_DELAY_MS");
         env::remove_var("PROVIDER_MAX_FAILOVERS");
+        env::remove_var("REPOSITORY_STORAGE_TYPE");
+        env::remove_var("RESET_STORAGE_ON_START");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -200,6 +237,11 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 100);
         assert_eq!(config.provider_retry_max_delay_ms, 2000);
         assert_eq!(config.provider_max_failovers, 3);
+        assert_eq!(
+            config.repository_storage_type,
+            RepositoryStorageType::InMemory
+        );
+        assert!(!config.reset_storage_on_start);
     }
 
     #[test]
@@ -221,6 +263,8 @@ mod tests {
         env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "invalid");
         env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "invalid");
         env::set_var("PROVIDER_MAX_FAILOVERS", "invalid");
+        env::set_var("REPOSITORY_STORAGE_TYPE", "invalid");
+        env::set_var("RESET_STORAGE_ON_START", "invalid");
         let config = ServerConfig::from_env();
 
         // Should fall back to defaults when parsing fails
@@ -234,6 +278,11 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 100);
         assert_eq!(config.provider_retry_max_delay_ms, 2000);
         assert_eq!(config.provider_max_failovers, 3);
+        assert_eq!(
+            config.repository_storage_type,
+            RepositoryStorageType::InMemory
+        );
+        assert!(!config.reset_storage_on_start);
     }
 
     #[test]
@@ -259,6 +308,8 @@ mod tests {
         env::set_var("PROVIDER_RETRY_BASE_DELAY_MS", "200");
         env::set_var("PROVIDER_RETRY_MAX_DELAY_MS", "3000");
         env::set_var("PROVIDER_MAX_FAILOVERS", "4");
+        env::set_var("REPOSITORY_STORAGE_TYPE", "in_memory");
+        env::set_var("RESET_STORAGE_ON_START", "true");
         let config = ServerConfig::from_env();
 
         assert_eq!(config.host, "127.0.0.1");
@@ -278,6 +329,11 @@ mod tests {
         assert_eq!(config.provider_retry_base_delay_ms, 200);
         assert_eq!(config.provider_retry_max_delay_ms, 3000);
         assert_eq!(config.provider_max_failovers, 4);
+        assert_eq!(
+            config.repository_storage_type,
+            RepositoryStorageType::InMemory
+        );
+        assert!(config.reset_storage_on_start);
     }
 
     #[test]

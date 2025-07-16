@@ -35,7 +35,7 @@
 //! - Maximum base fee multiplier: 10x
 //! - Time window for fee calculation: 90 seconds
 use crate::{
-    constants::DEFAULT_TRANSACTION_SPEED,
+    constants::{DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED},
     models::{
         evm::Speed, EvmNetwork, EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel,
         TransactionError, U256,
@@ -216,7 +216,7 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
 
         final_params.total_cost = final_params.calculate_total_cost(
             tx_data.is_eip1559(),
-            tx_data.gas_limit,
+            tx_data.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT), // Use default gas limit if not provided
             U256::from(tx_data.value),
         );
 
@@ -298,8 +298,11 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
             }
         }
 
-        final_params.total_cost =
-            final_params.calculate_total_cost(is_eip1559, gas_limit, U256::from(value));
+        final_params.total_cost = final_params.calculate_total_cost(
+            is_eip1559,
+            gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
+            U256::from(value),
+        );
 
         Ok(final_params)
     }

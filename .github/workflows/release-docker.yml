@@ -90,7 +90,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PAT }}
           repository: ${{ env.DOCKERHUB_IMAGE }}
           short-description: ${{ github.event.repository.description }}
-          readme-filepath: ./DOCKERHUB_README.md
+          readme-filepath: ./DOCKER_README.md
       - name: Slack notification success or failure
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:

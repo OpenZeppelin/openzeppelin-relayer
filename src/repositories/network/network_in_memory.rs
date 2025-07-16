@@ -3,35 +3,34 @@
 //! network configurations, while update and delete operations are not supported.
 //! The repository is implemented using a `Mutex`-protected `HashMap` to
 //! ensure thread safety in asynchronous contexts.
+
 use crate::{
     models::{NetworkRepoModel, NetworkType, RepositoryError},
-    repositories::*,
+    repositories::{NetworkRepository, PaginatedResult, PaginationQuery, Repository},
 };
 use async_trait::async_trait;
 use eyre::Result;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, MutexGuard};
 
-#[async_trait]
-pub trait NetworkRepository: Repository<NetworkRepoModel, String> {
-    /// Get a network by network type and name
-    async fn get_by_name(
-        &self,
-        network_type: NetworkType,
-        name: &str,
-    ) -> Result<Option<NetworkRepoModel>, RepositoryError>;
-
-    /// Get a network by network type and chain ID
-    async fn get_by_chain_id(
-        &self,
-        network_type: NetworkType,
-        chain_id: u64,
-    ) -> Result<Option<NetworkRepoModel>, RepositoryError>;
-}
-
 #[derive(Debug)]
 pub struct InMemoryNetworkRepository {
     store: Mutex<HashMap<String, NetworkRepoModel>>,
+}
+
+impl Clone for InMemoryNetworkRepository {
+    fn clone(&self) -> Self {
+        // Try to get the current data, or use empty HashMap if lock fails
+        let data = self
+            .store
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
+        Self {
+            store: Mutex::new(data),
+        }
+    }
 }
 
 impl InMemoryNetworkRepository {
@@ -121,6 +120,17 @@ impl Repository<NetworkRepoModel, String> for InMemoryNetworkRepository {
         let store = Self::acquire_lock(&self.store).await?;
         Ok(store.len())
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -130,13 +140,7 @@ impl NetworkRepository for InMemoryNetworkRepository {
         network_type: NetworkType,
         name: &str,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-        for (_, network) in store.iter() {
-            if network.network_type == network_type && network.name == name {
-                return Ok(Some(network.clone()));
-            }
-        }
-        Ok(None)
+        self.get(network_type, name).await
     }
 
     async fn get_by_chain_id(
@@ -144,37 +148,32 @@ impl NetworkRepository for InMemoryNetworkRepository {
         network_type: NetworkType,
         chain_id: u64,
     ) -> Result<Option<NetworkRepoModel>, RepositoryError> {
-        let store = Self::acquire_lock(&self.store).await?;
-
-        // Only EVM networks have chain_id, so we filter by network type first
+        // Only EVM networks have chain_id
         if network_type != NetworkType::Evm {
             return Ok(None);
         }
 
-        // Search through all networks to find one with matching chain_id and network_type
-        for network in store.values() {
+        let store = Self::acquire_lock(&self.store).await?;
+        for (_, network) in store.iter() {
             if network.network_type == network_type {
-                // For EVM networks, check if the chain_id matches
                 if let crate::models::NetworkConfigData::Evm(evm_config) = &network.config {
-                    if let Some(network_chain_id) = evm_config.chain_id {
-                        if network_chain_id == chain_id {
-                            return Ok(Some(network.clone()));
-                        }
+                    if evm_config.chain_id == Some(chain_id) {
+                        return Ok(Some(network.clone()));
                     }
                 }
             }
         }
-
         Ok(None)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::config::{
         EvmNetworkConfig, NetworkConfigCommon, SolanaNetworkConfig, StellarNetworkConfig,
     };
+
+    use super::*;
 
     fn create_test_network(name: String, network_type: NetworkType) -> NetworkRepoModel {
         let common = NetworkConfigCommon {
@@ -315,35 +314,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_network_repository_can_be_created() {
-        // This test verifies that our mock implementation compiles correctly
-        #[cfg(test)]
-        {
-            use super::MockNetworkRepository;
-            let _mock_repo = MockNetworkRepository::new();
-            // If this compiles, our mock is syntactically correct
-        }
-    }
-}
+    async fn test_has_entries() {
+        let repo = InMemoryNetworkRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
 
-#[cfg(test)]
-mockall::mock! {
-    pub NetworkRepository {}
+        let network = create_test_network("test".to_string(), NetworkType::Evm);
 
-    #[async_trait]
-    impl Repository<NetworkRepoModel, String> for NetworkRepository {
-        async fn create(&self, entity: NetworkRepoModel) -> Result<NetworkRepoModel, RepositoryError>;
-        async fn get_by_id(&self, id: String) -> Result<NetworkRepoModel, RepositoryError>;
-        async fn list_all(&self) -> Result<Vec<NetworkRepoModel>, RepositoryError>;
-        async fn list_paginated(&self, query: PaginationQuery) -> Result<PaginatedResult<NetworkRepoModel>, RepositoryError>;
-        async fn update(&self, id: String, entity: NetworkRepoModel) -> Result<NetworkRepoModel, RepositoryError>;
-        async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
-        async fn count(&self) -> Result<usize, RepositoryError>;
+        repo.create(network.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
     }
 
-    #[async_trait]
-    impl NetworkRepository for NetworkRepository {
-        async fn get_by_name(&self, network_type: NetworkType, name: &str) -> Result<Option<NetworkRepoModel>, RepositoryError>;
-        async fn get_by_chain_id(&self, network_type: NetworkType, chain_id: u64) -> Result<Option<NetworkRepoModel>, RepositoryError>;
+    #[tokio::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemoryNetworkRepository::new();
+        let network = create_test_network("test".to_string(), NetworkType::Evm);
+
+        repo.create(network.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

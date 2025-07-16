@@ -478,27 +478,43 @@ impl TryFrom<&EvmTransactionData> for TransactionRequest {
                         TransactionError::InvalidType("Invalid address format".to_string())
                     })?,
             )),
-            gas_price: Some(
-                Uint::<256, 4>::from(tx.gas_price.unwrap_or(0))
-                    .try_into()
-                    .map_err(|_| TransactionError::InvalidType("Invalid gas price".to_string()))?,
-            ),
-            // we should not set gas here
-            // gas: Some(
-            //     Uint::<256, 4>::from(tx.gas_limit)
-            //         .try_into()
-            //         .map_err(|_| TransactionError::InvalidType("Invalid gas
-            // limit".to_string()))?, ),
+            gas_price: tx
+                .gas_price
+                .map(|gp| {
+                    Uint::<256, 4>::from(gp)
+                        .try_into()
+                        .map_err(|_| TransactionError::InvalidType("Invalid gas price".to_string()))
+                })
+                .transpose()?,
             value: Some(Uint::<256, 4>::from(tx.value)),
-            input: TransactionInput::from(tx.data.clone().unwrap_or("".to_string()).into_bytes()),
-            nonce: Some(
-                Uint::<256, 4>::from(tx.nonce.ok_or_else(|| {
-                    TransactionError::InvalidType("Nonce must be defined".to_string())
-                })?)
-                .try_into()
-                .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))?,
-            ),
+            input: TransactionInput::from(tx.data_to_bytes()?),
+            nonce: tx
+                .nonce
+                .map(|n| {
+                    Uint::<256, 4>::from(n)
+                        .try_into()
+                        .map_err(|_| TransactionError::InvalidType("Invalid nonce".to_string()))
+                })
+                .transpose()?,
             chain_id: Some(tx.chain_id),
+            max_fee_per_gas: tx
+                .max_fee_per_gas
+                .map(|mfpg| {
+                    Uint::<256, 4>::from(mfpg).try_into().map_err(|_| {
+                        TransactionError::InvalidType("Invalid max fee per gas".to_string())
+                    })
+                })
+                .transpose()?,
+            max_priority_fee_per_gas: tx
+                .max_priority_fee_per_gas
+                .map(|mpfpg| {
+                    Uint::<256, 4>::from(mpfpg).try_into().map_err(|_| {
+                        TransactionError::InvalidType(
+                            "Invalid max priority fee per gas".to_string(),
+                        )
+                    })
+                })
+                .transpose()?,
             ..Default::default()
         })
     }
@@ -640,7 +656,7 @@ mod tests {
             data: Some("0x".to_string()),
             nonce: Some(1),
             chain_id: 1,
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             hash: None,
             signature: None,
             speed: None,
@@ -978,7 +994,7 @@ mod tests {
             data: Some("0x".to_string()),
             nonce: Some(1),
             chain_id: 1,
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             hash: None,
             signature: None,
             speed: None,
@@ -1018,7 +1034,7 @@ mod tests {
             data: Some("0x".to_string()),
             nonce: Some(1),
             chain_id: 1,
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             hash: None,
             signature: None,
             speed: None,

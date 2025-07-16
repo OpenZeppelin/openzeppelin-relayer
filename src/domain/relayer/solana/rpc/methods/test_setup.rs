@@ -1,8 +1,9 @@
 //! Test setup for solana rpc methods
 use solana_sdk::{
     hash::Hash, message::Message, pubkey::Pubkey, signature::Keypair, signer::Signer,
-    system_instruction, transaction::Transaction,
+    transaction::Transaction,
 };
+use solana_system_interface::instruction;
 use spl_associated_token_account::get_associated_token_address;
 use std::str::FromStr;
 
@@ -31,7 +32,7 @@ pub fn setup_test_context() -> (
     let payer = Keypair::new();
     let source = Keypair::new();
     let recipient = Pubkey::new_unique();
-    let ix = system_instruction::transfer(&source.pubkey(), &recipient, 1000);
+    let ix = instruction::transfer(&source.pubkey(), &recipient, 1000);
     let message = Message::new(&[ix], Some(&payer.pubkey()));
     let transaction = Transaction::new_unsigned(message);
     // Create test relayer

@@ -248,7 +248,7 @@ mod tests {
             data: Some("0x0123".to_string()),
             nonce: Some(1),
             chain_id: 10,
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             hash: None,
             signature: None,
             speed: None,

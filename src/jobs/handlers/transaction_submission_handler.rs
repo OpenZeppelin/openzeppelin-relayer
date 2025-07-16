@@ -13,13 +13,13 @@ use log::info;
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, JobProducer, TransactionCommand, TransactionSend},
-    models::AppState,
+    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
+    models::DefaultAppState,
 };
 
 pub async fn transaction_submission_handler(
     job: Job<TransactionSend>,
-    state: Data<ThinData<AppState<JobProducer>>>,
+    state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
     info!("handling transaction submission: {:?}", job.data);
@@ -36,7 +36,7 @@ pub async fn transaction_submission_handler(
 
 async fn handle_request(
     status_request: TransactionSend,
-    state: Data<ThinData<AppState<JobProducer>>>,
+    state: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
     let relayer_transaction =
         get_relayer_transaction(status_request.relayer_id.clone(), &state).await?;
