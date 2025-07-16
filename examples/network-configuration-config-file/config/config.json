@@ -57,6 +57,19 @@
       "average_blocktime_ms": 12000,
       "is_testnet": true,
       "tags": ["ethereum", "testnet"]
+    },
+    {
+      "from": "sepolia",
+      "type": "evm",
+      "network": "sepolia-custom",
+      "required_confirmations": 3,
+      "rpc_urls": [
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://ethereum-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "chain_id": 343434324, 
+      "tags": ["ethereum", "testnet", "custom"]
     }
   ],
   "plugins": []

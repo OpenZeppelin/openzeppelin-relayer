@@ -5,7 +5,7 @@ services:
       context: ../../
       dockerfile: Dockerfile.development
     ports:
-      - 8081:8080/tcp
+      - 8080:8080/tcp
     secrets:
       - api_key
       - webhook_signing_key
@@ -30,7 +30,7 @@ services:
   redis:
     image: redis:bookworm
     ports:
-      - 6380:6379/tcp
+      - 6379:6379/tcp
     security_opt:
       - no-new-privileges
     volumes:
