@@ -60,6 +60,9 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`evm-turnkey-signer`](./examples/evm-turnkey-signer/) | Using Turnkey Signer for EVM secure signing |
 | [`solana-turnkey-signer`](./examples/solana-turnkey-signer/) | Using Turnkey Signer for Solana secure signing |
 | [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/) | Using Google Cloud KMS Signer for Solana secure signing |
+| [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file |
+| [`network-configuration-json-file`](./examples/network-configuration-json-file/) | Using Custom network configuration via json file |
+
 
 
 Each example includes:
