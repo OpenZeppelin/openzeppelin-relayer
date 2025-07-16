@@ -240,9 +240,7 @@
         "https://api.aurorascan.dev/api",
         "https://aurorascan.dev"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": [],
       "is_testnet": false,
       "network": "aurora",
       "required_confirmations": 1,
@@ -261,9 +259,7 @@
         "https://testnet.aurorascan.dev/api",
         "https://testnet.aurorascan.dev"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": [],
       "is_testnet": true,
       "network": "aurora-testnet",
       "required_confirmations": 1,
