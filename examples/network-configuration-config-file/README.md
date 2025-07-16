@@ -1,11 +1,10 @@
-# OpenZeppelin Relayer - Network Direct Configuration Example
+# OpenZeppelin Relayer - Network Configuration - Config File Example
 
 This example demonstrates how to configure networks **directly within the main config.json file** instead of using separate network files. This approach is useful for simple setups or when you want to keep all configuration in a single file.
 
 ## Key Features Demonstrated
 
-- **Direct Network Configuration**: Networks are defined directly in the `networks` array within `config.json`
-- **Multiple Network Types**: Shows both EVM (Sepolia) and Stellar (Testnet) network configurations
+- **Config file Network Configuration**: Networks are defined directly in the `networks` array within `config.json`
 
 ## Configuration Structure
 
@@ -22,11 +21,6 @@ In this example, networks are defined directly in the main `config.json` file:
       "network": "sepolia",
       "chain_id": 11155111,
       // ... other network settings
-    },
-    {
-      "type": "stellar",
-      "network": "testnet",
-      // ... other network settings
     }
   ]
 }
@@ -42,12 +36,6 @@ In this example, networks are defined directly in the main `config.json` file:
 - **Features**: Supports EIP-1559 fee market
 - **Multiple RPC URLs**: For redundancy and reliability
 - **Explorer Integration**: Etherscan API and web interface
-
-#### Stellar Network (Testnet)
-
-- **Network Type**: `stellar`
-- **Network Passphrase**: Test SDF Network passphrase
-- **Explorer Integration**: Stellar Expert testnet explorer
 
 ## Getting Started
 
@@ -101,7 +89,7 @@ Update the `url` field in the notifications section of `config/config.json`. For
 Start the service with Docker Compose:
 
 ```bash
-docker compose -f examples/network-direct-config/docker-compose.yaml up
+docker compose -f examples/network-configuration-config-file/docker-compose.yaml up
 ```
 
 The service will be available at `http://localhost:8080/api/v1`
@@ -132,4 +120,4 @@ curl -X GET http://localhost:8080/api/v1/relayers \
 
 ## See Also
 
-- [Network Inheritance Example](../network-inheritance/README.md) - Shows how to use network inheritance
+- [Network Configuration Inheritance Example](../network-configuration-inheritance/README.md) - Shows how to use network inheritance.

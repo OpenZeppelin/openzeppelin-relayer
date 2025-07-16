@@ -29,7 +29,7 @@
     {
       "id": "notification-example",
       "type": "webhook",
-      "url": "",
+      "url": "https://webhook.site/f5076c2c-1776-4d42-8480-04b1813236c5",
       "signing_key": {
         "type": "env",
         "value": "WEBHOOK_SIGNING_KEY"
@@ -78,32 +78,9 @@
         "https://ethereum-sepolia-rpc.publicnode.com",
         "https://ethereum-sepolia-public.nodies.app"
       ],
+      "symbol": "ETH",
+      "chain_id": 343434324, 
       "tags": ["ethereum", "testnet", "custom"]
-    },
-    {
-      "type": "stellar",
-      "network": "stellar-base",
-      "rpc_urls": [
-        "https://soroban-testnet.stellar.org"
-      ],
-      "explorer_urls": [
-        "https://stellar.expert/explorer/testnet"
-      ],
-      "passphrase": "Test SDF Network ; September 2015",
-      "average_blocktime_ms": 5000,
-      "is_testnet": true,
-      "tags": ["stellar", "testnet"]
-    },
-    {
-      "from": "stellar-base",
-      "type": "stellar",
-      "network": "stellar-custom",
-      "rpc_urls": [
-        "https://horizon-testnet.stellar.org",
-        "https://soroban-testnet.stellar.org"
-      ],
-      "average_blocktime_ms": 4500,
-      "tags": ["stellar", "testnet", "custom"]
     }
   ],
   "plugins": []

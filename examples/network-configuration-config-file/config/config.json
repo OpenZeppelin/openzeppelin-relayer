@@ -11,22 +11,13 @@
       "policies": {
         "min_balance": 0
       }
-    },
-    {
-      "id": "stellar-testnet-direct",
-      "name": "Stellar Testnet Direct Config",
-      "network": "testnet",
-      "paused": false,
-      "notification_id": "notification-example",
-      "signer_id": "local-signer",
-      "network_type": "stellar"
     }
   ],
   "notifications": [
     {
       "id": "notification-example",
       "type": "webhook",
-      "url": "",
+      "url": "https://webhook.site/f5076c2c-1776-4d42-8480-04b1813236c5",
       "signing_key": {
         "type": "env",
         "value": "WEBHOOK_SIGNING_KEY"
@@ -66,15 +57,6 @@
       "average_blocktime_ms": 12000,
       "is_testnet": true,
       "tags": ["ethereum", "testnet"]
-    },
-    {
-      "type": "stellar",
-      "network": "testnet",
-      "rpc_urls": ["https://soroban-testnet.stellar.org"],
-      "explorer_urls": ["https://stellar.expert/explorer/testnet"],
-      "average_blocktime_ms": 5000,
-      "is_testnet": true,
-      "passphrase": "Test SDF Network ; September 2015"
     }
   ],
   "plugins": []

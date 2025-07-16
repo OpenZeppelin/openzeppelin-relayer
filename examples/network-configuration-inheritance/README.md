@@ -1,4 +1,4 @@
-# OpenZeppelin Relayer - Network Inheritance Example
+# OpenZeppelin Relayer - Network Configuration - Inheritance Example
 
 This example demonstrates how to use **network inheritance** to create network configurations that inherit from base networks. This approach reduces duplication and makes it easier to manage multiple related networks.
 
@@ -40,6 +40,7 @@ Network inheritance allows you to:
       "type": "evm",
       "network": "sepolia-custom",
       "required_confirmations": 3,     // Overrides parent value
+      "chain_id": 34343443,      // Overrides parent value
       "rpc_urls": ["https://custom-rpc.example.com"],  // Overrides parent value
       "tags": ["ethereum", "testnet", "custom"]        // Overrides parent value
     }
@@ -89,7 +90,7 @@ Create a new signer keystore:
 ```bash
 cargo run --example create_key -- \
   --password <DEFINE_YOUR_PASSWORD> \
-  --output-dir examples/network-inheritance/config/keys \
+  --output-dir examples/network-configuration-inheritance/config/keys \
   --filename local-signer.json
 ```
 
@@ -98,7 +99,7 @@ cargo run --example create_key -- \
 Create the environment file:
 
 ```bash
-cp examples/basic-example/.env.example examples/network-inheritance/.env
+cp examples/basic-example/.env.example examples/network-configuration-inheritance/.env
 ```
 
 Update the `.env` file with your configuration:
@@ -117,7 +118,7 @@ Update the `url` field in the notifications section of `config/config.json`. For
 Start the service with Docker Compose:
 
 ```bash
-docker compose -f examples/network-inheritance/docker-compose.yaml up
+docker compose -f examples/network-configuration-inheritance/docker-compose.yaml up
 ```
 
 The service will be available at `http://localhost:8081/api/v1` (note the different port to avoid conflicts).
@@ -170,4 +171,4 @@ When `sepolia-custom` inherits from `sepolia-base`, it receives:
 
 ## See Also
 
-- [Network Direct Configuration Example](../network-direct-config/README.md) - Shows direct network configuration
+- [Network Configuration Example](../network-configuration-config-file/README.md) - Shows usage of network configuration via config file.
