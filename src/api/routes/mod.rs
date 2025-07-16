@@ -12,11 +12,11 @@
 pub mod docs;
 pub mod health;
 pub mod metrics;
-pub mod networks;
-pub mod notifications;
+pub mod network;
+pub mod notification;
 pub mod plugin;
 pub mod relayer;
-pub mod signers;
+pub mod signer;
 
 use actix_web::web;
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
@@ -24,6 +24,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .configure(relayer::init)
         .configure(plugin::init)
         .configure(metrics::init)
-        .configure(notifications::init)
-        .configure(signers::init);
+        .configure(notification::init)
+        .configure(signer::init);
 }

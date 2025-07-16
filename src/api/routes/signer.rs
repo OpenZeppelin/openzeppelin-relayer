@@ -3,7 +3,7 @@
 //! The routes are integrated with the Actix-web framework and interact with the signer controller.
 
 use crate::{
-    api::controllers::signers,
+    api::controllers::signer,
     models::{DefaultAppState, PaginationQuery, SignerCreateRequest, SignerUpdateRequest},
 };
 use actix_web::{delete, get, patch, post, web, Responder};
@@ -14,7 +14,7 @@ async fn list_signers(
     query: web::Query<PaginationQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    signers::list_signers(query.into_inner(), data).await
+    signer::list_signers(query.into_inner(), data).await
 }
 
 /// Retrieves details of a specific signer by ID.
@@ -23,7 +23,7 @@ async fn get_signer(
     signer_id: web::Path<String>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    signers::get_signer(signer_id.into_inner(), data).await
+    signer::get_signer(signer_id.into_inner(), data).await
 }
 
 /// Creates a new signer.
@@ -32,7 +32,7 @@ async fn create_signer(
     request: web::Json<SignerCreateRequest>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    signers::create_signer(request.into_inner(), data).await
+    signer::create_signer(request.into_inner(), data).await
 }
 
 /// Updates an existing signer.
@@ -42,7 +42,7 @@ async fn update_signer(
     request: web::Json<SignerUpdateRequest>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    signers::update_signer(signer_id.into_inner(), request.into_inner(), data).await
+    signer::update_signer(signer_id.into_inner(), request.into_inner(), data).await
 }
 
 /// Deletes a signer by ID.
@@ -51,7 +51,7 @@ async fn delete_signer(
     signer_id: web::Path<String>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    signers::delete_signer(signer_id.into_inner(), data).await
+    signer::delete_signer(signer_id.into_inner(), data).await
 }
 
 /// Configures the signer routes.

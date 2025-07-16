@@ -9,7 +9,7 @@
 //! * `notifications` - Notification management endpoints  
 //! * `signers` - Signer management endpoints
 
-pub mod notifications;
+pub mod notification;
 pub mod plugin;
 pub mod relayer;
-pub mod signers;
+pub mod signer;
