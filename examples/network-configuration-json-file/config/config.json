@@ -17,7 +17,7 @@
     {
       "id": "notification-example",
       "type": "webhook",
-      "url": "https://webhook.site/f5076c2c-1776-4d42-8480-04b1813236c5",
+      "url": "",
       "signing_key": {
         "type": "env",
         "value": "WEBHOOK_SIGNING_KEY"
