@@ -37,7 +37,7 @@ use crate::{
     },
     models::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
-        TransactionRepoModel,
+        TransactionRepoModel, VaultCloudSignerConfig, VaultSignerConfig,
     },
     services::{GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
 };
@@ -138,10 +138,9 @@ impl SolanaSignerFactory {
         signer_model: &SignerRepoModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
         let signer = match &signer_model.config {
-            SignerConfig::Local(_)
-            | SignerConfig::Test(_)
-            | SignerConfig::Vault(_)
-            | SignerConfig::VaultCloud(_) => SolanaSigner::Local(LocalSigner::new(signer_model)?),
+            SignerConfig::Local(_) | SignerConfig::Vault(_) | SignerConfig::VaultCloud(_) => {
+                SolanaSigner::Local(LocalSigner::new(signer_model)?)
+            }
             SignerConfig::VaultTransit(vault_transit_signer_config) => {
                 let vault_service = VaultService::new(VaultConfig {
                     address: vault_transit_signer_config.address.clone(),
@@ -234,7 +233,7 @@ mod solana_signer_factory_tests {
     fn test_create_solana_signer_test() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
             }),
         };
@@ -251,8 +250,13 @@ mod solana_signer_factory_tests {
     fn test_create_solana_signer_vault() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Vault(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::Vault(VaultSignerConfig {
+                address: "https://vault.test.com".to_string(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: crate::models::SecretString::new("test-role-id"),
+                secret_id: crate::models::SecretString::new("test-secret-id"),
+                key_name: "test-key".to_string(),
+                mount_point: Some("secret".to_string()),
             }),
         };
 
@@ -268,8 +272,13 @@ mod solana_signer_factory_tests {
     fn test_create_solana_signer_vault_cloud() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::VaultCloud(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                client_id: "test-client-id".to_string(),
+                client_secret: crate::models::SecretString::new("test-client-secret"),
+                org_id: "test-org-id".to_string(),
+                project_id: "test-project-id".to_string(),
+                app_name: "test-app".to_string(),
+                key_name: "test-key".to_string(),
             }),
         };
 
@@ -380,7 +389,7 @@ mod solana_signer_factory_tests {
     async fn test_address_solana_signer_test() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
             }),
         };
@@ -397,8 +406,13 @@ mod solana_signer_factory_tests {
     async fn test_address_solana_signer_vault() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Vault(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::Vault(VaultSignerConfig {
+                address: "https://vault.test.com".to_string(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: crate::models::SecretString::new("test-role-id"),
+                secret_id: crate::models::SecretString::new("test-secret-id"),
+                key_name: "test-key".to_string(),
+                mount_point: Some("secret".to_string()),
             }),
         };
 
@@ -414,8 +428,13 @@ mod solana_signer_factory_tests {
     async fn test_address_solana_signer_vault_cloud() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::VaultCloud(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                client_id: "test-client-id".to_string(),
+                client_secret: crate::models::SecretString::new("test-client-secret"),
+                org_id: "test-org-id".to_string(),
+                project_id: "test-project-id".to_string(),
+                app_name: "test-app".to_string(),
+                key_name: "test-key".to_string(),
             }),
         };
 
@@ -531,7 +550,7 @@ mod solana_signer_factory_tests {
     async fn test_sign_solana_signer_test() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
             }),
         };
@@ -547,8 +566,13 @@ mod solana_signer_factory_tests {
     async fn test_sign_solana_signer_vault() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Vault(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::Vault(VaultSignerConfig {
+                address: "https://vault.test.com".to_string(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: crate::models::SecretString::new("test-role-id"),
+                secret_id: crate::models::SecretString::new("test-secret-id"),
+                key_name: "test-key".to_string(),
+                mount_point: Some("secret".to_string()),
             }),
         };
 
@@ -563,8 +587,13 @@ mod solana_signer_factory_tests {
     async fn test_sign_solana_signer_vault_cloud() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::VaultCloud(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                client_id: "test-client-id".to_string(),
+                client_secret: crate::models::SecretString::new("test-client-secret"),
+                org_id: "test-org-id".to_string(),
+                project_id: "test-project-id".to_string(),
+                app_name: "test-app".to_string(),
+                key_name: "test-key".to_string(),
             }),
         };
 
@@ -580,8 +609,13 @@ mod solana_signer_factory_tests {
     async fn test_sign_transaction_not_implemented() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::VaultCloud(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                client_id: "test-client-id".to_string(),
+                client_secret: crate::models::SecretString::new("test-client-secret"),
+                org_id: "test-org-id".to_string(),
+                project_id: "test-project-id".to_string(),
+                app_name: "test-app".to_string(),
+                key_name: "test-key".to_string(),
             }),
         };
 

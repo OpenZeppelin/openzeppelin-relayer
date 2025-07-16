@@ -59,7 +59,7 @@ pub mod mockutils {
         let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
         SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig { raw_key }),
+            config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         }
     }
 

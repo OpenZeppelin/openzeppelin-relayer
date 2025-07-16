@@ -6,6 +6,8 @@
 //!
 //! * `/health` - Health check endpoints
 //! * `/relayers` - Relayer management endpoints
+//! * `/notifications` - Notification management endpoints
+//! * `/signers` - Signer management endpoints
 
 pub mod docs;
 pub mod health;
@@ -22,5 +24,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .configure(relayer::init)
         .configure(plugin::init)
         .configure(metrics::init)
-        .configure(notifications::init);
+        .configure(notifications::init)
+        .configure(signers::init);
 }

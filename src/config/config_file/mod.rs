@@ -23,7 +23,10 @@
 //! to initialize the application components.
 use crate::{
     config::ConfigFileError,
-    models::{NotificationConfig, NotificationConfigs},
+    models::{
+        signer::{SignerFileConfig, SignersFileConfig},
+        NotificationConfig, NotificationConfigs,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -33,9 +36,6 @@ use std::{
 
 mod relayer;
 pub use relayer::*;
-
-mod signer;
-pub use signer::*;
 
 mod plugin;
 pub use plugin::*;
@@ -128,21 +128,6 @@ impl Config {
                         relayer.signer_id, relayer.id
                     ))
                 })?;
-
-            if let SignerFileConfigEnum::Test(_) = signer_config.config {
-                // ensure that only testnets are used with test signers
-                let network = networks
-                    .get_network(relayer.network_type, &relayer.network)
-                    .ok_or_else(|| ConfigFileError::InvalidNetwork {
-                        network_type: format!("{:?}", relayer.network_type).to_lowercase(),
-                        name: relayer.network.clone(),
-                    })?;
-                if !network.is_testnet() {
-                    return Err(ConfigFileError::TestSigner(
-                        "Test signer type cannot be used on production networks".to_string(),
-                    ));
-                }
-            }
         }
 
         Ok(())
@@ -226,7 +211,10 @@ pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{NotificationType, PlainOrEnvValue, SecretString};
+    use crate::models::{
+        signer::{LocalSignerFileConfig, SignerFileConfig, SignerFileConfigEnum},
+        NotificationType, PlainOrEnvValue, SecretString,
+    };
     use std::path::Path;
 
     use super::*;
@@ -244,21 +232,15 @@ mod tests {
                 notification_id: Some("test-1".to_string()),
                 custom_rpc_urls: None,
             }],
-            signers: vec![
-                SignerFileConfig {
-                    id: "test-1".to_string(),
-                    config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                        path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
-                        passphrase: PlainOrEnvValue::Plain {
-                            value: SecretString::new("test"),
-                        },
-                    }),
-                },
-                SignerFileConfig {
-                    id: "test-type".to_string(),
-                    config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
-                },
-            ],
+            signers: vec![SignerFileConfig {
+                id: "test-1".to_string(),
+                config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                    passphrase: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test"),
+                    },
+                }),
+            }],
             notifications: vec![NotificationConfig {
                 id: "test-1".to_string(),
                 r#type: NotificationType::Webhook,
@@ -1445,7 +1427,12 @@ mod tests {
             relayers: vec![],
             signers: vec![SignerFileConfig {
                 id: "test-signer".to_string(),
-                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+                config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                    path: "test-path".to_string(),
+                    passphrase: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test-passphrase"),
+                    },
+                }),
             }],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![NetworkFileConfig::Evm(EvmNetworkConfig {

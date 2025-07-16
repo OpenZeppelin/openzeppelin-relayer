@@ -35,7 +35,7 @@ use crate::{
     },
     models::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
-        TransactionRepoModel,
+        TransactionRepoModel, VaultCloudSignerConfig, VaultSignerConfig,
     },
     services::{
         turnkey::TurnkeyService, AwsKmsService, GoogleCloudKmsService, TurnkeyServiceTrait,
@@ -129,10 +129,9 @@ impl EvmSignerFactory {
         signer_model: SignerRepoModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match signer_model.config {
-            SignerConfig::Local(_)
-            | SignerConfig::Test(_)
-            | SignerConfig::Vault(_)
-            | SignerConfig::VaultCloud(_) => EvmSigner::Local(LocalSigner::new(&signer_model)?),
+            SignerConfig::Local(_) | SignerConfig::Vault(_) | SignerConfig::VaultCloud(_) => {
+                EvmSigner::Local(LocalSigner::new(&signer_model)?)
+            }
             SignerConfig::AwsKms(ref config) => {
                 let aws_service = AwsKmsService::new(config.clone()).await.map_err(|e| {
                     SignerFactoryError::CreationFailed(format!("AWS KMS service error: {}", e))
@@ -211,7 +210,7 @@ mod tests {
     async fn test_create_evm_signer_test() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
             }),
         };
@@ -227,8 +226,13 @@ mod tests {
     async fn test_create_evm_signer_vault() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Vault(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::Vault(VaultSignerConfig {
+                address: "https://vault.test.com".to_string(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: crate::models::SecretString::new("test-role-id"),
+                secret_id: crate::models::SecretString::new("test-secret-id"),
+                key_name: "test-key".to_string(),
+                mount_point: Some("secret".to_string()),
             }),
         };
 
@@ -243,8 +247,13 @@ mod tests {
     async fn test_create_evm_signer_vault_cloud() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::VaultCloud(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                client_id: "test-client-id".to_string(),
+                client_secret: crate::models::SecretString::new("test-client-secret"),
+                org_id: "test-org-id".to_string(),
+                project_id: "test-project-id".to_string(),
+                app_name: "test-app".to_string(),
+                key_name: "test-key".to_string(),
             }),
         };
 
@@ -340,7 +349,7 @@ mod tests {
     async fn test_address_evm_signer_test() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
             }),
         };
@@ -357,8 +366,13 @@ mod tests {
     async fn test_address_evm_signer_vault() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Vault(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::Vault(VaultSignerConfig {
+                address: "https://vault.test.com".to_string(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: crate::models::SecretString::new("test-role-id"),
+                secret_id: crate::models::SecretString::new("test-secret-id"),
+                key_name: "test-key".to_string(),
+                mount_point: Some("secret".to_string()),
             }),
         };
 
@@ -374,8 +388,13 @@ mod tests {
     async fn test_address_evm_signer_vault_cloud() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::VaultCloud(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                client_id: "test-client-id".to_string(),
+                client_secret: crate::models::SecretString::new("test-client-secret"),
+                org_id: "test-org-id".to_string(),
+                project_id: "test-project-id".to_string(),
+                app_name: "test-app".to_string(),
+                key_name: "test-key".to_string(),
             }),
         };
 
@@ -565,8 +584,13 @@ mod tests {
     async fn test_sign_data_with_vault_signer() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Vault(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::Vault(VaultSignerConfig {
+                address: "https://vault.test.com".to_string(),
+                namespace: Some("test-namespace".to_string()),
+                role_id: crate::models::SecretString::new("test-role-id"),
+                secret_id: crate::models::SecretString::new("test-secret-id"),
+                key_name: "test-key".to_string(),
+                mount_point: Some("secret".to_string()),
             }),
         };
 
@@ -595,8 +619,13 @@ mod tests {
     async fn test_sign_transaction_with_vault_cloud_signer() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::VaultCloud(LocalSignerConfig {
-                raw_key: test_key_bytes(),
+            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                client_id: "test-client-id".to_string(),
+                client_secret: crate::models::SecretString::new("test-client-secret"),
+                org_id: "test-org-id".to_string(),
+                project_id: "test-project-id".to_string(),
+                app_name: "test-app".to_string(),
+                key_name: "test-key".to_string(),
             }),
         };
 
@@ -649,15 +678,27 @@ mod tests {
             .unwrap(),
             EvmSignerFactory::create_evm_signer(SignerRepoModel {
                 id: "vault".to_string(),
-                config: SignerConfig::Vault(LocalSignerConfig {
-                    raw_key: key_bytes.clone(),
+                config: SignerConfig::Vault(VaultSignerConfig {
+                    address: "https://vault.test.com".to_string(),
+                    namespace: Some("test-namespace".to_string()),
+                    role_id: crate::models::SecretString::new("test-role-id"),
+                    secret_id: crate::models::SecretString::new("test-secret-id"),
+                    key_name: "test-key".to_string(),
+                    mount_point: Some("secret".to_string()),
                 }),
             })
             .await
             .unwrap(),
             EvmSignerFactory::create_evm_signer(SignerRepoModel {
                 id: "vault_cloud".to_string(),
-                config: SignerConfig::VaultCloud(LocalSignerConfig { raw_key: key_bytes }),
+                config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                    client_id: "test-client-id".to_string(),
+                    client_secret: crate::models::SecretString::new("test-client-secret"),
+                    org_id: "test-org-id".to_string(),
+                    project_id: "test-project-id".to_string(),
+                    app_name: "test-app".to_string(),
+                    key_name: "test-key".to_string(),
+                }),
             })
             .await
             .unwrap(),
@@ -697,14 +738,24 @@ mod tests {
         let vault_configs = vec![
             (
                 "vault",
-                SignerConfig::Vault(LocalSignerConfig {
-                    raw_key: test_key_bytes(),
+                SignerConfig::Vault(VaultSignerConfig {
+                    address: "https://vault.test.com".to_string(),
+                    namespace: Some("test-namespace".to_string()),
+                    role_id: crate::models::SecretString::new("test-role-id"),
+                    secret_id: crate::models::SecretString::new("test-secret-id"),
+                    key_name: "test-key".to_string(),
+                    mount_point: Some("secret".to_string()),
                 }),
             ),
             (
                 "vault_cloud",
-                SignerConfig::VaultCloud(LocalSignerConfig {
-                    raw_key: test_key_bytes(),
+                SignerConfig::VaultCloud(VaultCloudSignerConfig {
+                    client_id: "test-client-id".to_string(),
+                    client_secret: crate::models::SecretString::new("test-client-secret"),
+                    org_id: "test-org-id".to_string(),
+                    project_id: "test-project-id".to_string(),
+                    app_name: "test-app".to_string(),
+                    key_name: "test-key".to_string(),
                 }),
             ),
         ];

@@ -43,10 +43,9 @@ pub struct StellarSignerFactory;
 impl StellarSignerFactory {
     pub fn create_stellar_signer(m: &SignerRepoModel) -> Result<StellarSigner, SignerFactoryError> {
         let signer = match m.config {
-            SignerConfig::Local(_)
-            | SignerConfig::Test(_)
-            | SignerConfig::Vault(_)
-            | SignerConfig::VaultCloud(_) => StellarSigner::Local(LocalSigner::new(m)?),
+            SignerConfig::Local(_) | SignerConfig::Vault(_) | SignerConfig::VaultCloud(_) => {
+                StellarSigner::Local(LocalSigner::new(m)?)
+            }
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()))
             }
