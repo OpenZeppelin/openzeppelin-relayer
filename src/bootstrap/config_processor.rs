@@ -511,13 +511,16 @@ mod tests {
     use crate::{
         config::{
             AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
-            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, PluginFileConfig,
-            RelayerFileConfig, ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
+            KmsKeyConfig, NetworksFileConfig, PluginFileConfig, RelayerFileConfig,
+            ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
             VaultTransitSignerFileConfig,
         },
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
-        models::{AppState, NetworkType, PlainOrEnvValue, SecretString},
+        models::{
+            AppState, NetworkType, NotificationConfig, NotificationType, PlainOrEnvValue,
+            SecretString,
+        },
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -832,15 +835,15 @@ mod tests {
     async fn test_process_notifications() -> Result<()> {
         // Create test notifications
         let notifications = vec![
-            NotificationFileConfig {
+            NotificationConfig {
                 id: "test-notification-1".to_string(),
-                r#type: crate::config::NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://hooks.slack.com/test1".to_string(),
                 signing_key: None,
             },
-            NotificationFileConfig {
+            NotificationConfig {
                 id: "test-notification-2".to_string(),
-                r#type: crate::config::NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://hooks.slack.com/test2".to_string(),
                 signing_key: None,
             },
@@ -1230,9 +1233,9 @@ mod tests {
             custom_rpc_urls: None,
         }];
 
-        let notifications = vec![NotificationFileConfig {
+        let notifications = vec![NotificationConfig {
             id: "test-notification-1".to_string(),
-            r#type: crate::config::NotificationFileConfigType::Webhook,
+            r#type: NotificationType::Webhook,
             url: "https://hooks.slack.com/test1".to_string(),
             signing_key: None,
         }];
@@ -1581,9 +1584,9 @@ mod tests {
                 notification_id: None,
                 custom_rpc_urls: None,
             }],
-            notifications: vec![NotificationFileConfig {
+            notifications: vec![NotificationConfig {
                 id: "test-notification-1".to_string(),
-                r#type: crate::config::NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://hooks.slack.com/test1".to_string(),
                 signing_key: None,
             }],

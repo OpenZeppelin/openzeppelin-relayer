@@ -7,5 +7,6 @@
 //! * `relayer` - Transaction and relayer management endpoints
 //! * `plugin` - Plugin endpoints
 
+pub mod notifications;
 pub mod plugin;
 pub mod relayer;
