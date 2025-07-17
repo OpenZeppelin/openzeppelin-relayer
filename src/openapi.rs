@@ -1,6 +1,6 @@
 use crate::{
     api::routes::{
-        docs::{plugin_docs, relayer_docs},
+        docs::{notification_docs, plugin_docs, relayer_docs},
         health, metrics,
     },
     domain, models,
@@ -63,7 +63,12 @@ impl Modify for SecurityAddon {
         metrics::list_metrics,
         metrics::metric_detail,
         metrics::scrape_metrics,
-        plugin_docs::doc_call_plugin
+        plugin_docs::doc_call_plugin,
+        notification_docs::doc_list_notifications,
+        notification_docs::doc_get_notification,
+        notification_docs::doc_create_notification,
+        notification_docs::doc_update_notification,
+        notification_docs::doc_delete_notification,
     ),
     components(schemas(
         models::RelayerResponse,
