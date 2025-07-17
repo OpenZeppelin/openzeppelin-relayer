@@ -116,7 +116,7 @@
         "eip1559"
       ],
       "is_testnet": true,
-      "network": "moonbase-alpha",
+      "network": "moonbase",
       "required_confirmations": 1,
       "rpc_urls": [
         "https://rpc.testnet.moonbeam.network"
