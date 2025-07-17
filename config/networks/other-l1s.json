@@ -264,6 +264,40 @@
         "deprecated"
       ],
       "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 5000,
+      "chain_id": 122,
+      "explorer_urls": [
+        "https://explorer.fuse.io"
+      ],
+      "features": [],
+      "is_testnet": false,
+      "network": "fuse",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc.fuse.io"
+      ],
+      "symbol": "FUSE",
+      "tags": [],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 5000,
+      "chain_id": 123,
+      "explorer_urls": [
+        "https://explorer.fusespark.io"
+      ],
+      "features": [],
+      "is_testnet": true,
+      "network": "fuse-spark",
+      "required_confirmations": 1,
+      "rpc_urls": [
+        " https://rpc.fusespark.io"
+      ],
+      "symbol": "SPARK",
+      "tags": [],
+      "type": "evm"
     }
   ]
 }
