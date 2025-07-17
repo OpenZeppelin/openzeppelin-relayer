@@ -347,7 +347,7 @@ mod tests {
         let data = api_response.data.unwrap();
         assert_eq!(data.len(), 2);
 
-        // Check that both signers are present (order not guaranteed)
+        // Check that both signers are present
         let ids: Vec<&String> = data.iter().map(|s| &s.id).collect();
         assert!(ids.contains(&&"test-1".to_string()));
         assert!(ids.contains(&&"test-2".to_string()));

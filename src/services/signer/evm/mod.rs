@@ -13,7 +13,7 @@
 //!   ├── LocalSigner (encrypted JSON keystore)
 //!   ├── AwsKmsSigner (AWS KMS backend)
 //!   ├── Vault (HashiCorp Vault backend)
-//!   ├── VaultCould (HashiCorp Vault backend)
+//!   ├── VaultCloud (HashiCorp Vault backend)
 //!   └── Turnkey (Turnkey backend)
 //! ```
 mod aws_kms_signer;

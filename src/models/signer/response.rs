@@ -20,14 +20,14 @@ use utoipa::ToSchema;
 #[serde(rename_all = "lowercase")]
 pub enum SignerConfigResponse {
     #[serde(rename = "plain")]
-    Plain { has_key: bool },
+    Plain {},
     Vault {
         address: String,
         namespace: Option<String>,
         key_name: String,
         mount_point: Option<String>,
-        has_role_id: bool,
-        has_secret_id: bool,
+        // role_id: Option<String>,
+        // secret_id: Option<String>,
     },
     #[serde(rename = "vault_cloud")]
     VaultCloud {
@@ -36,7 +36,7 @@ pub enum SignerConfigResponse {
         project_id: String,
         app_name: String,
         key_name: String,
-        has_client_secret: bool,
+        // client_secret: Option<String>,
     },
     #[serde(rename = "vault_transit")]
     VaultTransit {
@@ -45,8 +45,8 @@ pub enum SignerConfigResponse {
         namespace: Option<String>,
         pubkey: String,
         mount_point: Option<String>,
-        has_role_id: bool,
-        has_secret_id: bool,
+        // role_id: Option<String>,
+        // secret_id: Option<String>,
     },
     #[serde(rename = "aws_kms")]
     AwsKms {
@@ -58,7 +58,7 @@ pub enum SignerConfigResponse {
         organization_id: String,
         private_key_id: String,
         public_key: String,
-        has_api_private_key: bool,
+        // api_private_key: Option<String>,
     },
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms {
@@ -76,9 +76,9 @@ pub struct GoogleCloudKmsSignerServiceAccountResponseConfig {
     pub auth_provider_x509_cert_url: String,
     pub client_x509_cert_url: String,
     pub universe_domain: String,
-    pub has_private_key: bool,
-    pub has_private_key_id: bool,
-    pub has_client_email: bool,
+    // pub private_key: Option<String>,
+    // pub private_key_id: Option<String>,
+    // pub client_email: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
@@ -92,16 +92,12 @@ pub struct GoogleCloudKmsSignerKeyResponseConfig {
 impl From<SignerConfig> for SignerConfigResponse {
     fn from(config: SignerConfig) -> Self {
         match config {
-            SignerConfig::Local(c) => SignerConfigResponse::Plain {
-                has_key: !c.raw_key.is_empty(),
-            },
+            SignerConfig::Local(_) => SignerConfigResponse::Plain {},
             SignerConfig::Vault(c) => SignerConfigResponse::Vault {
                 address: c.address,
                 namespace: c.namespace,
                 key_name: c.key_name,
                 mount_point: c.mount_point,
-                has_role_id: !c.role_id.is_empty(),
-                has_secret_id: !c.secret_id.is_empty(),
             },
             SignerConfig::VaultCloud(c) => SignerConfigResponse::VaultCloud {
                 client_id: c.client_id,
@@ -109,7 +105,6 @@ impl From<SignerConfig> for SignerConfigResponse {
                 project_id: c.project_id,
                 app_name: c.app_name,
                 key_name: c.key_name,
-                has_client_secret: !c.client_secret.is_empty(),
             },
             SignerConfig::VaultTransit(c) => SignerConfigResponse::VaultTransit {
                 key_name: c.key_name,
@@ -117,8 +112,6 @@ impl From<SignerConfig> for SignerConfigResponse {
                 namespace: c.namespace,
                 pubkey: c.pubkey,
                 mount_point: c.mount_point,
-                has_role_id: !c.role_id.is_empty(),
-                has_secret_id: !c.secret_id.is_empty(),
             },
             SignerConfig::AwsKms(c) => SignerConfigResponse::AwsKms {
                 region: c.region,
@@ -129,7 +122,6 @@ impl From<SignerConfig> for SignerConfigResponse {
                 organization_id: c.organization_id,
                 private_key_id: c.private_key_id,
                 public_key: c.public_key,
-                has_api_private_key: !c.api_private_key.is_empty(),
             },
             SignerConfig::GoogleCloudKms(c) => SignerConfigResponse::GoogleCloudKms {
                 service_account: GoogleCloudKmsSignerServiceAccountResponseConfig {
@@ -140,9 +132,6 @@ impl From<SignerConfig> for SignerConfigResponse {
                     auth_provider_x509_cert_url: c.service_account.auth_provider_x509_cert_url,
                     client_x509_cert_url: c.service_account.client_x509_cert_url,
                     universe_domain: c.service_account.universe_domain,
-                    has_private_key: !c.service_account.private_key.is_empty(),
-                    has_private_key_id: !c.service_account.private_key_id.is_empty(),
-                    has_client_email: !c.service_account.client_email.is_empty(),
                 },
                 key: GoogleCloudKmsSignerKeyResponseConfig {
                     location: c.key.location,
@@ -207,10 +196,7 @@ mod tests {
 
         assert_eq!(response.id, "test-signer");
         assert_eq!(response.r#type, SignerType::Local);
-        assert_eq!(
-            response.config,
-            SignerConfigResponse::Plain { has_key: true }
-        );
+        assert_eq!(response.config, SignerConfigResponse::Plain {});
     }
 
     #[test]
@@ -248,7 +234,7 @@ mod tests {
                     raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
                 }),
                 SignerType::Local,
-                SignerConfigResponse::Plain { has_key: true },
+                SignerConfigResponse::Plain {},
             ),
             (
                 SignerConfig::AwsKms(crate::models::AwsKmsSignerConfig {
@@ -284,13 +270,12 @@ mod tests {
         let response = SignerResponse {
             id: "test-signer".to_string(),
             r#type: SignerType::Local,
-            config: SignerConfigResponse::Plain { has_key: true },
+            config: SignerConfigResponse::Plain {},
         };
 
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"id\":\"test-signer\""));
         assert!(json.contains("\"type\":\"local\""));
-        assert!(json.contains("\"has_key\":true")); // Updated to match actual format
     }
 
     #[test]
@@ -314,5 +299,13 @@ mod tests {
                 key_id: "test-key-id".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_response_deserialization_all_types() {
+        let json = r#"{"id": "test", "type": "google_cloud_kms", "config": {"service_account": {"project_id": "proj", "client_id": "cid", "auth_uri": "auth", "token_uri": "token", "auth_provider_x509_cert_url": "cert", "client_x509_cert_url": "client_cert", "universe_domain": "domain"}, "key": {"location": "loc", "key_ring_id": "ring", "key_id": "key", "key_version": 1}}}"#;
+
+        let response: SignerResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.r#type, SignerType::GoogleCloudKms);
     }
 }

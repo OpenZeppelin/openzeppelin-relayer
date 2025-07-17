@@ -91,7 +91,7 @@ impl Config {
         self.validate_notifications()?;
         self.validate_plugins()?;
 
-        self.validate_relayer_signer_refs(&self.networks)?;
+        self.validate_relayer_signer_refs()?;
         self.validate_relayer_notification_refs()?;
 
         Ok(())
@@ -105,10 +105,7 @@ impl Config {
     /// # Errors
     /// Returns a `ConfigFileError::InvalidReference` if a relayer references a non-existent signer.
     /// Returns a `ConfigFileError::TestSigner` if a test signer is used on a production network.
-    fn validate_relayer_signer_refs(
-        &self,
-        networks: &NetworksFileConfig,
-    ) -> Result<(), ConfigFileError> {
+    fn validate_relayer_signer_refs(&self) -> Result<(), ConfigFileError> {
         let signer_ids: HashSet<_> = self.signers.iter().map(|s| &s.id).collect();
 
         for relayer in &self.relayers {
@@ -118,16 +115,6 @@ impl Config {
                     relayer.id, relayer.signer_id
                 )));
             }
-            let signer_config = self
-                .signers
-                .iter()
-                .find(|s| s.id == relayer.signer_id)
-                .ok_or_else(|| {
-                    ConfigFileError::InternalError(format!(
-                        "Signer '{}' not found for relayer '{}'",
-                        relayer.signer_id, relayer.id
-                    ))
-                })?;
         }
 
         Ok(())

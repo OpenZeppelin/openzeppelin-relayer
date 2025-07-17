@@ -290,7 +290,7 @@ impl SignerConfig {
         }
     }
 
-    /// Get local signer config if this is a local or test signer
+    /// Get local signer config if this is a local signer
     pub fn get_local(&self) -> Option<&LocalSignerConfig> {
         match self {
             Self::Local(config) => Some(config),
@@ -649,5 +649,281 @@ mod tests {
         } else {
             panic!("Expected BadRequest error");
         }
+    }
+
+    #[test]
+    fn test_valid_vault_signer() {
+        let config = SignerConfig::Vault(VaultSignerConfig {
+            address: "https://vault.example.com".to_string(),
+            namespace: Some("test".to_string()),
+            role_id: SecretString::new("role-id"),
+            secret_id: SecretString::new("secret-id"),
+            key_name: "test-key".to_string(),
+            mount_point: None,
+        });
+
+        let signer = Signer::new("vault-signer".to_string(), config);
+        assert!(signer.validate().is_ok());
+        assert_eq!(signer.signer_type(), SignerType::Vault);
+    }
+
+    #[test]
+    fn test_invalid_vault_signer_url() {
+        let config = SignerConfig::Vault(VaultSignerConfig {
+            address: "not-a-url".to_string(),
+            namespace: Some("test".to_string()),
+            role_id: SecretString::new("role-id"),
+            secret_id: SecretString::new("secret-id"),
+            key_name: "test-key".to_string(),
+            mount_point: None,
+        });
+
+        let signer = Signer::new("vault-signer".to_string(), config);
+        let result = signer.validate();
+        assert!(result.is_err());
+        if let Err(SignerValidationError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("Address must be a valid URL"));
+        } else {
+            panic!("Expected InvalidConfig error for invalid URL");
+        }
+    }
+
+    #[test]
+    fn test_valid_vault_cloud_signer() {
+        let config = SignerConfig::VaultCloud(VaultCloudSignerConfig {
+            client_id: "client-id".to_string(),
+            client_secret: SecretString::new("secret"),
+            org_id: "org-id".to_string(),
+            project_id: "project-id".to_string(),
+            app_name: "app".to_string(),
+            key_name: "key".to_string(),
+        });
+
+        let signer = Signer::new("vault-cloud-signer".to_string(), config);
+        assert!(signer.validate().is_ok());
+        assert_eq!(signer.signer_type(), SignerType::VaultCloud);
+    }
+
+    #[test]
+    fn test_invalid_vault_cloud_empty_fields() {
+        let config = SignerConfig::VaultCloud(VaultCloudSignerConfig {
+            client_id: "".to_string(), // Empty client ID
+            client_secret: SecretString::new("secret"),
+            org_id: "org-id".to_string(),
+            project_id: "project-id".to_string(),
+            app_name: "app".to_string(),
+            key_name: "key".to_string(),
+        });
+
+        let signer = Signer::new("vault-cloud-signer".to_string(), config);
+        let result = signer.validate();
+        assert!(result.is_err());
+        if let Err(SignerValidationError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("Client ID cannot be empty"));
+        } else {
+            panic!("Expected InvalidConfig error for empty client ID");
+        }
+    }
+
+    #[test]
+    fn test_valid_google_cloud_kms_signer() {
+        let config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new("private-key"),
+                private_key_id: SecretString::new("key-id"),
+                project_id: "project".to_string(),
+                client_email: SecretString::new("client@example.com"),
+                client_id: "client-id".to_string(),
+                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
+                    .to_string(),
+                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
+                    .to_string(),
+                universe_domain: "googleapis.com".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                location: "us-central1".to_string(),
+                key_ring_id: "test-ring".to_string(),
+                key_id: "test-key".to_string(),
+                key_version: 1,
+            },
+        });
+
+        let signer = Signer::new("gcp-kms-signer".to_string(), config);
+        assert!(signer.validate().is_ok());
+        assert_eq!(signer.signer_type(), SignerType::GoogleCloudKms);
+    }
+
+    #[test]
+    fn test_invalid_google_cloud_kms_urls() {
+        let config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new("private-key"),
+                private_key_id: SecretString::new("key-id"),
+                project_id: "project".to_string(),
+                client_email: SecretString::new("client@example.com"),
+                client_id: "client-id".to_string(),
+                auth_uri: "not-a-url".to_string(), // Invalid URL
+                token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
+                    .to_string(),
+                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
+                    .to_string(),
+                universe_domain: "googleapis.com".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                location: "us-central1".to_string(),
+                key_ring_id: "test-ring".to_string(),
+                key_id: "test-key".to_string(),
+                key_version: 1,
+            },
+        });
+
+        let signer = Signer::new("gcp-kms-signer".to_string(), config);
+        let result = signer.validate();
+        assert!(result.is_err());
+        if let Err(SignerValidationError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("Auth URI must be a valid URL"));
+        } else {
+            panic!("Expected InvalidConfig error for invalid URL");
+        }
+    }
+
+    #[test]
+    fn test_secret_string_validation() {
+        // Test empty secret
+        let result = validate_secret_string(&SecretString::new(""));
+        if let Err(e) = result {
+            assert_eq!(e.code, "empty_secret");
+        } else {
+            panic!("Expected validation error for empty secret");
+        }
+
+        // Test valid secret
+        let result = validate_secret_string(&SecretString::new("secret"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validation_error_formatting() {
+        // Create an invalid config to trigger multiple nested validation errors
+        let invalid_config = GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new(""), // Invalid: empty
+                private_key_id: SecretString::new("key-id"),
+                project_id: "project".to_string(),
+                client_email: SecretString::new("client@example.com"),
+                client_id: "".to_string(),         // Invalid: empty
+                auth_uri: "not-a-url".to_string(), // Invalid: not a URL
+                token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
+                    .to_string(),
+                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
+                    .to_string(),
+                universe_domain: "googleapis.com".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                location: "us-central1".to_string(),
+                key_ring_id: "".to_string(), // Invalid: empty
+                key_id: "test-key".to_string(),
+                key_version: 1,
+            },
+        };
+
+        let errors = invalid_config.validate().unwrap_err();
+
+        // Format the errors using the helper function
+        let formatted = format_validation_errors(&errors);
+
+        println!("formatted: {}", formatted);
+
+        // Check that messages from nested fields are correctly formatted
+        assert!(formatted.contains("client_id: Client ID cannot be empty"));
+        assert!(formatted.contains("private_key: Private key cannot be empty"));
+        assert!(formatted.contains("auth_uri: Auth URI must be a valid URL"));
+        assert!(formatted.contains("key_ring_id: Key ring ID cannot be empty"));
+    }
+
+    #[test]
+    fn test_config_type_getters() {
+        // Test Vault config getter
+        let vault_config = VaultSignerConfig {
+            address: "https://vault.example.com".to_string(),
+            namespace: None,
+            role_id: SecretString::new("role"),
+            secret_id: SecretString::new("secret"),
+            key_name: "key".to_string(),
+            mount_point: None,
+        };
+        let config = SignerConfig::Vault(vault_config);
+        assert!(config.get_vault().is_some());
+        assert!(config.get_vault_cloud().is_none());
+
+        // Test VaultCloud config getter
+        let vault_cloud_config = VaultCloudSignerConfig {
+            client_id: "client".to_string(),
+            client_secret: SecretString::new("secret"),
+            org_id: "org".to_string(),
+            project_id: "project".to_string(),
+            app_name: "app".to_string(),
+            key_name: "key".to_string(),
+        };
+        let config = SignerConfig::VaultCloud(vault_cloud_config);
+        assert!(config.get_vault_cloud().is_some());
+        assert!(config.get_vault_transit().is_none());
+
+        // Test VaultTransit config getter
+        let vault_transit_config = VaultTransitSignerConfig {
+            key_name: "key".to_string(),
+            address: "https://vault.example.com".to_string(),
+            namespace: None,
+            role_id: SecretString::new("role"),
+            secret_id: SecretString::new("secret"),
+            pubkey: "pubkey".to_string(),
+            mount_point: None,
+        };
+        let config = SignerConfig::VaultTransit(vault_transit_config);
+        assert!(config.get_vault_transit().is_some());
+        assert!(config.get_turnkey().is_none());
+
+        // Test Turnkey config getter
+        let turnkey_config = TurnkeySignerConfig {
+            api_public_key: "public".to_string(),
+            api_private_key: SecretString::new("private"),
+            organization_id: "org".to_string(),
+            private_key_id: "key-id".to_string(),
+            public_key: "pubkey".to_string(),
+        };
+        let config = SignerConfig::Turnkey(turnkey_config);
+        assert!(config.get_turnkey().is_some());
+        assert!(config.get_google_cloud_kms().is_none());
+
+        // Test Google Cloud KMS config getter
+        let gcp_config = GoogleCloudKmsSignerConfig {
+            service_account: GoogleCloudKmsSignerServiceAccountConfig {
+                private_key: SecretString::new("private-key"),
+                private_key_id: SecretString::new("key-id"),
+                project_id: "project".to_string(),
+                client_email: SecretString::new("client@example.com"),
+                client_id: "client-id".to_string(),
+                auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
+                    .to_string(),
+                client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test"
+                    .to_string(),
+                universe_domain: "googleapis.com".to_string(),
+            },
+            key: GoogleCloudKmsSignerKeyConfig {
+                location: "us-central1".to_string(),
+                key_ring_id: "test-ring".to_string(),
+                key_id: "test-key".to_string(),
+                key_version: 1,
+            },
+        };
+        let config = SignerConfig::GoogleCloudKms(gcp_config);
+        assert!(config.get_google_cloud_kms().is_some());
+        assert!(config.get_local().is_none());
     }
 }

@@ -523,4 +523,159 @@ mod tests {
         assert_eq!(signer.id, "local-signer");
         assert_eq!(signer.signer_type(), SignerType::Local);
     }
+
+    #[test]
+    fn test_valid_turnkey_create_request() {
+        let request = SignerCreateRequest {
+            id: Some("test-turnkey-signer".to_string()),
+            config: SignerConfigRequest::Turnkey {
+                config: TurnkeySignerRequestConfig {
+                    api_public_key: "test-public-key".to_string(),
+                    api_private_key: "test-private-key".to_string(),
+                    organization_id: "test-org".to_string(),
+                    private_key_id: "test-private-key-id".to_string(),
+                    public_key: "test-public-key".to_string(),
+                },
+            },
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_ok());
+
+        let signer = result.unwrap();
+        assert_eq!(signer.id, "test-turnkey-signer");
+        assert_eq!(signer.signer_type(), SignerType::Turnkey);
+
+        if let Some(turnkey_config) = signer.config.get_turnkey() {
+            assert_eq!(turnkey_config.api_public_key, "test-public-key");
+            assert_eq!(turnkey_config.organization_id, "test-org");
+        } else {
+            panic!("Expected Turnkey config");
+        }
+    }
+
+    #[test]
+    fn test_valid_vault_cloud_create_request() {
+        let request = SignerCreateRequest {
+            id: Some("test-vault-cloud-signer".to_string()),
+            config: SignerConfigRequest::VaultCloud {
+                config: VaultCloudSignerRequestConfig {
+                    client_id: "test-client-id".to_string(),
+                    client_secret: "test-client-secret".to_string(),
+                    org_id: "test-org".to_string(),
+                    project_id: "test-project".to_string(),
+                    app_name: "test-app".to_string(),
+                    key_name: "test-key".to_string(),
+                },
+            },
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_ok());
+
+        let signer = result.unwrap();
+        assert_eq!(signer.id, "test-vault-cloud-signer");
+        assert_eq!(signer.signer_type(), SignerType::VaultCloud);
+    }
+
+    #[test]
+    fn test_valid_vault_transit_create_request() {
+        let request = SignerCreateRequest {
+            id: Some("test-vault-transit-signer".to_string()),
+            config: SignerConfigRequest::VaultTransit {
+                config: VaultTransitSignerRequestConfig {
+                    key_name: "test-key".to_string(),
+                    address: "https://vault.example.com".to_string(),
+                    namespace: None,
+                    role_id: "test-role".to_string(),
+                    secret_id: "test-secret".to_string(),
+                    pubkey: "test-pubkey".to_string(),
+                    mount_point: None,
+                },
+            },
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_ok());
+
+        let signer = result.unwrap();
+        assert_eq!(signer.id, "test-vault-transit-signer");
+        assert_eq!(signer.signer_type(), SignerType::VaultTransit);
+    }
+
+    #[test]
+    fn test_valid_google_cloud_kms_create_request() {
+        let request = SignerCreateRequest {
+            id: Some("test-gcp-kms-signer".to_string()),
+            config: SignerConfigRequest::GoogleCloudKms {
+                config: GoogleCloudKmsSignerRequestConfig {
+                    service_account: GoogleCloudKmsSignerServiceAccountRequestConfig {
+                        private_key: "test-private-key".to_string(),
+                        private_key_id: "test-key-id".to_string(),
+                        project_id: "test-project".to_string(),
+                        client_email: "test@email.com".to_string(),
+                        client_id: "test-client-id".to_string(),
+                        auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                        token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
+                        client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/test%40test.iam.gserviceaccount.com".to_string(),
+                        universe_domain: "googleapis.com".to_string(),
+                    },
+                    key: GoogleCloudKmsSignerKeyRequestConfig {
+                        location: "global".to_string(),
+                        key_ring_id: "test-ring".to_string(),
+                        key_id: "test-key".to_string(),
+                        key_version: 1,
+                    },
+                },
+            },
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_ok());
+
+        let signer = result.unwrap();
+        assert_eq!(signer.id, "test-gcp-kms-signer");
+        assert_eq!(signer.signer_type(), SignerType::GoogleCloudKms);
+    }
+
+    #[test]
+    fn test_invalid_local_hex_key() {
+        let request = SignerCreateRequest {
+            id: Some("test-signer".to_string()),
+            config: SignerConfigRequest::Local {
+                config: PlainSignerRequestConfig {
+                    key: "invalid-hex".to_string(), // Invalid hex
+                },
+            },
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid hex key format"));
+        }
+    }
+
+    #[test]
+    fn test_invalid_turnkey_empty_key() {
+        let request = SignerCreateRequest {
+            id: Some("test-signer".to_string()),
+            config: SignerConfigRequest::Turnkey {
+                config: TurnkeySignerRequestConfig {
+                    api_public_key: "".to_string(), // Empty
+                    api_private_key: "test-private-key".to_string(),
+                    organization_id: "test-org".to_string(),
+                    private_key_id: "test-private-key-id".to_string(),
+                    public_key: "test-public-key".to_string(),
+                },
+            },
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("API public key cannot be empty"));
+        }
+    }
 }

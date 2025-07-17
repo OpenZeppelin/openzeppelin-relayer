@@ -384,24 +384,6 @@ mod solana_signer_factory_tests {
         assert_eq!(test_key_bytes_pubkey(), signer_address);
         assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
     }
-
-    #[tokio::test]
-    async fn test_address_solana_signer_test() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: test_key_bytes(),
-            }),
-        };
-
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-        let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().await.unwrap();
-
-        assert_eq!(test_key_bytes_pubkey(), signer_address);
-        assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
-    }
-
     #[tokio::test]
     async fn test_address_solana_signer_vault() {
         let signer_model = SignerRepoModel {

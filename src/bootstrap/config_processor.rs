@@ -1067,11 +1067,9 @@ mod tests {
         // Create test signers, relayers, and notifications
         let signers = vec![SignerFileConfig {
             id: "test-signer-1".to_string(),
-            config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                path: "test-path".to_string(),
-                passphrase: PlainOrEnvValue::Plain {
-                    value: SecretString::new("test-passphrase"),
-                },
+            config: SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {
+                region: "us-east-1".to_string(),
+                key_id: "test-key-id".to_string(),
             }),
         }];
 

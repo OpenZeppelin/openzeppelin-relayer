@@ -464,9 +464,8 @@ impl TryFrom<SignerFileConfig> for Signer {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::SecretString;
-
     use super::*;
+    use crate::models::SecretString;
 
     #[test]
     fn test_aws_kms_conversion() {
@@ -586,5 +585,83 @@ mod tests {
             configs.validate(),
             Err(ConfigFileError::DuplicateId(_))
         ));
+    }
+
+    #[test]
+    fn test_local_conversion_invalid_path() {
+        let config = LocalSignerFileConfig {
+            path: "non-existent-path".to_string(),
+            passphrase: PlainOrEnvValue::Plain {
+                value: SecretString::new("test-passphrase"),
+            },
+        };
+
+        let result = LocalSignerConfig::try_from(config);
+        assert!(result.is_err());
+        if let Err(ConfigFileError::FileNotFound(msg)) = result {
+            assert!(msg.contains("Signer file not found"));
+        } else {
+            panic!("Expected FileNotFound error");
+        }
+    }
+
+    #[test]
+    fn test_vault_conversion() {
+        let config = VaultSignerFileConfig {
+            address: "https://vault.example.com".to_string(),
+            namespace: Some("test-namespace".to_string()),
+            role_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("test-role"),
+            },
+            secret_id: PlainOrEnvValue::Plain {
+                value: SecretString::new("test-secret"),
+            },
+            key_name: "test-key".to_string(),
+            mount_point: Some("test-mount".to_string()),
+        };
+
+        let result = VaultSignerConfig::try_from(config);
+        assert!(result.is_ok());
+
+        let vault_config = result.unwrap();
+        assert_eq!(vault_config.address, "https://vault.example.com");
+        assert_eq!(vault_config.namespace, Some("test-namespace".to_string()));
+    }
+
+    #[test]
+    fn test_google_cloud_kms_conversion() {
+        let config = GoogleCloudKmsSignerFileConfig {
+            service_account: GoogleCloudKmsServiceAccountFileConfig {
+                project_id: "test-project".to_string(),
+                private_key_id: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-key-id"),
+                },
+                private_key: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test-private-key"),
+                },
+                client_email: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test@email.com"),
+                },
+                client_id: "test-client-id".to_string(),
+                auth_uri: google_cloud_default_auth_uri(),
+                token_uri: google_cloud_default_token_uri(),
+                auth_provider_x509_cert_url: google_cloud_default_auth_provider_x509_cert_url(),
+                client_x509_cert_url: google_cloud_default_client_x509_cert_url(),
+                universe_domain: google_cloud_default_universe_domain(),
+            },
+            key: GoogleCloudKmsKeyFileConfig {
+                location: google_cloud_default_location(),
+                key_ring_id: "test-ring".to_string(),
+                key_id: "test-key".to_string(),
+                key_version: google_cloud_default_key_version(),
+            },
+        };
+
+        let result = GoogleCloudKmsSignerConfig::try_from(config);
+        assert!(result.is_ok());
+
+        let gcp_config = result.unwrap();
+        assert_eq!(gcp_config.key.key_id, "test-key");
+        assert_eq!(gcp_config.service_account.project_id, "test-project");
     }
 }
