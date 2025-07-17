@@ -149,17 +149,8 @@ where
     pub async fn finalize_transaction_state(
         &self,
         tx_id: String,
-        new_status: TransactionStatus,
-        status_reason: Option<String>,
-        confirmed_at: Option<String>,
+        update_req: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let update_req = TransactionUpdateRequest {
-            status: Some(new_status),
-            status_reason,
-            confirmed_at,
-            ..Default::default()
-        };
-
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx_id, update_req)
@@ -398,13 +389,15 @@ mod tests {
 
         let handler = make_stellar_tx_handler(relayer, mocks);
 
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            status_reason: Some("Transaction confirmed".to_string()),
+            confirmed_at: Some("2023-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+
         let result = handler
-            .finalize_transaction_state(
-                "tx-1".to_string(),
-                TransactionStatus::Confirmed,
-                Some("Transaction confirmed".to_string()),
-                Some("2023-01-01T00:00:00Z".to_string()),
-            )
+            .finalize_transaction_state("tx-1".to_string(), update_request)
             .await;
 
         assert!(result.is_ok());

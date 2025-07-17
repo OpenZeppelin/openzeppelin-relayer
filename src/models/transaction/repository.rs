@@ -446,6 +446,18 @@ impl StellarTransactionData {
         self
     }
 
+    /// Updates the Stellar transaction data with the actual fee charged by the network.
+    ///
+    /// # Arguments
+    /// * `fee` - The actual fee charged in stroops
+    ///
+    /// # Returns
+    /// The updated `StellarTransactionData` with the specified fee
+    pub fn with_fee(mut self, fee: u32) -> Self {
+        self.fee = Some(fee);
+        self
+    }
+
     /// Builds an unsigned envelope from any transaction input.
     ///
     /// Returns an envelope without signatures, suitable for simulation and fee calculation.

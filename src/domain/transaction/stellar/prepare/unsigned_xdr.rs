@@ -6,6 +6,7 @@ use log::info;
 use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
 
 use crate::{
+    constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{extract_operations, extract_source_account},
     models::{StellarTransactionData, StellarValidationError, TransactionError, TransactionInput},
     repositories::TransactionCounterTrait,
@@ -104,7 +105,15 @@ where
                     ))
                 })?
         }
-        None => stellar_data,
+        None => {
+            // For non-simulated transactions, ensure fee is set from the envelope
+            let fee = match &envelope {
+                TransactionEnvelope::TxV0(e) => e.tx.fee,
+                TransactionEnvelope::Tx(e) => e.tx.fee,
+                _ => STELLAR_DEFAULT_TRANSACTION_FEE,
+            };
+            stellar_data.with_fee(fee)
+        }
     };
 
     // Step 6: Sign the transaction
