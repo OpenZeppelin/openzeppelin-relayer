@@ -377,27 +377,6 @@ mod solana_signer_factory_tests {
         assert_eq!(test_key_bytes_pubkey(), signer_address);
         assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
     }
-    // #[tokio::test]
-    // async fn test_address_solana_signer_vault() {
-    //     let signer_model = SignerRepoModel {
-    //         id: "test".to_string(),
-    //         config: SignerConfig::Vault(VaultSignerConfig {
-    //             address: "https://vault.test.com".to_string(),
-    //             namespace: Some("test-namespace".to_string()),
-    //             role_id: crate::models::SecretString::new("test-role-id"),
-    //             secret_id: crate::models::SecretString::new("test-secret-id"),
-    //             key_name: "test-key".to_string(),
-    //             mount_point: Some("secret".to_string()),
-    //         }),
-    //     };
-
-    //     let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-    //     let signer_address = signer.address().await.unwrap();
-    //     let signer_pubkey = signer.pubkey().await.unwrap();
-
-    //     assert_eq!(test_key_bytes_pubkey(), signer_address);
-    //     assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
-    // }
 
     #[tokio::test]
     async fn test_address_solana_signer_vault_transit() {
@@ -514,25 +493,4 @@ mod solana_signer_factory_tests {
 
         assert!(signature.is_ok());
     }
-
-    // #[tokio::test]
-    // async fn test_sign_solana_signer_vault() {
-    //     let signer_model = SignerRepoModel {
-    //         id: "test".to_string(),
-    //         config: SignerConfig::Vault(VaultSignerConfig {
-    //             address: "https://vault.test.com".to_string(),
-    //             namespace: Some("test-namespace".to_string()),
-    //             role_id: crate::models::SecretString::new("test-role-id"),
-    //             secret_id: crate::models::SecretString::new("test-secret-id"),
-    //             key_name: "test-key".to_string(),
-    //             mount_point: Some("secret".to_string()),
-    //         }),
-    //     };
-
-    //     let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-    //     let message = b"test message";
-    //     let signature = signer.sign(message).await;
-
-    //     assert!(signature.is_ok());
-    // }
 }

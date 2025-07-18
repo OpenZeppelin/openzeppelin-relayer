@@ -100,6 +100,15 @@ impl<'de> Deserialize<'de> for LocalSignerConfig {
 }
 
 /// AWS KMS signer configuration
+/// The configuration supports:
+/// - AWS Region (aws_region) - important for region-specific key
+/// - KMS Key identification (key_id)
+///
+/// The AWS authentication is carried out
+/// through recommended credential providers as outlined in
+/// https://docs.aws.amazon.com/sdk-for-rust/latest/dg/credproviders.html
+/// Currently only EVM signing is supported since, as of June 2025,
+/// AWS does not support ed25519 scheme
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AwsKmsSignerConfig {
     #[validate(length(min = 1, message = "Region cannot be empty"))]

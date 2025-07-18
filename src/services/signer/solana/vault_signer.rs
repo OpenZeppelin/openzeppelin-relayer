@@ -70,7 +70,7 @@ where
     namespace: Option<String>,
     mount_point: Option<String>,
     vault_service: T,
-    /// Cached local signer, wrapped in Arc<Mutex<>> for thread-safe lazy initialization
+    /// Cached local signer
     local_signer: Arc<Mutex<Option<Arc<LocalSigner>>>>,
 }
 

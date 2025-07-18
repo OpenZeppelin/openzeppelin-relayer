@@ -241,7 +241,7 @@ mod tests {
         };
         network_repo.create(test_network).await.unwrap();
 
-        // Create test signer first
+        // Create local signer first
         let test_signer = crate::models::SignerRepoModel {
             id: "test-signer".to_string(),
             config: crate::models::SignerConfig::Local(crate::models::LocalSignerConfig {
