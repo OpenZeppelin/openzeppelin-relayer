@@ -58,7 +58,7 @@ impl Hash for VaultCacheKey {
 static VAULT_SIGNER_CACHE: Lazy<RwLock<HashMap<VaultCacheKey, Arc<LocalSigner>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-/// EVM signer that fetches private keys from HashiCorp Vault KV2 engine
+/// Solana signer that fetches private keys from HashiCorp Vault KV2 engine
 #[derive(Clone)]
 pub struct VaultSigner<T>
 where
