@@ -23,8 +23,8 @@
 use crate::{
     constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
-        stellar::next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse,
-        SignTypedDataRequest,
+        transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
+        SignDataResponse, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -180,17 +180,13 @@ where
 
     async fn sync_sequence(&self) -> Result<(), RelayerError> {
         info!(
-            "Fetching sequence for relayer: {} ({})",
+            "Syncing sequence for relayer: {} ({})",
             self.relayer.id, self.relayer.address
         );
 
-        let account_entry = self
-            .provider
-            .get_account(&self.relayer.address)
+        let next = fetch_next_sequence_from_chain(&self.provider, &self.relayer.address)
             .await
-            .map_err(|e| RelayerError::ProviderError(format!("Failed to fetch account: {}", e)))?;
-
-        let next = next_sequence_u64(account_entry.seq_num.0)?;
+            .map_err(RelayerError::ProviderError)?;
 
         info!(
             "Setting next sequence {} for relayer {}",
