@@ -75,7 +75,7 @@ secrets = { version = "1.2"}
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
-ed25519-dalek = "2.1"
+ed25519-dalek = "2.2"
 stellar-strkey = "0.0.13"
 soroban-rs = "0.2.5"
 p256 = { version = "0.13.2" }
