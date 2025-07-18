@@ -12,7 +12,7 @@
 
 use crate::{
     models::{
-        signer::signer::{
+        signer::{
             AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
             GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
             SignerValidationError, TurnkeySignerConfig, VaultSignerConfig,
@@ -413,7 +413,7 @@ impl SignerRepoModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::signer::signer::{LocalSignerConfig, SignerConfig};
+    use crate::models::signer::{LocalSignerConfig, SignerConfig};
     use secrets::SecretVec;
 
     #[test]
@@ -422,10 +422,8 @@ mod tests {
             raw_key: SecretVec::new(32, |v| v.fill(1)),
         };
 
-        let core = crate::models::signer::signer::Signer::new(
-            "test-id".to_string(),
-            SignerConfig::Local(config),
-        );
+        let core =
+            crate::models::signer::Signer::new("test-id".to_string(), SignerConfig::Local(config));
 
         let repo_model = SignerRepoModel::from(core);
         assert_eq!(repo_model.id, "test-id");
@@ -434,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_to_core_signer() {
-        use crate::models::signer::signer::AwsKmsSignerConfig;
+        use crate::models::signer::AwsKmsSignerConfig;
 
         let domain_config = AwsKmsSignerConfig {
             region: Some("us-east-1".to_string()),
@@ -450,7 +448,7 @@ mod tests {
         assert_eq!(core.id, "test-id");
         assert_eq!(
             core.signer_type(),
-            crate::models::signer::signer::SignerType::AwsKms
+            crate::models::signer::SignerType::AwsKms
         );
     }
 

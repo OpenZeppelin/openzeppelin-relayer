@@ -142,7 +142,11 @@ impl EvmSignerFactory {
                 );
                 let vault_service = VaultService::new(vault_config);
 
-                EvmSigner::Vault(VaultSigner::new(config.clone(), vault_service))
+                EvmSigner::Vault(VaultSigner::new(
+                    signer_model.id.clone(),
+                    config.clone(),
+                    vault_service,
+                ))
             }
             SignerConfig::AwsKms(config) => {
                 let aws_service = AwsKmsService::new(config.clone()).await.map_err(|e| {

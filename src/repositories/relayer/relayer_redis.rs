@@ -467,7 +467,7 @@ impl RelayerRepository for RedisRelayerRepository {
                 relayer
                     .notification_id
                     .as_ref()
-                    .map_or(false, |id| id == notification_id)
+                    .is_some_and(|id| id == notification_id)
             })
             .collect();
 
@@ -1031,10 +1031,7 @@ mod tests {
         let result = repo.list_by_signer_id(&signer2_id).await.unwrap();
         assert_eq!(result.len(), 1);
 
-        let result = repo
-            .list_by_signer_id(&"nonexistent".to_string())
-            .await
-            .unwrap();
+        let result = repo.list_by_signer_id("nonexistent").await.unwrap();
         assert_eq!(result.len(), 0);
     }
 

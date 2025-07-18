@@ -1,26 +1,25 @@
-//! # Vault Signer for EVM
+//! # Vault Signer for Solana
 //!
-//! This module provides an EVM signer implementation that uses HashiCorp Vault's KV2 engine
+//! This module provides an Solana signer implementation that uses HashiCorp Vault's KV2 engine
 //! for secure key management. The private key is fetched once during signer creation and cached
 //! in memory for optimal performance.
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use secrets::SecretVec;
+use solana_sdk::signature::Signature;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use zeroize::Zeroizing;
 
+use crate::services::SolanaSignTrait;
 use crate::{
-    domain::{
-        SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
-        SignTypedDataRequest,
-    },
+    domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
     models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, VaultSignerConfig},
     services::{
-        signer::evm::{local_signer::LocalSigner, DataSignerTrait},
+        signer::solana::local_signer::LocalSigner,
         vault::{VaultService, VaultServiceTrait},
         Signer,
     },
@@ -217,18 +216,15 @@ impl<T: VaultServiceTrait + Clone> Signer for VaultSigner<T> {
 }
 
 #[async_trait]
-impl<T: VaultServiceTrait + Clone> DataSignerTrait for VaultSigner<T> {
-    async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
+impl<T: VaultServiceTrait + Clone> SolanaSignTrait for VaultSigner<T> {
+    async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         let signer = self.get_local_signer().await?;
-        signer.sign_data(request).await
+        signer.sign(message).await
     }
 
-    async fn sign_typed_data(
-        &self,
-        request: SignTypedDataRequest,
-    ) -> Result<SignDataResponse, SignerError> {
+    async fn pubkey(&self) -> Result<Address, SignerError> {
         let signer = self.get_local_signer().await?;
-        signer.sign_typed_data(request).await
+        signer.pubkey().await
     }
 }
 

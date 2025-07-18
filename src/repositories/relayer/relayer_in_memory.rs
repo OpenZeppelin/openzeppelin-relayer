@@ -92,7 +92,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
                 relayer
                     .notification_id
                     .as_ref()
-                    .map_or(false, |id| id == notification_id)
+                    .is_some_and(|id| id == notification_id)
             })
             .cloned()
             .collect();

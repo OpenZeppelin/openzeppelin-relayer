@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_signer_response_from_domain_model() {
-        use crate::models::signer::signer::{AwsKmsSignerConfig, SignerConfig};
+        use crate::models::signer::{AwsKmsSignerConfig, SignerConfig};
 
         let aws_config = AwsKmsSignerConfig {
             key_id: "test-key-id".to_string(),

@@ -256,7 +256,7 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
         };
 
         // Validate the configuration using domain model validation
-        domain_config.validate().map_err(|e| ApiError::from(e))?;
+        domain_config.validate().map_err(ApiError::from)?;
 
         Ok(domain_config)
     }
@@ -287,7 +287,7 @@ impl TryFrom<SignerCreateRequest> for Signer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::signer::signer::SignerType;
+    use crate::models::signer::SignerType;
 
     #[test]
     fn test_valid_aws_kms_create_request() {

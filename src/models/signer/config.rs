@@ -11,7 +11,7 @@
 
 use crate::{
     config::ConfigFileError,
-    models::signer::signer::{
+    models::signer::{
         AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
         GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
         TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
@@ -418,13 +418,13 @@ impl TryFrom<SignerFileConfig> for Signer {
 
         // Validate using domain model validation logic
         signer.validate().map_err(|e| match e {
-            crate::models::signer::signer::SignerValidationError::EmptyId => {
+            crate::models::signer::SignerValidationError::EmptyId => {
                 ConfigFileError::MissingField("signer id".into())
             }
-            crate::models::signer::signer::SignerValidationError::InvalidIdFormat => {
+            crate::models::signer::SignerValidationError::InvalidIdFormat => {
                 ConfigFileError::InvalidFormat("Invalid signer ID format".into())
             }
-            crate::models::signer::signer::SignerValidationError::InvalidConfig(msg) => {
+            crate::models::signer::SignerValidationError::InvalidConfig(msg) => {
                 ConfigFileError::InvalidFormat(format!("Invalid signer configuration: {}", msg))
             }
         })?;
