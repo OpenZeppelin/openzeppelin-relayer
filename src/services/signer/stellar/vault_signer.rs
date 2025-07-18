@@ -257,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn test_valid_private_key() {
         let config = create_test_config(Some(uuid::Uuid::new_v4().to_string().as_str()));
-        let mock_private_key = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
+        let mock_private_key = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"; // noboost
         let mock_service = MockVaultService::new(mock_private_key.to_string());
         let signer_id = uuid::Uuid::new_v4().to_string();
         let signer = VaultSigner::new(signer_id, config, mock_service);
@@ -341,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn test_caching_behavior() {
         let config = create_test_config(Some(uuid::Uuid::new_v4().to_string().as_str()));
-        let mock_private_key = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
+        let mock_private_key = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"; // noboost
         let mock_service = MockVaultService::new(mock_private_key.to_string());
         let signer_id = uuid::Uuid::new_v4().to_string();
         let signer = VaultSigner::new(signer_id, config, mock_service);
