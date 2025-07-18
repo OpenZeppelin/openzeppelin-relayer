@@ -241,6 +241,15 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         tx_data: &EvmTransactionData,
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError> {
+        // Check if network lacks mempool (e.g., Arbitrum) - skip bump and use current prices
+        if self.gas_price_service.network().lacks_mempool() {
+            let mut price_params = self.get_transaction_price_params(tx_data, relayer).await?;
+
+            // For mempool-less networks, we don't need to bump - just use current market prices
+            price_params.is_min_bumped = Some(true);
+            return Ok(price_params);
+        }
+
         let network_gas_prices = self.gas_price_service.get_prices_from_json_rpc().await?;
         let relayer_gas_price_cap = relayer
             .policies
@@ -717,6 +726,26 @@ mod tests {
         }
     }
 
+    fn create_mock_no_mempool_network(name: &str) -> EvmNetwork {
+        let average_blocktime_ms = match name {
+            "arbitrum" => 1000, // 1 second for arbitrum
+            _ => 12000,         // 12 seconds for others
+        };
+
+        EvmNetwork {
+            network: name.to_string(),
+            rpc_urls: vec!["https://rpc.example.com".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms,
+            is_testnet: true,
+            tags: vec!["no-mempool".to_string()], // This makes lacks_mempool() return true
+            chain_id: 42161,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()], // This makes it use EIP1559 pricing
+            symbol: "ETH".to_string(),
+        }
+    }
+
     fn create_mock_relayer() -> RelayerRepoModel {
         RelayerRepoModel {
             id: "test-relayer".to_string(),
@@ -1134,6 +1163,11 @@ mod tests {
             .expect_get_prices_from_json_rpc()
             .times(1)
             .returning(|| Box::pin(async { Ok(GasPrices::default()) }));
+
+        // Add the missing expectation for network
+        mock_service
+            .expect_network()
+            .return_const(create_mock_evm_network("mainnet"));
 
         let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
         let relayer = create_mock_relayer();
@@ -1640,5 +1674,231 @@ mod tests {
                 result
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_calculate_bumped_gas_price_no_mempool_network_eip1559() {
+        let mut mock_service = MockEvmGasPriceServiceTrait::new();
+
+        // Mock the network to return a no-mempool network
+        mock_service
+            .expect_network()
+            .return_const(create_mock_no_mempool_network("arbitrum"));
+
+        // Mock get_prices_from_json_rpc for get_transaction_price_params call
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 1_000_000_000,
+                average: 2_000_000_000,
+                fast: 3_000_000_000,
+                fastest: 4_000_000_000,
+            },
+            max_priority_fee_per_gas: SpeedPrices {
+                safe_low: 1_000_000_000,
+                average: 2_000_000_000,
+                fast: 3_000_000_000,
+                fastest: 4_000_000_000,
+            },
+            base_fee_per_gas: 50_000_000_000,
+        };
+
+        mock_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+
+        // Also mock get_legacy_prices_from_json_rpc in case it's called
+        mock_service
+            .expect_get_legacy_prices_from_json_rpc()
+            .returning(|| {
+                Box::pin(async {
+                    Ok(SpeedPrices {
+                        safe_low: 1_000_000_000,
+                        average: 2_000_000_000,
+                        fast: 3_000_000_000,
+                        fastest: 4_000_000_000,
+                    })
+                })
+            });
+
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
+        let mut relayer = create_mock_relayer();
+
+        // Ensure relayer policy allows EIP1559 pricing
+        relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            eip1559_pricing: Some(true),
+            ..Default::default()
+        });
+
+        // Create a speed-based transaction that would normally be bumped
+        let tx_data = EvmTransactionData {
+            speed: Some(Speed::Fast),
+            gas_limit: Some(21000),
+            value: U256::from(1_000_000_000_000_000_000u128), // 1 ETH
+            ..Default::default()
+        };
+
+        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+
+        assert!(result.is_ok());
+        let price_params = result.unwrap();
+
+        // For no-mempool networks, should use current market prices, not bump
+        assert_eq!(price_params.is_min_bumped, Some(true));
+
+        // The no-mempool network should use the current market prices instead of bumping
+        // For this test, what matters is that it returns is_min_bumped: true
+        // The exact pricing method depends on the network configuration
+
+        // Verify that some pricing was returned (either EIP1559 or legacy)
+        assert!(
+            price_params.max_priority_fee_per_gas.is_some() || price_params.gas_price.is_some()
+        );
+
+        // Should have calculated total cost
+        assert!(price_params.total_cost > U256::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_bumped_gas_price_no_mempool_network_legacy() {
+        let mut mock_service = MockEvmGasPriceServiceTrait::new();
+
+        // Mock the network to return a no-mempool network
+        mock_service
+            .expect_network()
+            .return_const(create_mock_no_mempool_network("arbitrum"));
+
+        // Mock get_legacy_prices_from_json_rpc for get_transaction_price_params call
+        let mock_legacy_prices = SpeedPrices {
+            safe_low: 10_000_000_000,
+            average: 12_000_000_000,
+            fast: 14_000_000_000,
+            fastest: 18_000_000_000,
+        };
+
+        mock_service
+            .expect_get_legacy_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_legacy_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
+        let mut relayer = create_mock_relayer();
+
+        // Force legacy pricing
+        relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            eip1559_pricing: Some(false),
+            ..Default::default()
+        });
+
+        // Create a speed-based transaction that would normally be bumped
+        let tx_data = EvmTransactionData {
+            speed: Some(Speed::Fast),
+            gas_limit: Some(21000),
+            value: U256::from(1_000_000_000_000_000_000u128), // 1 ETH
+            ..Default::default()
+        };
+
+        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+
+        assert!(result.is_ok());
+        let price_params = result.unwrap();
+
+        // For no-mempool networks, should use current market prices, not bump
+        assert_eq!(price_params.is_min_bumped, Some(true));
+
+        // Should return current market prices - verify that some pricing was returned
+        assert!(
+            price_params.max_priority_fee_per_gas.is_some() || price_params.gas_price.is_some()
+        );
+
+        // Should have calculated total cost
+        assert!(price_params.total_cost > U256::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_bumped_gas_price_no_mempool_vs_regular_network() {
+        // Test EIP1559 transaction on regular network (should bump)
+        let mut mock_service_regular = MockEvmGasPriceServiceTrait::new();
+
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices::default(),
+            max_priority_fee_per_gas: SpeedPrices {
+                safe_low: 1_000_000_000,
+                average: 2_000_000_000,
+                fast: 3_000_000_000,
+                fastest: 4_000_000_000,
+            },
+            base_fee_per_gas: 50_000_000_000,
+        };
+
+        mock_service_regular
+            .expect_network()
+            .return_const(create_mock_evm_network("mainnet"));
+
+        let mock_prices_clone = mock_prices.clone();
+        mock_service_regular
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices_clone.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+
+        let pc_regular =
+            PriceCalculator::new(mock_service_regular, NetworkExtraFeeCalculator::None);
+        let relayer = create_mock_relayer();
+
+        let tx_data = EvmTransactionData {
+            speed: Some(Speed::Fast),
+            ..Default::default()
+        };
+
+        let result_regular = pc_regular
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
+
+        // Regular network should return some pricing (either EIP1559 or legacy)
+        assert!(
+            result_regular.max_priority_fee_per_gas.is_some() || result_regular.gas_price.is_some()
+        );
+
+        // Test same transaction on no-mempool network (should not bump)
+        let mut mock_service_no_mempool = MockEvmGasPriceServiceTrait::new();
+
+        mock_service_no_mempool
+            .expect_network()
+            .return_const(create_mock_no_mempool_network("arbitrum"));
+
+        mock_service_no_mempool
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+
+        let pc_no_mempool =
+            PriceCalculator::new(mock_service_no_mempool, NetworkExtraFeeCalculator::None);
+
+        let result_no_mempool = pc_no_mempool
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
+
+        // No-mempool network should use current market prices
+        assert_eq!(result_no_mempool.is_min_bumped, Some(true));
+
+        // Both networks should return some pricing
+        assert!(
+            result_no_mempool.max_priority_fee_per_gas.is_some()
+                || result_no_mempool.gas_price.is_some()
+        );
+
+        // The key difference is that no-mempool networks should set is_min_bumped to true
+        // Regular networks may or may not set is_min_bumped depending on the actual implementation
+        assert_eq!(result_no_mempool.is_min_bumped, Some(true));
     }
 }
