@@ -288,7 +288,9 @@
       "explorer_urls": [
         "https://explorer.fuse.io"
       ],
-      "features": [],
+      "features": [
+        "eip1559"
+      ],
       "is_testnet": false,
       "network": "fuse",
       "required_confirmations": 1,
@@ -305,7 +307,9 @@
       "explorer_urls": [
         "https://explorer.fusespark.io"
       ],
-      "features": [],
+      "features": [
+        "eip1559"
+      ],
       "is_testnet": true,
       "network": "fuse-spark",
       "required_confirmations": 1,

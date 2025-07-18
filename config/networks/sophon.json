@@ -8,12 +8,9 @@
         "https://explorer.sophon.xyz/",
         "https://api-explorer.sophon.xyz/"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": false,
       "network": "sophon",
-      "required_confirmations": 1,
+      "required_confirmations": 6,
       "rpc_urls": [
         "https://rpc.sophon.xyz",
         "https://rpc-quicknode.sophon.xyz"
@@ -28,12 +25,9 @@
       "explorer_urls": [
         "https://testnet.sophscan.xyz/"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": true,
       "network": "sophon-testnet",
-      "required_confirmations": 1,
+      "required_confirmations": 6,
       "rpc_urls": [
         "https://rpc.testnet.sophon.xyz",
         "https://rpc-quicknode.testnet.sophon.xyz"

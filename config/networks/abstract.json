@@ -6,6 +6,9 @@
       "explorer_urls": [
         "https://abscan.org/"
       ],
+      "features": [
+        "eip1559"
+      ],
       "is_testnet": false,
       "network": "abstract",
       "required_confirmations": 1,
@@ -20,6 +23,9 @@
       "chain_id": 11124,
       "explorer_urls": [
         "https://sepolia.abscan.org/"
+      ],
+      "features": [
+        "eip1559"
       ],
       "is_testnet": true,
       "network": "abstract-sepolia",
