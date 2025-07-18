@@ -41,9 +41,7 @@
       "network": "arbitrum-sepolia",
       "required_confirmations": 1,
       "rpc_urls": [
-        "https://sepolia-rollup.arbitrum.io/rpc",
-        "https://arbitrum-sepolia.drpc.org",
-        "https://arbitrum-sepolia-rpc.publicnode.com"
+        "https://sepolia-rollup.arbitrum.io/rpc"
       ],
       "symbol": "ETH",
       "tags": [
