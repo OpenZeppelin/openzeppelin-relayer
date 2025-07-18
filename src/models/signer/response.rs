@@ -20,23 +20,13 @@ use utoipa::ToSchema;
 #[serde(rename_all = "lowercase")]
 pub enum SignerConfigResponse {
     #[serde(rename = "plain")]
-    Plain {},
     Vault {
         address: String,
         namespace: Option<String>,
         key_name: String,
         mount_point: Option<String>,
-        // role_id: Option<String>,
-        // secret_id: Option<String>,
-    },
-    #[serde(rename = "vault_cloud")]
-    VaultCloud {
-        client_id: String,
-        org_id: String,
-        project_id: String,
-        app_name: String,
-        key_name: String,
-        // client_secret: Option<String>,
+        // role_id: Option<String>, hidden from response due to security concerns
+        // secret_id: Option<String>, hidden from response due to security concerns
     },
     #[serde(rename = "vault_transit")]
     VaultTransit {
@@ -45,8 +35,8 @@ pub enum SignerConfigResponse {
         namespace: Option<String>,
         pubkey: String,
         mount_point: Option<String>,
-        // role_id: Option<String>,
-        // secret_id: Option<String>,
+        // role_id: Option<String>, hidden from response due to security concerns
+        // secret_id: Option<String>, hidden from response due to security concerns
     },
     #[serde(rename = "aws_kms")]
     AwsKms {
@@ -58,13 +48,14 @@ pub enum SignerConfigResponse {
         organization_id: String,
         private_key_id: String,
         public_key: String,
-        // api_private_key: Option<String>,
+        // api_private_key: Option<String>, hidden from response due to security concerns
     },
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms {
         service_account: GoogleCloudKmsSignerServiceAccountResponseConfig,
         key: GoogleCloudKmsSignerKeyResponseConfig,
     },
+    Plain {},
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
@@ -76,9 +67,9 @@ pub struct GoogleCloudKmsSignerServiceAccountResponseConfig {
     pub auth_provider_x509_cert_url: String,
     pub client_x509_cert_url: String,
     pub universe_domain: String,
-    // pub private_key: Option<String>,
-    // pub private_key_id: Option<String>,
-    // pub client_email: Option<String>,
+    // pub private_key: Option<String>, hidden from response due to security concerns
+    // pub private_key_id: Option<String>, hidden from response due to security concerns
+    // pub client_email: Option<String>, hidden from response due to security concerns
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
@@ -98,13 +89,6 @@ impl From<SignerConfig> for SignerConfigResponse {
                 namespace: c.namespace,
                 key_name: c.key_name,
                 mount_point: c.mount_point,
-            },
-            SignerConfig::VaultCloud(c) => SignerConfigResponse::VaultCloud {
-                client_id: c.client_id,
-                org_id: c.org_id,
-                project_id: c.project_id,
-                app_name: c.app_name,
-                key_name: c.key_name,
             },
             SignerConfig::VaultTransit(c) => SignerConfigResponse::VaultTransit {
                 key_name: c.key_name,

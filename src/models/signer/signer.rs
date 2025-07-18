@@ -112,26 +112,6 @@ pub struct VaultSignerConfig {
     pub mount_point: Option<String>,
 }
 
-/// Vault Cloud signer configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-pub struct VaultCloudSignerConfig {
-    #[validate(length(min = 1, message = "Client ID cannot be empty"))]
-    pub client_id: String,
-    #[validate(custom(
-        function = "validate_secret_string",
-        message = "Client secret cannot be empty"
-    ))]
-    pub client_secret: SecretString,
-    #[validate(length(min = 1, message = "Organization ID cannot be empty"))]
-    pub org_id: String,
-    #[validate(length(min = 1, message = "Project ID cannot be empty"))]
-    pub project_id: String,
-    #[validate(length(min = 1, message = "Application name cannot be empty"))]
-    pub app_name: String,
-    #[validate(length(min = 1, message = "Key name cannot be empty"))]
-    pub key_name: String,
-}
-
 /// Vault Transit signer configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct VaultTransitSignerConfig {
@@ -239,7 +219,6 @@ fn validate_secret_string(secret: &SecretString) -> Result<(), validator::Valida
 pub enum SignerConfig {
     Local(LocalSignerConfig),
     Vault(VaultSignerConfig),
-    VaultCloud(VaultCloudSignerConfig),
     VaultTransit(VaultTransitSignerConfig),
     AwsKms(AwsKmsSignerConfig),
     Turnkey(TurnkeySignerConfig),
@@ -260,12 +239,6 @@ impl SignerConfig {
             Self::Vault(config) => Validate::validate(config).map_err(|e| {
                 SignerValidationError::InvalidConfig(format!(
                     "Vault validation failed: {}",
-                    format_validation_errors(&e)
-                ))
-            }),
-            Self::VaultCloud(config) => Validate::validate(config).map_err(|e| {
-                SignerValidationError::InvalidConfig(format!(
-                    "Vault Cloud validation failed: {}",
                     format_validation_errors(&e)
                 ))
             }),
@@ -314,14 +287,6 @@ impl SignerConfig {
         }
     }
 
-    /// Get Vault Cloud signer config if this is a Vault Cloud signer
-    pub fn get_vault_cloud(&self) -> Option<&VaultCloudSignerConfig> {
-        match self {
-            Self::VaultCloud(config) => Some(config),
-            _ => None,
-        }
-    }
-
     /// Get Vault Transit signer config if this is a Vault Transit signer
     pub fn get_vault_transit(&self) -> Option<&VaultTransitSignerConfig> {
         match self {
@@ -352,7 +317,6 @@ impl SignerConfig {
             Self::Local(_) => SignerType::Local,
             Self::AwsKms(_) => SignerType::AwsKms,
             Self::Vault(_) => SignerType::Vault,
-            Self::VaultCloud(_) => SignerType::VaultCloud,
             Self::VaultTransit(_) => SignerType::VaultTransit,
             Self::Turnkey(_) => SignerType::Turnkey,
             Self::GoogleCloudKms(_) => SignerType::GoogleCloudKms,
@@ -406,8 +370,6 @@ pub enum SignerType {
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms,
     Vault,
-    #[serde(rename = "vault_cloud")]
-    VaultCloud,
     #[serde(rename = "vault_transit")]
     VaultTransit,
     Turnkey,
@@ -689,43 +651,6 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_vault_cloud_signer() {
-        let config = SignerConfig::VaultCloud(VaultCloudSignerConfig {
-            client_id: "client-id".to_string(),
-            client_secret: SecretString::new("secret"),
-            org_id: "org-id".to_string(),
-            project_id: "project-id".to_string(),
-            app_name: "app".to_string(),
-            key_name: "key".to_string(),
-        });
-
-        let signer = Signer::new("vault-cloud-signer".to_string(), config);
-        assert!(signer.validate().is_ok());
-        assert_eq!(signer.signer_type(), SignerType::VaultCloud);
-    }
-
-    #[test]
-    fn test_invalid_vault_cloud_empty_fields() {
-        let config = SignerConfig::VaultCloud(VaultCloudSignerConfig {
-            client_id: "".to_string(), // Empty client ID
-            client_secret: SecretString::new("secret"),
-            org_id: "org-id".to_string(),
-            project_id: "project-id".to_string(),
-            app_name: "app".to_string(),
-            key_name: "key".to_string(),
-        });
-
-        let signer = Signer::new("vault-cloud-signer".to_string(), config);
-        let result = signer.validate();
-        assert!(result.is_err());
-        if let Err(SignerValidationError::InvalidConfig(msg)) = result {
-            assert!(msg.contains("Client ID cannot be empty"));
-        } else {
-            panic!("Expected InvalidConfig error for empty client ID");
-        }
-    }
-
-    #[test]
     fn test_valid_google_cloud_kms_signer() {
         let config = SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
@@ -858,20 +783,6 @@ mod tests {
         };
         let config = SignerConfig::Vault(vault_config);
         assert!(config.get_vault().is_some());
-        assert!(config.get_vault_cloud().is_none());
-
-        // Test VaultCloud config getter
-        let vault_cloud_config = VaultCloudSignerConfig {
-            client_id: "client".to_string(),
-            client_secret: SecretString::new("secret"),
-            org_id: "org".to_string(),
-            project_id: "project".to_string(),
-            app_name: "app".to_string(),
-            key_name: "key".to_string(),
-        };
-        let config = SignerConfig::VaultCloud(vault_cloud_config);
-        assert!(config.get_vault_cloud().is_some());
-        assert!(config.get_vault_transit().is_none());
 
         // Test VaultTransit config getter
         let vault_transit_config = VaultTransitSignerConfig {

@@ -15,7 +15,7 @@ use crate::{
         signer::signer::{
             AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
             GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
-            SignerValidationError, TurnkeySignerConfig, VaultCloudSignerConfig, VaultSignerConfig,
+            SignerValidationError, TurnkeySignerConfig, VaultSignerConfig,
             VaultTransitSignerConfig,
         },
         SecretString,
@@ -53,7 +53,6 @@ pub struct SignerRepoModelStorage {
 pub enum SignerConfigStorage {
     Local(LocalSignerConfigStorage),
     Vault(VaultSignerConfigStorage),
-    VaultCloud(VaultCloudSignerConfigStorage),
     VaultTransit(VaultTransitSignerConfigStorage),
     AwsKms(AwsKmsSignerConfigStorage),
     Turnkey(TurnkeySignerConfigStorage),
@@ -101,16 +100,6 @@ pub struct VaultSignerConfigStorage {
     pub secret_id: String, // Stored as string for simplicity
     pub key_name: String,
     pub mount_point: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VaultCloudSignerConfigStorage {
-    pub client_id: String,
-    pub client_secret: String, // Stored as string for simplicity
-    pub org_id: String,
-    pub project_id: String,
-    pub app_name: String,
-    pub key_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,9 +187,6 @@ impl From<SignerConfig> for SignerConfigStorage {
             SignerConfig::Local(local) => SignerConfigStorage::Local(local.into()),
             SignerConfig::AwsKms(aws) => SignerConfigStorage::AwsKms(aws.into()),
             SignerConfig::Vault(vault) => SignerConfigStorage::Vault(vault.into()),
-            SignerConfig::VaultCloud(vault_cloud) => {
-                SignerConfigStorage::VaultCloud(vault_cloud.into())
-            }
             SignerConfig::VaultTransit(vault_transit) => {
                 SignerConfigStorage::VaultTransit(vault_transit.into())
             }
@@ -217,9 +203,6 @@ impl From<SignerConfigStorage> for SignerConfig {
             SignerConfigStorage::Local(local) => SignerConfig::Local(local.into()),
             SignerConfigStorage::AwsKms(aws) => SignerConfig::AwsKms(aws.into()),
             SignerConfigStorage::Vault(vault) => SignerConfig::Vault(vault.into()),
-            SignerConfigStorage::VaultCloud(vault_cloud) => {
-                SignerConfig::VaultCloud(vault_cloud.into())
-            }
             SignerConfigStorage::VaultTransit(vault_transit) => {
                 SignerConfig::VaultTransit(vault_transit.into())
             }
@@ -285,32 +268,6 @@ impl From<VaultSignerConfigStorage> for VaultSignerConfig {
             secret_id: SecretString::new(&storage.secret_id),
             key_name: storage.key_name,
             mount_point: storage.mount_point,
-        }
-    }
-}
-
-impl From<VaultCloudSignerConfig> for VaultCloudSignerConfigStorage {
-    fn from(config: VaultCloudSignerConfig) -> Self {
-        Self {
-            client_id: config.client_id,
-            client_secret: config.client_secret.to_str().to_string(),
-            org_id: config.org_id,
-            project_id: config.project_id,
-            app_name: config.app_name,
-            key_name: config.key_name,
-        }
-    }
-}
-
-impl From<VaultCloudSignerConfigStorage> for VaultCloudSignerConfig {
-    fn from(storage: VaultCloudSignerConfigStorage) -> Self {
-        Self {
-            client_id: storage.client_id,
-            client_secret: SecretString::new(&storage.client_secret),
-            org_id: storage.org_id,
-            project_id: storage.project_id,
-            app_name: storage.app_name,
-            key_name: storage.key_name,
         }
     }
 }

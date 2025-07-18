@@ -14,7 +14,7 @@ use crate::{
     models::signer::signer::{
         AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
         GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
-        TurnkeySignerConfig, VaultCloudSignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
+        TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
     },
     models::PlainOrEnvValue,
 };
@@ -55,17 +55,6 @@ pub struct VaultSignerFileConfig {
     pub secret_id: PlainOrEnvValue,
     pub key_name: String,
     pub mount_point: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct VaultCloudSignerFileConfig {
-    pub client_id: String,
-    pub client_secret: PlainOrEnvValue,
-    pub org_id: String,
-    pub project_id: String,
-    pub app_name: String,
-    pub key_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -155,8 +144,6 @@ pub enum SignerFileConfigEnum {
     AwsKms(AwsKmsSignerFileConfig),
     Turnkey(TurnkeySignerFileConfig),
     Vault(VaultSignerFileConfig),
-    #[serde(rename = "vault_cloud")]
-    VaultCloud(VaultCloudSignerFileConfig),
     #[serde(rename = "vault_transit")]
     VaultTransit(VaultTransitSignerFileConfig),
     #[serde(rename = "google_cloud_kms")]
@@ -305,25 +292,6 @@ impl TryFrom<VaultSignerFileConfig> for VaultSignerConfig {
     }
 }
 
-impl TryFrom<VaultCloudSignerFileConfig> for VaultCloudSignerConfig {
-    type Error = ConfigFileError;
-
-    fn try_from(config: VaultCloudSignerFileConfig) -> Result<Self, Self::Error> {
-        let client_secret = config.client_secret.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get client secret: {}", e))
-        })?;
-
-        Ok(VaultCloudSignerConfig {
-            client_id: config.client_id,
-            client_secret,
-            org_id: config.org_id,
-            project_id: config.project_id,
-            app_name: config.app_name,
-            key_name: config.key_name,
-        })
-    }
-}
-
 impl TryFrom<VaultTransitSignerFileConfig> for VaultTransitSignerConfig {
     type Error = ConfigFileError;
 
@@ -421,9 +389,6 @@ impl TryFrom<SignerFileConfigEnum> for SignerConfig {
             SignerFileConfigEnum::Vault(vault) => {
                 Ok(SignerConfig::Vault(VaultSignerConfig::try_from(vault)?))
             }
-            SignerFileConfigEnum::VaultCloud(vault_cloud) => Ok(SignerConfig::VaultCloud(
-                VaultCloudSignerConfig::try_from(vault_cloud)?,
-            )),
             SignerFileConfigEnum::VaultTransit(vault_transit) => Ok(SignerConfig::VaultTransit(
                 VaultTransitSignerConfig::try_from(vault_transit)?,
             )),

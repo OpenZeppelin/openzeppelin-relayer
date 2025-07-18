@@ -417,9 +417,9 @@ mod tests {
         let signer = SignerFileConfig {
             id: "test-signer".to_string(),
             config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                path: "test-path".to_string(),
+                path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
                 passphrase: PlainOrEnvValue::Plain {
-                    value: SecretString::new("test-passphrase"),
+                    value: SecretString::new("test"),
                 },
             }),
         };
@@ -634,18 +634,18 @@ mod tests {
             SignerFileConfig {
                 id: "test-signer-1".to_string(),
                 config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                    path: "test-path".to_string(),
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
                     passphrase: PlainOrEnvValue::Plain {
-                        value: SecretString::new("test-passphrase"),
+                        value: SecretString::new("test"),
                     },
                 }),
             },
             SignerFileConfig {
                 id: "test-signer-2".to_string(),
                 config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                    path: "test-path".to_string(),
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
                     passphrase: PlainOrEnvValue::Plain {
-                        value: SecretString::new("test-passphrase"),
+                        value: SecretString::new("test"),
                     },
                 }),
             },
@@ -951,9 +951,9 @@ mod tests {
         let signers = vec![SignerFileConfig {
             id: "test-signer-1".to_string(),
             config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                path: "test-path".to_string(),
+                path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
                 passphrase: PlainOrEnvValue::Plain {
-                    value: SecretString::new("test-passphrase"),
+                    value: SecretString::new("test"),
                 },
             }),
         }];
@@ -1067,9 +1067,11 @@ mod tests {
         // Create test signers, relayers, and notifications
         let signers = vec![SignerFileConfig {
             id: "test-signer-1".to_string(),
-            config: SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {
-                region: "us-east-1".to_string(),
-                key_id: "test-key-id".to_string(),
+            config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                passphrase: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test"),
+                },
             }),
         }];
 
@@ -1424,9 +1426,9 @@ mod tests {
             signers: vec![SignerFileConfig {
                 id: "test-signer-1".to_string(),
                 config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                    path: "test-path".to_string(),
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
                     passphrase: PlainOrEnvValue::Plain {
-                        value: SecretString::new("test-passphrase"),
+                        value: SecretString::new("test"),
                     },
                 }),
             }],

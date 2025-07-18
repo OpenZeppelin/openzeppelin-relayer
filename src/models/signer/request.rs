@@ -12,8 +12,7 @@
 use crate::models::{
     ApiError, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
     GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, SecretString, Signer,
-    SignerConfig, TurnkeySignerConfig, VaultCloudSignerConfig, VaultSignerConfig,
-    VaultTransitSignerConfig,
+    SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
 };
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
@@ -42,17 +41,6 @@ pub struct VaultSignerRequestConfig {
     pub secret_id: String,
     pub key_name: String,
     pub mount_point: Option<String>,
-}
-
-/// Vault Cloud signer configuration for API requests
-#[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
-pub struct VaultCloudSignerRequestConfig {
-    pub client_id: String,
-    pub client_secret: String,
-    pub org_id: String,
-    pub project_id: String,
-    pub app_name: String,
-    pub key_name: String,
 }
 
 /// Vault Transit signer configuration for API requests
@@ -123,10 +111,6 @@ pub enum SignerConfigRequest {
     Vault {
         config: VaultSignerRequestConfig,
     },
-    #[serde(rename = "vault_cloud")]
-    VaultCloud {
-        config: VaultCloudSignerRequestConfig,
-    },
     #[serde(rename = "vault_transit")]
     VaultTransit {
         config: VaultTransitSignerRequestConfig,
@@ -173,19 +157,6 @@ impl From<VaultSignerRequestConfig> for VaultSignerConfig {
             secret_id: SecretString::new(&config.secret_id),
             key_name: config.key_name,
             mount_point: config.mount_point,
-        }
-    }
-}
-
-impl From<VaultCloudSignerRequestConfig> for VaultCloudSignerConfig {
-    fn from(config: VaultCloudSignerRequestConfig) -> Self {
-        Self {
-            client_id: config.client_id,
-            client_secret: SecretString::new(&config.client_secret),
-            org_id: config.org_id,
-            project_id: config.project_id,
-            app_name: config.app_name,
-            key_name: config.key_name,
         }
     }
 }
@@ -275,7 +246,6 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
             }
             SignerConfigRequest::AwsKms { config } => SignerConfig::AwsKms(config.into()),
             SignerConfigRequest::Vault { config } => SignerConfig::Vault(config.into()),
-            SignerConfigRequest::VaultCloud { config } => SignerConfig::VaultCloud(config.into()),
             SignerConfigRequest::VaultTransit { config } => {
                 SignerConfig::VaultTransit(config.into())
             }
@@ -552,30 +522,6 @@ mod tests {
         } else {
             panic!("Expected Turnkey config");
         }
-    }
-
-    #[test]
-    fn test_valid_vault_cloud_create_request() {
-        let request = SignerCreateRequest {
-            id: Some("test-vault-cloud-signer".to_string()),
-            config: SignerConfigRequest::VaultCloud {
-                config: VaultCloudSignerRequestConfig {
-                    client_id: "test-client-id".to_string(),
-                    client_secret: "test-client-secret".to_string(),
-                    org_id: "test-org".to_string(),
-                    project_id: "test-project".to_string(),
-                    app_name: "test-app".to_string(),
-                    key_name: "test-key".to_string(),
-                },
-            },
-        };
-
-        let result = Signer::try_from(request);
-        assert!(result.is_ok());
-
-        let signer = result.unwrap();
-        assert_eq!(signer.id, "test-vault-cloud-signer");
-        assert_eq!(signer.signer_type(), SignerType::VaultCloud);
     }
 
     #[test]

@@ -9,7 +9,6 @@
 //! SolanaSigner
 //!   ├── Local (Raw Key Signer)
 //!   ├── Vault (HashiCorp Vault backend)
-//!   ├── VaultCloud (HashiCorp Cloud Vault backend)
 //!   ├── VaultTransit (HashiCorp Vault Transit signer)
 //!   |── GoogleCloudKms (Google Cloud KMS backend)
 //!   └── Turnkey (Turnkey backend)
@@ -37,7 +36,7 @@ use crate::{
     },
     models::{
         Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
-        TransactionRepoModel, VaultCloudSignerConfig, VaultSignerConfig,
+        TransactionRepoModel, VaultSignerConfig,
     },
     services::{GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
 };
@@ -50,7 +49,6 @@ use mockall::automock;
 pub enum SolanaSigner {
     Local(LocalSigner),
     Vault(LocalSigner),
-    VaultCloud(LocalSigner),
     VaultTransit(VaultTransitSigner),
     Turnkey(TurnkeySigner),
     GoogleCloudKms(GoogleCloudKmsSigner),
@@ -60,9 +58,7 @@ pub enum SolanaSigner {
 impl Signer for SolanaSigner {
     async fn address(&self) -> Result<Address, SignerError> {
         match self {
-            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
-                signer.address().await
-            }
+            Self::Local(signer) | Self::Vault(signer) => signer.address().await,
             Self::VaultTransit(signer) => signer.address().await,
             Self::Turnkey(signer) => signer.address().await,
             Self::GoogleCloudKms(signer) => signer.address().await,
@@ -74,9 +70,7 @@ impl Signer for SolanaSigner {
         transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
-            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
-                signer.sign_transaction(transaction).await
-            }
+            Self::Local(signer) | Self::Vault(signer) => signer.sign_transaction(transaction).await,
             Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
             Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
@@ -110,9 +104,7 @@ pub trait SolanaSignTrait: Sync + Send {
 impl SolanaSignTrait for SolanaSigner {
     async fn pubkey(&self) -> Result<Address, SignerError> {
         match self {
-            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
-                signer.pubkey().await
-            }
+            Self::Local(signer) | Self::Vault(signer) => signer.pubkey().await,
             Self::VaultTransit(signer) => signer.pubkey().await,
             Self::Turnkey(signer) => signer.pubkey().await,
             Self::GoogleCloudKms(signer) => signer.pubkey().await,
@@ -121,9 +113,7 @@ impl SolanaSignTrait for SolanaSigner {
 
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         match self {
-            Self::Local(signer) | Self::Vault(signer) | Self::VaultCloud(signer) => {
-                Ok(signer.sign(message).await?)
-            }
+            Self::Local(signer) | Self::Vault(signer) => Ok(signer.sign(message).await?),
             Self::VaultTransit(signer) => Ok(signer.sign(message).await?),
             Self::Turnkey(signer) => Ok(signer.sign(message).await?),
             Self::GoogleCloudKms(signer) => Ok(signer.sign(message).await?),
@@ -138,7 +128,7 @@ impl SolanaSignerFactory {
         signer_model: &SignerRepoModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
         let signer = match &signer_model.config {
-            SignerConfig::Local(_) | SignerConfig::Vault(_) | SignerConfig::VaultCloud(_) => {
+            SignerConfig::Local(_) | SignerConfig::Vault(_) => {
                 SolanaSigner::Local(LocalSigner::new(signer_model)?)
             }
             SignerConfig::VaultTransit(vault_transit_signer_config) => {
@@ -269,28 +259,6 @@ mod solana_signer_factory_tests {
     }
 
     #[test]
-    fn test_create_solana_signer_vault_cloud() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
-                client_id: "test-client-id".to_string(),
-                client_secret: crate::models::SecretString::new("test-client-secret"),
-                org_id: "test-org-id".to_string(),
-                project_id: "test-project-id".to_string(),
-                app_name: "test-app".to_string(),
-                key_name: "test-key".to_string(),
-            }),
-        };
-
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-
-        match signer {
-            SolanaSigner::Local(_) => {}
-            _ => panic!("Expected Local signer"),
-        }
-    }
-
-    #[test]
     fn test_create_solana_signer_vault_transit() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
@@ -395,28 +363,6 @@ mod solana_signer_factory_tests {
                 secret_id: crate::models::SecretString::new("test-secret-id"),
                 key_name: "test-key".to_string(),
                 mount_point: Some("secret".to_string()),
-            }),
-        };
-
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-        let signer_address = signer.address().await.unwrap();
-        let signer_pubkey = signer.pubkey().await.unwrap();
-
-        assert_eq!(test_key_bytes_pubkey(), signer_address);
-        assert_eq!(test_key_bytes_pubkey(), signer_pubkey);
-    }
-
-    #[tokio::test]
-    async fn test_address_solana_signer_vault_cloud() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
-                client_id: "test-client-id".to_string(),
-                client_secret: crate::models::SecretString::new("test-client-secret"),
-                org_id: "test-org-id".to_string(),
-                project_id: "test-project-id".to_string(),
-                app_name: "test-app".to_string(),
-                key_name: "test-key".to_string(),
             }),
         };
 
@@ -563,60 +509,5 @@ mod solana_signer_factory_tests {
         let signature = signer.sign(message).await;
 
         assert!(signature.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_sign_solana_signer_vault_cloud() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
-                client_id: "test-client-id".to_string(),
-                client_secret: crate::models::SecretString::new("test-client-secret"),
-                org_id: "test-org-id".to_string(),
-                project_id: "test-project-id".to_string(),
-                app_name: "test-app".to_string(),
-                key_name: "test-key".to_string(),
-            }),
-        };
-
-        let signer: SolanaSigner =
-            SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-        let message = b"test message";
-        let signature = signer.sign(message).await;
-
-        assert!(signature.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_sign_transaction_not_implemented() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::VaultCloud(VaultCloudSignerConfig {
-                client_id: "test-client-id".to_string(),
-                client_secret: crate::models::SecretString::new("test-client-secret"),
-                org_id: "test-org-id".to_string(),
-                project_id: "test-project-id".to_string(),
-                app_name: "test-app".to_string(),
-                key_name: "test-key".to_string(),
-            }),
-        };
-
-        let signer: SolanaSigner =
-            SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
-        let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            fee_payer: "test".to_string(),
-            hash: None,
-            recent_blockhash: None,
-            instructions: vec![],
-        });
-
-        let result = signer.sign_transaction(transaction_data).await;
-
-        match result {
-            Err(SignerError::NotImplemented(msg)) => {
-                assert_eq!(msg, "sign_transaction is not implemented".to_string());
-            }
-            _ => panic!("Expected SignerError::NotImplemented"),
-        }
     }
 }

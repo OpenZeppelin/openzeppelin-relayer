@@ -17,14 +17,13 @@ use super::DataSignerTrait;
 pub enum StellarSigner {
     Local(LocalSigner),
     Vault(LocalSigner),
-    VaultCloud(LocalSigner),
 }
 
 #[async_trait]
 impl Signer for StellarSigner {
     async fn address(&self) -> Result<Address, SignerError> {
         match self {
-            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.address().await,
+            Self::Local(s) | Self::Vault(s) => s.address().await,
         }
     }
 
@@ -33,7 +32,7 @@ impl Signer for StellarSigner {
         tx: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
-            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.sign_transaction(tx).await,
+            Self::Local(s) | Self::Vault(s) => s.sign_transaction(tx).await,
         }
     }
 }
@@ -43,7 +42,7 @@ pub struct StellarSignerFactory;
 impl StellarSignerFactory {
     pub fn create_stellar_signer(m: &SignerRepoModel) -> Result<StellarSigner, SignerFactoryError> {
         let signer = match m.config {
-            SignerConfig::Local(_) | SignerConfig::Vault(_) | SignerConfig::VaultCloud(_) => {
+            SignerConfig::Local(_) | SignerConfig::Vault(_) => {
                 StellarSigner::Local(LocalSigner::new(m)?)
             }
             SignerConfig::AwsKms(_) => {

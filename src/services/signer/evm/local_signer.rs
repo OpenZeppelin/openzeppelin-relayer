@@ -43,6 +43,7 @@ use super::DataSignerTrait;
 
 use alloy::rpc::types::TransactionRequest;
 
+#[derive(Clone)]
 pub struct LocalSigner {
     local_signer_client: AlloyLocalSignerClient<SigningKey>,
 }
