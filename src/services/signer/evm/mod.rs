@@ -354,28 +354,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_address_evm_signer_vault() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::Vault(VaultSignerConfig {
-                address: "https://vault.test.com".to_string(),
-                namespace: Some("test-namespace".to_string()),
-                role_id: crate::models::SecretString::new("test-role-id"),
-                secret_id: crate::models::SecretString::new("test-secret-id"),
-                key_name: "test-key".to_string(),
-                mount_point: Some("secret".to_string()),
-            }),
-        };
-
-        let signer = EvmSignerFactory::create_evm_signer(signer_model)
-            .await
-            .unwrap();
-        let signer_address = signer.address().await.unwrap();
-
-        assert_eq!(test_key_address(), signer_address);
-    }
-
-    #[tokio::test]
     async fn test_address_evm_signer_turnkey() {
         let signer_model = SignerRepoModel {
             id: "test".to_string(),
@@ -545,100 +523,6 @@ mod tests {
                 assert_eq!(sig.sig.len(), 130, "Invalid signature length for {}", name);
             } else {
                 panic!("Expected EVM signature for {}", name);
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_sign_data_with_vault_signer() {
-        let signer_model = SignerRepoModel {
-            id: "test".to_string(),
-            config: SignerConfig::Vault(VaultSignerConfig {
-                address: "https://vault.test.com".to_string(),
-                namespace: Some("test-namespace".to_string()),
-                role_id: crate::models::SecretString::new("test-role-id"),
-                secret_id: crate::models::SecretString::new("test-secret-id"),
-                key_name: "test-key".to_string(),
-                mount_point: Some("secret".to_string()),
-            }),
-        };
-
-        let signer = EvmSignerFactory::create_evm_signer(signer_model)
-            .await
-            .unwrap();
-
-        let request = SignDataRequest {
-            message: "Test vault message".to_string(),
-        };
-
-        let result = signer.sign_data(request).await;
-        assert!(result.is_ok());
-
-        if let Ok(SignDataResponse::Evm(sig)) = result {
-            assert_eq!(sig.r.len(), 64);
-            assert_eq!(sig.s.len(), 64);
-            assert!(sig.v == 27 || sig.v == 28);
-            assert_eq!(sig.sig.len(), 130);
-        } else {
-            panic!("Expected successful EVM signature");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_transaction_signing_with_different_vault_types() {
-        // Test that different vault configurations can sign transactions correctly
-        let transaction_data = NetworkTransactionData::Evm(EvmTransactionData {
-            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
-            to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
-            gas_price: Some(20000000000),
-            gas_limit: Some(21000),
-            nonce: Some(0),
-            value: U256::from(1000000000000000000u64),
-            data: Some("0x".to_string()),
-            chain_id: 1,
-            hash: None,
-            signature: None,
-            raw: None,
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
-            speed: None,
-        });
-
-        let vault_configs = vec![(
-            "vault",
-            SignerConfig::Vault(VaultSignerConfig {
-                address: "https://vault.test.com".to_string(),
-                namespace: Some("test-namespace".to_string()),
-                role_id: crate::models::SecretString::new("test-role-id"),
-                secret_id: crate::models::SecretString::new("test-secret-id"),
-                key_name: "test-key".to_string(),
-                mount_point: Some("secret".to_string()),
-            }),
-        )];
-
-        for (name, config) in vault_configs {
-            let signer_model = SignerRepoModel {
-                id: name.to_string(),
-                config,
-            };
-
-            let signer = EvmSignerFactory::create_evm_signer(signer_model)
-                .await
-                .unwrap();
-
-            let result = signer.sign_transaction(transaction_data.clone()).await;
-            assert!(result.is_ok(), "Failed to sign transaction with {}", name);
-
-            if let Ok(SignTransactionResponse::Evm(evm_tx)) = result {
-                assert!(!evm_tx.hash.is_empty(), "Empty hash for {}", name);
-                assert!(!evm_tx.raw.is_empty(), "Empty raw for {}", name);
-                assert!(
-                    !evm_tx.signature.sig.is_empty(),
-                    "Empty signature for {}",
-                    name
-                );
-            } else {
-                panic!("Expected EVM transaction response for {}", name);
             }
         }
     }

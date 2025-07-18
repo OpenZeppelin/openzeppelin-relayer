@@ -227,6 +227,12 @@ impl TryFrom<LocalSignerFileConfig> for LocalSignerConfig {
             ConfigFileError::InvalidFormat(format!("Failed to get passphrase value: {}", e))
         })?;
 
+        if passphrase.is_empty() {
+            return Err(ConfigFileError::InvalidFormat(
+                "Local signer passphrase cannot be empty".into(),
+            ));
+        }
+
         let raw_key = SecretVec::new(32, |buffer| {
             let loaded = oz_keystore::LocalClient::load(
                 Path::new(&config.path).to_path_buf(),
