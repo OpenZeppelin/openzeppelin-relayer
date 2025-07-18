@@ -37,6 +37,14 @@ use std::sync::Arc;
 #[async_trait]
 pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync {
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+    async fn list_by_signer_id(
+        &self,
+        signer_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+    async fn list_by_notification_id(
+        &self,
+        notification_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
     async fn partial_update(
         &self,
         id: String,
@@ -163,6 +171,30 @@ impl RelayerRepository for RelayerRepositoryStorage {
         match self {
             RelayerRepositoryStorage::InMemory(repo) => repo.list_active().await,
             RelayerRepositoryStorage::Redis(repo) => repo.list_active().await,
+        }
+    }
+
+    async fn list_by_signer_id(
+        &self,
+        signer_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_by_signer_id(signer_id).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.list_by_signer_id(signer_id).await,
+        }
+    }
+
+    async fn list_by_notification_id(
+        &self,
+        notification_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => {
+                repo.list_by_notification_id(notification_id).await
+            }
+            RelayerRepositoryStorage::Redis(repo) => {
+                repo.list_by_notification_id(notification_id).await
+            }
         }
     }
 
@@ -426,6 +458,8 @@ mockall::mock! {
     #[async_trait]
     impl RelayerRepository for RelayerRepository {
         async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn list_by_signer_id(&self, signer_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn list_by_notification_id(&self, notification_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
         async fn partial_update(&self, id: String, update: RelayerUpdateRequest) -> Result<RelayerRepoModel, RepositoryError>;
         async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
         async fn disable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;

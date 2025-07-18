@@ -187,6 +187,12 @@ where
 /// # Returns
 ///
 /// A success response or an error if deletion fails.
+///
+/// # Security
+///
+/// This endpoint ensures that notifications cannot be deleted if they are still being
+/// used by any relayers. This prevents breaking existing relayer configurations
+/// and maintains system integrity.
 pub async fn delete_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
     notification_id: String,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
@@ -201,6 +207,30 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
+    // First check if the notification exists
+    let _notification = state
+        .notification_repository
+        .get_by_id(notification_id.clone())
+        .await?;
+
+    // Check if any relayers are using this notification
+    let connected_relayers = state
+        .relayer_repository
+        .list_by_notification_id(&notification_id)
+        .await?;
+
+    if !connected_relayers.is_empty() {
+        let relayer_names: Vec<String> =
+            connected_relayers.iter().map(|r| r.name.clone()).collect();
+        return Err(ApiError::BadRequest(format!(
+            "Cannot delete notification '{}' because it is being used by {} relayer(s): {}. Please remove or reconfigure these relayers before deleting the notification.",
+            notification_id,
+            connected_relayers.len(),
+            relayer_names.join(", ")
+        )));
+    }
+
+    // Safe to delete - no relayers are using this notification
     state
         .notification_repository
         .delete_by_id(notification_id)
@@ -681,5 +711,294 @@ mod tests {
         } else {
             panic!("Expected BadRequest error with validation messages");
         }
+    }
+
+    #[actix_web::test]
+    async fn test_delete_notification_blocked_by_connected_relayers() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        // Create a test notification
+        let notification = create_test_notification_model("connected-notification");
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
+
+        // Create a relayer that uses this notification
+        let relayer = crate::models::RelayerRepoModel {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "ethereum".to_string(),
+            paused: false,
+            network_type: crate::models::NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: crate::models::RelayerNetworkPolicy::Evm(
+                crate::models::RelayerEvmPolicy::default(),
+            ),
+            address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            notification_id: Some("connected-notification".to_string()), // References our notification
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+        app_state.relayer_repository.create(relayer).await.unwrap();
+
+        // Try to delete the notification - should fail
+        let result =
+            delete_notification("connected-notification".to_string(), ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        if let ApiError::BadRequest(msg) = error {
+            assert!(msg.contains("Cannot delete notification"));
+            assert!(msg.contains("being used by"));
+            assert!(msg.contains("Test Relayer"));
+            assert!(msg.contains("remove or reconfigure"));
+        } else {
+            panic!("Expected BadRequest error");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_delete_notification_after_relayer_removed() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        // Create a test notification
+        let notification = create_test_notification_model("cleanup-notification");
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
+
+        // Create a relayer that uses this notification
+        let relayer = crate::models::RelayerRepoModel {
+            id: "temp-relayer".to_string(),
+            name: "Temporary Relayer".to_string(),
+            network: "ethereum".to_string(),
+            paused: false,
+            network_type: crate::models::NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: crate::models::RelayerNetworkPolicy::Evm(
+                crate::models::RelayerEvmPolicy::default(),
+            ),
+            address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            notification_id: Some("cleanup-notification".to_string()),
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+        app_state.relayer_repository.create(relayer).await.unwrap();
+
+        // First deletion attempt should fail
+        let result =
+            delete_notification("cleanup-notification".to_string(), ThinData(app_state)).await;
+        assert!(result.is_err());
+
+        // Create new app state for second test (since app_state was consumed)
+        let app_state2 = create_mock_app_state(None, None, None, None, None).await;
+
+        // Re-create the notification in the new state
+        let notification2 = create_test_notification_model("cleanup-notification");
+        app_state2
+            .notification_repository
+            .create(notification2)
+            .await
+            .unwrap();
+
+        // Now notification deletion should succeed (no relayers in new state)
+        let result =
+            delete_notification("cleanup-notification".to_string(), ThinData(app_state2)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_delete_notification_with_multiple_relayers() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        // Create a test notification
+        let notification = create_test_notification_model("multi-relayer-notification");
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
+
+        // Create multiple relayers that use this notification
+        let relayers = vec![
+            crate::models::RelayerRepoModel {
+                id: "relayer-1".to_string(),
+                name: "EVM Relayer".to_string(),
+                network: "ethereum".to_string(),
+                paused: false,
+                network_type: crate::models::NetworkType::Evm,
+                signer_id: "test-signer".to_string(),
+                policies: crate::models::RelayerNetworkPolicy::Evm(
+                    crate::models::RelayerEvmPolicy::default(),
+                ),
+                address: "0x1111111111111111111111111111111111111111".to_string(),
+                notification_id: Some("multi-relayer-notification".to_string()),
+                system_disabled: false,
+                custom_rpc_urls: None,
+            },
+            crate::models::RelayerRepoModel {
+                id: "relayer-2".to_string(),
+                name: "Solana Relayer".to_string(),
+                network: "solana".to_string(),
+                paused: true, // Even paused relayers should block deletion
+                network_type: crate::models::NetworkType::Solana,
+                signer_id: "test-signer".to_string(),
+                policies: crate::models::RelayerNetworkPolicy::Solana(
+                    crate::models::RelayerSolanaPolicy::default(),
+                ),
+                address: "solana-address".to_string(),
+                notification_id: Some("multi-relayer-notification".to_string()),
+                system_disabled: false,
+                custom_rpc_urls: None,
+            },
+            crate::models::RelayerRepoModel {
+                id: "relayer-3".to_string(),
+                name: "Stellar Relayer".to_string(),
+                network: "stellar".to_string(),
+                paused: false,
+                network_type: crate::models::NetworkType::Stellar,
+                signer_id: "test-signer".to_string(),
+                policies: crate::models::RelayerNetworkPolicy::Stellar(
+                    crate::models::RelayerStellarPolicy::default(),
+                ),
+                address: "stellar-address".to_string(),
+                notification_id: Some("multi-relayer-notification".to_string()),
+                system_disabled: true, // Even disabled relayers should block deletion
+                custom_rpc_urls: None,
+            },
+        ];
+
+        // Create all relayers
+        for relayer in relayers {
+            app_state.relayer_repository.create(relayer).await.unwrap();
+        }
+
+        // Try to delete the notification - should fail with detailed error
+        let result = delete_notification(
+            "multi-relayer-notification".to_string(),
+            ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        if let ApiError::BadRequest(msg) = error {
+            assert!(msg.contains("Cannot delete notification 'multi-relayer-notification'"));
+            assert!(msg.contains("being used by 3 relayer(s)"));
+            assert!(msg.contains("EVM Relayer"));
+            assert!(msg.contains("Solana Relayer"));
+            assert!(msg.contains("Stellar Relayer"));
+            assert!(msg.contains("remove or reconfigure"));
+        } else {
+            panic!("Expected BadRequest error, got: {:?}", error);
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_delete_notification_with_some_relayers_using_different_notification() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        // Create two test notifications
+        let notification1 = create_test_notification_model("notification-to-delete");
+        let notification2 = create_test_notification_model("other-notification");
+        app_state
+            .notification_repository
+            .create(notification1)
+            .await
+            .unwrap();
+        app_state
+            .notification_repository
+            .create(notification2)
+            .await
+            .unwrap();
+
+        // Create relayers - only one uses the notification we want to delete
+        let relayer1 = crate::models::RelayerRepoModel {
+            id: "blocking-relayer".to_string(),
+            name: "Blocking Relayer".to_string(),
+            network: "ethereum".to_string(),
+            paused: false,
+            network_type: crate::models::NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: crate::models::RelayerNetworkPolicy::Evm(
+                crate::models::RelayerEvmPolicy::default(),
+            ),
+            address: "0x1111111111111111111111111111111111111111".to_string(),
+            notification_id: Some("notification-to-delete".to_string()), // This one blocks deletion
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer2 = crate::models::RelayerRepoModel {
+            id: "non-blocking-relayer".to_string(),
+            name: "Non-blocking Relayer".to_string(),
+            network: "polygon".to_string(),
+            paused: false,
+            network_type: crate::models::NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: crate::models::RelayerNetworkPolicy::Evm(
+                crate::models::RelayerEvmPolicy::default(),
+            ),
+            address: "0x2222222222222222222222222222222222222222".to_string(),
+            notification_id: Some("other-notification".to_string()), // This one uses different notification
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer3 = crate::models::RelayerRepoModel {
+            id: "no-notification-relayer".to_string(),
+            name: "No Notification Relayer".to_string(),
+            network: "bsc".to_string(),
+            paused: false,
+            network_type: crate::models::NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: crate::models::RelayerNetworkPolicy::Evm(
+                crate::models::RelayerEvmPolicy::default(),
+            ),
+            address: "0x3333333333333333333333333333333333333333".to_string(),
+            notification_id: None, // This one has no notification
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        app_state.relayer_repository.create(relayer1).await.unwrap();
+        app_state.relayer_repository.create(relayer2).await.unwrap();
+        app_state.relayer_repository.create(relayer3).await.unwrap();
+
+        // Try to delete the first notification - should fail because of one relayer
+        let result =
+            delete_notification("notification-to-delete".to_string(), ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        if let ApiError::BadRequest(msg) = error {
+            assert!(msg.contains("being used by 1 relayer(s)"));
+            assert!(msg.contains("Blocking Relayer"));
+            assert!(!msg.contains("Non-blocking Relayer")); // Should not mention the other relayer
+            assert!(!msg.contains("No Notification Relayer")); // Should not mention relayer with no notification
+        } else {
+            panic!("Expected BadRequest error");
+        }
+
+        // Try to delete the second notification - should succeed (no relayers using it in our test)
+        let app_state2 = create_mock_app_state(None, None, None, None, None).await;
+        let notification2_recreated = create_test_notification_model("other-notification");
+        app_state2
+            .notification_repository
+            .create(notification2_recreated)
+            .await
+            .unwrap();
+
+        let result =
+            delete_notification("other-notification".to_string(), ThinData(app_state2)).await;
+
+        assert!(result.is_ok());
     }
 }

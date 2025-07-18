@@ -203,7 +203,7 @@ mod tests {
         // Update the signer
         let updated_signer = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[2; 32])),
             }),
         };

@@ -39,6 +39,18 @@ pub enum SignerError {
     NotImplemented(String),
 
     #[error("Invalid configuration: {0}")]
+    ConfigError(String),
+
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    #[error("Authentication error: {0}")]
+    AuthenticationError(String),
+
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    #[error("Invalid configuration: {0}")]
     Configuration(String),
 
     #[error("Transaction conversion error: {0}")]

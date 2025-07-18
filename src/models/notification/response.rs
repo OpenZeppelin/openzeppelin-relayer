@@ -50,7 +50,7 @@ mod tests {
         assert_eq!(response.id, "test-id");
         assert_eq!(response.r#type, NotificationType::Webhook);
         assert_eq!(response.url, "https://example.com/webhook");
-        assert_eq!(response.has_signing_key, true);
+        assert!(response.has_signing_key);
     }
 
     #[test]
@@ -67,6 +67,6 @@ mod tests {
         assert_eq!(response.id, "test-id");
         assert_eq!(response.r#type, NotificationType::Webhook);
         assert_eq!(response.url, "https://example.com/webhook");
-        assert_eq!(response.has_signing_key, false);
+        assert!(!response.has_signing_key);
     }
 }
