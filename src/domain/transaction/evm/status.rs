@@ -425,6 +425,23 @@ mod tests {
         }
     }
 
+    /// Returns a `TestMocks` with network repository configured for prepare_noop_update_request tests.
+    pub fn default_test_mocks_with_network() -> TestMocks {
+        let mut mocks = default_test_mocks();
+        // Set up default expectation for get_by_chain_id that prepare_noop_update_request tests need
+        mocks
+            .network_repo
+            .expect_get_by_chain_id()
+            .returning(|network_type, chain_id| {
+                if network_type == NetworkType::Evm && chain_id == 1 {
+                    Ok(Some(create_test_network_model()))
+                } else {
+                    Ok(None)
+                }
+            });
+        mocks
+    }
+
     /// Creates a test NetworkRepoModel for chain_id 1 (mainnet)
     pub fn create_test_network_model() -> NetworkRepoModel {
         let evm_config = EvmNetworkConfig {
@@ -756,7 +773,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_should_resubmit_false_for_no_mempool_network() {
+        async fn test_should_resubmit_true_for_no_mempool_network() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
@@ -778,8 +795,8 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let res = evm_transaction.should_resubmit(&tx).await.unwrap();
             assert!(
-                !res,
-                "Transaction should not be resubmitted for no-mempool networks."
+                res,
+                "Transaction should be resubmitted for no-mempool networks."
             );
         }
 
@@ -922,7 +939,7 @@ mod tests {
         #[tokio::test]
         async fn test_noop_request_without_cancellation() {
             // Create a transaction with an initial noop_count of 2 and is_canceled set to false.
-            let mocks = default_test_mocks();
+            let mocks = default_test_mocks_with_network();
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.noop_count = Some(2);
@@ -943,7 +960,7 @@ mod tests {
         #[tokio::test]
         async fn test_noop_request_with_cancellation() {
             // Create a transaction with no initial noop_count (None) and is_canceled false.
-            let mocks = default_test_mocks();
+            let mocks = default_test_mocks_with_network();
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.noop_count = None;

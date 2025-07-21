@@ -1211,7 +1211,37 @@ mod tests {
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(ready(Ok(()))));
 
-            let mock_network = MockNetworkRepository::new();
+            // Network repository expectations for cancellation NOOP transaction
+            let mut mock_network = MockNetworkRepository::new();
+            mock_network
+                .expect_get_by_chain_id()
+                .with(eq(NetworkType::Evm), eq(1))
+                .returning(|_, _| {
+                    use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+                    use crate::models::{NetworkConfigData, NetworkRepoModel};
+
+                    let config = EvmNetworkConfig {
+                        common: NetworkConfigCommon {
+                            network: "mainnet".to_string(),
+                            from: None,
+                            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                            explorer_urls: None,
+                            average_blocktime_ms: Some(12000),
+                            is_testnet: Some(false),
+                            tags: Some(vec!["mainnet".to_string()]),
+                        },
+                        chain_id: Some(1),
+                        required_confirmations: Some(12),
+                        features: Some(vec!["eip1559".to_string()]),
+                        symbol: Some("ETH".to_string()),
+                    };
+                    Ok(Some(NetworkRepoModel {
+                        id: "evm:mainnet".to_string(),
+                        name: "mainnet".to_string(),
+                        network_type: NetworkType::Evm,
+                        config: NetworkConfigData::Evm(config),
+                    }))
+                });
 
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
