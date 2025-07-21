@@ -138,9 +138,6 @@ impl NetworksFileConfig {
     /// - `Result<NetworksFileConfig, ConfigFileError>` containing either the flattened configuration
     ///   or an error if any inheritance issues are encountered.
     pub fn flatten(&self) -> Result<NetworksFileConfig, ConfigFileError> {
-        // First validate the individual network configurations.
-        self.validate()?;
-
         // Process each network to resolve inheritance
         let resolved_networks = self
             .networks
