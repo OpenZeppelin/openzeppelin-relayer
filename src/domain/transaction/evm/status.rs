@@ -132,7 +132,7 @@ where
             ))
         })?;
 
-        let timeout = match network.lacks_mempool() {
+        let timeout = match network.is_arbitrum() {
             true => ARBITRUM_TIME_TO_RESUBMIT,
             false => get_resubmit_timeout_for_speed(&evm_data.speed),
         };
@@ -221,7 +221,23 @@ where
         is_cancellation: bool,
     ) -> Result<TransactionUpdateRequest, TransactionError> {
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
-        make_noop(&mut evm_data, Some(self.provider())).await?;
+        let network_model = self
+            .network_repository()
+            .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+            .await?
+            .ok_or(TransactionError::UnexpectedError(format!(
+                "Network with chain id {} not found",
+                evm_data.chain_id
+            )))?;
+
+        let network = EvmNetwork::try_from(network_model).map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Error converting network model to EvmNetwork: {}",
+                e
+            ))
+        })?;
+
+        make_noop(&mut evm_data, &network, Some(self.provider())).await?;
 
         let noop_count = tx.noop_count.unwrap_or(0) + 1;
         let update_request = TransactionUpdateRequest {

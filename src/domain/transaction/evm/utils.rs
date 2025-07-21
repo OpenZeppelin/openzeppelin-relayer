@@ -1,6 +1,7 @@
 use crate::constants::{
     DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
 };
+use crate::models::EvmNetwork;
 use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
 };
@@ -18,6 +19,7 @@ pub fn is_arbitrum_network(chain_id: u64) -> bool {
 /// For Arbitrum networks, uses eth_estimateGas to account for L1 + L2 costs
 pub async fn make_noop<P: EvmProviderTrait>(
     evm_data: &mut EvmTransactionData,
+    network: &EvmNetwork,
     provider: Option<&P>,
 ) -> Result<(), TransactionError> {
     // Update the transaction to be a noop
@@ -26,7 +28,7 @@ pub async fn make_noop<P: EvmProviderTrait>(
     evm_data.to = Some(evm_data.from.clone());
 
     // Set gas limit based on network type
-    if is_arbitrum_network(evm_data.chain_id) {
+    if network.is_arbitrum() {
         // For Arbitrum networks, try to estimate gas to account for L1 + L2 costs
         if let Some(provider) = provider {
             match provider.estimate_gas(evm_data).await {
@@ -130,6 +132,51 @@ mod tests {
     use crate::models::{evm::Speed, NetworkTransactionData};
     use crate::services::{MockEvmProviderTrait, ProviderError};
 
+    fn create_standard_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "ethereum".to_string(),
+            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 12000,
+            is_testnet: false,
+            tags: vec!["mainnet".to_string()],
+            chain_id: 1,
+            required_confirmations: 12,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
+
+    fn create_arbitrum_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "arbitrum".to_string(),
+            rpc_urls: vec!["https://arb1.arbitrum.io/rpc".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 1000,
+            is_testnet: false,
+            tags: vec!["rollup".to_string(), "is_arbitrum".to_string()],
+            chain_id: 42161,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
+
+    fn create_arbitrum_nova_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "arbitrum-nova".to_string(),
+            rpc_urls: vec!["https://nova.arbitrum.io/rpc".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 1000,
+            is_testnet: false,
+            tags: vec!["rollup".to_string(), "is_arbitrum".to_string()],
+            chain_id: 42170,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn test_make_noop_standard_network() {
         let mut evm_data = EvmTransactionData {
@@ -149,7 +196,8 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let result = make_noop(&mut evm_data, None::<&MockEvmProviderTrait>).await;
+        let network = create_standard_network();
+        let result = make_noop(&mut evm_data, &network, None::<&MockEvmProviderTrait>).await;
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly
@@ -179,7 +227,8 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let result = make_noop(&mut evm_data, None::<&MockEvmProviderTrait>).await;
+        let network = create_arbitrum_network();
+        let result = make_noop(&mut evm_data, &network, None::<&MockEvmProviderTrait>).await;
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly for Arbitrum
@@ -210,7 +259,8 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let result = make_noop(&mut evm_data, None::<&MockEvmProviderTrait>).await;
+        let network = create_arbitrum_nova_network();
+        let result = make_noop(&mut evm_data, &network, None::<&MockEvmProviderTrait>).await;
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly for Arbitrum Nova
@@ -249,7 +299,8 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let result = make_noop(&mut evm_data, Some(&mock_provider)).await;
+        let network = create_arbitrum_network();
+        let result = make_noop(&mut evm_data, &network, Some(&mock_provider)).await;
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly with estimated gas
@@ -287,7 +338,8 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let result = make_noop(&mut evm_data, Some(&mock_provider)).await;
+        let network = create_arbitrum_network();
+        let result = make_noop(&mut evm_data, &network, Some(&mock_provider)).await;
         assert!(result.is_ok());
 
         // Verify the transaction falls back to conservative estimate
