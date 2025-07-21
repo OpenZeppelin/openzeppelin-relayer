@@ -173,6 +173,9 @@ Some tags have special meaning and affect relayer behavior:
 |`optimism`
 |Identifies Optimism-based networks using the OP Stack (e.g., Optimism, Base, World Chain)
 
+|`arbitrum`
+|Identifies Arbitrum-based networks using the Arbitrum Stack
+
 |`no-mempool`
 |Indicates networks that lack a traditional mempool (e.g., Arbitrum)
 
