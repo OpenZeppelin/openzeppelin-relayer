@@ -23,3 +23,5 @@ pub const MIN_BUMP_FACTOR: f64 = 1.1;
 pub const MAXIMUM_TX_ATTEMPTS: usize = 50;
 // Maximum number of NOOP transactions to attempt
 pub const MAXIMUM_NOOP_RETRY_ATTEMPTS: u32 = 50;
+
+pub const ARBITRUM_TIME_TO_RESUBMIT: i64 = 20_000;

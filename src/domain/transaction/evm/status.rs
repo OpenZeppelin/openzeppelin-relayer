@@ -11,6 +11,7 @@ use super::{
     get_age_of_sent_at, has_enough_confirmations, is_noop, is_transaction_valid, make_noop,
     too_many_attempts, too_many_noop_attempts,
 };
+use crate::constants::ARBITRUM_TIME_TO_RESUBMIT;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
@@ -112,8 +113,9 @@ where
         }
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
+        let age = get_age_of_sent_at(tx)?;
 
-        // Check if network lacks mempool (like Arbitrum) - skip resubmission for such networks
+        // Check if network lacks mempool and determine appropriate timeout
         let network_model = self
             .network_repository()
             .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
@@ -130,16 +132,10 @@ where
             ))
         })?;
 
-        if network.lacks_mempool() {
-            info!(
-                "Network lacks mempool (no-mempool), skipping resubmission for transaction {}",
-                tx.id
-            );
-            return Ok(false);
-        }
-
-        let age = get_age_of_sent_at(tx)?;
-        let timeout = get_resubmit_timeout_for_speed(&evm_data.speed);
+        let timeout = match network.lacks_mempool() {
+            true => ARBITRUM_TIME_TO_RESUBMIT,
+            false => get_resubmit_timeout_for_speed(&evm_data.speed),
+        };
 
         let timeout_with_backoff = get_resubmit_timeout_with_backoff(timeout, tx.hashes.len());
         if age > Duration::milliseconds(timeout_with_backoff) {
