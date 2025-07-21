@@ -1,5 +1,6 @@
 use crate::constants::{
-    DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
+    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS,
+    MAXIMUM_TX_ATTEMPTS,
 };
 use crate::models::EvmNetwork;
 use crate::models::{
@@ -8,11 +9,6 @@ use crate::models::{
 use crate::services::EvmProviderTrait;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-
-/// Checks if a chain ID corresponds to an Arbitrum network
-pub fn is_arbitrum_network(chain_id: u64) -> bool {
-    matches!(chain_id, 42161 | 421614 | 42170)
-}
 
 /// Updates an existing transaction to be a "noop" transaction (transaction to self with zero value and no data)
 /// This is commonly used for cancellation and replacement transactions
@@ -42,12 +38,12 @@ pub async fn make_noop<P: EvmProviderTrait>(
                         "Failed to estimate gas for Arbitrum noop transaction: {:?}",
                         e
                     );
-                    evm_data.gas_limit = Some(50_000);
+                    evm_data.gas_limit = Some(ARBITRUM_GAS_LIMIT);
                 }
             }
         } else {
             // No provider available, use conservative estimate
-            evm_data.gas_limit = Some(50_000);
+            evm_data.gas_limit = Some(ARBITRUM_GAS_LIMIT);
         }
     } else {
         // For other networks, use the standard gas limit
@@ -696,25 +692,6 @@ mod tests {
             }
             _ => panic!("Expected UnexpectedError for missing sent_at"),
         }
-    }
-
-    #[test]
-    fn test_is_arbitrum_network() {
-        // Test Arbitrum One
-        assert!(is_arbitrum_network(42161));
-
-        // Test Arbitrum Sepolia
-        assert!(is_arbitrum_network(421614));
-
-        // Test Arbitrum Nova
-        assert!(is_arbitrum_network(42170));
-
-        // Test non-Arbitrum networks
-        assert!(!is_arbitrum_network(1)); // Ethereum mainnet
-        assert!(!is_arbitrum_network(10)); // Optimism
-        assert!(!is_arbitrum_network(137)); // Polygon
-        assert!(!is_arbitrum_network(8453)); // Base
-        assert!(!is_arbitrum_network(11155111)); // Sepolia
     }
 
     #[test]
