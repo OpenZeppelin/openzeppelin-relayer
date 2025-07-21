@@ -127,7 +127,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
         let relayer = store.get_mut(&id).ok_or_else(|| {
             RepositoryError::NotFound(format!("Relayer with ID {} not found", id))
         })?;
-        relayer.policies = policy;
+        relayer.policies = policy.into();
         Ok(relayer.clone())
     }
 
@@ -282,8 +282,8 @@ mod tests {
                 gas_price_cap: None,
                 whitelist_receivers: None,
                 eip1559_pricing: Some(false),
-                private_transactions: false,
-                min_balance: 0,
+                private_transactions: Some(false),
+                min_balance: Some(0),
                 gas_limit_estimation: Some(true),
             }),
             signer_id: "test".to_string(),
@@ -445,8 +445,8 @@ mod tests {
             gas_price_cap: Some(50000000000),
             whitelist_receivers: Some(vec!["0x1234".to_string()]),
             eip1559_pricing: Some(true),
-            private_transactions: true,
-            min_balance: 1000000,
+            private_transactions: Some(true),
+            min_balance: Some(1000000),
             gas_limit_estimation: Some(true),
         });
 
@@ -462,8 +462,8 @@ mod tests {
                 assert_eq!(policy.gas_price_cap, Some(50000000000));
                 assert_eq!(policy.whitelist_receivers, Some(vec!["0x1234".to_string()]));
                 assert_eq!(policy.eip1559_pricing, Some(true));
-                assert!(policy.private_transactions);
-                assert_eq!(policy.min_balance, 1000000);
+                assert!(policy.private_transactions.unwrap_or(false));
+                assert_eq!(policy.min_balance, Some(1000000));
             }
             _ => panic!("Unexpected policy type"),
         }

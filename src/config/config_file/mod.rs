@@ -24,6 +24,7 @@
 use crate::{
     config::ConfigFileError,
     models::{
+        relayer::{RelayerFileConfig, RelayersFileConfig},
         signer::{SignerFileConfig, SignersFileConfig},
         NotificationConfig, NotificationConfigs,
     },
@@ -33,9 +34,6 @@ use std::{
     collections::HashSet,
     fs::{self},
 };
-
-mod relayer;
-pub use relayer::*;
 
 mod plugin;
 pub use plugin::*;

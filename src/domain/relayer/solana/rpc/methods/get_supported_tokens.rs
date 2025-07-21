@@ -70,8 +70,9 @@ mod tests {
     use crate::{
         domain::{setup_test_context, SolanaRpcMethodsImpl},
         models::{
+            AllowedTokenSwapConfig as SolanaAllowedTokensSwapConfig,
             GetSupportedTokensRequestParams, RelayerNetworkPolicy, RelayerSolanaPolicy,
-            SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
+            SolanaAllowedTokensPolicy,
         },
     };
 

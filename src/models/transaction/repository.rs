@@ -1863,7 +1863,7 @@ mod tests {
             policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
                 max_fee: None,
                 timeout_seconds: None,
-                min_balance: DEFAULT_STELLAR_MIN_BALANCE,
+                min_balance: Some(DEFAULT_STELLAR_MIN_BALANCE),
             }),
             address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
             notification_id: None,

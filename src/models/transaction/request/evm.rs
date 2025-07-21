@@ -175,7 +175,7 @@ pub fn validate_price_params(
     if is_legacy {
         if let RelayerNetworkPolicy::Evm(evm_policy) = &relayer.policies {
             if let Some(gas_price_cap) = evm_policy.gas_price_cap {
-                if request.gas_price.unwrap_or(0) > gas_price_cap {
+                if request.gas_price.unwrap_or(0) > gas_price_cap as u128 {
                     return Err(ApiError::BadRequest("Gas price is too high".to_string()));
                 }
             }
@@ -187,7 +187,7 @@ pub fn validate_price_params(
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{NetworkType, RelayerEvmPolicy, RpcConfig};
+    use crate::models::{NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RpcConfig};
 
     use super::*;
     use chrono::{Duration, Utc};

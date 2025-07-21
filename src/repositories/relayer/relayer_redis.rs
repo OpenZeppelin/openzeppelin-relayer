@@ -533,7 +533,7 @@ impl RelayerRepository for RedisRelayerRepository {
         let mut relayer = self.get_by_id(id.clone()).await?;
 
         // Update the policy
-        relayer.policies = policy;
+        relayer.policies = policy.into();
 
         // Update the relayer
         self.update(id, relayer).await
@@ -849,8 +849,8 @@ mod tests {
             gas_price_cap: Some(50_000_000_000),
             whitelist_receivers: Some(vec!["0x123".to_string()]),
             eip1559_pricing: Some(true),
-            private_transactions: true,
-            min_balance: 1000000000000000000,
+            private_transactions: Some(true),
+            min_balance: Some(1000000000000000000),
             gas_limit_estimation: Some(true),
         });
 
@@ -865,8 +865,8 @@ mod tests {
                 Some(vec!["0x123".to_string()])
             );
             assert_eq!(evm_policy.eip1559_pricing, Some(true));
-            assert!(evm_policy.private_transactions);
-            assert_eq!(evm_policy.min_balance, 1000000000000000000);
+            assert!(evm_policy.private_transactions.unwrap_or(false));
+            assert_eq!(evm_policy.min_balance, Some(1000000000000000000));
         } else {
             panic!("Expected EVM policy");
         }

@@ -138,7 +138,7 @@ pub fn validate_explicit_price_bump(
         .policies
         .get_evm_policy()
         .gas_price_cap
-        .unwrap_or(u128::MAX);
+        .unwrap_or_default();
 
     // Check if gas prices exceed gas price cap
     if let Some(gas_price) = new_evm_data.gas_price {

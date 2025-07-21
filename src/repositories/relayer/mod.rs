@@ -254,12 +254,12 @@ mod tests {
             paused: false,
             network_type: NetworkType::Evm,
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                min_balance: Some(0),
+                gas_limit_estimation: Some(true),
                 gas_price_cap: None,
                 whitelist_receivers: None,
                 eip1559_pricing: Some(false),
-                private_transactions: false,
-                min_balance: 0,
-                gas_limit_estimation: Some(true),
+                private_transactions: Some(false),
             }),
             signer_id: "test".to_string(),
             address: "0x".to_string(),
@@ -337,12 +337,12 @@ mod tests {
 
         // Test update_policy
         let new_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            min_balance: Some(1000000000000000000),
+            gas_limit_estimation: Some(true),
             gas_price_cap: Some(50_000_000_000),
             whitelist_receivers: None,
             eip1559_pricing: Some(true),
-            private_transactions: false,
-            min_balance: 1000000000000000000,
-            gas_limit_estimation: Some(true),
+            private_transactions: Some(false),
         });
         let policy_updated = impl_repo
             .update_policy(relayer.id.clone(), new_policy)
