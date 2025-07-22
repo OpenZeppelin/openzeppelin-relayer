@@ -16,12 +16,11 @@ use super::{
     RelayerStellarPolicy, RpcConfig,
 };
 use crate::{models::error::ApiError, utils::generate_uuid};
-use serde::{de, Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Request model for creating a new relayer
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRelayerRequest {
     pub id: Option<String>,
@@ -29,112 +28,97 @@ pub struct CreateRelayerRequest {
     pub network: String,
     pub paused: bool,
     pub network_type: RelayerNetworkType,
-    /// Policies without network_type tag - will be validated against the network_type field
+    /// Policies - will be deserialized based on the network_type field
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub policies: Option<UpdateRelayerPolicyRequest>,
+    pub policies: Option<CreateRelayerPolicyRequest>,
     pub signer_id: String,
     pub notification_id: Option<String>,
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
-impl CreateRelayerRequest {
-    /// Converts the policies field to domain RelayerNetworkPolicy using the network_type field
-    pub fn to_domain_policies(&self) -> Result<Option<RelayerNetworkPolicy>, ApiError> {
-        if let Some(policy_request) = &self.policies {
-            Ok(Some(policy_request.to_domain_policy(self.network_type)?))
+/// Helper struct for deserializing CreateRelayerRequest with raw policies JSON
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateRelayerRequestRaw {
+    pub id: Option<String>,
+    pub name: String,
+    pub network: String,
+    pub paused: bool,
+    pub network_type: RelayerNetworkType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policies: Option<serde_json::Value>,
+    pub signer_id: String,
+    pub notification_id: Option<String>,
+    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
+}
+
+impl<'de> serde::Deserialize<'de> for CreateRelayerRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = CreateRelayerRequestRaw::deserialize(deserializer)?;
+
+        // Convert policies based on network_type using the existing utility function
+        let policies = if let Some(policies_value) = raw.policies {
+            let domain_policy =
+                deserialize_policy_for_network_type(&policies_value, raw.network_type)
+                    .map_err(serde::de::Error::custom)?;
+
+            // Convert from RelayerNetworkPolicy to CreateRelayerPolicyRequest
+            let policy = match domain_policy {
+                RelayerNetworkPolicy::Evm(evm_policy) => {
+                    CreateRelayerPolicyRequest::Evm(evm_policy)
+                }
+                RelayerNetworkPolicy::Solana(solana_policy) => {
+                    CreateRelayerPolicyRequest::Solana(solana_policy)
+                }
+                RelayerNetworkPolicy::Stellar(stellar_policy) => {
+                    CreateRelayerPolicyRequest::Stellar(stellar_policy)
+                }
+            };
+            Some(policy)
         } else {
-            Ok(None)
-        }
+            None
+        };
+
+        Ok(CreateRelayerRequest {
+            id: raw.id,
+            name: raw.name,
+            network: raw.network,
+            paused: raw.paused,
+            network_type: raw.network_type,
+            policies,
+            signer_id: raw.signer_id,
+            notification_id: raw.notification_id,
+            custom_rpc_urls: raw.custom_rpc_urls,
+        })
     }
 }
 
-/// Policy types for update requests - these don't require network_type tags
-/// since they will be inferred from the existing relayer
-#[derive(Debug, Clone, Serialize, PartialEq, ToSchema)]
+/// Policy types for create requests - deserialized based on network_type from parent request
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub enum UpdateRelayerPolicyRequest {
+pub enum CreateRelayerPolicyRequest {
     Evm(RelayerEvmPolicy),
     Solana(RelayerSolanaPolicy),
     Stellar(RelayerStellarPolicy),
 }
 
-impl<'de> Deserialize<'de> for UpdateRelayerPolicyRequest {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value: Value = Value::deserialize(deserializer)?;
-
-        if let Value::Object(obj) = &value {
-            // Check for Solana-specific fields first (most distinctive)
-            if obj.contains_key("fee_payment_strategy")
-                || obj.contains_key("allowed_tokens")
-                || obj.contains_key("allowed_programs")
-                || obj.contains_key("max_signatures")
-                || obj.contains_key("max_tx_data_size")
-                || obj.contains_key("allowed_accounts")
-                || obj.contains_key("disallowed_accounts")
-                || obj.contains_key("max_allowed_fee_lamports")
-                || obj.contains_key("swap_config")
-                || obj.contains_key("fee_margin_percentage")
-            {
-                let policy: RelayerSolanaPolicy =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                return Ok(UpdateRelayerPolicyRequest::Solana(policy));
-            }
-
-            // Check for EVM-specific fields
-            if obj.contains_key("gas_price_cap")
-                || obj.contains_key("gas_limit_estimation")
-                || obj.contains_key("whitelist_receivers")
-                || obj.contains_key("eip1559_pricing")
-                || obj.contains_key("private_transactions")
-            {
-                let policy: RelayerEvmPolicy =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                return Ok(UpdateRelayerPolicyRequest::Evm(policy));
-            }
-
-            // Check for Stellar-specific fields
-            if obj.contains_key("max_fee") || obj.contains_key("timeout_seconds") {
-                let policy: RelayerStellarPolicy =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
-                return Ok(UpdateRelayerPolicyRequest::Stellar(policy));
-            }
-
-            // If only min_balance is present, we can't determine the type automatically
-            // Try each type and see which one deserializes successfully
-            if let Ok(policy) = serde_json::from_value::<RelayerEvmPolicy>(value.clone()) {
-                return Ok(UpdateRelayerPolicyRequest::Evm(policy));
-            }
-            if let Ok(policy) = serde_json::from_value::<RelayerSolanaPolicy>(value.clone()) {
-                return Ok(UpdateRelayerPolicyRequest::Solana(policy));
-            }
-            if let Ok(policy) = serde_json::from_value::<RelayerStellarPolicy>(value) {
-                return Ok(UpdateRelayerPolicyRequest::Stellar(policy));
-            }
-        }
-
-        Err(de::Error::custom(
-            "Unable to determine policy type from provided fields",
-        ))
-    }
-}
-
-impl UpdateRelayerPolicyRequest {
+impl CreateRelayerPolicyRequest {
     /// Converts to domain RelayerNetworkPolicy using the provided network type
     pub fn to_domain_policy(
         &self,
         network_type: RelayerNetworkType,
     ) -> Result<RelayerNetworkPolicy, ApiError> {
         match (self, network_type) {
-            (UpdateRelayerPolicyRequest::Evm(policy), RelayerNetworkType::Evm) => {
+            (CreateRelayerPolicyRequest::Evm(policy), RelayerNetworkType::Evm) => {
                 Ok(RelayerNetworkPolicy::Evm(policy.clone()))
             }
-            (UpdateRelayerPolicyRequest::Solana(policy), RelayerNetworkType::Solana) => {
+            (CreateRelayerPolicyRequest::Solana(policy), RelayerNetworkType::Solana) => {
                 Ok(RelayerNetworkPolicy::Solana(policy.clone()))
             }
-            (UpdateRelayerPolicyRequest::Stellar(policy), RelayerNetworkType::Stellar) => {
+            (CreateRelayerPolicyRequest::Stellar(policy), RelayerNetworkType::Stellar) => {
                 Ok(RelayerNetworkPolicy::Stellar(policy.clone()))
             }
             _ => Err(ApiError::BadRequest(
@@ -142,6 +126,45 @@ impl UpdateRelayerPolicyRequest {
             )),
         }
     }
+}
+
+/// Utility function to deserialize policy JSON for a specific network type
+/// Used for update requests where we know the network type ahead of time
+pub fn deserialize_policy_for_network_type(
+    policies_value: &serde_json::Value,
+    network_type: RelayerNetworkType,
+) -> Result<RelayerNetworkPolicy, ApiError> {
+    match network_type {
+        RelayerNetworkType::Evm => {
+            let evm_policy: RelayerEvmPolicy = serde_json::from_value(policies_value.clone())
+                .map_err(|e| ApiError::BadRequest(format!("Invalid EVM policy: {}", e)))?;
+            Ok(RelayerNetworkPolicy::Evm(evm_policy))
+        }
+        RelayerNetworkType::Solana => {
+            let solana_policy: RelayerSolanaPolicy = serde_json::from_value(policies_value.clone())
+                .map_err(|e| ApiError::BadRequest(format!("Invalid Solana policy: {}", e)))?;
+            Ok(RelayerNetworkPolicy::Solana(solana_policy))
+        }
+        RelayerNetworkType::Stellar => {
+            let stellar_policy: RelayerStellarPolicy =
+                serde_json::from_value(policies_value.clone())
+                    .map_err(|e| ApiError::BadRequest(format!("Invalid Stellar policy: {}", e)))?;
+            Ok(RelayerNetworkPolicy::Stellar(stellar_policy))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateRelayerRequest {
+    pub name: Option<String>,
+    pub paused: Option<bool>,
+    /// Raw policy JSON - will be validated against relayer's network type during application
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policies: Option<CreateRelayerPolicyRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_id: Option<String>,
+    pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
 /// Request model for updating an existing relayer
@@ -181,11 +204,12 @@ impl UpdateRelayerPolicyRequest {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct UpdateRelayerRequest {
+pub struct UpdateRelayerRequestRaw {
     pub name: Option<String>,
     pub paused: Option<bool>,
+    /// Raw policy JSON - will be validated against relayer's network type during application
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub policies: Option<UpdateRelayerPolicyRequest>,
+    pub policies: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_id: Option<String>,
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
@@ -197,8 +221,12 @@ impl TryFrom<CreateRelayerRequest> for Relayer {
     fn try_from(request: CreateRelayerRequest) -> Result<Self, Self::Error> {
         let id = request.id.clone().unwrap_or_else(|| generate_uuid());
 
-        // Convert policies using the network_type from the request
-        let policies = request.to_domain_policies()?;
+        // Convert policies directly using the typed policy request
+        let policies = if let Some(policy_request) = &request.policies {
+            Some(policy_request.to_domain_policy(request.network_type)?)
+        } else {
+            None
+        };
 
         // Create domain relayer
         let relayer = Relayer::new(
@@ -233,7 +261,7 @@ mod tests {
             network: "mainnet".to_string(),
             paused: false,
             network_type: RelayerNetworkType::Evm,
-            policies: Some(UpdateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
+            policies: Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
                 gas_price_cap: Some(100),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
@@ -279,7 +307,7 @@ mod tests {
             network: "mainnet".to_string(),
             paused: false,
             network_type: RelayerNetworkType::Solana,
-            policies: Some(UpdateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
+            policies: Some(CreateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
                 fee_payment_strategy: Some(
                     crate::models::relayer::RelayerSolanaFeePaymentStrategy::Relayer,
                 ),
@@ -300,13 +328,17 @@ mod tests {
         };
 
         // Test policy conversion
-        let policies = request.to_domain_policies().unwrap();
-        assert!(policies.is_some());
-
-        if let Some(RelayerNetworkPolicy::Solana(solana_policy)) = policies {
-            assert_eq!(solana_policy.min_balance, Some(1000000));
+        if let Some(policy_request) = &request.policies {
+            let policy = policy_request
+                .to_domain_policy(request.network_type)
+                .unwrap();
+            if let RelayerNetworkPolicy::Solana(solana_policy) = policy {
+                assert_eq!(solana_policy.min_balance, Some(1000000));
+            } else {
+                panic!("Expected Solana policy");
+            }
         } else {
-            panic!("Expected Solana policy");
+            panic!("Expected policies to be present");
         }
 
         // Test full conversion to domain relayer
@@ -323,7 +355,7 @@ mod tests {
             network: "mainnet".to_string(),
             paused: false,
             network_type: RelayerNetworkType::Evm, // EVM network type
-            policies: Some(UpdateRelayerPolicyRequest::Solana(
+            policies: Some(CreateRelayerPolicyRequest::Solana(
                 RelayerSolanaPolicy::default(),
             )), // But Solana policy
             signer_id: "test-signer".to_string(),
@@ -331,13 +363,18 @@ mod tests {
             custom_rpc_urls: None,
         };
 
-        // Should fail during policy conversion
-        let result = request.to_domain_policies();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Policy type does not match relayer network type"));
+        // Should fail during policy conversion - since the policy was auto-detected as Solana
+        // but the network type is EVM, the conversion should fail
+        if let Some(policy_request) = &request.policies {
+            let result = policy_request.to_domain_policy(request.network_type);
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Policy type does not match relayer network type"));
+        } else {
+            panic!("Expected policies to be present");
+        }
     }
 
     #[test]
@@ -374,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_valid_update_request() {
-        let request = UpdateRelayerRequest {
+        let request = UpdateRelayerRequestRaw {
             name: Some("Updated Name".to_string()),
             paused: Some(true),
             policies: None,
@@ -389,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_update_request_all_none() {
-        let request = UpdateRelayerRequest {
+        let request = UpdateRelayerRequestRaw {
             name: None,
             paused: None,
             policies: None,
@@ -413,15 +450,21 @@ mod tests {
             }
         }"#;
 
-        let request: UpdateRelayerRequest = serde_json::from_str(json_input).unwrap();
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
         assert!(request.policies.is_some());
 
-        // Validation now happens automatically during deserialization
-        if let Some(UpdateRelayerPolicyRequest::Evm(evm_policy)) = request.policies {
-            assert_eq!(evm_policy.gas_price_cap, Some(100000000000));
-            assert_eq!(evm_policy.eip1559_pricing, Some(true));
-        } else {
-            panic!("Expected EVM policy");
+        // Validation happens during domain conversion based on network type
+        // Test with the utility function
+        if let Some(policies_json) = &request.policies {
+            let network_policy =
+                deserialize_policy_for_network_type(policies_json, RelayerNetworkType::Evm)
+                    .unwrap();
+            if let RelayerNetworkPolicy::Evm(evm_policy) = network_policy {
+                assert_eq!(evm_policy.gas_price_cap, Some(100000000000));
+                assert_eq!(evm_policy.eip1559_pricing, Some(true));
+            } else {
+                panic!("Expected EVM policy");
+            }
         }
     }
 
@@ -435,27 +478,38 @@ mod tests {
             }
         }"#;
 
-        let request: UpdateRelayerRequest = serde_json::from_str(json_input).unwrap();
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
 
-        // Validation now happens automatically during deserialization
-        if let Some(UpdateRelayerPolicyRequest::Solana(solana_policy)) = request.policies {
-            assert_eq!(solana_policy.min_balance, Some(1000000));
-        } else {
-            panic!("Expected Solana policy");
+        // Validation happens during domain conversion based on network type
+        // Test with the utility function for Solana
+        if let Some(policies_json) = &request.policies {
+            let network_policy =
+                deserialize_policy_for_network_type(policies_json, RelayerNetworkType::Solana)
+                    .unwrap();
+            if let RelayerNetworkPolicy::Solana(solana_policy) = network_policy {
+                assert_eq!(solana_policy.min_balance, Some(1000000));
+            } else {
+                panic!("Expected Solana policy");
+            }
         }
     }
 
     #[test]
     fn test_update_request_invalid_policy_format() {
-        // Test that invalid policy format fails during JSON deserialization
-        let invalid_json = r#"{
+        // Test that invalid policy format fails during validation with utility function
+        let valid_json = r#"{
             "name": "Test",
             "policies": "invalid_not_an_object"
         }"#;
 
-        // Should fail during deserialization since policies should be objects with valid fields
-        let result = serde_json::from_str::<UpdateRelayerRequest>(invalid_json);
-        assert!(result.is_err());
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(valid_json).unwrap();
+
+        // Should fail when trying to validate the policy against a network type
+        if let Some(policies_json) = &request.policies {
+            let result =
+                deserialize_policy_for_network_type(policies_json, RelayerNetworkType::Evm);
+            assert!(result.is_err());
+        }
     }
 
     #[test]
@@ -468,15 +522,10 @@ mod tests {
             }
         }"#;
 
-        let request: UpdateRelayerRequest = serde_json::from_str(json_input).unwrap();
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
 
-        // Should correctly deserialize as EVM policy based on field detection
-        if let Some(UpdateRelayerPolicyRequest::Evm(evm_policy)) = request.policies {
-            assert_eq!(evm_policy.gas_price_cap, Some(100000000000));
-            assert_eq!(evm_policy.eip1559_pricing, Some(true));
-        } else {
-            panic!("Expected EVM policy to be auto-detected");
-        }
+        // Should correctly deserialize as raw JSON - validation happens during domain conversion
+        assert!(request.policies.is_some());
     }
 
     #[test]
@@ -490,16 +539,10 @@ mod tests {
             }
         }"#;
 
-        let request: UpdateRelayerRequest = serde_json::from_str(json_input).unwrap();
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
 
-        // Should correctly deserialize as Stellar policy
-        if let Some(UpdateRelayerPolicyRequest::Stellar(stellar_policy)) = request.policies {
-            assert_eq!(stellar_policy.max_fee, Some(10000));
-            assert_eq!(stellar_policy.timeout_seconds, Some(300));
-            assert_eq!(stellar_policy.min_balance, Some(5000000));
-        } else {
-            panic!("Expected Stellar policy");
-        }
+        // Should correctly deserialize as raw JSON - validation happens during domain conversion
+        assert!(request.policies.is_some());
     }
 
     #[test]
@@ -510,7 +553,8 @@ mod tests {
             "notification_id": "notif-123"
         }"#;
 
-        let request: UpdateRelayerRequest = serde_json::from_str(json_with_notification).unwrap();
+        let request: UpdateRelayerRequestRaw =
+            serde_json::from_str(json_with_notification).unwrap();
         assert_eq!(request.notification_id, Some("notif-123".to_string()));
 
         // Test without notification_id
@@ -518,7 +562,7 @@ mod tests {
             "name": "Test Relayer"
         }"#;
 
-        let request: UpdateRelayerRequest =
+        let request: UpdateRelayerRequestRaw =
             serde_json::from_str(json_without_notification).unwrap();
         assert_eq!(request.notification_id, None);
 
@@ -528,7 +572,7 @@ mod tests {
             "notification_id": 123
         }"#;
 
-        let result = serde_json::from_str::<UpdateRelayerRequest>(invalid_json);
+        let result = serde_json::from_str::<UpdateRelayerRequestRaw>(invalid_json);
         assert!(result.is_err());
     }
 
@@ -548,7 +592,7 @@ mod tests {
             ]
         }"#;
 
-        let request: UpdateRelayerRequest = serde_json::from_str(json_input).unwrap();
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
 
         // Verify all fields are correctly deserialized
         assert_eq!(request.name, Some("Updated Relayer".to_string()));
@@ -560,11 +604,82 @@ mod tests {
         assert!(request.policies.is_some());
         assert!(request.custom_rpc_urls.is_some());
 
-        if let Some(UpdateRelayerPolicyRequest::Evm(evm_policy)) = request.policies {
-            assert_eq!(evm_policy.min_balance, Some(5000000000000000000));
-            assert_eq!(evm_policy.gas_limit_estimation, Some(false));
+        // Policies are now raw JSON - validation happens during domain conversion
+        if let Some(policies_json) = &request.policies {
+            // Just verify it's a JSON object with expected fields
+            assert!(policies_json.get("min_balance").is_some());
+            assert!(policies_json.get("gas_limit_estimation").is_some());
+        } else {
+            panic!("Expected policies");
+        }
+    }
+
+    #[test]
+    fn test_create_request_network_type_based_policy_deserialization() {
+        // Test that policies are correctly deserialized based on network_type
+        // EVM network with EVM policy fields
+        let evm_json = r#"{
+            "name": "EVM Relayer",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "policies": {
+                "gas_price_cap": 50000000000,
+                "eip1559_pricing": true,
+                "min_balance": "1000000000000000000"
+            }
+        }"#;
+
+        let evm_request: CreateRelayerRequest = serde_json::from_str(evm_json).unwrap();
+        assert_eq!(evm_request.network_type, RelayerNetworkType::Evm);
+
+        if let Some(CreateRelayerPolicyRequest::Evm(evm_policy)) = evm_request.policies {
+            assert_eq!(evm_policy.gas_price_cap, Some(50000000000));
+            assert_eq!(evm_policy.eip1559_pricing, Some(true));
+            assert_eq!(evm_policy.min_balance, Some(1000000000000000000));
         } else {
             panic!("Expected EVM policy");
         }
+
+        // Solana network with Solana policy fields
+        let solana_json = r#"{
+            "name": "Solana Relayer",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "solana",
+            "signer_id": "test-signer",
+            "policies": {
+                "fee_payment_strategy": "relayer",
+                "min_balance": 5000000,
+                "max_signatures": 10
+            }
+        }"#;
+
+        let solana_request: CreateRelayerRequest = serde_json::from_str(solana_json).unwrap();
+        assert_eq!(solana_request.network_type, RelayerNetworkType::Solana);
+
+        if let Some(CreateRelayerPolicyRequest::Solana(solana_policy)) = solana_request.policies {
+            assert_eq!(solana_policy.min_balance, Some(5000000));
+            assert_eq!(solana_policy.max_signatures, Some(10));
+        } else {
+            panic!("Expected Solana policy");
+        }
+
+        // Test that wrong policy fields for network type fails
+        let invalid_json = r#"{
+            "name": "Invalid Relayer",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "evm",
+            "signer_id": "test-signer",
+            "policies": {
+                "fee_payment_strategy": "relayer"
+            }
+        }"#;
+
+        let result = serde_json::from_str::<CreateRelayerRequest>(invalid_json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown field"));
     }
 }

@@ -17,10 +17,10 @@ use crate::{
         SignTypedDataRequest, Transaction,
     },
     models::{
-        convert_to_internal_rpc_request, ApiError, ApiResponse, CreateRelayerRequest,
-        DefaultAppState, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
-        Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater, RelayerResponse,
-        TransactionResponse, UpdateRelayerRequest,
+        convert_to_internal_rpc_request, deserialize_policy_for_network_type, ApiError,
+        ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkTransactionRequest, NetworkType,
+        PaginationMeta, PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel,
+        RelayerRepoUpdater, RelayerResponse, TransactionResponse, UpdateRelayerRequestRaw,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{Signer, SignerFactory},
@@ -188,8 +188,13 @@ pub async fn update_relayer(
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     // convert patch to UpdateRelayerRequest to validate
-    let update_request: UpdateRelayerRequest = serde_json::from_value(patch.clone())
+    let update_request: UpdateRelayerRequestRaw = serde_json::from_value(patch.clone())
         .map_err(|e| ApiError::BadRequest(format!("Invalid update request: {}", e)))?;
+
+    if let Some(policies) = update_request.policies {
+        deserialize_policy_for_network_type(&policies, relayer.network_type)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid policy: {}", e)))?;
+    }
 
     if relayer.system_disabled {
         return Err(ApiError::BadRequest("Relayer is disabled".to_string()));
@@ -197,7 +202,7 @@ pub async fn update_relayer(
 
     // Check if notification exists (if setting one) by extracting from JSON patch
     if let Some(notification_id) = update_request.notification_id {
-        let _notification = state
+        state
             .notification_repository
             .get_by_id(notification_id.to_string())
             .await?;

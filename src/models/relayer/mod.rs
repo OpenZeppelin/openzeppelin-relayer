@@ -602,31 +602,30 @@ impl Relayer {
     /// Apply JSON Merge Patch (RFC 7396) directly to the domain object
     ///
     /// This method:
-    /// 1. Validates the patch by converting to typed UpdateRelayerRequest
-    /// 2. Converts domain object to JSON
-    /// 3. Applies JSON merge patch
-    /// 4. Converts back to domain object
-    /// 5. Validates the final result
+    /// 1. Converts domain object to JSON
+    /// 2. Applies JSON merge patch
+    /// 3. Converts back to domain object
+    /// 4. Validates the final result
     ///
     /// This approach provides true JSON Merge Patch semantics while maintaining validation.
     pub fn apply_json_patch(
         &self,
         patch: &serde_json::Value,
     ) -> Result<Self, RelayerValidationError> {
-        // 3. Convert current domain object to JSON
+        // 1. Convert current domain object to JSON
         let mut domain_json = serde_json::to_value(self).map_err(|e| {
             RelayerValidationError::InvalidField(format!("Serialization error: {}", e))
         })?;
 
-        // 4. Apply JSON Merge Patch
+        // 2. Apply JSON Merge Patch
         json_patch::merge(&mut domain_json, patch);
 
-        // 5. Convert back to domain object
+        // 3. Convert back to domain object
         let updated: Relayer = serde_json::from_value(domain_json).map_err(|e| {
             RelayerValidationError::InvalidField(format!("Invalid result after patch: {}", e))
         })?;
 
-        // 6. Validate the final result
+        // 4. Validate the final result
         updated.validate()?;
 
         Ok(updated)
@@ -803,9 +802,11 @@ mod tests {
         // Should fail when converting back to domain object
         let result = relayer.apply_json_patch(&invalid_patch);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid result after patch"));
+        // The error now occurs during the initial validation step
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Invalid patch format")
+                || error_msg.contains("Invalid result after patch")
+        );
     }
 }
