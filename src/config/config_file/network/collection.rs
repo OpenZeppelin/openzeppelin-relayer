@@ -619,14 +619,19 @@ mod tests {
     }
 
     #[test]
-    fn test_flatten_with_validation_failure() {
+    fn test_validation_after_flatten_with_failure() {
         let networks = vec![
             create_evm_network_wrapped("valid"),
             create_invalid_evm_network_wrapped("invalid"),
         ];
         let config = NetworksFileConfig::new(networks).unwrap();
 
-        let result = config.flatten();
+        let flattened = config.flatten();
+        assert!(flattened.is_ok());
+        let flattened = flattened.unwrap();
+
+        let result = flattened.validate();
+
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
