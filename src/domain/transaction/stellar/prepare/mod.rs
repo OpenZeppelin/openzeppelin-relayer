@@ -15,7 +15,10 @@ use super::{lane_gate, StellarRelayerTransaction};
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,
-    models::{TransactionError, TransactionInput, TransactionRepoModel, TransactionStatus},
+    models::{
+        TransactionError, TransactionInput, TransactionRepoModel, TransactionStatus,
+        TransactionUpdateRequest,
+    },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
 };
@@ -172,13 +175,13 @@ where
         }
 
         // Step 2: Mark transaction as Failed with detailed reason
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(error_reason.clone()),
+            ..Default::default()
+        };
         let _failed_tx = match self
-            .finalize_transaction_state(
-                tx_id.clone(),
-                TransactionStatus::Failed,
-                Some(error_reason.clone()),
-                None,
-            )
+            .finalize_transaction_state(tx_id.clone(), update_request)
             .await
         {
             Ok(updated_tx) => updated_tx,

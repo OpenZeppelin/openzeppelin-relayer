@@ -193,7 +193,7 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-exa
 }'
 ----
 
-See xref:api_reference.adoc[API Reference] and link:https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/solana[SDK examples, window=_blank] for full details and examples.
+See link:https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^] and link:https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/solana[SDK examples, window=_blank] for full details and examples.
 
 
 == Security

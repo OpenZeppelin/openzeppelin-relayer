@@ -166,7 +166,7 @@ Expected Result: A successful request should return an HTTP 200 status code alon
 
 == Using the relayer through the API
 
-For detailed API usage, refer to the xref:api_reference.adoc[API guide]. The guide provides endpoint descriptions, usage examples, and best practices for integrating with the relayer service.
+For detailed API usage, refer to the link:https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^] page.
 
 == Using the relayer through the SDK
 

@@ -10,7 +10,10 @@ use super::StellarRelayerTransaction;
 use crate::{
     constants::STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS,
     jobs::{JobProducerTrait, TransactionStatusCheck},
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus},
+    models::{
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
+    },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
 };
@@ -148,15 +151,29 @@ where
     pub async fn handle_stellar_success(
         &self,
         tx: TransactionRepoModel,
-        _provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse, // May be needed later for more details
+        provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        // Extract the actual fee charged from the transaction result and update network data
+        let updated_network_data = provider_response.result.as_ref().and_then(|tx_result| {
+            tx.network_data
+                .get_stellar_transaction_data()
+                .ok()
+                .map(|stellar_data| {
+                    NetworkTransactionData::Stellar(
+                        stellar_data.with_fee(tx_result.fee_charged as u32),
+                    )
+                })
+        });
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            confirmed_at: Some(Utc::now().to_rfc3339()),
+            network_data: updated_network_data,
+            ..Default::default()
+        };
+
         let confirmed_tx = self
-            .finalize_transaction_state(
-                tx.id.clone(),
-                TransactionStatus::Confirmed,
-                None,
-                Some(Utc::now().to_rfc3339()),
-            )
+            .finalize_transaction_state(tx.id.clone(), update_request)
             .await?;
 
         self.enqueue_next_pending_transaction(&tx.id).await?;
@@ -182,13 +199,15 @@ where
         };
 
         warn!("Stellar transaction {} failed: {}", tx.id, detailed_reason);
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(detailed_reason),
+            ..Default::default()
+        };
+
         let updated_tx = self
-            .finalize_transaction_state(
-                tx.id.clone(),
-                TransactionStatus::Failed,
-                Some(detailed_reason),
-                None,
-            )
+            .finalize_transaction_state(tx.id.clone(), update_request)
             .await?;
 
         self.enqueue_next_pending_transaction(&tx.id).await?;

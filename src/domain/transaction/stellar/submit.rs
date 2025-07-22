@@ -166,13 +166,14 @@ where
         }
 
         // For non-bad-sequence errors or if reset failed, mark as failed
+        // Step 1: Mark transaction as Failed with detailed reason
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(error_reason.clone()),
+            ..Default::default()
+        };
         let _failed_tx = match self
-            .finalize_transaction_state(
-                tx_id.clone(),
-                TransactionStatus::Failed,
-                Some(error_reason.clone()),
-                None,
-            )
+            .finalize_transaction_state(tx_id.clone(), update_request)
             .await
         {
             Ok(updated_tx) => updated_tx,

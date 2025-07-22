@@ -5,6 +5,7 @@ use log::info;
 
 use super::common::{get_next_sequence, sign_stellar_transaction, simulate_if_needed};
 use crate::{
+    constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::extract_operations,
     models::{StellarTransactionData, TransactionError, TransactionRepoModel},
     repositories::TransactionCounterTrait,
@@ -76,7 +77,12 @@ where
                     ))
                 })?
         }
-        None => stellar_data,
+        None => {
+            // For non-simulated transactions, ensure fee is set to default
+            let op_count = extract_operations(&unsigned_env)?.len() as u32;
+            let fee = STELLAR_DEFAULT_TRANSACTION_FEE * op_count;
+            stellar_data.with_fee(fee)
+        }
     };
 
     // Sign the transaction

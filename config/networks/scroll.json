@@ -37,15 +37,10 @@
       "network": "scroll-sepolia",
       "required_confirmations": 1,
       "rpc_urls": [
-        "https://sepolia-rpc.scroll.io/",
-        "https://scroll-sepolia.drpc.org",
-        "https://scroll-sepolia-rpc.publicnode.com",
-        "https://scroll-sepolia-public.nodies.app"
+        "https://sepolia-rpc.scroll.io"
       ],
       "symbol": "ETH",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": [],
       "type": "evm"
     }
   ]

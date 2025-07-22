@@ -55,9 +55,7 @@
       "network": "fantom-testnet",
       "required_confirmations": 1,
       "rpc_urls": [
-        "https://rpc.testnet.fantom.network/",
-        "https://fantom-testnet.drpc.org",
-        "https://fantom-testnet-rpc.publicnode.com"
+        "https://rpc.testnet.fantom.network"
       ],
       "symbol": "FTM",
       "tags": [
@@ -108,7 +106,7 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 10000,
+      "average_blocktime_ms": 5600,
       "chain_id": 1287,
       "explorer_urls": [
         "https://api-moonbase.moonscan.io/api",
@@ -117,16 +115,11 @@
       "features": [
         "eip1559"
       ],
-      "is_testnet": false,
+      "is_testnet": true,
       "network": "moonbase",
       "required_confirmations": 1,
       "rpc_urls": [
-        "https://moonbase-alpha.public.blastapi.io",
-        "https://moonbase-rpc.dwellir.com",
-        "https://moonbeam-alpha.api.onfinality.io/public",
-        "https://rpc.api.moonbase.moonbeam.network",
-        "https://moonbase.unitedbloc.com",
-        "https://moonbase.public.curie.radiumblock.co/http"
+        "https://rpc.testnet.moonbeam.network"
       ],
       "symbol": "DEV",
       "type": "evm"
@@ -166,8 +159,7 @@
       "network": "avalanche-fuji",
       "required_confirmations": 1,
       "rpc_urls": [
-        "https://avalanche-fuji.drpc.org",
-        "https://avalanche-fuji-c-chain-rpc.publicnode.com"
+        "https://ava-testnet.public.blastapi.io/ext/bc/C/rpc"
       ],
       "symbol": "AVAX",
       "tags": [
@@ -240,9 +232,7 @@
         "https://api.aurorascan.dev/api",
         "https://aurorascan.dev"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": [],
       "is_testnet": false,
       "network": "aurora",
       "required_confirmations": 1,
@@ -261,9 +251,7 @@
         "https://testnet.aurorascan.dev/api",
         "https://testnet.aurorascan.dev"
       ],
-      "features": [
-        "eip1559"
-      ],
+      "features": [],
       "is_testnet": true,
       "network": "aurora-testnet",
       "required_confirmations": 1,
