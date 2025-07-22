@@ -34,7 +34,7 @@
       ],
       "is_testnet": true,
       "network": "gnosis-chiado",
-      "required_confirmations": 1,
+      "required_confirmations": 6,
       "rpc_urls": [
         "https://rpc.chiadochain.net"
       ],
