@@ -46,8 +46,10 @@ impl Modify for SecurityAddon {
     paths(
         relayer_docs::doc_get_relayer,
         relayer_docs::doc_list_relayers,
-        relayer_docs::doc_get_relayer_balance,
+        relayer_docs::doc_create_relayer,
         relayer_docs::doc_update_relayer,
+        relayer_docs::doc_delete_relayer,
+        relayer_docs::doc_get_relayer_balance,
         relayer_docs::doc_get_transaction_by_nonce,
         relayer_docs::doc_get_transaction_by_id,
         relayer_docs::doc_list_transactions,
@@ -72,6 +74,7 @@ impl Modify for SecurityAddon {
     ),
     components(schemas(
         models::RelayerResponse,
+        models::CreateRelayerRequest,
         models::NetworkPolicyResponse,
         models::EvmPolicyResponse,
         models::SolanaPolicyResponse,

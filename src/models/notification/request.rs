@@ -15,6 +15,7 @@ use utoipa::ToSchema;
 
 /// Request structure for creating a new notification
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NotificationCreateRequest {
     pub id: Option<String>,
     pub r#type: Option<NotificationType>,
@@ -25,6 +26,7 @@ pub struct NotificationCreateRequest {
 
 /// Request structure for updating an existing notification
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NotificationUpdateRequest {
     pub r#type: Option<NotificationType>,
     pub url: Option<String>,

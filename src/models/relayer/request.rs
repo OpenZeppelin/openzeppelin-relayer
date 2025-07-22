@@ -11,14 +11,16 @@
 //! These models handle API-specific concerns like optional fields for updates
 //! while delegating business logic validation to the domain model.
 
-use super::{RelayerNetworkPolicy, RelayerNetworkType, RpcConfig};
+use super::{Relayer, RelayerNetworkPolicy, RelayerNetworkType, RpcConfig};
+use crate::{models::ApiError, utils::generate_uuid};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 /// Request model for creating a new relayer
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CreateRelayerRequest {
-    pub id: String,
+    pub id: Option<String>,
     pub name: String,
     pub network: String,
     pub paused: bool,
@@ -33,6 +35,7 @@ pub struct CreateRelayerRequest {
 /// All fields are optional to allow partial updates
 /// Note: network and signer_id are not updateable after creation
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateRelayerRequest {
     pub name: Option<String>,
     pub paused: Option<bool>,
@@ -40,6 +43,31 @@ pub struct UpdateRelayerRequest {
     pub policies: Option<RelayerNetworkPolicy>,
     pub notification_id: Option<String>,
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
+}
+
+impl TryFrom<CreateRelayerRequest> for Relayer {
+    type Error = ApiError;
+
+    fn try_from(request: CreateRelayerRequest) -> Result<Self, Self::Error> {
+        let id = request.id.unwrap_or_else(|| generate_uuid());
+        // Create domain relayer
+        let relayer = Relayer::new(
+            id,
+            request.name,
+            request.network,
+            request.paused,
+            request.network_type,
+            request.policies,
+            request.signer_id,
+            request.notification_id,
+            request.custom_rpc_urls,
+        );
+
+        // Validate using domain model validation logic
+        relayer.validate().map_err(ApiError::from)?;
+
+        Ok(relayer)
+    }
 }
 
 #[cfg(test)]
@@ -50,7 +78,7 @@ mod tests {
     #[test]
     fn test_valid_create_request() {
         let request = CreateRelayerRequest {
-            id: "test-relayer".to_string(),
+            id: Some("test-relayer".to_string()),
             name: "Test Relayer".to_string(),
             network: "mainnet".to_string(),
             paused: false,
@@ -69,24 +97,14 @@ mod tests {
         };
 
         // Convert to domain model and validate there
-        let domain_relayer = Relayer::new(
-            request.id,
-            request.name,
-            request.network,
-            request.paused,
-            request.network_type,
-            request.policies,
-            request.signer_id,
-            request.notification_id,
-            request.custom_rpc_urls,
-        );
-        assert!(domain_relayer.validate().is_ok());
+        let domain_relayer = Relayer::try_from(request);
+        assert!(domain_relayer.is_ok());
     }
 
     #[test]
     fn test_invalid_create_request_empty_id() {
         let request = CreateRelayerRequest {
-            id: "".to_string(),
+            id: Some("".to_string()),
             name: "Test Relayer".to_string(),
             network: "mainnet".to_string(),
             paused: false,
@@ -98,18 +116,8 @@ mod tests {
         };
 
         // Convert to domain model and validate there - should fail due to empty ID
-        let domain_relayer = Relayer::new(
-            request.id,
-            request.name,
-            request.network,
-            request.paused,
-            request.network_type,
-            request.policies,
-            request.signer_id,
-            request.notification_id,
-            request.custom_rpc_urls,
-        );
-        assert!(domain_relayer.validate().is_err());
+        let domain_relayer = Relayer::try_from(request);
+        assert!(domain_relayer.is_err());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 use crate::{
     api::controllers::relayer,
     domain::{RelayerUpdateRequest, SignDataRequest, SignTypedDataRequest},
-    models::{DefaultAppState, PaginationQuery},
+    models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -28,6 +28,15 @@ async fn get_relayer(
     relayer::get_relayer(relayer_id.into_inner(), data).await
 }
 
+/// Creates a new relayer.
+#[post("/relayers")]
+async fn create_relayer(
+    request: web::Json<CreateRelayerRequest>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    relayer::create_relayer(request.into_inner(), data).await
+}
+
 /// Updates a relayer's information based on the provided update request.
 #[patch("/relayers/{relayer_id}")]
 async fn update_relayer(
@@ -36,6 +45,15 @@ async fn update_relayer(
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::update_relayer(relayer_id.into_inner(), update_req.into_inner(), data).await
+}
+
+/// Deletes a relayer by ID.
+#[delete("/relayers/{relayer_id}")]
+async fn delete_relayer(
+    relayer_id: web::Path<String>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    relayer::delete_relayer(relayer_id.into_inner(), data).await
 }
 
 /// Fetches the current status of a specific relayer.
@@ -180,7 +198,9 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(sign_typed_data); // /relayers/{id}/sign-typed-data
     cfg.service(rpc); // /relayers/{id}/rpc
     cfg.service(get_relayer); // /relayers/{id}
+    cfg.service(create_relayer); // /relayers
     cfg.service(update_relayer); // /relayers/{id}
+    cfg.service(delete_relayer); // /relayers/{id}
     cfg.service(list_relayers); // /relayers
 }
 

@@ -3,6 +3,9 @@
 //! Handles HTTP endpoints for relayer operations including:
 //! - Listing relayers
 //! - Getting relayer details
+//! - Creating relayers
+//! - Updating relayers
+//! - Deleting relayers
 //! - Submitting transactions
 //! - Signing messages
 //! - JSON-RPC proxy
@@ -10,14 +13,16 @@ use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
-        RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest, Transaction,
+        RelayerFactory, RelayerFactoryTrait, RelayerUpdateRequest, SignDataRequest,
+        SignDataResponse, SignTypedDataRequest, Transaction,
     },
     models::{
-        convert_to_internal_rpc_request, ApiError, ApiResponse, DefaultAppState,
-        NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery, RelayerResponse,
-        TransactionResponse,
+        convert_to_internal_rpc_request, ApiError, ApiResponse, CreateRelayerRequest,
+        DefaultAppState, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
+        RelayerRepoModel, RelayerResponse, TransactionResponse,
     },
-    repositories::{RelayerRepository, Repository, TransactionRepository},
+    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
+    services::{Signer, SignerFactory},
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
@@ -72,6 +77,97 @@ pub async fn get_relayer(
     Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
 
+/// Creates a new relayer.
+///
+/// # Arguments
+///
+/// * `request` - The relayer creation request.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The created relayer or an error if creation fails.
+///
+/// # Validation
+///
+/// This endpoint performs comprehensive dependency validation before creating the relayer:
+/// - **Signer Validation**: Ensures the specified signer exists in the system
+/// - **Signer Uniqueness**: Validates that the signer is not already in use by another relayer on the same network
+/// - **Notification Validation**: If a notification ID is provided, validates it exists
+/// - **Network Validation**: Confirms the specified network exists for the given network type
+///
+/// All validations must pass before the relayer is created, ensuring referential integrity and security constraints.
+pub async fn create_relayer(
+    request: CreateRelayerRequest,
+    state: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, ApiError> {
+    // Convert request to domain relayer (validates automatically)
+    let relayer = crate::models::Relayer::try_from(request)?;
+
+    // Validate dependencies before creating the relayer
+    let signer_model = state
+        .signer_repository
+        .get_by_id(relayer.signer_id.clone())
+        .await?;
+
+    // Check if network exists for the given network type
+    let network = state
+        .network_repository
+        .get_by_name(relayer.network_type.into(), &relayer.network)
+        .await?;
+
+    if network.is_none() {
+        return Err(ApiError::BadRequest(format!(
+            "Network '{}' not found for network type '{}'. Please ensure the network configuration exists.",
+            relayer.network,
+            relayer.network_type
+        )));
+    }
+
+    // check if signer is already in use by another relayer on the same network
+    let relayers = state
+        .relayer_repository
+        .list_by_signer_id(&relayer.signer_id)
+        .await?;
+    if let Some(existing_relayer) = relayers.iter().find(|r| r.network == relayer.network) {
+        return Err(ApiError::BadRequest(format!(
+            "Cannot create relayer: signer '{}' is already in use by relayer '{}' on network '{}'. Each signer can only be connected to one relayer per network for security reasons. Please use a different signer or create the relayer on a different network.",
+            relayer.signer_id, existing_relayer.id, relayer.network
+        )));
+    }
+
+    // Check if notification exists (if provided)
+    if let Some(notification_id) = &relayer.notification_id {
+        let _notification = state
+            .notification_repository
+            .get_by_id(notification_id.clone())
+            .await?;
+    }
+
+    // Convert domain model to repository model
+    let mut relayer_model = RelayerRepoModel::from(relayer);
+
+    // get address from signer and set it to relayer model
+    let signer_service = SignerFactory::create_signer(&relayer_model.network_type, &signer_model)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+    let address = signer_service
+        .address()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+    relayer_model.address = address.to_string();
+
+    let created_relayer = state.relayer_repository.create(relayer_model).await?;
+
+    let relayer =
+        RelayerFactory::create_relayer(created_relayer.clone(), signer_model, &state).await?;
+
+    relayer.initialize_relayer().await?;
+
+    let response = RelayerResponse::from(created_relayer);
+    Ok(HttpResponse::Created().json(ApiResponse::success(response)))
+}
+
 /// Updates a relayer's information.
 ///
 /// # Arguments
@@ -107,6 +203,55 @@ pub async fn update_relayer(
     let relayer_response: RelayerResponse = updated_relayer.into();
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
+}
+
+/// Deletes a relayer by ID.
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer to delete.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// A success response or an error if deletion fails.
+///
+/// # Security
+///
+/// This endpoint ensures that relayers cannot be deleted if they have any pending
+/// or active transactions. This prevents data loss and maintains system integrity.
+pub async fn delete_relayer(
+    relayer_id: String,
+    state: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, ApiError> {
+    // First check if the relayer exists
+    let _relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+
+    // Check if the relayer has any transactions (pending or otherwise)
+    use crate::models::PaginationQuery;
+    let transactions = state
+        .transaction_repository
+        .find_by_relayer_id(
+            &relayer_id,
+            PaginationQuery {
+                page: 1,
+                per_page: 1,
+            },
+        )
+        .await?;
+
+    if transactions.total > 0 {
+        return Err(ApiError::BadRequest(format!(
+            "Cannot delete relayer '{}' because it has {} transaction(s). Please wait for all transactions to complete or cancel them before deleting the relayer.",
+            relayer_id,
+            transactions.total
+        )));
+    }
+
+    // Safe to delete - no transactions associated with this relayer
+    state.relayer_repository.delete_by_id(relayer_id).await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success("Relayer deleted successfully")))
 }
 
 /// Retrieves the status of a specific relayer.

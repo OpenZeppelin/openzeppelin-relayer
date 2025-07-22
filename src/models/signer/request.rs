@@ -27,6 +27,7 @@ pub struct PlainSignerRequestConfig {
 
 /// AWS KMS signer configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct AwsKmsSignerRequestConfig {
     pub region: String,
     pub key_id: String,
@@ -34,6 +35,7 @@ pub struct AwsKmsSignerRequestConfig {
 
 /// Vault signer configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultSignerRequestConfig {
     pub address: String,
     pub namespace: Option<String>,
@@ -45,6 +47,7 @@ pub struct VaultSignerRequestConfig {
 
 /// Vault Transit signer configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultTransitSignerRequestConfig {
     pub key_name: String,
     pub address: String,
@@ -57,6 +60,7 @@ pub struct VaultTransitSignerRequestConfig {
 
 /// Turnkey signer configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct TurnkeySignerRequestConfig {
     pub api_public_key: String,
     pub api_private_key: String,
@@ -67,6 +71,7 @@ pub struct TurnkeySignerRequestConfig {
 
 /// Google Cloud KMS service account configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct GoogleCloudKmsSignerServiceAccountRequestConfig {
     pub private_key: String,
     pub private_key_id: String,
@@ -82,6 +87,7 @@ pub struct GoogleCloudKmsSignerServiceAccountRequestConfig {
 
 /// Google Cloud KMS key configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct GoogleCloudKmsSignerKeyRequestConfig {
     pub location: String,
     pub key_ring_id: String,
@@ -91,6 +97,7 @@ pub struct GoogleCloudKmsSignerKeyRequestConfig {
 
 /// Google Cloud KMS signer configuration for API requests
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct GoogleCloudKmsSignerRequestConfig {
     pub service_account: GoogleCloudKmsSignerServiceAccountRequestConfig,
     pub key: GoogleCloudKmsSignerKeyRequestConfig,
@@ -126,6 +133,7 @@ pub enum SignerConfigRequest {
 
 /// Request model for creating a new signer
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct SignerCreateRequest {
     /// Optional ID - if not provided, a UUID will be generated
     pub id: Option<String>,
@@ -137,6 +145,7 @@ pub struct SignerCreateRequest {
 /// Request model for updating an existing signer
 /// At the moment, we don't allow updating signers
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct SignerUpdateRequest {}
 
 impl From<AwsKmsSignerRequestConfig> for AwsKmsSignerConfig {

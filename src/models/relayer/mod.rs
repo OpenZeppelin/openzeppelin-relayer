@@ -84,6 +84,8 @@ impl From<RelayerNetworkType> for ConfigFileNetworkType {
 /// EVM-specific relayer policy configuration
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
 pub struct RelayerEvmPolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_optional_u128", default)]
     pub min_balance: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gas_limit_estimation: Option<bool>,
