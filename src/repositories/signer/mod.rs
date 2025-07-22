@@ -139,10 +139,10 @@ mod tests {
     use crate::models::{LocalSignerConfig, SignerConfig};
     use secrets::SecretVec;
 
-    fn create_test_signer(id: String) -> SignerRepoModel {
+    fn create_local_signer(id: String) -> SignerRepoModel {
         SignerRepoModel {
             id: id.clone(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         }
@@ -160,7 +160,7 @@ mod tests {
     #[actix_web::test]
     async fn test_in_memory_impl_operations() {
         let impl_repo = SignerRepositoryStorage::new_in_memory();
-        let signer = create_test_signer("test-signer".to_string());
+        let signer = create_local_signer("test-signer".to_string());
 
         // Test create
         let created = impl_repo.create(signer.clone()).await.unwrap();
@@ -210,7 +210,7 @@ mod tests {
     #[actix_web::test]
     async fn test_duplicate_creation_error() {
         let impl_repo = SignerRepositoryStorage::new_in_memory();
-        let signer = create_test_signer("duplicate-test".to_string());
+        let signer = create_local_signer("duplicate-test".to_string());
 
         // Create the signer first time
         impl_repo.create(signer.clone()).await.unwrap();
@@ -227,7 +227,7 @@ mod tests {
     #[actix_web::test]
     async fn test_update_operations() {
         let impl_repo = SignerRepositoryStorage::new_in_memory();
-        let signer = create_test_signer("update-test".to_string());
+        let signer = create_local_signer("update-test".to_string());
 
         // Create the signer first
         impl_repo.create(signer.clone()).await.unwrap();
@@ -263,7 +263,7 @@ mod tests {
     #[actix_web::test]
     async fn test_delete_operations() {
         let impl_repo = SignerRepositoryStorage::new_in_memory();
-        let signer = create_test_signer("delete-test".to_string());
+        let signer = create_local_signer("delete-test".to_string());
 
         // Create the signer first
         impl_repo.create(signer).await.unwrap();
@@ -291,7 +291,7 @@ mod tests {
         let repo = InMemorySignerRepository::new();
         assert!(!repo.has_entries().await.unwrap());
 
-        let signer = create_test_signer("test".to_string());
+        let signer = create_local_signer("test".to_string());
         repo.create(signer.clone()).await.unwrap();
         assert!(repo.has_entries().await.unwrap());
     }
@@ -299,7 +299,7 @@ mod tests {
     #[actix_web::test]
     async fn test_drop_all_entries() {
         let repo = InMemorySignerRepository::new();
-        let signer = create_test_signer("test".to_string());
+        let signer = create_local_signer("test".to_string());
         repo.create(signer.clone()).await.unwrap();
         assert!(repo.has_entries().await.unwrap());
 
