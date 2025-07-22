@@ -14,7 +14,7 @@
 mod config;
 pub use config::*;
 
-mod request;
+pub mod request;
 pub use request::*;
 
 mod response;
@@ -599,53 +599,34 @@ impl Relayer {
         Ok(())
     }
 
-    /// Applies an update request to create a new validated relayer
+    /// Apply JSON Merge Patch (RFC 7396) directly to the domain object
     ///
-    /// This method provides a domain-first approach where the core model handles
-    /// its own business rules and validation rather than having update logic
-    /// scattered across request models.
+    /// This method:
+    /// 1. Validates the patch by converting to typed UpdateRelayerRequest
+    /// 2. Converts domain object to JSON
+    /// 3. Applies JSON merge patch
+    /// 4. Converts back to domain object
+    /// 5. Validates the final result
     ///
-    /// # Arguments
-    /// * `request` - The update request containing partial data to apply
-    ///
-    /// # Returns
-    /// * `Ok(Relayer)` - A new validated relayer with updates applied
-    /// * `Err(RelayerValidationError)` - If the resulting relayer would be invalid
-    pub fn apply_update(
+    /// This approach provides true JSON Merge Patch semantics while maintaining validation.
+    pub fn apply_json_patch(
         &self,
-        request: &UpdateRelayerRequest,
+        patch: &serde_json::Value,
     ) -> Result<Self, RelayerValidationError> {
-        let mut updated = self.clone();
+        // 3. Convert current domain object to JSON
+        let mut domain_json = serde_json::to_value(self).map_err(|e| {
+            RelayerValidationError::InvalidField(format!("Serialization error: {}", e))
+        })?;
 
-        // Apply updates from request
-        if let Some(name) = &request.name {
-            updated.name = name.clone();
-        }
+        // 4. Apply JSON Merge Patch
+        json_patch::merge(&mut domain_json, patch);
 
-        if let Some(paused) = request.paused {
-            updated.paused = paused;
-        }
+        // 5. Convert back to domain object
+        let updated: Relayer = serde_json::from_value(domain_json).map_err(|e| {
+            RelayerValidationError::InvalidField(format!("Invalid result after patch: {}", e))
+        })?;
 
-        if let Some(policies) = request
-            .to_domain_policies(self.network_type)
-            .map_err(|e| RelayerValidationError::InvalidPolicy(e.to_string()))?
-        {
-            updated.policies = Some(policies);
-        }
-
-        if let Some(notification_id) = &request.notification_id {
-            updated.notification_id = if notification_id.is_empty() {
-                None
-            } else {
-                Some(notification_id.clone())
-            };
-        }
-
-        if let Some(custom_rpc_urls) = &request.custom_rpc_urls {
-            updated.custom_rpc_urls = Some(custom_rpc_urls.clone());
-        }
-
-        // Validate the complete updated model
+        // 6. Validate the final result
         updated.validate()?;
 
         Ok(updated)
@@ -671,6 +652,8 @@ pub enum RelayerValidationError {
     InvalidRpcUrl(String),
     #[error("RPC URL weight must be in range 0-100")]
     InvalidRpcWeight,
+    #[error("Invalid field: {0}")]
+    InvalidField(String),
 }
 
 /// Centralized conversion from RelayerValidationError to ApiError
@@ -697,6 +680,132 @@ impl From<RelayerValidationError> for crate::models::ApiError {
             RelayerValidationError::InvalidRpcWeight => {
                 "RPC URL weight must be in range 0-100".to_string()
             }
+            RelayerValidationError::InvalidField(msg) => msg.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use serde_json::json;
+
+    #[test]
+    fn test_apply_json_patch_comprehensive() {
+        // Create a sample relayer
+        let relayer = Relayer {
+            id: "test-relayer".to_string(),
+            name: "Original Name".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Evm,
+            policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                min_balance: Some(1000000000000000000),
+                gas_limit_estimation: Some(true),
+                gas_price_cap: Some(50000000000),
+                whitelist_receivers: None,
+                eip1559_pricing: Some(false),
+                private_transactions: None,
+            })),
+            signer_id: "test-signer".to_string(),
+            notification_id: Some("old-notification".to_string()),
+            custom_rpc_urls: None,
+        };
+
+        // Create a JSON patch
+        let patch = json!({
+            "name": "Updated Name via JSON Patch",
+            "paused": true,
+            "policies": {
+                "min_balance": "2000000000000000000",
+                "gas_price_cap": null,  // Remove this field
+                "eip1559_pricing": true,  // Update this field
+                "whitelist_receivers": ["0x123", "0x456"]  // Add this field
+                // gas_limit_estimation not mentioned - should remain unchanged
+            },
+            "notification_id": null, // Remove notification
+            "custom_rpc_urls": [{"url": "https://example.com", "weight": 100}]
+        });
+
+        // Apply the JSON patch - all logic now handled uniformly!
+        let updated_relayer = relayer.apply_json_patch(&patch).unwrap();
+
+        // Verify all updates were applied correctly
+        assert_eq!(updated_relayer.name, "Updated Name via JSON Patch");
+        assert_eq!(updated_relayer.paused, true);
+        assert_eq!(updated_relayer.notification_id, None); // Removed
+        assert!(updated_relayer.custom_rpc_urls.is_some());
+
+        // Verify policy merge patch worked correctly
+        if let Some(RelayerNetworkPolicy::Evm(evm_policy)) = updated_relayer.policies {
+            assert_eq!(evm_policy.min_balance, Some(2000000000000000000)); // Updated
+            assert_eq!(evm_policy.gas_price_cap, None); // Removed (was null)
+            assert_eq!(evm_policy.eip1559_pricing, Some(true)); // Updated
+            assert_eq!(evm_policy.gas_limit_estimation, Some(true)); // Unchanged
+            assert_eq!(
+                evm_policy.whitelist_receivers,
+                Some(vec!["0x123".to_string(), "0x456".to_string()])
+            ); // Added
+            assert_eq!(evm_policy.private_transactions, None); // Unchanged
+        } else {
+            panic!("Expected EVM policy");
+        }
+    }
+
+    #[test]
+    fn test_apply_json_patch_validation_failure() {
+        let relayer = Relayer {
+            id: "test-relayer".to_string(),
+            name: "Original Name".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Evm,
+            policies: None,
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Invalid patch - field that would make the result invalid
+        let invalid_patch = json!({
+            "name": ""  // Empty name should fail validation
+        });
+
+        // Should fail validation during final validation step
+        let result = relayer.apply_json_patch(&invalid_patch);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Relayer name cannot be empty"));
+    }
+
+    #[test]
+    fn test_apply_json_patch_invalid_result() {
+        let relayer = Relayer {
+            id: "test-relayer".to_string(),
+            name: "Original Name".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Evm,
+            policies: None,
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Patch that would create an invalid structure
+        let invalid_patch = json!({
+            "network_type": "invalid_type"  // Invalid enum value
+        });
+
+        // Should fail when converting back to domain object
+        let result = relayer.apply_json_patch(&invalid_patch);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid result after patch"));
     }
 }

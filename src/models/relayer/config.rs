@@ -321,6 +321,7 @@ impl TryFrom<RelayerFileConfig> for Relayer {
             RelayerValidationError::InvalidRpcWeight => {
                 ConfigFileError::InvalidFormat("RPC URL weight must be in range 0-100".to_string())
             }
+            RelayerValidationError::InvalidField(msg) => ConfigFileError::InvalidFormat(msg),
         })?;
 
         Ok(relayer)
@@ -472,6 +473,7 @@ impl RelayersFileConfig {
                 RelayerValidationError::InvalidRpcWeight => ConfigFileError::InvalidFormat(
                     "RPC URL weight must be in range 0-100".to_string(),
                 ),
+                RelayerValidationError::InvalidField(msg) => ConfigFileError::InvalidFormat(msg),
             })?;
 
             if !ids.insert(relayer_config.id.clone()) {

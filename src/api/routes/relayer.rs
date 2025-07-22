@@ -4,7 +4,7 @@
 use crate::{
     api::controllers::relayer,
     domain::{SignDataRequest, SignTypedDataRequest},
-    models::{CreateRelayerRequest, DefaultAppState, PaginationQuery, UpdateRelayerRequest},
+    models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -37,14 +37,14 @@ async fn create_relayer(
     relayer::create_relayer(request.into_inner(), data).await
 }
 
-/// Updates a relayer's information based on the provided update request.
+/// Updates a relayer's information using JSON Merge Patch (RFC 7396).
 #[patch("/relayers/{relayer_id}")]
 async fn update_relayer(
     relayer_id: web::Path<String>,
-    update_req: web::Json<UpdateRelayerRequest>,
+    patch: web::Json<serde_json::Value>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    relayer::update_relayer(relayer_id.into_inner(), update_req.into_inner(), data).await
+    relayer::update_relayer(relayer_id.into_inner(), patch.into_inner(), data).await
 }
 
 /// Deletes a relayer by ID.

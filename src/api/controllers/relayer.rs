@@ -182,30 +182,35 @@ pub async fn create_relayer(
 /// The updated relayer information.
 pub async fn update_relayer(
     relayer_id: String,
-    request: UpdateRelayerRequest,
+    patch: serde_json::Value,
     state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+
+    // convert patch to UpdateRelayerRequest to validate
+    let update_request: UpdateRelayerRequest = serde_json::from_value(patch.clone())
+        .map_err(|e| ApiError::BadRequest(format!("Invalid update request: {}", e)))?;
 
     if relayer.system_disabled {
         return Err(ApiError::BadRequest("Relayer is disabled".to_string()));
     }
 
-    // check if notification exists (if provided)
-    if let Some(notification_id) = &request.notification_id {
+    // Check if notification exists (if setting one) by extracting from JSON patch
+    if let Some(notification_id) = update_request.notification_id {
         let _notification = state
             .notification_repository
-            .get_by_id(notification_id.clone())
+            .get_by_id(notification_id.to_string())
             .await?;
     }
 
-    // Apply update (with validation)
-    let updated: RelayerDomainModel =
-        RelayerDomainModel::from(relayer.clone()).apply_update(&request)?;
+    // Apply JSON merge patch directly to domain object
+    let updated_domain = RelayerDomainModel::from(relayer.clone())
+        .apply_json_patch(&patch)
+        .map_err(ApiError::from)?;
 
-    // Use safe updater to preserve runtime fields automatically
+    // 3. Repository concern - Use existing RelayerRepoUpdater to preserve runtime fields
     let updated_repo_model =
-        RelayerRepoUpdater::from_existing(relayer).apply_domain_update(updated);
+        RelayerRepoUpdater::from_existing(relayer).apply_domain_update(updated_domain);
 
     let saved_relayer = state
         .relayer_repository
@@ -213,7 +218,6 @@ pub async fn update_relayer(
         .await?;
 
     let relayer_response: RelayerResponse = saved_relayer.into();
-
     Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
 
