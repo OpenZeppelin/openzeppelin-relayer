@@ -27,6 +27,30 @@ pub struct DeletePendingTransactionsResponse {
     pub total_processed: u32,
 }
 
+/// Policy types for responses - these don't include network_type tags
+/// since the network_type is already available at the top level of RelayerResponse
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(untagged)]
+pub enum RelayerNetworkPolicyResponse {
+    Evm(RelayerEvmPolicy),
+    Solana(RelayerSolanaPolicy),
+    Stellar(RelayerStellarPolicy),
+}
+
+impl From<RelayerNetworkPolicy> for RelayerNetworkPolicyResponse {
+    fn from(policy: RelayerNetworkPolicy) -> Self {
+        match policy {
+            RelayerNetworkPolicy::Evm(evm_policy) => RelayerNetworkPolicyResponse::Evm(evm_policy),
+            RelayerNetworkPolicy::Solana(solana_policy) => {
+                RelayerNetworkPolicyResponse::Solana(solana_policy)
+            }
+            RelayerNetworkPolicy::Stellar(stellar_policy) => {
+                RelayerNetworkPolicyResponse::Stellar(stellar_policy)
+            }
+        }
+    }
+}
+
 /// Relayer response model for API endpoints
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
@@ -35,7 +59,10 @@ pub struct RelayerResponse {
     pub network: String,
     pub network_type: RelayerNetworkType,
     pub paused: bool,
-    pub policies: Option<RelayerNetworkPolicy>,
+    /// Policies without redundant network_type tag - network type is available at top level
+    /// Only included if user explicitly provided policies (not shown for empty/default policies)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policies: Option<RelayerNetworkPolicyResponse>,
     pub signer_id: String,
     pub notification_id: Option<String>,
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
@@ -84,7 +111,7 @@ impl From<Relayer> for RelayerResponse {
             network: relayer.network,
             network_type: relayer.network_type,
             paused: relayer.paused,
-            policies: relayer.policies,
+            policies: relayer.policies.map(RelayerNetworkPolicyResponse::from),
             signer_id: relayer.signer_id,
             notification_id: relayer.notification_id,
             custom_rpc_urls: relayer.custom_rpc_urls,
@@ -96,18 +123,57 @@ impl From<Relayer> for RelayerResponse {
 
 impl From<RelayerRepoModel> for RelayerResponse {
     fn from(model: RelayerRepoModel) -> Self {
+        // Only include policies in response if they have actual user-provided values
+        let policies = if is_empty_policy(&model.policies) {
+            None // Don't return empty/default policies in API response
+        } else {
+            Some(RelayerNetworkPolicyResponse::from(model.policies))
+        };
+
         Self {
             id: model.id,
             name: model.name,
             network: model.network,
             network_type: model.network_type.into(),
             paused: model.paused,
-            policies: Some(model.policies.into()),
+            policies,
             signer_id: model.signer_id,
             notification_id: model.notification_id,
             custom_rpc_urls: model.custom_rpc_urls,
             address: Some(model.address),
             system_disabled: Some(model.system_disabled),
+        }
+    }
+}
+
+/// Check if a policy is "empty" (all fields are None) indicating it's a default
+fn is_empty_policy(policy: &RelayerNetworkPolicy) -> bool {
+    match policy {
+        RelayerNetworkPolicy::Evm(evm_policy) => {
+            evm_policy.min_balance.is_none()
+                && evm_policy.gas_limit_estimation.is_none()
+                && evm_policy.gas_price_cap.is_none()
+                && evm_policy.whitelist_receivers.is_none()
+                && evm_policy.eip1559_pricing.is_none()
+                && evm_policy.private_transactions.is_none()
+        }
+        RelayerNetworkPolicy::Solana(solana_policy) => {
+            solana_policy.allowed_programs.is_none()
+                && solana_policy.max_signatures.is_none()
+                && solana_policy.max_tx_data_size.is_none()
+                && solana_policy.min_balance.is_none()
+                && solana_policy.allowed_tokens.is_none()
+                && solana_policy.fee_payment_strategy.is_none()
+                && solana_policy.fee_margin_percentage.is_none()
+                && solana_policy.allowed_accounts.is_none()
+                && solana_policy.disallowed_accounts.is_none()
+                && solana_policy.max_allowed_fee_lamports.is_none()
+                && solana_policy.swap_config.is_none()
+        }
+        RelayerNetworkPolicy::Stellar(stellar_policy) => {
+            stellar_policy.min_balance.is_none()
+                && stellar_policy.max_fee.is_none()
+                && stellar_policy.timeout_seconds.is_none()
         }
     }
 }
@@ -145,7 +211,17 @@ mod tests {
         assert_eq!(response.network, relayer.network);
         assert_eq!(response.network_type, relayer.network_type);
         assert_eq!(response.paused, relayer.paused);
-        assert_eq!(response.policies, relayer.policies);
+        assert_eq!(
+            response.policies,
+            Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
+                gas_price_cap: Some(100_000_000_000),
+                whitelist_receivers: None,
+                eip1559_pricing: Some(true),
+                private_transactions: None,
+                min_balance: None,
+                gas_limit_estimation: None,
+            }))
+        );
         assert_eq!(response.signer_id, relayer.signer_id);
         assert_eq!(response.notification_id, relayer.notification_id);
         assert_eq!(response.custom_rpc_urls, relayer.custom_rpc_urls);
@@ -161,7 +237,7 @@ mod tests {
             network: "mainnet".to_string(),
             network_type: RelayerNetworkType::Evm,
             paused: false,
-            policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            policies: Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
                 gas_price_cap: Some(100_000_000_000),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
@@ -184,6 +260,117 @@ mod tests {
         let deserialized: RelayerResponse = serde_json::from_str(&serialized).unwrap();
         assert_eq!(response.id, deserialized.id);
         assert_eq!(response.name, deserialized.name);
+    }
+
+    #[test]
+    fn test_response_without_redundant_network_type() {
+        let response = RelayerResponse {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "mainnet".to_string(),
+            network_type: RelayerNetworkType::Evm,
+            paused: false,
+            policies: Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
+                gas_price_cap: Some(100_000_000_000),
+                whitelist_receivers: None,
+                eip1559_pricing: Some(true),
+                private_transactions: None,
+                min_balance: None,
+                gas_limit_estimation: None,
+            })),
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+            address: Some("0x123...".to_string()),
+            system_disabled: Some(false),
+        };
+
+        let serialized = serde_json::to_string_pretty(&response).unwrap();
+
+        assert!(serialized.contains(r#""network_type": "evm""#));
+
+        // Count occurrences - should only be 1 (at top level)
+        let network_type_count = serialized.matches(r#""network_type""#).count();
+        assert_eq!(
+            network_type_count, 1,
+            "Should only have one network_type field at top level, not in policies"
+        );
+
+        assert!(serialized.contains(r#""gas_price_cap": 100000000000"#));
+        assert!(serialized.contains(r#""eip1559_pricing": true"#));
+    }
+
+    #[test]
+    fn test_empty_policies_not_returned_in_response() {
+        // Create a repository model with empty policies (all None - user didn't set any)
+        let repo_model = RelayerRepoModel {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "mainnet".to_string(),
+            network_type: RelayerNetworkType::Evm,
+            paused: false,
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()), // All None values
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+            address: "0x123...".to_string(),
+            system_disabled: false,
+        };
+
+        // Convert to response
+        let response = RelayerResponse::from(repo_model);
+
+        // Empty policies should not be included in response
+        assert_eq!(response.policies, None);
+
+        // Verify serialization doesn't include policies field
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(
+            !serialized.contains("policies"),
+            "Empty policies should not appear in JSON response"
+        );
+    }
+
+    #[test]
+    fn test_user_provided_policies_returned_in_response() {
+        // Create a repository model with user-provided policies
+        let repo_model = RelayerRepoModel {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "mainnet".to_string(),
+            network_type: RelayerNetworkType::Evm,
+            paused: false,
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                gas_price_cap: Some(100_000_000_000),
+                eip1559_pricing: Some(true),
+                min_balance: None, // Some fields can still be None
+                gas_limit_estimation: None,
+                whitelist_receivers: None,
+                private_transactions: None,
+            }),
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+            address: "0x123...".to_string(),
+            system_disabled: false,
+        };
+
+        // Convert to response
+        let response = RelayerResponse::from(repo_model);
+
+        // User-provided policies should be included in response
+        assert!(response.policies.is_some());
+
+        // Verify serialization includes policies field
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(
+            serialized.contains("policies"),
+            "User-provided policies should appear in JSON response"
+        );
+        assert!(
+            serialized.contains("gas_price_cap"),
+            "User-provided policy values should appear in JSON response"
+        );
     }
 }
 

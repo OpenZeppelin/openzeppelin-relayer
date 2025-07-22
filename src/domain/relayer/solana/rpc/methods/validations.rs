@@ -10,6 +10,7 @@ use std::collections::HashMap;
 /// * Have correct fee payer configuration
 /// * Comply with relayer policies
 use crate::{
+    constants::{DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE},
     domain::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction},
     models::RelayerSolanaPolicy,
     services::SolanaProviderTrait,
@@ -247,7 +248,10 @@ impl SolanaTransactionValidator {
         tx: &Transaction,
         config: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
-        let max_size: usize = config.max_tx_data_size.unwrap_or_default().into();
+        let max_size: usize = config
+            .max_tx_data_size
+            .unwrap_or(DEFAULT_SOLANA_MAX_TX_DATA_SIZE)
+            .into();
         let tx_bytes = bincode::serialize(tx)
             .map_err(|e| SolanaTransactionValidationError::DeserializeError(e.to_string()))?;
 
@@ -329,7 +333,7 @@ impl SolanaTransactionValidator {
             .map_err(|e| SolanaTransactionValidationError::ValidationError(e.to_string()))?;
 
         // Ensure minimum balance policy is maintained
-        let min_balance = policy.min_balance.unwrap_or_default();
+        let min_balance = policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE);
         let required_balance = fee + min_balance;
 
         if balance < required_balance {

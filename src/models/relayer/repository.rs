@@ -19,9 +19,9 @@ impl RelayerRepoUpdater {
     pub fn from_existing(existing: RelayerRepoModel) -> Self {
         Self { original: existing }
     }
-    
+
     /// Apply updates from a domain model while preserving runtime fields
-    /// 
+    ///
     /// This method ensures that runtime fields (address, system_disabled) from the
     /// original repository model are preserved when converting from domain model,
     /// preventing data loss during updates.
@@ -179,7 +179,7 @@ mod tests {
             id: "test_relayer".to_string(),
             name: "Original Name".to_string(),
             address: "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E".to_string(), // Runtime field
-            system_disabled: true, // Runtime field
+            system_disabled: true,                                             // Runtime field
             paused: false,
             network: "mainnet".to_string(),
             network_type: NetworkType::Evm,
@@ -193,7 +193,7 @@ mod tests {
         let domain_update = Relayer {
             id: "test_relayer".to_string(),
             name: "Updated Name".to_string(), // Changed
-            paused: true, // Changed
+            paused: true,                     // Changed
             network: "mainnet".to_string(),
             network_type: RelayerNetworkType::Evm,
             signer_id: "test_signer".to_string(),
@@ -203,16 +203,22 @@ mod tests {
         };
 
         // Use updater to preserve runtime fields
-        let updated = RelayerRepoUpdater::from_existing(original.clone())
-            .apply_domain_update(domain_update);
+        let updated =
+            RelayerRepoUpdater::from_existing(original.clone()).apply_domain_update(domain_update);
 
         // Verify business fields were updated
         assert_eq!(updated.name, "Updated Name");
         assert_eq!(updated.paused, true);
-        assert_eq!(updated.notification_id, Some("new_notification".to_string()));
+        assert_eq!(
+            updated.notification_id,
+            Some("new_notification".to_string())
+        );
 
         // Verify runtime fields were preserved
-        assert_eq!(updated.address, "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E");
+        assert_eq!(
+            updated.address,
+            "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E"
+        );
         assert_eq!(updated.system_disabled, true);
     }
 }

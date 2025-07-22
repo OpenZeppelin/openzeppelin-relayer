@@ -11,7 +11,8 @@ use std::{str::FromStr, sync::Arc};
 
 use crate::{
     constants::{
-        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
+        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
+        SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{
         relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
@@ -661,7 +662,7 @@ where
 
         let policy = self.relayer.policies.get_solana_policy();
 
-        if balance < policy.min_balance.unwrap_or_default() {
+        if balance < policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE) {
             return Err(RelayerError::InsufficientBalanceError(
                 "Insufficient balance".to_string(),
             ));

@@ -19,8 +19,8 @@ use crate::{
     models::{
         convert_to_internal_rpc_request, ApiError, ApiResponse, CreateRelayerRequest,
         DefaultAppState, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
-        Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater, RelayerResponse, TransactionResponse,
-        UpdateRelayerRequest,
+        Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater, RelayerResponse,
+        TransactionResponse, UpdateRelayerRequest,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{Signer, SignerFactory},
@@ -200,11 +200,12 @@ pub async fn update_relayer(
     }
 
     // Apply update (with validation)
-    let updated: RelayerDomainModel = RelayerDomainModel::from(relayer.clone()).apply_update(&request)?;
+    let updated: RelayerDomainModel =
+        RelayerDomainModel::from(relayer.clone()).apply_update(&request)?;
 
     // Use safe updater to preserve runtime fields automatically
-    let updated_repo_model = RelayerRepoUpdater::from_existing(relayer)
-        .apply_domain_update(updated);
+    let updated_repo_model =
+        RelayerRepoUpdater::from_existing(relayer).apply_domain_update(updated);
 
     let saved_relayer = state
         .relayer_repository

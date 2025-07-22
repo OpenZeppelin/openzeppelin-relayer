@@ -66,7 +66,7 @@ mod tests {
     use super::*;
     use crate::models::{
         EvmTransactionResponse, NetworkType, RelayerDisabledPayload, RelayerEvmPolicy,
-        RelayerNetworkPolicy, RelayerResponse, TransactionResponse, TransactionStatus,
+        RelayerNetworkPolicyResponse, RelayerResponse, TransactionResponse, TransactionStatus,
         WebhookNotification, WebhookPayload, U256,
     };
 
@@ -150,7 +150,7 @@ mod tests {
                 network: "ethereum".to_string(),
                 network_type: NetworkType::Evm,
                 paused: false,
-                policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                policies: Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
                     gas_price_cap: None,
                     whitelist_receivers: None,
                     eip1559_pricing: None,

@@ -333,7 +333,7 @@ fn convert_config_policies_to_domain(
     match config_policies {
         ConfigFileRelayerNetworkPolicy::Evm(evm_policy) => {
             Ok(RelayerNetworkPolicy::Evm(super::RelayerEvmPolicy {
-                min_balance: Some(evm_policy.min_balance.unwrap_or_default()),
+                min_balance: evm_policy.min_balance,
                 gas_limit_estimation: evm_policy.gas_limit_estimation,
                 gas_price_cap: evm_policy.gas_price_cap,
                 whitelist_receivers: evm_policy.whitelist_receivers,

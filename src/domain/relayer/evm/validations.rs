@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::{
+    constants::DEFAULT_EVM_MIN_BALANCE,
     models::{types::U256, RelayerEvmPolicy},
     services::EvmProviderTrait,
 };
@@ -28,7 +29,7 @@ impl EvmTransactionValidator {
             .await
             .map_err(|e| EvmTransactionValidationError::ProviderError(e.to_string()))?;
 
-        let min_balance = U256::from(policy.min_balance.unwrap_or_default());
+        let min_balance = U256::from(policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE));
 
         if balance < min_balance {
             return Err(EvmTransactionValidationError::InsufficientBalance(format!(
@@ -51,7 +52,7 @@ impl EvmTransactionValidator {
             .await
             .map_err(|e| EvmTransactionValidationError::ProviderError(e.to_string()))?;
 
-        let min_balance = U256::from(policy.min_balance.unwrap_or_default());
+        let min_balance = U256::from(policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE));
 
         let remaining_balance = balance.saturating_sub(balance_to_use);
 
@@ -65,7 +66,7 @@ impl EvmTransactionValidator {
         // Check if remaining balance would fall below minimum requirement
         if !min_balance.is_zero() && remaining_balance < min_balance {
             return Err(EvmTransactionValidationError::InsufficientBalance(
-                format!("Relayer balance {balance} is insufficient to cover {balance_to_use}, with an enforced minimum balance of {}", policy.min_balance.unwrap_or_default())
+                format!("Relayer balance {balance} is insufficient to cover {balance_to_use}, with an enforced minimum balance of {}", policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE))
             ));
         }
 

@@ -268,10 +268,6 @@ where
         evm_data: &EvmTransactionData,
         relayer_policy: &RelayerEvmPolicy,
     ) -> Result<u64, TransactionError> {
-        println!(
-            "relayer_policy: {:?}",
-            relayer_policy.gas_limit_estimation.unwrap_or_default()
-        );
         if !relayer_policy
             .gas_limit_estimation
             .unwrap_or(DEFAULT_EVM_GAS_LIMIT_ESTIMATION)

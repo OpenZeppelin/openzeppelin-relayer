@@ -97,7 +97,7 @@ fn resolve_strategy(relayer: &RelayerRepoModel) -> SolanaSwapStrategy {
         .get_solana_policy()
         .get_swap_config()
         .and_then(|cfg| cfg.strategy)
-        .unwrap_or_default() // Provide a default strategy
+        .unwrap_or(SolanaSwapStrategy::Noop) // Provide a default strategy
 }
 
 pub struct NoopDex;

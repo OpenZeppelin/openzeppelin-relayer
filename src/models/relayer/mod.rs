@@ -26,15 +26,7 @@ pub use repository::*;
 mod rpc_config;
 pub use rpc_config::*;
 
-use crate::{
-    config::ConfigFileNetworkType,
-    constants::{
-        DEFAULT_EVM_EIP1559_ENABLED, DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE,
-        DEFAULT_EVM_PRIVATE_TRANSACTIONS, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
-        DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE, ID_REGEX,
-    },
-    utils::deserialize_optional_u128,
-};
+use crate::{config::ConfigFileNetworkType, constants::ID_REGEX, utils::deserialize_optional_u128};
 use apalis_cron::Schedule;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -82,7 +74,8 @@ impl From<RelayerNetworkType> for ConfigFileNetworkType {
 }
 
 /// EVM-specific relayer policy configuration
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RelayerEvmPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "deserialize_optional_u128", default)]
@@ -100,21 +93,9 @@ pub struct RelayerEvmPolicy {
     pub private_transactions: Option<bool>,
 }
 
-impl Default for RelayerEvmPolicy {
-    fn default() -> Self {
-        Self {
-            min_balance: Some(DEFAULT_EVM_MIN_BALANCE),
-            gas_limit_estimation: Some(DEFAULT_EVM_GAS_LIMIT_ESTIMATION),
-            gas_price_cap: Some(u128::MAX),
-            whitelist_receivers: None,
-            eip1559_pricing: Some(DEFAULT_EVM_EIP1559_ENABLED),
-            private_transactions: Some(DEFAULT_EVM_PRIVATE_TRANSACTIONS),
-        }
-    }
-}
-
 /// Solana token swap configuration
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct AllowedTokenSwapConfig {
     /// Conversion slippage percentage for token. Optional.
     pub slippage_percentage: Option<f32>,
@@ -128,6 +109,7 @@ pub struct AllowedTokenSwapConfig {
 
 /// Configuration for allowed token handling on Solana
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AllowedToken {
     pub mint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,36 +149,27 @@ impl AllowedToken {
 }
 
 /// Solana fee payment strategy
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RelayerSolanaFeePaymentStrategy {
+    #[default]
     User,
     Relayer,
 }
 
-impl Default for RelayerSolanaFeePaymentStrategy {
-    fn default() -> Self {
-        Self::User
-    }
-}
-
 /// Solana swap strategy
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum RelayerSolanaSwapStrategy {
     JupiterSwap,
     JupiterUltra,
+    #[default]
     Noop,
 }
 
-impl Default for RelayerSolanaSwapStrategy {
-    fn default() -> Self {
-        Self::Noop
-    }
-}
-
 /// Jupiter swap options
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct JupiterSwapOptions {
     /// Maximum priority fee (in lamports) for a transaction. Optional.
     pub priority_fee_max_lamports: Option<u64>,
@@ -206,7 +179,8 @@ pub struct JupiterSwapOptions {
 }
 
 /// Solana swap policy configuration
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RelayerSolanaSwapPolicy {
     /// DEX strategy to use for token swaps.
     pub strategy: Option<RelayerSolanaSwapStrategy>,
@@ -218,19 +192,9 @@ pub struct RelayerSolanaSwapPolicy {
     pub jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 
-impl Default for RelayerSolanaSwapPolicy {
-    fn default() -> Self {
-        Self {
-            strategy: Some(RelayerSolanaSwapStrategy::default()),
-            cron_schedule: None,
-            min_balance_threshold: None,
-            jupiter_swap_options: None,
-        }
-    }
-}
-
 /// Solana-specific relayer policy configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RelayerSolanaPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_programs: Option<Vec<String>>,
@@ -254,24 +218,6 @@ pub struct RelayerSolanaPolicy {
     pub max_allowed_fee_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swap_config: Option<RelayerSolanaSwapPolicy>,
-}
-
-impl Default for RelayerSolanaPolicy {
-    fn default() -> Self {
-        Self {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
-            fee_margin_percentage: None,
-            min_balance: Some(DEFAULT_SOLANA_MIN_BALANCE),
-            allowed_tokens: None,
-            allowed_programs: None,
-            allowed_accounts: None,
-            disallowed_accounts: None,
-            max_signatures: None,
-            max_tx_data_size: Some(DEFAULT_SOLANA_MAX_TX_DATA_SIZE),
-            max_allowed_fee_lamports: None,
-            swap_config: None,
-        }
-    }
 }
 
 impl RelayerSolanaPolicy {
@@ -301,7 +247,8 @@ impl RelayerSolanaPolicy {
     }
 }
 /// Stellar-specific relayer policy configuration
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RelayerStellarPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_balance: Option<u64>,
@@ -309,16 +256,6 @@ pub struct RelayerStellarPolicy {
     pub max_fee: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
-}
-
-impl Default for RelayerStellarPolicy {
-    fn default() -> Self {
-        Self {
-            max_fee: None,
-            timeout_seconds: None,
-            min_balance: Some(DEFAULT_STELLAR_MIN_BALANCE),
-        }
-    }
 }
 
 /// Network-specific policy for relayers
