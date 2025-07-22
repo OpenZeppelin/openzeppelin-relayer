@@ -293,7 +293,7 @@
       ],
       "is_testnet": false,
       "network": "fuse",
-      "required_confirmations": 1,
+      "required_confirmations": 6,
       "rpc_urls": [
         "https://rpc.fuse.io"
       ],
@@ -312,7 +312,7 @@
       ],
       "is_testnet": true,
       "network": "fuse-spark",
-      "required_confirmations": 1,
+      "required_confirmations": 6,
       "rpc_urls": [
         " https://rpc.fusespark.io"
       ],

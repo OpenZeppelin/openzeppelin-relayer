@@ -11,7 +11,7 @@
       ],
       "is_testnet": false,
       "network": "abstract",
-      "required_confirmations": 1,
+      "required_confirmations": 6,
       "rpc_urls": [
         "https://api.mainnet.abs.xyz"
       ],
@@ -29,7 +29,7 @@
       ],
       "is_testnet": true,
       "network": "abstract-sepolia",
-      "required_confirmations": 1,
+      "required_confirmations": 6,
       "rpc_urls": [
         "https://api.testnet.abs.xyz"
       ],
