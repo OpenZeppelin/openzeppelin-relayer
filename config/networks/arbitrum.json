@@ -22,7 +22,7 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "is_arbitrum",
+        "arbitrum_based",
         "rollup",
         "no-mempool"
       ],
@@ -43,12 +43,11 @@
       "required_confirmations": 1,
       "rpc_urls": [
         "https://sepolia-rollup.arbitrum.io/rpc",
-        "https://arbitrum-sepolia-rpc.publicnode.com",
-        "https://sepolia-rollup.arbitrum.io/rpc"
+        "https://arbitrum-sepolia-rpc.publicnode.com"
       ],
       "symbol": "ETH",
       "tags": [
-        "is_arbitrum",
+        "arbitrum_based",
         "deprecated",
         "rollup",
         "no-mempool"
@@ -75,7 +74,7 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "is_arbitrum",
+        "arbitrum_based",
         "rollup",
         "no-mempool"
       ],

@@ -23,7 +23,7 @@
       "symbol": "ETH",
       "tags": [
         "rollup",
-        "optimism"
+        "optimism_based"
       ],
       "type": "evm"
     },
@@ -50,7 +50,7 @@
       "tags": [
         "deprecated",
         "rollup",
-        "optimism"
+        "optimism_based"
       ],
       "type": "evm"
     },

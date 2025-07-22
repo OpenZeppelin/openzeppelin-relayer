@@ -170,10 +170,10 @@ Some tags have special meaning and affect relayer behavior:
 |`rollup`
 |Identifies Layer 2 rollup networks (e.g., Arbitrum, Optimism, Base)
 
-|`optimism`
+|`optimism_based`
 |Identifies Optimism-based networks using the OP Stack (e.g., Optimism, Base, World Chain)
 
-|`arbitrum`
+|`arbitrum_based`
 |Identifies Arbitrum-based networks using the Arbitrum Stack
 
 |`no-mempool`
