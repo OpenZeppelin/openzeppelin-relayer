@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_is_optimism_with_optimism_tag() {
-        let network = create_test_evm_network_with_tags(vec!["optimism", "rollup"]);
+        let network = create_test_evm_network_with_tags(vec!["optimism_based", "rollup"]);
         assert!(network.is_optimism());
     }
 
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_lacks_mempool_without_no_mempool_tag() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
+        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism_based"]);
         assert!(!network.lacks_mempool());
     }
 
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_optimism_like_network() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
+        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism_based"]);
         assert!(network.is_rollup());
         assert!(network.is_optimism());
         assert!(!network.lacks_mempool());
@@ -241,7 +241,7 @@ mod tests {
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
-                tags: Some(vec!["rollup".to_string(), "optimism".to_string()]),
+                tags: Some(vec!["rollup".to_string(), "optimism_based".to_string()]),
             },
             chain_id: Some(10),
             required_confirmations: Some(1),

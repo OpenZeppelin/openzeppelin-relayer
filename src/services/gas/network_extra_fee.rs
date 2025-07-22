@@ -84,7 +84,7 @@ mod tests {
             explorer_urls: None,
             average_blocktime_ms: 12000,
             is_testnet: false,
-            tags: vec![if optimism { "optimism" } else { name }.to_string()],
+            tags: vec![if optimism { "optimism_based" } else { name }.to_string()],
             chain_id: if optimism { 10 } else { 42161 },
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
