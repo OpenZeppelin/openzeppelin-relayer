@@ -40,7 +40,7 @@ jobs:
           # Do not check for new version
           SEMGREP_ENABLE_VERSION_CHECK: 0
           # No metrics
-          SEMGREP_SEND_METRICS: false
+          SEMGREP_SEND_METRICS: 'off'
       - name: Upload SARIF file for GitHub Advanced Security Dashboard
         uses: github/codeql-action/upload-sarif@d6bbdef45e766d081b84a2def353b0055f728d3e  # v3.29.3
         with:
