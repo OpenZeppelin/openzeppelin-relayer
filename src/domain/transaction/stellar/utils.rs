@@ -1,6 +1,8 @@
 //! Utility functions for Stellar transaction domain logic.
 use crate::models::OperationSpec;
 use crate::models::RelayerError;
+use crate::services::StellarProviderTrait;
+use log::info;
 
 /// Returns true if any operation needs simulation (contract invocation, creation, or wasm upload).
 pub fn needs_simulation(operations: &[OperationSpec]) -> bool {
@@ -43,10 +45,8 @@ pub async fn fetch_next_sequence_from_chain<P>(
     relayer_address: &str,
 ) -> Result<u64, String>
 where
-    P: crate::services::StellarProviderTrait,
+    P: StellarProviderTrait,
 {
-    use log::info;
-
     info!(
         "Fetching sequence from chain for address: {}",
         relayer_address
