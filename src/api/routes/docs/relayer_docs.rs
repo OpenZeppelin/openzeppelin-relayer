@@ -1,14 +1,24 @@
+//! # Relayer Documentation
+//!
+//! This module contains the OpenAPI documentation for the relayer API endpoints.
+//!
+//! ## Endpoints
+//!
+//! - `GET /api/v1/relayers`: List all relayers
+//! - `GET /api/v1/relayers/{id}`: Get a relayer by ID
+//! - `POST /api/v1/relayers`: Create a new relayer
+//! - `PATCH /api/v1/relayers/{id}`: Update a relayer
+//! - `DELETE /api/v1/relayers/{id}`: Delete a relayer
+
 use crate::{
-    domain::{
-        BalanceResponse, RelayerUpdateRequest, SignDataRequest, SignDataResponse,
-        SignTypedDataRequest,
-    },
+    domain::{BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest},
     models::{
         ApiResponse, CreateRelayerRequest, DeletePendingTransactionsResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
-        RelayerResponse, RelayerStatus, TransactionResponse,
+        RelayerResponse, RelayerStatus, TransactionResponse, UpdateRelayerRequest,
     },
 };
+
 /// Relayer routes implementation
 ///
 /// Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file
@@ -223,7 +233,7 @@ fn doc_create_relayer() {}
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
-    request_body = RelayerUpdateRequest,
+    request_body = UpdateRelayerRequest,
     responses(
         (status = 200, description = "Relayer updated successfully", body = ApiResponse<RelayerResponse>),
         (

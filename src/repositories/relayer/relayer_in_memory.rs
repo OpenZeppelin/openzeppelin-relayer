@@ -9,7 +9,7 @@
 //! implementation is useful for testing and development purposes.
 use crate::models::PaginationQuery;
 use crate::{
-    domain::RelayerUpdateRequest,
+    models::UpdateRelayerRequest,
     models::{RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
 };
 use async_trait::async_trait;
@@ -102,7 +102,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
         if let Some(relayer) = store.get_mut(&id) {
@@ -386,7 +386,13 @@ mod tests {
         repo.create(initial_relayer.clone()).await.unwrap();
 
         // Perform a partial update on the relayer
-        let update_req = RelayerUpdateRequest { paused: Some(true) };
+        let update_req = UpdateRelayerRequest {
+            name: None,
+            paused: Some(true),
+            policies: None,
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
 
         let updated_relayer = repo
             .partial_update(relayer_id.clone(), update_req)

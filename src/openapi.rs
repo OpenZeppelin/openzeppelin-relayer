@@ -79,7 +79,7 @@ impl Modify for SecurityAddon {
         models::EvmPolicyResponse,
         models::SolanaPolicyResponse,
         models::StellarPolicyResponse,
-        domain::RelayerUpdateRequest,
+        models::UpdateRelayerRequest,
         domain::SignDataRequest,
         domain::SignTypedDataRequest,
         models::PluginCallRequest,

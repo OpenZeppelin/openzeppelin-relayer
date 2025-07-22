@@ -13,13 +13,14 @@ use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
-        RelayerFactory, RelayerFactoryTrait, RelayerUpdateRequest, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest, Transaction,
+        RelayerFactory, RelayerFactoryTrait, SignDataRequest, SignDataResponse,
+        SignTypedDataRequest, Transaction,
     },
     models::{
         convert_to_internal_rpc_request, ApiError, ApiResponse, CreateRelayerRequest,
         DefaultAppState, NetworkTransactionRequest, NetworkType, PaginationMeta, PaginationQuery,
-        RelayerRepoModel, RelayerResponse, TransactionResponse,
+        Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater, RelayerResponse, TransactionResponse,
+        UpdateRelayerRequest,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{Signer, SignerFactory},
@@ -181,26 +182,36 @@ pub async fn create_relayer(
 /// The updated relayer information.
 pub async fn update_relayer(
     relayer_id: String,
-    update_req: RelayerUpdateRequest,
+    request: UpdateRelayerRequest,
     state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
-    if relayer.system_disabled || (relayer.paused && update_req.paused != Some(false)) {
-        let error_message = if relayer.system_disabled {
-            "Relayer is disabled"
-        } else {
-            "Relayer is paused"
-        };
-        return Err(ApiError::BadRequest(error_message.to_string()));
+    if relayer.system_disabled {
+        return Err(ApiError::BadRequest("Relayer is disabled".to_string()));
     }
 
-    let updated_relayer = state
+    // check if notification exists (if provided)
+    if let Some(notification_id) = &request.notification_id {
+        let _notification = state
+            .notification_repository
+            .get_by_id(notification_id.clone())
+            .await?;
+    }
+
+    // Apply update (with validation)
+    let updated: RelayerDomainModel = RelayerDomainModel::from(relayer.clone()).apply_update(&request)?;
+
+    // Use safe updater to preserve runtime fields automatically
+    let updated_repo_model = RelayerRepoUpdater::from_existing(relayer)
+        .apply_domain_update(updated);
+
+    let saved_relayer = state
         .relayer_repository
-        .partial_update(relayer_id.clone(), update_req)
+        .update(relayer_id.clone(), updated_repo_model)
         .await?;
 
-    let relayer_response: RelayerResponse = updated_relayer.into();
+    let relayer_response: RelayerResponse = saved_relayer.into();
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }

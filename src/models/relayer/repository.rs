@@ -8,6 +8,32 @@ use super::{RelayerNetworkPolicy, RelayerNetworkType, RpcConfig};
 // Use the domain model RelayerNetworkType directly
 pub type NetworkType = RelayerNetworkType;
 
+/// Helper for safely updating relayer repository models from domain models
+/// while preserving runtime fields like address and system_disabled
+pub struct RelayerRepoUpdater {
+    original: RelayerRepoModel,
+}
+
+impl RelayerRepoUpdater {
+    /// Create an updater from an existing repository model
+    pub fn from_existing(existing: RelayerRepoModel) -> Self {
+        Self { original: existing }
+    }
+    
+    /// Apply updates from a domain model while preserving runtime fields
+    /// 
+    /// This method ensures that runtime fields (address, system_disabled) from the
+    /// original repository model are preserved when converting from domain model,
+    /// preventing data loss during updates.
+    pub fn apply_domain_update(self, domain: Relayer) -> RelayerRepoModel {
+        let mut updated = RelayerRepoModel::from(domain);
+        // Preserve runtime fields from original
+        updated.address = self.original.address;
+        updated.system_disabled = self.original.system_disabled;
+        updated
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayerRepoModel {
     pub id: String,
@@ -51,6 +77,22 @@ impl Default for RelayerRepoModel {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+        }
+    }
+}
+
+impl From<RelayerRepoModel> for Relayer {
+    fn from(repo_model: RelayerRepoModel) -> Self {
+        Self {
+            id: repo_model.id,
+            name: repo_model.name,
+            network: repo_model.network,
+            paused: repo_model.paused,
+            network_type: repo_model.network_type,
+            policies: Some(repo_model.policies),
+            signer_id: repo_model.signer_id,
+            notification_id: repo_model.notification_id,
+            custom_rpc_urls: repo_model.custom_rpc_urls,
         }
     }
 }
@@ -128,5 +170,49 @@ mod tests {
         let result = relayer.validate_active_state();
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), RelayerError::RelayerDisabled));
+    }
+
+    #[test]
+    fn test_relayer_repo_updater_preserves_runtime_fields() {
+        // Create an original relayer with runtime fields set
+        let original = RelayerRepoModel {
+            id: "test_relayer".to_string(),
+            name: "Original Name".to_string(),
+            address: "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E".to_string(), // Runtime field
+            system_disabled: true, // Runtime field
+            paused: false,
+            network: "mainnet".to_string(),
+            network_type: NetworkType::Evm,
+            signer_id: "test_signer".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Create a domain model with different business fields
+        let domain_update = Relayer {
+            id: "test_relayer".to_string(),
+            name: "Updated Name".to_string(), // Changed
+            paused: true, // Changed
+            network: "mainnet".to_string(),
+            network_type: RelayerNetworkType::Evm,
+            signer_id: "test_signer".to_string(),
+            policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default())),
+            notification_id: Some("new_notification".to_string()), // Changed
+            custom_rpc_urls: None,
+        };
+
+        // Use updater to preserve runtime fields
+        let updated = RelayerRepoUpdater::from_existing(original.clone())
+            .apply_domain_update(domain_update);
+
+        // Verify business fields were updated
+        assert_eq!(updated.name, "Updated Name");
+        assert_eq!(updated.paused, true);
+        assert_eq!(updated.notification_id, Some("new_notification".to_string()));
+
+        // Verify runtime fields were preserved
+        assert_eq!(updated.address, "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E");
+        assert_eq!(updated.system_disabled, true);
     }
 }

@@ -3,8 +3,8 @@
 //! The routes are integrated with the Actix-web framework and interact with the relayer controller.
 use crate::{
     api::controllers::relayer,
-    domain::{RelayerUpdateRequest, SignDataRequest, SignTypedDataRequest},
-    models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
+    domain::{SignDataRequest, SignTypedDataRequest},
+    models::{CreateRelayerRequest, DefaultAppState, PaginationQuery, UpdateRelayerRequest},
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
 use serde::Deserialize;
@@ -41,7 +41,7 @@ async fn create_relayer(
 #[patch("/relayers/{relayer_id}")]
 async fn update_relayer(
     relayer_id: web::Path<String>,
-    update_req: web::Json<RelayerUpdateRequest>,
+    update_req: web::Json<UpdateRelayerRequest>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::update_relayer(relayer_id.into_inner(), update_req.into_inner(), data).await

@@ -1,6 +1,6 @@
 //! Redis-backed implementation of the RelayerRepository.
 
-use crate::domain::RelayerUpdateRequest;
+use crate::models::UpdateRelayerRequest;
 use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
@@ -482,7 +482,7 @@ impl RelayerRepository for RedisRelayerRepository {
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         // First get the current relayer
         let mut relayer = self.get_by_id(id.clone()).await?;
@@ -809,7 +809,10 @@ mod tests {
 
         repo.create(relayer.clone()).await.unwrap();
 
-        let update = RelayerUpdateRequest { paused: Some(true) };
+        let update = UpdateRelayerRequest {
+            paused: Some(true),
+            ..Default::default()
+        };
         let result = repo.partial_update(relayer.id.clone(), update).await;
         assert!(result.is_ok());
 

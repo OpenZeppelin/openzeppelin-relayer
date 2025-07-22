@@ -689,12 +689,11 @@ impl Relayer {
             updated.paused = paused;
         }
 
-        if let Some(network_type) = &request.network_type {
-            updated.network_type = network_type.clone();
-        }
-
-        if let Some(policies) = &request.policies {
-            updated.policies = Some(policies.clone());
+        if let Some(policies) = request
+            .to_domain_policies(self.network_type)
+            .map_err(|e| RelayerValidationError::InvalidPolicy(e.to_string()))?
+        {
+            updated.policies = Some(policies);
         }
 
         if let Some(notification_id) = &request.notification_id {
