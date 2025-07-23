@@ -16,13 +16,19 @@ use crate::{
         RelayerFactory, RelayerFactoryTrait, SignDataRequest, SignDataResponse,
         SignTypedDataRequest, Transaction,
     },
+    jobs::JobProducerTrait,
     models::{
         convert_to_internal_rpc_request, deserialize_policy_for_network_type, ApiError,
-        ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkTransactionRequest, NetworkType,
-        PaginationMeta, PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel,
-        RelayerRepoUpdater, RelayerResponse, TransactionResponse, UpdateRelayerRequestRaw,
+        ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
+        NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
+        PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
+        RelayerResponse, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        TransactionResponse, UpdateRelayerRequestRaw,
     },
-    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        TransactionCounterTrait, TransactionRepository,
+    },
     services::{Signer, SignerFactory},
 };
 use actix_web::{web, HttpResponse};
@@ -38,10 +44,20 @@ use eyre::Result;
 /// # Returns
 ///
 /// A paginated list of relayers.
-pub async fn list_relayers(
+pub async fn list_relayers<J, RR, TR, NR, NFR, SR, TCR, PR>(
     query: PaginationQuery,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayers = state.relayer_repository.list_paginated(query).await?;
 
     let mapped_relayers: Vec<RelayerResponse> =
@@ -67,10 +83,20 @@ pub async fn list_relayers(
 /// # Returns
 ///
 /// The details of the specified relayer.
-pub async fn get_relayer(
+pub async fn get_relayer<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
 
     let relayer_response: RelayerResponse = relayer.into();
@@ -98,10 +124,20 @@ pub async fn get_relayer(
 /// - **Network Validation**: Confirms the specified network exists for the given network type
 ///
 /// All validations must pass before the relayer is created, ensuring referential integrity and security constraints.
-pub async fn create_relayer(
+pub async fn create_relayer<J, RR, TR, NR, NFR, SR, TCR, PR>(
     request: CreateRelayerRequest,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     // Convert request to domain relayer (validates automatically)
     let relayer = crate::models::Relayer::try_from(request)?;
 
@@ -180,11 +216,21 @@ pub async fn create_relayer(
 /// # Returns
 ///
 /// The updated relayer information.
-pub async fn update_relayer(
+pub async fn update_relayer<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
     patch: serde_json::Value,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     // convert patch to UpdateRelayerRequest to validate
@@ -241,10 +287,20 @@ pub async fn update_relayer(
 ///
 /// This endpoint ensures that relayers cannot be deleted if they have any pending
 /// or active transactions. This prevents data loss and maintains system integrity.
-pub async fn delete_relayer(
+pub async fn delete_relayer<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     // First check if the relayer exists
     let _relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
@@ -285,10 +341,20 @@ pub async fn delete_relayer(
 /// # Returns
 ///
 /// The status of the specified relayer.
-pub async fn get_relayer_status(
+pub async fn get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
     let status = relayer.get_status().await?;
@@ -306,10 +372,20 @@ pub async fn get_relayer_status(
 /// # Returns
 ///
 /// The balance of the specified relayer.
-pub async fn get_relayer_balance(
+pub async fn get_relayer_balance<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
     let result = relayer.get_balance().await?;
@@ -361,11 +437,21 @@ pub async fn send_transaction(
 /// # Returns
 ///
 /// The details of the specified transaction.
-pub async fn get_transaction_by_id(
+pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
     transaction_id: String,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     if relayer_id.is_empty() || transaction_id.is_empty() {
         return Ok(HttpResponse::Ok().json(ApiResponse::<()>::error(
             "Invalid relayer or transaction ID".to_string(),
@@ -392,11 +478,21 @@ pub async fn get_transaction_by_id(
 /// # Returns
 ///
 /// The details of the specified transaction.
-pub async fn get_transaction_by_nonce(
+pub async fn get_transaction_by_nonce<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
     nonce: u64,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     // get by nonce is only supported for EVM network
@@ -428,11 +524,21 @@ pub async fn get_transaction_by_nonce(
 /// # Returns
 ///
 /// A paginated list of transactions
-pub async fn list_transactions(
+pub async fn list_transactions<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
     query: PaginationQuery,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     let transactions = state
@@ -463,10 +569,20 @@ pub async fn list_transactions(
 /// # Returns
 ///
 /// A success response with details about cancelled and failed transactions.
-pub async fn delete_pending_transactions(
+pub async fn delete_pending_transactions<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
     relayer.validate_active_state()?;
     let network_relayer = get_network_relayer_by_model(relayer.clone(), &state).await?;
@@ -559,11 +675,21 @@ pub async fn replace_transaction(
 /// # Returns
 ///
 /// The signed data response.
-pub async fn sign_data(
+pub async fn sign_data<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
     request: SignDataRequest,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
@@ -588,11 +714,21 @@ pub async fn sign_data(
 /// # Returns
 ///
 /// The signed typed data response.
-pub async fn sign_typed_data(
+pub async fn sign_typed_data<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
     request: SignTypedDataRequest,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
@@ -613,11 +749,21 @@ pub async fn sign_typed_data(
 /// # Returns
 ///
 /// The result of the JSON-RPC call.
-pub async fn relayer_rpc(
+pub async fn relayer_rpc<J, RR, TR, NR, NFR, SR, TCR, PR>(
     relayer_id: String,
     request: serde_json::Value,
-    state: web::ThinData<DefaultAppState>,
-) -> Result<HttpResponse, ApiError> {
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+) -> Result<HttpResponse, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+{
     let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
     relayer.validate_active_state()?;
     let network_relayer = get_network_relayer_by_model(relayer.clone(), &state).await?;
@@ -626,4 +772,500 @@ pub async fn relayer_rpc(
     let result = network_relayer.rpc(internal_request).await?;
 
     Ok(HttpResponse::Ok().json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        models::{ApiResponse, CreateRelayerRequest, RelayerNetworkType, RelayerResponse},
+        utils::mocks::mockutils::{
+            create_mock_app_state, create_mock_network, create_mock_notification,
+            create_mock_relayer, create_mock_signer, create_mock_transaction,
+        },
+    };
+    use actix_web::body::to_bytes;
+    use std::env;
+
+    fn setup_test_env() {
+        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost
+        env::set_var("REDIS_URL", "redis://localhost:6379");
+    }
+
+    fn cleanup_test_env() {
+        env::remove_var("API_KEY");
+        env::remove_var("REDIS_URL");
+    }
+
+    /// Helper function to create a test relayer create request
+    fn create_test_relayer_create_request(
+        id: Option<String>,
+        name: &str,
+        network: &str,
+        signer_id: &str,
+        notification_id: Option<String>,
+    ) -> CreateRelayerRequest {
+        CreateRelayerRequest {
+            id,
+            name: name.to_string(),
+            network: network.to_string(),
+            network_type: RelayerNetworkType::Evm,
+            paused: false,
+            policies: None,
+            signer_id: signer_id.to_string(),
+            notification_id,
+            custom_rpc_urls: None,
+        }
+    }
+
+    // CREATE RELAYER TESTS
+
+    #[actix_web::test]
+    async fn test_create_relayer_success() {
+        setup_test_env();
+        let network = create_mock_network();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        let request = create_test_relayer_create_request(
+            Some("test-relayer".to_string()),
+            "Test Relayer",
+            "test", // Using "test" to match the mock network name
+            "test", // Using "test" to match the mock signer id
+            None,
+        );
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-relayer");
+        assert_eq!(data.name, "Test Relayer"); // This one keeps custom name from the request
+        assert_eq!(data.network, "test");
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_with_notification() {
+        setup_test_env();
+        let network = create_mock_network();
+        let signer = create_mock_signer();
+        let notification = create_mock_notification("test-notification".to_string());
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        // Add notification manually since create_mock_app_state doesn't handle notifications
+        app_state
+            .notification_repository
+            .create(notification)
+            .await
+            .unwrap();
+
+        let request = create_test_relayer_create_request(
+            Some("test-relayer".to_string()),
+            "Test Relayer",
+            "test", // Using "test" to match the mock network name
+            "test", // Using "test" to match the mock signer id
+            Some("test-notification".to_string()),
+        );
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_nonexistent_signer() {
+        let network = create_mock_network();
+        let app_state = create_mock_app_state(None, None, Some(vec![network]), None, None).await;
+
+        let request = create_test_relayer_create_request(
+            Some("test-relayer".to_string()),
+            "Test Relayer",
+            "test", // Using "test" to match the mock network name
+            "nonexistent-signer",
+            None,
+        );
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Signer with ID nonexistent-signer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent signer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_nonexistent_network() {
+        let signer = create_mock_signer();
+        let app_state = create_mock_app_state(None, Some(vec![signer]), None, None, None).await;
+
+        let request = create_test_relayer_create_request(
+            Some("test-relayer".to_string()),
+            "Test Relayer",
+            "nonexistent-network",
+            "test", // Using "test" to match the mock signer id
+            None,
+        );
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Network 'nonexistent-network' not found"));
+            assert!(msg.contains("network configuration exists"));
+        } else {
+            panic!("Expected BadRequest error for nonexistent network");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_signer_already_in_use() {
+        let network = create_mock_network();
+        let signer = create_mock_signer();
+        let mut existing_relayer = create_mock_relayer("existing-relayer".to_string(), false);
+        existing_relayer.signer_id = "test".to_string(); // Match the mock signer id
+        existing_relayer.network = "test".to_string(); // Match the mock network name
+        let app_state = create_mock_app_state(
+            Some(vec![existing_relayer]),
+            Some(vec![signer]),
+            Some(vec![network]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = create_test_relayer_create_request(
+            Some("test-relayer".to_string()),
+            "Test Relayer",
+            "test", // Using "test" to match the mock network name
+            "test", // Using "test" to match the mock signer id
+            None,
+        );
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("signer 'test' is already in use"));
+            assert!(msg.contains("relayer 'existing-relayer'"));
+            assert!(msg.contains("network 'test'"));
+            assert!(msg.contains("security reasons"));
+        } else {
+            panic!("Expected BadRequest error for signer already in use");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_nonexistent_notification() {
+        let network = create_mock_network();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        let request = create_test_relayer_create_request(
+            Some("test-relayer".to_string()),
+            "Test Relayer",
+            "test", // Using "test" to match the mock network name
+            "test", // Using "test" to match the mock signer id
+            Some("nonexistent-notification".to_string()),
+        );
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Notification with ID 'nonexistent-notification' not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent notification");
+        }
+    }
+
+    // LIST RELAYERS TESTS
+
+    #[actix_web::test]
+    async fn test_list_relayers_success() {
+        let relayer1 = create_mock_relayer("relayer-1".to_string(), false);
+        let relayer2 = create_mock_relayer("relayer-2".to_string(), false);
+        let app_state =
+            create_mock_app_state(Some(vec![relayer1, relayer2]), None, None, None, None).await;
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let result = list_relayers(query, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<Vec<RelayerResponse>> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.len(), 2);
+    }
+
+    #[actix_web::test]
+    async fn test_list_relayers_empty() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let result = list_relayers(query, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<Vec<RelayerResponse>> =
+            serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.len(), 0);
+    }
+
+    // GET RELAYER TESTS
+
+    #[actix_web::test]
+    async fn test_get_relayer_success() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let result = get_relayer(
+            "test-relayer".to_string(),
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-relayer");
+        assert_eq!(data.name, "Relayer test-relayer"); // Mock utility creates name as "Relayer {id}"
+    }
+
+    #[actix_web::test]
+    async fn test_get_relayer_not_found() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let result = get_relayer(
+            "nonexistent".to_string(),
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent not found"));
+        } else {
+            panic!("Expected NotFound error");
+        }
+    }
+
+    // UPDATE RELAYER TESTS
+
+    #[actix_web::test]
+    async fn test_update_relayer_success() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "name": "Updated Relayer Name",
+            "paused": true
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.name, "Updated Relayer Name");
+        assert!(data.paused);
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_system_disabled() {
+        let mut relayer = create_mock_relayer("disabled-relayer".to_string(), false);
+        relayer.system_disabled = true;
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "name": "Updated Name"
+        });
+
+        let result = update_relayer(
+            "disabled-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Relayer is disabled"));
+        } else {
+            panic!("Expected BadRequest error for disabled relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_invalid_patch() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "invalid_field": "value"
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid update request"));
+        } else {
+            panic!("Expected BadRequest error for invalid patch");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_nonexistent() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "name": "Updated Name"
+        });
+
+        let result = update_relayer(
+            "nonexistent-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    // DELETE RELAYER TESTS
+
+    #[actix_web::test]
+    async fn test_delete_relayer_success() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let result = delete_relayer(
+            "test-relayer".to_string(),
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<String> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert!(data.contains("Relayer deleted successfully"));
+    }
+
+    #[actix_web::test]
+    async fn test_delete_relayer_with_transactions() {
+        let relayer = create_mock_relayer("relayer-with-tx".to_string(), false);
+        let mut transaction = create_mock_transaction();
+        transaction.id = "test-tx".to_string();
+        transaction.relayer_id = "relayer-with-tx".to_string();
+        let app_state = create_mock_app_state(
+            Some(vec![relayer]),
+            None,
+            None,
+            None,
+            Some(vec![transaction]),
+        )
+        .await;
+
+        let result = delete_relayer(
+            "relayer-with-tx".to_string(),
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Cannot delete relayer 'relayer-with-tx'"));
+            assert!(msg.contains("has 1 transaction(s)"));
+            assert!(msg.contains("wait for all transactions to complete"));
+        } else {
+            panic!("Expected BadRequest error for relayer with transactions");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_delete_relayer_nonexistent() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let result = delete_relayer(
+            "nonexistent-relayer".to_string(),
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::NotFound(msg)) = result {
+            assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
+        } else {
+            panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
 }
