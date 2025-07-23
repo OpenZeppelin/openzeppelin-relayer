@@ -1,13 +1,14 @@
-name: "CodeQL Advanced"
-
+---
+name: CodeQL Advanced
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
   schedule:
-    - cron: "25 21 * * 1"
-
+    - cron: 25 21 * * 1
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
@@ -22,7 +23,6 @@ jobs:
       # only required for workflows in private repositories
       # actions: read
       # contents: read
-
     strategy:
       fail-fast: false
       matrix:
@@ -33,17 +33,15 @@ jobs:
             build-mode: none
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.5.4
+        uses: actions/checkout@v@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.5.4
 
       # Initializes the CodeQL tools for scanning.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@d6bbdef45e766d081b84a2def353b0055f728d3e # v3.29.3
+        uses: github/codeql-action/init@d6bbdef45e766d081b84a2def353b0055f728d3e  # v3.29.3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@d6bbdef45e766d081b84a2def353b0055f728d3e # v3.29.3
-
+        uses: github/codeql-action/analyze@d6bbdef45e766d081b84a2def353b0055f728d3e  # v3.29.3
         with:
-          category: "/language:${{matrix.language}}"
+          category: /language:${{matrix.language}}
