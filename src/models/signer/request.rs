@@ -262,15 +262,21 @@ impl TryFrom<SignerCreateRequest> for Signer {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         // Validate that the signer type matches the config variant
-        let config_matches_type = match (&request.signer_type, &request.config) {
-            (SignerTypeRequest::Local, SignerConfigRequest::Local(_)) => true,
-            (SignerTypeRequest::AwsKms, SignerConfigRequest::AwsKms(_)) => true,
-            (SignerTypeRequest::Vault, SignerConfigRequest::Vault(_)) => true,
-            (SignerTypeRequest::VaultTransit, SignerConfigRequest::VaultTransit(_)) => true,
-            (SignerTypeRequest::Turnkey, SignerConfigRequest::Turnkey(_)) => true,
-            (SignerTypeRequest::GoogleCloudKms, SignerConfigRequest::GoogleCloudKms(_)) => true,
-            _ => false,
-        };
+        let config_matches_type = matches!(
+            (&request.signer_type, &request.config),
+            (SignerTypeRequest::Local, SignerConfigRequest::Local(_))
+                | (SignerTypeRequest::AwsKms, SignerConfigRequest::AwsKms(_))
+                | (SignerTypeRequest::Vault, SignerConfigRequest::Vault(_))
+                | (
+                    SignerTypeRequest::VaultTransit,
+                    SignerConfigRequest::VaultTransit(_)
+                )
+                | (SignerTypeRequest::Turnkey, SignerConfigRequest::Turnkey(_))
+                | (
+                    SignerTypeRequest::GoogleCloudKms,
+                    SignerConfigRequest::GoogleCloudKms(_)
+                )
+        );
 
         if !config_matches_type {
             return Err(ApiError::BadRequest(format!(

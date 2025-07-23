@@ -16,7 +16,6 @@ use super::{
     RelayerRepoModel, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
     RelayerSolanaSwapPolicy, RelayerStellarPolicy, RpcConfig,
 };
-use crate::utils::{deserialize_optional_u128, serialize_optional_u128};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -33,20 +32,22 @@ pub struct DeletePendingTransactionsResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(untagged)]
 pub enum RelayerNetworkPolicyResponse {
-    Evm(RelayerEvmPolicy),
-    Solana(RelayerSolanaPolicy),
-    Stellar(RelayerStellarPolicy),
+    Evm(EvmPolicyResponse),
+    Solana(SolanaPolicyResponse),
+    Stellar(StellarPolicyResponse),
 }
 
 impl From<RelayerNetworkPolicy> for RelayerNetworkPolicyResponse {
     fn from(policy: RelayerNetworkPolicy) -> Self {
         match policy {
-            RelayerNetworkPolicy::Evm(evm_policy) => RelayerNetworkPolicyResponse::Evm(evm_policy),
+            RelayerNetworkPolicy::Evm(evm_policy) => {
+                RelayerNetworkPolicyResponse::Evm(evm_policy.into())
+            }
             RelayerNetworkPolicy::Solana(solana_policy) => {
-                RelayerNetworkPolicyResponse::Solana(solana_policy)
+                RelayerNetworkPolicyResponse::Solana(solana_policy.into())
             }
             RelayerNetworkPolicy::Stellar(stellar_policy) => {
-                RelayerNetworkPolicyResponse::Stellar(stellar_policy)
+                RelayerNetworkPolicyResponse::Stellar(stellar_policy.into())
             }
         }
     }
@@ -135,7 +136,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
             id: model.id,
             name: model.name,
             network: model.network,
-            network_type: model.network_type.into(),
+            network_type: model.network_type,
             paused: model.paused,
             policies,
             signer_id: model.signer_id,
@@ -214,14 +215,17 @@ mod tests {
         assert_eq!(response.paused, relayer.paused);
         assert_eq!(
             response.policies,
-            Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
-                gas_price_cap: Some(100_000_000_000),
-                whitelist_receivers: None,
-                eip1559_pricing: Some(true),
-                private_transactions: None,
-                min_balance: None,
-                gas_limit_estimation: None,
-            }))
+            Some(RelayerNetworkPolicyResponse::Evm(
+                RelayerEvmPolicy {
+                    gas_price_cap: Some(100_000_000_000),
+                    whitelist_receivers: None,
+                    eip1559_pricing: Some(true),
+                    private_transactions: None,
+                    min_balance: None,
+                    gas_limit_estimation: None,
+                }
+                .into()
+            ))
         );
         assert_eq!(response.signer_id, relayer.signer_id);
         assert_eq!(response.notification_id, relayer.notification_id);
@@ -238,7 +242,7 @@ mod tests {
             network: "mainnet".to_string(),
             network_type: RelayerNetworkType::Evm,
             paused: false,
-            policies: Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
+            policies: Some(RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse {
                 gas_price_cap: Some(100_000_000_000),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
@@ -271,7 +275,7 @@ mod tests {
             network: "mainnet".to_string(),
             network_type: RelayerNetworkType::Evm,
             paused: false,
-            policies: Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
+            policies: Some(RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse {
                 gas_price_cap: Some(100_000_000_000),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
@@ -299,7 +303,7 @@ mod tests {
 
         println!("serialized: {:?}", serialized);
 
-        assert!(serialized.contains(r#""gas_price_cap": "100000000000""#));
+        assert!(serialized.contains(r#""gas_price_cap": 100000000000"#));
         assert!(serialized.contains(r#""eip1559_pricing": true"#));
     }
 
@@ -387,37 +391,75 @@ pub struct NetworkPolicyResponse {
 /// EVM policy response model for OpenAPI documentation  
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct EvmPolicyResponse {
-    #[serde(serialize_with = "serialize_optional_u128", deserialize_with = "deserialize_optional_u128")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub min_balance: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub gas_limit_estimation: Option<bool>,
-    #[serde(serialize_with = "serialize_optional_u128", deserialize_with = "deserialize_optional_u128")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub gas_price_cap: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub whitelist_receivers: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub eip1559_pricing: Option<bool>,
-    pub private_transactions: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub private_transactions: Option<bool>,
 }
 
 /// Solana policy response model for OpenAPI documentation
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct SolanaPolicyResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub allowed_programs: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_signatures: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_tx_data_size: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub min_balance: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub allowed_tokens: Option<Vec<AllowedToken>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub fee_payment_strategy: Option<RelayerSolanaFeePaymentStrategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub fee_margin_percentage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub allowed_accounts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub disallowed_accounts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_allowed_fee_lamports: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub swap_config: Option<RelayerSolanaSwapPolicy>,
 }
 
 /// Stellar policy response model for OpenAPI documentation
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct StellarPolicyResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_fee: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub timeout_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub min_balance: Option<u64>,
 }
 
@@ -429,7 +471,7 @@ impl From<RelayerEvmPolicy> for EvmPolicyResponse {
             gas_price_cap: policy.gas_price_cap,
             whitelist_receivers: policy.whitelist_receivers,
             eip1559_pricing: policy.eip1559_pricing,
-            private_transactions: policy.private_transactions.unwrap_or(false),
+            private_transactions: policy.private_transactions,
         }
     }
 }

@@ -150,14 +150,17 @@ mod tests {
                 network: "ethereum".to_string(),
                 network_type: NetworkType::Evm,
                 paused: false,
-                policies: Some(RelayerNetworkPolicyResponse::Evm(RelayerEvmPolicy {
-                    gas_price_cap: None,
-                    whitelist_receivers: None,
-                    eip1559_pricing: None,
-                    private_transactions: Some(false),
-                    min_balance: Some(0),
-                    gas_limit_estimation: None,
-                })),
+                policies: Some(RelayerNetworkPolicyResponse::Evm(
+                    RelayerEvmPolicy {
+                        gas_price_cap: None,
+                        whitelist_receivers: None,
+                        eip1559_pricing: None,
+                        private_transactions: Some(false),
+                        min_balance: Some(0),
+                        gas_limit_estimation: None,
+                    }
+                    .into(),
+                )),
                 signer_id: "signer-1".to_string(),
                 notification_id: None,
                 custom_rpc_urls: None,

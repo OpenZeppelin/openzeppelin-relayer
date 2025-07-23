@@ -127,7 +127,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
         let relayer = store.get_mut(&id).ok_or_else(|| {
             RepositoryError::NotFound(format!("Relayer with ID {} not found", id))
         })?;
-        relayer.policies = policy.into();
+        relayer.policies = policy;
         Ok(relayer.clone())
     }
 

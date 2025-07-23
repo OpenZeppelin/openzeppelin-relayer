@@ -533,7 +533,7 @@ impl RelayerRepository for RedisRelayerRepository {
         let mut relayer = self.get_by_id(id.clone()).await?;
 
         // Update the policy
-        relayer.policies = policy.into();
+        relayer.policies = policy;
 
         // Update the relayer
         self.update(id, relayer).await

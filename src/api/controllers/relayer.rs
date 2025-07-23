@@ -114,7 +114,7 @@ pub async fn create_relayer(
     // Check if network exists for the given network type
     let network = state
         .network_repository
-        .get_by_name(relayer.network_type.into(), &relayer.network)
+        .get_by_name(relayer.network_type, &relayer.network)
         .await?;
 
     if network.is_none() {

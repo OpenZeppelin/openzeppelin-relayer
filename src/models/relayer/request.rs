@@ -219,7 +219,7 @@ impl TryFrom<CreateRelayerRequest> for Relayer {
     type Error = ApiError;
 
     fn try_from(request: CreateRelayerRequest) -> Result<Self, Self::Error> {
-        let id = request.id.clone().unwrap_or_else(|| generate_uuid());
+        let id = request.id.clone().unwrap_or_else(generate_uuid);
 
         // Convert policies directly using the typed policy request
         let policies = if let Some(policy_request) = &request.policies {

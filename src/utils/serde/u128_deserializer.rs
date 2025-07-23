@@ -87,6 +87,30 @@ where
     }
 }
 
+pub fn serialize_optional_u128_as_number<S>(
+    value: &Option<u128>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(v) => serializer.serialize_some(&v),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Deserialize optional u128 from number
+pub fn deserialize_optional_u128_as_number<'de, D>(
+    deserializer: D,
+) -> Result<Option<u128>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<u128> = Option::deserialize(deserializer)?;
+    Ok(value)
+}
+
 // Deserialize optional u64
 pub fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where

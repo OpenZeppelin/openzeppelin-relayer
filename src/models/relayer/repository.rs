@@ -208,7 +208,7 @@ mod tests {
 
         // Verify business fields were updated
         assert_eq!(updated.name, "Updated Name");
-        assert_eq!(updated.paused, true);
+        assert!(updated.paused);
         assert_eq!(
             updated.notification_id,
             Some("new_notification".to_string())
@@ -219,6 +219,6 @@ mod tests {
             updated.address,
             "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E"
         );
-        assert_eq!(updated.system_disabled, true);
+        assert!(updated.system_disabled);
     }
 }

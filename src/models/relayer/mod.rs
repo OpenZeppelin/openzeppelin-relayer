@@ -339,6 +339,7 @@ pub struct Relayer {
 
 impl Relayer {
     /// Creates a new relayer
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         name: String,
@@ -744,7 +745,7 @@ mod tests {
 
         // Verify all updates were applied correctly
         assert_eq!(updated_relayer.name, "Updated Name via JSON Patch");
-        assert_eq!(updated_relayer.paused, true);
+        assert!(updated_relayer.paused);
         assert_eq!(updated_relayer.notification_id, None); // Removed
         assert!(updated_relayer.custom_rpc_urls.is_some());
 
