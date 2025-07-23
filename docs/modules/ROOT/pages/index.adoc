@@ -212,7 +212,7 @@ For detailed information about each directory and its contents, see xref:structu
 
 === Prerequisites
 
-* Rust 2021 edition, version `1.85` or later
+* Rust 2021 edition, version `1.86` or later
 * Docker (optional, for containerized deployment)
 * Node.js, typescript and ts-node (optional, for plugins)
 

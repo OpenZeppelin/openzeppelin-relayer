@@ -4,7 +4,7 @@
 /// managing notifications for transactions. The module leverages various
 /// services and repositories to perform these operations asynchronously.
 use crate::{
-    domain::transaction::Transaction,
+    domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionRequest,
@@ -149,17 +149,8 @@ where
     pub async fn finalize_transaction_state(
         &self,
         tx_id: String,
-        new_status: TransactionStatus,
-        status_reason: Option<String>,
-        confirmed_at: Option<String>,
+        update_req: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let update_req = TransactionUpdateRequest {
-            status: Some(new_status),
-            status_reason,
-            confirmed_at,
-            ..Default::default()
-        };
-
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx_id, update_req)
@@ -201,6 +192,61 @@ where
             .map_err(TransactionError::from)?;
 
         Ok(pending_txs.into_iter().next())
+    }
+
+    /// Syncs the sequence number from the blockchain for the relayer's address.
+    /// This fetches the on-chain sequence number and updates the local counter to the next usable value.
+    pub async fn sync_sequence_from_chain(
+        &self,
+        relayer_address: &str,
+    ) -> Result<(), TransactionError> {
+        info!(
+            "Syncing sequence number from chain for address: {}",
+            relayer_address
+        );
+
+        // Use the shared helper to fetch the next sequence
+        let next_usable_seq = fetch_next_sequence_from_chain(self.provider(), relayer_address)
+            .await
+            .map_err(TransactionError::UnexpectedError)?;
+
+        // Update the local counter to the next usable sequence
+        self.transaction_counter_service()
+            .set(&self.relayer().id, relayer_address, next_usable_seq)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to update sequence counter: {}",
+                    e
+                ))
+            })?;
+
+        info!("Updated local sequence counter to {}", next_usable_seq);
+        Ok(())
+    }
+
+    /// Resets a transaction to its pre-prepare state for reprocessing through the pipeline.
+    /// This is used when a transaction fails with a bad sequence error and needs to be retried.
+    pub async fn reset_transaction_for_retry(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        info!("Resetting transaction {} for retry through pipeline", tx.id);
+
+        // Use the model's built-in reset method
+        let update_req = tx.create_reset_update_request()?;
+
+        // Update the transaction
+        let reset_tx = self
+            .transaction_repository()
+            .partial_update(tx.id.clone(), update_req)
+            .await?;
+
+        info!(
+            "Transaction {} reset successfully to pre-prepare state",
+            reset_tx.id
+        );
+        Ok(reset_tx)
     }
 }
 
@@ -284,7 +330,7 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::RepositoryError;
+    use crate::models::{NetworkTransactionData, RepositoryError};
     use std::sync::Arc;
 
     use crate::domain::transaction::stellar::test_helpers::*;
@@ -398,13 +444,15 @@ mod tests {
 
         let handler = make_stellar_tx_handler(relayer, mocks);
 
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            status_reason: Some("Transaction confirmed".to_string()),
+            confirmed_at: Some("2023-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+
         let result = handler
-            .finalize_transaction_state(
-                "tx-1".to_string(),
-                TransactionStatus::Confirmed,
-                Some("Transaction confirmed".to_string()),
-                Some("2023-01-01T00:00:00Z".to_string()),
-            )
+            .finalize_transaction_state("tx-1".to_string(), update_request)
             .await;
 
         assert!(result.is_ok());
@@ -472,5 +520,191 @@ mod tests {
             .enqueue_next_pending_transaction("finished-tx")
             .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_sequence_from_chain() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock provider to return account with sequence 100
+        mocks
+            .provider
+            .expect_get_account()
+            .withf(|addr| addr == TEST_PK)
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    use soroban_rs::xdr::{
+                        AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
+                        String32, Thresholds, Uint256,
+                    };
+                    use stellar_strkey::ed25519;
+
+                    // Create a dummy public key for account ID
+                    let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                    Ok(AccountEntry {
+                        account_id,
+                        balance: 1000000,
+                        seq_num: SequenceNumber(100),
+                        num_sub_entries: 0,
+                        inflation_dest: None,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        thresholds: Thresholds([1, 1, 1, 1]),
+                        signers: Default::default(),
+                        ext: AccountEntryExt::V0,
+                    })
+                })
+            });
+
+        // Mock counter set to verify it's called with next usable sequence (101)
+        mocks
+            .counter
+            .expect_set()
+            .withf(|relayer_id, addr, seq| {
+                relayer_id == "relayer-1" && addr == TEST_PK && *seq == 101
+            })
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_sequence_from_chain_provider_error() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock provider to fail
+        mocks
+            .provider
+            .expect_get_account()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(eyre::eyre!("Account not found")) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Failed to fetch account from chain"));
+            }
+            _ => panic!("Expected UnexpectedError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_sequence_from_chain_counter_error() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock provider success
+        mocks.provider.expect_get_account().times(1).returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                // Create a dummy public key for account ID
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(100),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        // Mock counter set to fail
+        mocks.counter.expect_set().times(1).returning(|_, _, _| {
+            Box::pin(async {
+                Err(RepositoryError::Unknown(
+                    "Counter update failed".to_string(),
+                ))
+            })
+        });
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Failed to update sequence counter"));
+            }
+            _ => panic!("Expected UnexpectedError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reset_transaction_for_retry() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Create a transaction with stellar data that has been prepared
+        let mut tx = create_test_transaction(&relayer.id);
+        if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+            data.sequence_number = Some(42);
+            data.signatures.push(dummy_signature());
+            data.hash = Some("test-hash".to_string());
+            data.signed_envelope_xdr = Some("test-xdr".to_string());
+        }
+
+        // Mock partial_update to reset transaction
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|tx_id, upd| {
+                tx_id == "tx-1"
+                    && upd.status == Some(TransactionStatus::Pending)
+                    && upd.sent_at.is_none()
+                    && upd.confirmed_at.is_none()
+            })
+            .times(1)
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                if let Some(network_data) = upd.network_data {
+                    tx.network_data = network_data;
+                }
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.reset_transaction_for_retry(tx).await;
+        assert!(result.is_ok());
+
+        let reset_tx = result.unwrap();
+        assert_eq!(reset_tx.status, TransactionStatus::Pending);
+
+        // Verify stellar data was reset
+        if let NetworkTransactionData::Stellar(data) = &reset_tx.network_data {
+            assert!(data.sequence_number.is_none());
+            assert!(data.signatures.is_empty());
+            assert!(data.hash.is_none());
+            assert!(data.signed_envelope_xdr.is_none());
+        } else {
+            panic!("Expected Stellar transaction data");
+        }
     }
 }

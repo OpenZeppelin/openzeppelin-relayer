@@ -16,10 +16,27 @@
       "rpc_urls": [
         "https://rpc.gnosis.gateway.fm",
         "https://rpc.gnosischain.com/",
-        "https://rpc.ankr.com/gnosis",
         "https://gnosis-pokt.nodies.app",
         "https://gnosis-mainnet.public.blastapi.io",
         "https://gnosis.api.onfinality.io/public"
+      ],
+      "symbol": "xDAI",
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 5000,
+      "chain_id": 10200,
+      "explorer_urls": [
+        "https://gnosis-chiado.blockscout.com/"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "gnosis-chiado",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://rpc.chiadochain.net"
       ],
       "symbol": "xDAI",
       "type": "evm"
@@ -263,6 +280,44 @@
       "tags": [
         "deprecated"
       ],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 5000,
+      "chain_id": 122,
+      "explorer_urls": [
+        "https://explorer.fuse.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "fuse",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://rpc.fuse.io"
+      ],
+      "symbol": "FUSE",
+      "tags": [],
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 5000,
+      "chain_id": 123,
+      "explorer_urls": [
+        "https://explorer.fusespark.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "fuse-spark",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        " https://rpc.fusespark.io"
+      ],
+      "symbol": "SPARK",
+      "tags": [],
       "type": "evm"
     }
   ]

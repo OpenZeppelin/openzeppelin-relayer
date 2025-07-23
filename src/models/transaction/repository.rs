@@ -95,6 +95,40 @@ impl TransactionRepoModel {
     pub fn validate(&self) -> Result<(), TransactionError> {
         Ok(())
     }
+
+    /// Creates a TransactionUpdateRequest to reset this transaction to its pre-prepare state.
+    /// This is used when a transaction needs to be retried from the beginning (e.g., bad sequence error).
+    ///
+    /// For Stellar transactions:
+    /// - Resets status to Pending
+    /// - Clears sent_at and confirmed_at timestamps
+    /// - Resets hashes array
+    /// - Calls reset_to_pre_prepare_state on the StellarTransactionData
+    ///
+    /// For other networks, only resets the common fields.
+    pub fn create_reset_update_request(
+        &self,
+    ) -> Result<TransactionUpdateRequest, TransactionError> {
+        let network_data = match &self.network_data {
+            NetworkTransactionData::Stellar(stellar_data) => Some(NetworkTransactionData::Stellar(
+                stellar_data.clone().reset_to_pre_prepare_state(),
+            )),
+            // For other networks, we don't modify the network data
+            _ => None,
+        };
+
+        Ok(TransactionUpdateRequest {
+            status: Some(TransactionStatus::Pending),
+            status_reason: None,
+            sent_at: None,
+            confirmed_at: None,
+            network_data,
+            priced_at: None,
+            hashes: Some(vec![]),
+            noop_count: None,
+            is_canceled: None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,6 +468,28 @@ pub struct StellarTransactionData {
 }
 
 impl StellarTransactionData {
+    /// Resets the transaction data to its pre-prepare state by clearing all fields
+    /// that are populated during the prepare and submit phases.
+    ///
+    /// Fields preserved (from initial creation):
+    /// - source_account, network_passphrase, memo, valid_until, transaction_input
+    ///
+    /// Fields reset to None/empty:
+    /// - fee, sequence_number, signatures, signed_envelope_xdr, hash, simulation_transaction_data
+    pub fn reset_to_pre_prepare_state(mut self) -> Self {
+        // Reset all fields populated during prepare phase
+        self.fee = None;
+        self.sequence_number = None;
+        self.signatures = vec![];
+        self.signed_envelope_xdr = None;
+        self.simulation_transaction_data = None;
+
+        // Reset fields populated during submit phase
+        self.hash = None;
+
+        self
+    }
+
     /// Updates the Stellar transaction data with a specific sequence number.
     ///
     /// # Arguments
@@ -443,6 +499,18 @@ impl StellarTransactionData {
     /// The updated `StellarTransactionData` with the specified sequence number
     pub fn with_sequence_number(mut self, sequence_number: i64) -> Self {
         self.sequence_number = Some(sequence_number);
+        self
+    }
+
+    /// Updates the Stellar transaction data with the actual fee charged by the network.
+    ///
+    /// # Arguments
+    /// * `fee` - The actual fee charged in stroops
+    ///
+    /// # Returns
+    /// The updated `StellarTransactionData` with the specified fee
+    pub fn with_fee(mut self, fee: u32) -> Self {
+        self.fee = Some(fee);
         self
     }
 
@@ -940,6 +1008,105 @@ mod tests {
         assert_eq!(signature.s.len(), 64); // 32 bytes in hex
         assert_eq!(signature.v, 27);
         assert_eq!(signature.sig.len(), 130); // 65 bytes in hex
+    }
+
+    #[test]
+    fn test_stellar_transaction_data_reset_to_pre_prepare_state() {
+        let stellar_data = StellarTransactionData {
+            source_account: "GTEST".to_string(),
+            fee: Some(100),
+            sequence_number: Some(42),
+            memo: Some(MemoSpec::Text {
+                value: "test memo".to_string(),
+            }),
+            valid_until: Some("2024-12-31".to_string()),
+            network_passphrase: "Test Network".to_string(),
+            signatures: vec![], // Simplified - empty for test
+            hash: Some("test-hash".to_string()),
+            simulation_transaction_data: Some("simulation-data".to_string()),
+            transaction_input: TransactionInput::Operations(vec![OperationSpec::Payment {
+                destination: "GDEST".to_string(),
+                amount: 1000,
+                asset: AssetSpec::Native,
+            }]),
+            signed_envelope_xdr: Some("signed-xdr".to_string()),
+        };
+
+        let reset_data = stellar_data.clone().reset_to_pre_prepare_state();
+
+        // Fields that should be preserved
+        assert_eq!(reset_data.source_account, stellar_data.source_account);
+        assert_eq!(reset_data.memo, stellar_data.memo);
+        assert_eq!(reset_data.valid_until, stellar_data.valid_until);
+        assert_eq!(
+            reset_data.network_passphrase,
+            stellar_data.network_passphrase
+        );
+        assert!(matches!(
+            reset_data.transaction_input,
+            TransactionInput::Operations(_)
+        ));
+
+        // Fields that should be reset
+        assert_eq!(reset_data.fee, None);
+        assert_eq!(reset_data.sequence_number, None);
+        assert!(reset_data.signatures.is_empty());
+        assert_eq!(reset_data.hash, None);
+        assert_eq!(reset_data.simulation_transaction_data, None);
+        assert_eq!(reset_data.signed_envelope_xdr, None);
+    }
+
+    #[test]
+    fn test_transaction_repo_model_create_reset_update_request() {
+        let stellar_data = StellarTransactionData {
+            source_account: "GTEST".to_string(),
+            fee: Some(100),
+            sequence_number: Some(42),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test Network".to_string(),
+            signatures: vec![],
+            hash: Some("test-hash".to_string()),
+            simulation_transaction_data: None,
+            transaction_input: TransactionInput::Operations(vec![]),
+            signed_envelope_xdr: Some("signed-xdr".to_string()),
+        };
+
+        let tx = TransactionRepoModel {
+            id: "tx-1".to_string(),
+            relayer_id: "relayer-1".to_string(),
+            status: TransactionStatus::Failed,
+            status_reason: Some("Bad sequence".to_string()),
+            created_at: "2024-01-01".to_string(),
+            sent_at: Some("2024-01-02".to_string()),
+            confirmed_at: Some("2024-01-03".to_string()),
+            valid_until: None,
+            network_data: NetworkTransactionData::Stellar(stellar_data),
+            priced_at: None,
+            hashes: vec!["hash1".to_string(), "hash2".to_string()],
+            network_type: NetworkType::Stellar,
+            noop_count: None,
+            is_canceled: None,
+        };
+
+        let update_req = tx.create_reset_update_request().unwrap();
+
+        // Check common fields
+        assert_eq!(update_req.status, Some(TransactionStatus::Pending));
+        assert_eq!(update_req.status_reason, None);
+        assert_eq!(update_req.sent_at, None);
+        assert_eq!(update_req.confirmed_at, None);
+        assert_eq!(update_req.hashes, Some(vec![]));
+
+        // Check that network data was reset
+        if let Some(NetworkTransactionData::Stellar(reset_data)) = update_req.network_data {
+            assert_eq!(reset_data.fee, None);
+            assert_eq!(reset_data.sequence_number, None);
+            assert_eq!(reset_data.hash, None);
+            assert_eq!(reset_data.signed_envelope_xdr, None);
+        } else {
+            panic!("Expected Stellar network data");
+        }
     }
 
     // Create a helper function to generate a sample EvmTransactionData for testing

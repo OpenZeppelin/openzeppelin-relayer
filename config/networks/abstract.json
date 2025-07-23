@@ -1,0 +1,41 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 1000,
+      "chain_id": 2741,
+      "explorer_urls": [
+        "https://abscan.org/"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "abstract",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://api.mainnet.abs.xyz"
+      ],
+      "symbol": "ETH",
+      "type": "evm"
+    },
+    {
+      "average_blocktime_ms": 1000,
+      "chain_id": 11124,
+      "explorer_urls": [
+        "https://sepolia.abscan.org/"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": true,
+      "network": "abstract-sepolia",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://api.testnet.abs.xyz"
+      ],
+      "symbol": "ETH",
+      "tags": [],
+      "type": "evm"
+    }
+  ]
+}

@@ -5,7 +5,7 @@
 use chrono::Utc;
 use log::{info, warn};
 
-use super::StellarRelayerTransaction;
+use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
     jobs::{JobProducerTrait, TransactionStatusCheck},
     models::{
@@ -94,24 +94,86 @@ where
     }
 
     /// Handles submission failures with comprehensive cleanup and error reporting.
-    /// This method ensures failed transactions are properly marked and notifications sent.
+    /// For bad sequence errors, resets the transaction and re-enqueues it for retry.
     async fn handle_submit_failure(
         &self,
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
         let error_reason = format!("Submission failed: {}", error);
-        let tx_id = tx.id.clone(); // Clone the ID before moving tx
+        let tx_id = tx.id.clone();
         warn!("Transaction {} submission failed: {}", tx_id, error_reason);
 
+        if is_bad_sequence_error(&error_reason) {
+            // For bad sequence errors, sync sequence from chain first
+            if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
+                info!(
+                    "Syncing sequence from chain after bad sequence error for transaction {}",
+                    tx_id
+                );
+                match self
+                    .sync_sequence_from_chain(&stellar_data.source_account)
+                    .await
+                {
+                    Ok(()) => {
+                        info!(
+                            "Successfully synced sequence from chain for transaction {}",
+                            tx_id
+                        );
+                    }
+                    Err(sync_error) => {
+                        warn!(
+                            "Failed to sync sequence from chain for transaction {}: {}",
+                            tx_id, sync_error
+                        );
+                    }
+                }
+            }
+
+            // Reset the transaction and re-enqueue it
+            info!(
+                "Bad sequence error detected for transaction {}. Resetting and re-enqueueing.",
+                tx_id
+            );
+
+            // Reset the transaction to pending state
+            match self.reset_transaction_for_retry(tx.clone()).await {
+                Ok(reset_tx) => {
+                    // Re-enqueue the transaction to go through the pipeline again
+                    if let Err(e) = self.send_transaction_request_job(&reset_tx, Some(2)).await {
+                        warn!(
+                            "Failed to re-enqueue transaction {} after reset: {}",
+                            tx_id, e
+                        );
+                    } else {
+                        info!(
+                            "Transaction {} reset and re-enqueued for retry through pipeline",
+                            tx_id
+                        );
+                    }
+
+                    // Return success since we're handling the retry
+                    return Ok(reset_tx);
+                }
+                Err(reset_error) => {
+                    warn!(
+                        "Failed to reset transaction {} for retry: {}",
+                        tx_id, reset_error
+                    );
+                    // Fall through to normal failure handling
+                }
+            }
+        }
+
+        // For non-bad-sequence errors or if reset failed, mark as failed
         // Step 1: Mark transaction as Failed with detailed reason
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(error_reason.clone()),
+            ..Default::default()
+        };
         let _failed_tx = match self
-            .finalize_transaction_state(
-                tx_id.clone(),
-                TransactionStatus::Failed,
-                Some(error_reason.clone()),
-                None,
-            )
+            .finalize_transaction_state(tx_id.clone(), update_request)
             .await
         {
             Ok(updated_tx) => updated_tx,
@@ -120,24 +182,20 @@ where
                     "Failed to mark transaction {} as failed: {}. Continuing with lane cleanup.",
                     tx_id, finalize_error
                 );
-                // Continue with cleanup even if we can't update the transaction
                 tx
             }
         };
 
-        // Step 2: Attempt to enqueue next pending transaction or release lane
+        // Attempt to enqueue next pending transaction or release lane
         if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
             warn!(
-                "Failed to enqueue next pending transaction after {} submission failure: {}. Lane may remain stuck.",
+                "Failed to enqueue next pending transaction after {} submission failure: {}.",
                 tx_id, enqueue_error
             );
-            // Note: We don't have direct lane ownership here since submit doesn't claim lanes,
-            // but the transaction still owns the lane from prepare phase
         }
 
-        // Step 3: Log failure for monitoring (submit_fail_total metric would go here)
         info!(
-            "Transaction {} submission failure handled. Next transaction enqueued. Error: {}",
+            "Transaction {} submission failure handled. Error: {}",
             tx_id, error_reason
         );
 
@@ -216,7 +274,7 @@ mod tests {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
-            // Provider fails
+            // Provider fails with non-bad-sequence error
             mocks
                 .provider
                 .expect_send_transaction()
@@ -251,6 +309,7 @@ mod tests {
             let mut tx = create_test_transaction(&relayer.id);
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42); // Set sequence number
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -307,6 +366,7 @@ mod tests {
             let mut tx = create_test_transaction(&relayer.id);
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42); // Set sequence number
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -419,11 +479,13 @@ mod tests {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
-            // Provider fails
+            // Provider fails with non-bad-sequence error
             mocks
                 .provider
                 .expect_send_transaction()
                 .returning(|_| Box::pin(async { Err(eyre::eyre!("Network error")) }));
+
+            // No sync expected for non-bad-sequence errors
 
             // Mock finalize_transaction_state for failure handling
             mocks
@@ -471,6 +533,7 @@ mod tests {
             let mut tx = create_test_transaction(&relayer.id);
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42); // Set sequence number
             }
 
             let res = handler.submit_transaction_impl(tx).await;
@@ -478,6 +541,98 @@ mod tests {
             // Should return error but next transaction should be enqueued
             assert!(res.is_err());
             matches!(res.unwrap_err(), TransactionError::UnexpectedError(_));
+        }
+
+        #[tokio::test]
+        async fn test_submit_bad_sequence_resets_and_retries() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock provider to return bad sequence error
+            mocks.provider.expect_send_transaction().returning(|_| {
+                Box::pin(async { Err(eyre::eyre!("transaction submission failed: TxBadSeq")) })
+            });
+
+            // Mock get_account for sync_sequence_from_chain
+            mocks.provider.expect_get_account().times(1).returning(|_| {
+                Box::pin(async {
+                    use soroban_rs::xdr::{
+                        AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
+                        String32, Thresholds, Uint256,
+                    };
+                    use stellar_strkey::ed25519;
+
+                    let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                    Ok(AccountEntry {
+                        account_id,
+                        balance: 1000000,
+                        seq_num: SequenceNumber(100),
+                        num_sub_entries: 0,
+                        inflation_dest: None,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        thresholds: Thresholds([1, 1, 1, 1]),
+                        signers: Default::default(),
+                        ext: AccountEntryExt::V0,
+                    })
+                })
+            });
+
+            // Mock counter set for sync_sequence_from_chain
+            mocks
+                .counter
+                .expect_set()
+                .times(1)
+                .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+            // Mock partial_update for reset_transaction_for_retry - should reset to Pending
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
+                .times(1)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    if let Some(network_data) = upd.network_data {
+                        tx.network_data = network_data;
+                    }
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Mock produce_transaction_request_job for re-enqueue
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42);
+            }
+
+            let result = handler.submit_transaction_impl(tx).await;
+
+            // Should return Ok since we're handling the retry
+            assert!(result.is_ok());
+            let reset_tx = result.unwrap();
+            assert_eq!(reset_tx.status, TransactionStatus::Pending);
+
+            // Verify stellar data was reset
+            if let NetworkTransactionData::Stellar(data) = &reset_tx.network_data {
+                assert!(data.sequence_number.is_none());
+                assert!(data.signatures.is_empty());
+                assert!(data.hash.is_none());
+                assert!(data.signed_envelope_xdr.is_none());
+            } else {
+                panic!("Expected Stellar transaction data");
+            }
         }
     }
 }
