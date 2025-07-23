@@ -62,7 +62,7 @@ For detailed network configuration options, see the xref:network_configuration.a
 For a step-by-step setup, see xref:quickstart.adoc[Quick Start Guide].
 Key prerequisites:
 
-- Rust 2021, version `1.85` or later
+- Rust 2021, version `1.86` or later
 - Redis
 - Docker (optional)
 
