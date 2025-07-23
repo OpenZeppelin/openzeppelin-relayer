@@ -170,7 +170,7 @@ Some tags have special meaning and affect relayer behavior:
 |`rollup`
 |Identifies Layer 2 rollup networks (e.g., Arbitrum, Optimism, Base)
 
-|`optimism_based`
+|`optimism`
 |Identifies Optimism-based networks using the OP Stack (e.g., Optimism, Base, World Chain)
 
 |`arbitrum_based`

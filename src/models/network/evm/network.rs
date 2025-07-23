@@ -93,7 +93,7 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
 
 impl EvmNetwork {
     pub fn is_optimism(&self) -> bool {
-        self.tags.contains(&"optimism_based".to_string())
+        self.tags.contains(&"optimism".to_string())
     }
 
     pub fn is_rollup(&self) -> bool {
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_is_optimism_with_optimism_tag() {
-        let network = create_test_evm_network_with_tags(vec!["optimism_based", "rollup"]);
+        let network = create_test_evm_network_with_tags(vec!["optimism", "rollup"]);
         assert!(network.is_optimism());
     }
 
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_lacks_mempool_without_no_mempool_tag() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism_based"]);
+        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
         assert!(!network.lacks_mempool());
     }
 
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_optimism_like_network() {
-        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism_based"]);
+        let network = create_test_evm_network_with_tags(vec!["rollup", "optimism"]);
         assert!(network.is_rollup());
         assert!(network.is_optimism());
         assert!(!network.lacks_mempool());
@@ -241,7 +241,7 @@ mod tests {
                 explorer_urls: None,
                 average_blocktime_ms: Some(12000),
                 is_testnet: Some(false),
-                tags: Some(vec!["rollup".to_string(), "optimism_based".to_string()]),
+                tags: Some(vec!["rollup".to_string(), "optimism".to_string()]),
             },
             chain_id: Some(10),
             required_confirmations: Some(1),
