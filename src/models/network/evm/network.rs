@@ -105,7 +105,7 @@ impl EvmNetwork {
     }
 
     pub fn is_arbitrum(&self) -> bool {
-        self.tags.contains(&"arbitrum_based".to_string())
+        self.tags.contains(&"arbitrum-based".to_string())
     }
 
     pub fn is_testnet(&self) -> bool {

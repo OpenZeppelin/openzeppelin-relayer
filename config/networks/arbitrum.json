@@ -22,7 +22,7 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "arbitrum_based",
+        "arbitrum-based",
         "rollup",
         "no-mempool"
       ],
@@ -47,7 +47,7 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "arbitrum_based",
+        "arbitrum-based",
         "deprecated",
         "rollup",
         "no-mempool"
@@ -74,7 +74,7 @@
       ],
       "symbol": "ETH",
       "tags": [
-        "arbitrum_based",
+        "arbitrum-based",
         "rollup",
         "no-mempool"
       ],
