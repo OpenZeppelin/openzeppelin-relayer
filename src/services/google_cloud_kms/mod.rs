@@ -20,6 +20,7 @@
 
 use alloy::primitives::keccak256;
 use async_trait::async_trait;
+use google_cloud_auth::credentials::CacheableResource;
 use google_cloud_auth::credentials::{service_account::Builder as GcpCredBuilder, Credentials};
 #[cfg_attr(test, allow(unused_imports))]
 use http::{Extensions, HeaderMap};
@@ -28,7 +29,6 @@ use reqwest::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 #[cfg(test)]
 use mockall::automock;
@@ -95,7 +95,6 @@ pub struct GoogleCloudKmsService {
     pub config: GoogleCloudKmsSignerConfig,
     credentials: Arc<Credentials>,
     client: Client,
-    cached_headers: Arc<RwLock<Option<HeaderMap>>>,
 }
 
 impl GoogleCloudKmsService {
@@ -121,7 +120,6 @@ impl GoogleCloudKmsService {
             config: config.clone(),
             credentials: Arc::new(credentials),
             client: Client::new(),
-            cached_headers: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -142,23 +140,22 @@ impl GoogleCloudKmsService {
                 .await
                 .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))?;
 
-            match cacheable_headers {
-                google_cloud_auth::credentials::CacheableResource::New { data, .. } => {
-                    let mut cached = self.cached_headers.write().await;
-                    *cached = Some(data.clone());
-                    Ok(data)
-                }
-                google_cloud_auth::credentials::CacheableResource::NotModified => {
-                    let cached = self.cached_headers.read().await;
-                    if let Some(headers) = cached.as_ref() {
-                        Ok(headers.clone())
-                    } else {
-                        Err(GoogleCloudKmsError::ConfigError(
-                            "KMS auth token not modified, but not found in cache".to_string(),
-                        ))
-                    }
-                }
-            }
+            self.get_headers_from_cache(cacheable_headers)
+                .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))
+        }
+    }
+
+    /// Extracts headers from the cacheable resource.
+    #[allow(dead_code)]
+    fn get_headers_from_cache(
+        &self,
+        headers: CacheableResource<HeaderMap>,
+    ) -> Result<HeaderMap, GoogleCloudKmsError> {
+        match headers {
+            CacheableResource::New { data, .. } => Ok(data),
+            CacheableResource::NotModified => Err(GoogleCloudKmsError::ConfigError(
+                "Expecting headers to be present".to_string(),
+            )),
         }
     }
 
