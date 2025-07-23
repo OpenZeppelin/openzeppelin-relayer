@@ -16,6 +16,7 @@ use super::{
     RelayerRepoModel, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
     RelayerSolanaSwapPolicy, RelayerStellarPolicy, RpcConfig,
 };
+use crate::utils::{deserialize_optional_u128, serialize_optional_u128};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -298,7 +299,7 @@ mod tests {
 
         println!("serialized: {:?}", serialized);
 
-        assert!(serialized.contains(r#""gas_price_cap": 100000000000"#));
+        assert!(serialized.contains(r#""gas_price_cap": "100000000000""#));
         assert!(serialized.contains(r#""eip1559_pricing": true"#));
     }
 
@@ -386,8 +387,10 @@ pub struct NetworkPolicyResponse {
 /// EVM policy response model for OpenAPI documentation  
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct EvmPolicyResponse {
+    #[serde(serialize_with = "serialize_optional_u128", deserialize_with = "deserialize_optional_u128")]
     pub min_balance: Option<u128>,
     pub gas_limit_estimation: Option<bool>,
+    #[serde(serialize_with = "serialize_optional_u128", deserialize_with = "deserialize_optional_u128")]
     pub gas_price_cap: Option<u128>,
     pub whitelist_receivers: Option<Vec<String>>,
     pub eip1559_pricing: Option<bool>,
