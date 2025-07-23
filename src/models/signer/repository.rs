@@ -23,7 +23,7 @@ use crate::{
     utils::{base64_decode, base64_encode},
 };
 use secrets::SecretVec;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Helper function to serialize secrets as base64 for storage
 fn serialize_secret_base64<S>(secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
@@ -32,6 +32,19 @@ where
 {
     let base64 = base64_encode(secret.borrow().as_ref());
     serializer.serialize_str(&base64)
+}
+
+/// Helper function to deserialize secrets from base64 storage
+fn deserialize_secret_base64<'de, D>(deserializer: D) -> Result<SecretVec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let base64_str = String::deserialize(deserializer)?;
+    let decoded = base64_decode(&base64_str)
+        .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+    Ok(SecretVec::new(decoded.len(), |v| {
+        v.copy_from_slice(&decoded)
+    }))
 }
 
 /// Repository model for signer storage and retrieval
@@ -60,29 +73,13 @@ pub enum SignerConfigStorage {
 }
 
 /// Local signer configuration for storage (with base64 encoding)
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalSignerConfigStorage {
-    #[serde(serialize_with = "serialize_secret_base64")]
+    #[serde(
+        serialize_with = "serialize_secret_base64",
+        deserialize_with = "deserialize_secret_base64"
+    )]
     pub raw_key: SecretVec<u8>,
-}
-
-impl<'de> Deserialize<'de> for LocalSignerConfigStorage {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct LocalSignerConfigHelper {
-            raw_key: String,
-        }
-
-        let helper = LocalSignerConfigHelper::deserialize(deserializer)?;
-        let decoded = base64_decode(&helper.raw_key)
-            .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
-        let raw_key = SecretVec::new(decoded.len(), |v| v.copy_from_slice(&decoded));
-
-        Ok(LocalSignerConfigStorage { raw_key })
-    }
 }
 
 /// Storage representations for other signer types (these are simpler as they don't contain secrets that need encoding)
@@ -166,6 +163,16 @@ impl From<SignerRepoModel> for SignerRepoModelStorage {
         Self {
             id: model.id,
             config: model.config.into(),
+        }
+    }
+}
+
+/// Convert storage model back to repository model
+impl From<SignerRepoModelStorage> for SignerRepoModel {
+    fn from(storage_model: SignerRepoModelStorage) -> Self {
+        Self {
+            id: storage_model.id,
+            config: storage_model.config.into(),
         }
     }
 }

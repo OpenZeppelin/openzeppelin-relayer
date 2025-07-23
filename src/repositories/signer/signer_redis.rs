@@ -221,7 +221,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let result: Result<Option<String>, RedisError> = conn.get(&key).await;
         match result {
             Ok(Some(data)) => {
-                let signer = self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")?;
+                let signer_storage =
+                    self.deserialize_entity::<SignerRepoModelStorage>(&data, &id, "signer")?;
+                let signer = SignerRepoModel::from(signer_storage);
                 debug!("Retrieved signer with ID: {}", id);
                 Ok(signer)
             }

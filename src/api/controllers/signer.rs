@@ -261,30 +261,38 @@ mod tests {
         signer_type: SignerType,
     ) -> SignerCreateRequest {
         use crate::models::{
-            AwsKmsSignerRequestConfig, PlainSignerRequestConfig, SignerConfigRequest,
+            AwsKmsSignerRequestConfig, LocalSignerRequestConfig, SignerConfigRequest,
+            SignerTypeRequest,
         };
 
-        let config = match signer_type {
-            SignerType::Local => SignerConfigRequest::Local {
-                config: PlainSignerRequestConfig {
+        let (signer_type_req, config) = match signer_type {
+            SignerType::Local => (
+                SignerTypeRequest::Local,
+                SignerConfigRequest::Local(LocalSignerRequestConfig {
                     key: "1111111111111111111111111111111111111111111111111111111111111111"
                         .to_string(), // Valid 32-byte hex key
-                },
-            },
-            SignerType::AwsKms => SignerConfigRequest::AwsKms {
-                config: AwsKmsSignerRequestConfig {
+                }),
+            ),
+            SignerType::AwsKms => (
+                SignerTypeRequest::AwsKms,
+                SignerConfigRequest::AwsKms(AwsKmsSignerRequestConfig {
                     region: "us-east-1".to_string(),
                     key_id: "test-key-id".to_string(),
-                },
-            },
-            _ => SignerConfigRequest::Local {
-                config: PlainSignerRequestConfig {
+                }),
+            ),
+            _ => (
+                SignerTypeRequest::Local,
+                SignerConfigRequest::Local(LocalSignerRequestConfig {
                     key: "placeholder-key".to_string(),
-                },
-            }, // Use Local for other types in helper
+                }),
+            ), // Use Local for other types in helper
         };
 
-        SignerCreateRequest { id, config }
+        SignerCreateRequest {
+            id,
+            signer_type: signer_type_req,
+            config,
+        }
     }
 
     /// Helper function to create a test signer update request

@@ -296,6 +296,8 @@ mod tests {
             "Should only have one network_type field at top level, not in policies"
         );
 
+        println!("serialized: {:?}", serialized);
+
         assert!(serialized.contains(r#""gas_price_cap": 100000000000"#));
         assert!(serialized.contains(r#""eip1559_pricing": true"#));
     }

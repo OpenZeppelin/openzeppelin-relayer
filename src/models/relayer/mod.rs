@@ -26,7 +26,11 @@ pub use repository::*;
 mod rpc_config;
 pub use rpc_config::*;
 
-use crate::{config::ConfigFileNetworkType, constants::ID_REGEX, utils::deserialize_optional_u128};
+use crate::{
+    config::ConfigFileNetworkType,
+    constants::ID_REGEX,
+    utils::{deserialize_optional_u128, serialize_optional_u128},
+};
 use apalis_cron::Schedule;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -78,12 +82,20 @@ impl From<RelayerNetworkType> for ConfigFileNetworkType {
 #[serde(deny_unknown_fields)]
 pub struct RelayerEvmPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     pub min_balance: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gas_limit_estimation: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     pub gas_price_cap: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whitelist_receivers: Option<Vec<String>>,
