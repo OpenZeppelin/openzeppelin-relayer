@@ -778,7 +778,10 @@ where
 mod tests {
     use super::*;
     use crate::{
-        models::{ApiResponse, CreateRelayerRequest, RelayerNetworkType, RelayerResponse},
+        models::{
+            ApiResponse, CreateRelayerRequest, RelayerNetworkPolicyResponse, RelayerNetworkType,
+            RelayerResponse,
+        },
         utils::mocks::mockutils::{
             create_mock_app_state, create_mock_network, create_mock_notification,
             create_mock_relayer, create_mock_signer, create_mock_transaction,
@@ -818,6 +821,53 @@ mod tests {
         }
     }
 
+    /// Helper function to create a mock Solana network
+    fn create_mock_solana_network() -> crate::models::NetworkRepoModel {
+        use crate::config::{NetworkConfigCommon, SolanaNetworkConfig};
+        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+
+        NetworkRepoModel {
+            id: "test".to_string(),
+            name: "test".to_string(),
+            network_type: NetworkType::Solana,
+            config: NetworkConfigData::Solana(SolanaNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "test".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["http://localhost:8899".to_string()]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(400),
+                    is_testnet: Some(true),
+                    tags: None,
+                },
+            }),
+        }
+    }
+
+    /// Helper function to create a mock Stellar network
+    fn create_mock_stellar_network() -> crate::models::NetworkRepoModel {
+        use crate::config::{NetworkConfigCommon, StellarNetworkConfig};
+        use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+
+        NetworkRepoModel {
+            id: "test".to_string(),
+            name: "test".to_string(),
+            network_type: NetworkType::Stellar,
+            config: NetworkConfigData::Stellar(StellarNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "test".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://horizon-testnet.stellar.org".to_string()]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(5000),
+                    is_testnet: Some(true),
+                    tags: None,
+                },
+                passphrase: Some("Test Network ; September 2015".to_string()),
+            }),
+        }
+    }
+
     // CREATE RELAYER TESTS
 
     #[actix_web::test]
@@ -854,6 +904,252 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn test_create_relayer_with_evm_policies() {
+        setup_test_env();
+        let network = create_mock_network();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        let mut request = create_test_relayer_create_request(
+            Some("test-relayer-policies".to_string()),
+            "Test Relayer with Policies",
+            "test", // Using "test" to match the mock network name
+            "test", // Using "test" to match the mock signer id
+            None,
+        );
+
+        // Add EVM policies
+        use crate::models::relayer::{CreateRelayerPolicyRequest, RelayerEvmPolicy};
+        request.policies = Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(50000000000),
+            min_balance: Some(1000000000000000000),
+            eip1559_pricing: Some(true),
+            private_transactions: Some(false),
+            gas_limit_estimation: Some(true),
+            whitelist_receivers: Some(vec![
+                "0x1234567890123456789012345678901234567890".to_string()
+            ]),
+        }));
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-relayer-policies");
+        assert_eq!(data.name, "Test Relayer with Policies");
+        assert_eq!(data.network, "test");
+
+        // Verify policies are present in response
+        assert!(data.policies.is_some());
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_with_partial_evm_policies() {
+        setup_test_env();
+        let network = create_mock_network();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        let mut request = create_test_relayer_create_request(
+            Some("test-relayer-partial".to_string()),
+            "Test Relayer with Partial Policies",
+            "test",
+            "test",
+            None,
+        );
+
+        // Add partial EVM policies
+        use crate::models::relayer::{CreateRelayerPolicyRequest, RelayerEvmPolicy};
+        request.policies = Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
+            gas_price_cap: Some(30000000000),
+            eip1559_pricing: Some(false),
+            min_balance: None,
+            private_transactions: None,
+            gas_limit_estimation: None,
+            whitelist_receivers: None,
+        }));
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-relayer-partial");
+
+        // Verify partial policies are present in response
+        assert!(data.policies.is_some());
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_with_solana_policies() {
+        setup_test_env();
+        let network = create_mock_solana_network();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        let mut request = create_test_relayer_create_request(
+            Some("test-solana-relayer".to_string()),
+            "Test Solana Relayer",
+            "test",
+            "test",
+            None,
+        );
+
+        // Change network type to Solana and add Solana policies
+        use crate::models::relayer::{
+            CreateRelayerPolicyRequest, RelayerNetworkType, RelayerSolanaFeePaymentStrategy,
+            RelayerSolanaPolicy,
+        };
+        request.network_type = RelayerNetworkType::Solana;
+        request.policies = Some(CreateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(5000000),
+            max_signatures: Some(10),
+            max_tx_data_size: Some(1232),
+            max_allowed_fee_lamports: Some(50000),
+            allowed_programs: None, // Simplified to avoid validation issues
+            allowed_tokens: None,
+            fee_margin_percentage: Some(10.0),
+            allowed_accounts: None,
+            disallowed_accounts: None,
+            swap_config: None,
+        }));
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-solana-relayer");
+        assert_eq!(data.network_type, RelayerNetworkType::Solana);
+        assert_eq!(data.name, "Test Solana Relayer");
+
+        // Verify Solana policies are present in response
+        assert!(data.policies.is_some());
+        // verify policies are correct
+        let policies = data.policies.unwrap();
+        if let RelayerNetworkPolicyResponse::Solana(solana_policy) = policies {
+            assert_eq!(
+                solana_policy.fee_payment_strategy,
+                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+            );
+            assert_eq!(solana_policy.min_balance, Some(5000000));
+            assert_eq!(solana_policy.max_signatures, Some(10));
+            assert_eq!(solana_policy.max_tx_data_size, Some(1232));
+            assert_eq!(solana_policy.max_allowed_fee_lamports, Some(50000));
+        } else {
+            panic!("Expected Solana policies");
+        }
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_with_stellar_policies() {
+        setup_test_env();
+        let network = create_mock_stellar_network();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        let mut request = create_test_relayer_create_request(
+            Some("test-stellar-relayer".to_string()),
+            "Test Stellar Relayer",
+            "test",
+            "test",
+            None,
+        );
+
+        // Change network type to Stellar and add Stellar policies
+        use crate::models::relayer::{
+            CreateRelayerPolicyRequest, RelayerNetworkType, RelayerStellarPolicy,
+        };
+        request.network_type = RelayerNetworkType::Stellar;
+        request.policies = Some(CreateRelayerPolicyRequest::Stellar(RelayerStellarPolicy {
+            min_balance: Some(10000000),
+            max_fee: Some(100),
+            timeout_seconds: Some(30),
+        }));
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "test-stellar-relayer");
+        assert_eq!(data.network_type, RelayerNetworkType::Stellar);
+
+        // Verify Stellar policies are present in response
+        assert!(data.policies.is_some());
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
+    async fn test_create_relayer_with_policy_type_mismatch() {
+        setup_test_env();
+        let network = create_mock_network();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, Some(vec![signer]), Some(vec![network]), None, None).await;
+
+        let mut request = create_test_relayer_create_request(
+            Some("test-mismatch-relayer".to_string()),
+            "Test Mismatch Relayer",
+            "test",
+            "test",
+            None,
+        );
+
+        // Set network type to EVM but provide Solana policies (should fail)
+        use crate::models::relayer::{
+            CreateRelayerPolicyRequest, RelayerNetworkType, RelayerSolanaPolicy,
+        };
+        request.network_type = RelayerNetworkType::Evm;
+        request.policies = Some(CreateRelayerPolicyRequest::Solana(
+            RelayerSolanaPolicy::default(),
+        ));
+
+        let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Policy type does not match relayer network type"));
+        } else {
+            panic!("Expected BadRequest error for policy type mismatch");
+        }
+        cleanup_test_env();
+    }
+
+    #[actix_web::test]
     async fn test_create_relayer_with_notification() {
         setup_test_env();
         let network = create_mock_network();
@@ -882,6 +1178,12 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 201);
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.notification_id, Some("test-notification".to_string()));
         cleanup_test_env();
     }
 
@@ -1192,6 +1494,398 @@ mod tests {
             assert!(msg.contains("Relayer with ID nonexistent-relayer not found"));
         } else {
             panic!("Expected NotFound error for nonexistent relayer");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_set_evm_policies() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "policies": {
+                "gas_price_cap": 50000000000u64,
+                "min_balance": 1000000000000000000u64,
+                "eip1559_pricing": true,
+                "private_transactions": false,
+                "gas_limit_estimation": true,
+                "whitelist_receivers": ["0x1234567890123456789012345678901234567890"]
+            }
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+
+        // For now, just verify that the policies field exists
+        // The policy validation can be added once we understand the correct structure
+        assert!(data.policies.is_some());
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_partial_policy_update() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        // First update with some policies
+        let patch1 = serde_json::json!({
+            "policies": {
+                "gas_price_cap": 30000000000u64,
+                "min_balance": 500000000000000000u64,
+                "eip1559_pricing": false
+            }
+        });
+
+        let result1 = update_relayer(
+            "test-relayer".to_string(),
+            patch1,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result1.is_ok());
+
+        // Create fresh app state for second update test
+        let relayer2 = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state2 = create_mock_app_state(Some(vec![relayer2]), None, None, None, None).await;
+
+        // Second update with only gas_price_cap change
+        let patch2 = serde_json::json!({
+            "policies": {
+                "gas_price_cap": 60000000000u64
+            }
+        });
+
+        let result2 = update_relayer(
+            "test-relayer".to_string(),
+            patch2,
+            actix_web::web::ThinData(app_state2),
+        )
+        .await;
+
+        assert!(result2.is_ok());
+        let response = result2.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+
+        // Just verify policies exist for now
+        assert!(data.policies.is_some());
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_unset_notification() {
+        let mut relayer = create_mock_relayer("test-relayer".to_string(), false);
+        relayer.notification_id = Some("test-notification".to_string());
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "notification_id": null
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.notification_id, None);
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_unset_custom_rpc_urls() {
+        let mut relayer = create_mock_relayer("test-relayer".to_string(), false);
+        relayer.custom_rpc_urls = Some(vec![crate::models::RpcConfig {
+            url: "https://custom-rpc.example.com".to_string(),
+            weight: 50,
+        }]);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "custom_rpc_urls": null
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.custom_rpc_urls, None);
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_set_custom_rpc_urls() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "custom_rpc_urls": [
+                {
+                    "url": "https://rpc1.example.com",
+                    "weight": 80
+                },
+                {
+                    "url": "https://rpc2.example.com",
+                    "weight": 60
+                }
+            ]
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+
+        assert!(data.custom_rpc_urls.is_some());
+        let rpc_urls = data.custom_rpc_urls.unwrap();
+        assert_eq!(rpc_urls.len(), 2);
+        assert_eq!(rpc_urls[0].url, "https://rpc1.example.com");
+        assert_eq!(rpc_urls[0].weight, 80);
+        assert_eq!(rpc_urls[1].url, "https://rpc2.example.com");
+        assert_eq!(rpc_urls[1].weight, 60);
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_clear_policies() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "policies": null
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.policies, None);
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_invalid_policy_structure() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "policies": {
+                "invalid_field_name": "some_value"
+            }
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid policy"));
+        } else {
+            panic!("Expected BadRequest error for invalid policy structure");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_invalid_evm_policy_values() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "policies": {
+                "gas_price_cap": "invalid_number",
+                "min_balance": -1
+            }
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid policy") || msg.contains("Invalid update request"));
+        } else {
+            panic!("Expected BadRequest error for invalid policy values");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_multiple_fields_at_once() {
+        let mut relayer = create_mock_relayer("test-relayer".to_string(), false);
+        relayer.notification_id = Some("old-notification".to_string());
+        let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "name": "Multi-Update Relayer",
+            "paused": true,
+            "notification_id": null,
+            "policies": {
+                "gas_price_cap": 40000000000u64,
+                "eip1559_pricing": true
+            },
+            "custom_rpc_urls": [
+                {
+                    "url": "https://new-rpc.example.com",
+                    "weight": 90
+                }
+            ]
+        });
+
+        let result = update_relayer(
+            "test-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+
+        // Verify all fields were updated correctly
+        assert_eq!(data.name, "Multi-Update Relayer");
+        assert!(data.paused);
+        assert_eq!(data.notification_id, None);
+
+        // Verify policies and RPC URLs were set
+        assert!(data.policies.is_some());
+        assert!(data.custom_rpc_urls.is_some());
+        let rpc_urls = data.custom_rpc_urls.unwrap();
+        assert_eq!(rpc_urls.len(), 1);
+        assert_eq!(rpc_urls[0].url, "https://new-rpc.example.com");
+        assert_eq!(rpc_urls[0].weight, 90);
+    }
+
+    #[actix_web::test]
+    async fn test_update_relayer_solana_policies() {
+        use crate::models::{
+            NetworkType, RelayerNetworkPolicy, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
+        };
+
+        // Create a Solana relayer (not the default EVM one)
+        let mut solana_relayer = create_mock_relayer("test-solana-relayer".to_string(), false);
+        solana_relayer.network_type = NetworkType::Solana;
+        solana_relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default());
+
+        let app_state =
+            create_mock_app_state(Some(vec![solana_relayer]), None, None, None, None).await;
+
+        let patch = serde_json::json!({
+            "policies": {
+                "fee_payment_strategy": "user",
+                "min_balance": 2000000,
+                "max_signatures": 5,
+                "max_tx_data_size": 800,
+                "max_allowed_fee_lamports": 25000,
+                "fee_margin_percentage": 15.0
+            }
+        });
+
+        let result = update_relayer(
+            "test-solana-relayer".to_string(),
+            patch,
+            actix_web::web::ThinData(app_state),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+
+        let body = to_bytes(response.into_body()).await.unwrap();
+        let api_response: ApiResponse<RelayerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+
+        // Verify Solana policies are present and correctly updated
+        assert!(data.policies.is_some());
+        let policies = data.policies.unwrap();
+        if let RelayerNetworkPolicyResponse::Solana(solana_policy) = policies {
+            assert_eq!(
+                solana_policy.fee_payment_strategy,
+                Some(RelayerSolanaFeePaymentStrategy::User)
+            );
+            assert_eq!(solana_policy.min_balance, Some(2000000));
+            assert_eq!(solana_policy.max_signatures, Some(5));
+            assert_eq!(solana_policy.max_tx_data_size, Some(800));
+            assert_eq!(solana_policy.max_allowed_fee_lamports, Some(25000));
+            assert_eq!(solana_policy.fee_margin_percentage, Some(15.0));
+        } else {
+            panic!("Expected Solana policies in response");
         }
     }
 
