@@ -112,11 +112,12 @@ impl RedisSignerRepository {
         let mut failed_count = 0;
         let mut failed_ids = Vec::new();
 
+
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_entity::<SignerRepoModel>(&json, &ids[i], "signer") {
-                        Ok(signer) => signers.push(signer),
+                    match self.deserialize_entity::<SignerRepoModelStorage>(&json, &ids[i], "signer") {
+                        Ok(signer) => signers.push(SignerRepoModel::from(signer)),
                         Err(e) => {
                             failed_count += 1;
                             error!("Failed to deserialize signer {}: {}", ids[i], e);
