@@ -700,8 +700,1129 @@ impl From<RelayerValidationError> for crate::models::ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use serde_json::json;
+
+    // ===== RelayerNetworkType Tests =====
+
+    #[test]
+    fn test_relayer_network_type_display() {
+        assert_eq!(RelayerNetworkType::Evm.to_string(), "evm");
+        assert_eq!(RelayerNetworkType::Solana.to_string(), "solana");
+        assert_eq!(RelayerNetworkType::Stellar.to_string(), "stellar");
+    }
+
+    #[test]
+    fn test_relayer_network_type_from_config_file_type() {
+        assert_eq!(
+            RelayerNetworkType::from(ConfigFileNetworkType::Evm),
+            RelayerNetworkType::Evm
+        );
+        assert_eq!(
+            RelayerNetworkType::from(ConfigFileNetworkType::Solana),
+            RelayerNetworkType::Solana
+        );
+        assert_eq!(
+            RelayerNetworkType::from(ConfigFileNetworkType::Stellar),
+            RelayerNetworkType::Stellar
+        );
+    }
+
+    #[test]
+    fn test_config_file_network_type_from_relayer_type() {
+        assert_eq!(
+            ConfigFileNetworkType::from(RelayerNetworkType::Evm),
+            ConfigFileNetworkType::Evm
+        );
+        assert_eq!(
+            ConfigFileNetworkType::from(RelayerNetworkType::Solana),
+            ConfigFileNetworkType::Solana
+        );
+        assert_eq!(
+            ConfigFileNetworkType::from(RelayerNetworkType::Stellar),
+            ConfigFileNetworkType::Stellar
+        );
+    }
+
+    #[test]
+    fn test_relayer_network_type_serialization() {
+        let evm_type = RelayerNetworkType::Evm;
+        let serialized = serde_json::to_string(&evm_type).unwrap();
+        assert_eq!(serialized, "\"evm\"");
+
+        let deserialized: RelayerNetworkType = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, RelayerNetworkType::Evm);
+
+        // Test all types
+        let types = vec![
+            (RelayerNetworkType::Evm, "\"evm\""),
+            (RelayerNetworkType::Solana, "\"solana\""),
+            (RelayerNetworkType::Stellar, "\"stellar\""),
+        ];
+
+        for (network_type, expected_json) in types {
+            let serialized = serde_json::to_string(&network_type).unwrap();
+            assert_eq!(serialized, expected_json);
+
+            let deserialized: RelayerNetworkType = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, network_type);
+        }
+    }
+
+    // ===== Policy Struct Tests =====
+
+    #[test]
+    fn test_relayer_evm_policy_default() {
+        let default_policy = RelayerEvmPolicy::default();
+        assert_eq!(default_policy.min_balance, None);
+        assert_eq!(default_policy.gas_limit_estimation, None);
+        assert_eq!(default_policy.gas_price_cap, None);
+        assert_eq!(default_policy.whitelist_receivers, None);
+        assert_eq!(default_policy.eip1559_pricing, None);
+        assert_eq!(default_policy.private_transactions, None);
+    }
+
+    #[test]
+    fn test_relayer_evm_policy_serialization() {
+        let policy = RelayerEvmPolicy {
+            min_balance: Some(1000000000000000000),
+            gas_limit_estimation: Some(true),
+            gas_price_cap: Some(50000000000),
+            whitelist_receivers: Some(vec!["0x123".to_string(), "0x456".to_string()]),
+            eip1559_pricing: Some(false),
+            private_transactions: Some(true),
+        };
+
+        let serialized = serde_json::to_string(&policy).unwrap();
+        let deserialized: RelayerEvmPolicy = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(policy, deserialized);
+    }
+
+    #[test]
+    fn test_allowed_token_new() {
+        let token = AllowedToken::new(
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            Some(100000),
+            None,
+        );
+
+        assert_eq!(token.mint, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        assert_eq!(token.max_allowed_fee, Some(100000));
+        assert_eq!(token.decimals, None);
+        assert_eq!(token.symbol, None);
+        assert_eq!(token.swap_config, None);
+    }
+
+    #[test]
+    fn test_allowed_token_new_partial() {
+        let swap_config = AllowedTokenSwapConfig {
+            slippage_percentage: Some(0.5),
+            min_amount: Some(1000),
+            max_amount: Some(10000000),
+            retain_min_amount: Some(500),
+        };
+
+        let token = AllowedToken::new_partial(
+            "TokenMint123".to_string(),
+            Some(50000),
+            Some(swap_config.clone()),
+        );
+
+        assert_eq!(token.mint, "TokenMint123");
+        assert_eq!(token.max_allowed_fee, Some(50000));
+        assert_eq!(token.swap_config, Some(swap_config));
+    }
+
+    #[test]
+    fn test_allowed_token_swap_config_default() {
+        let config = AllowedTokenSwapConfig::default();
+        assert_eq!(config.slippage_percentage, None);
+        assert_eq!(config.min_amount, None);
+        assert_eq!(config.max_amount, None);
+        assert_eq!(config.retain_min_amount, None);
+    }
+
+    #[test]
+    fn test_relayer_solana_fee_payment_strategy_default() {
+        let default_strategy = RelayerSolanaFeePaymentStrategy::default();
+        assert_eq!(default_strategy, RelayerSolanaFeePaymentStrategy::User);
+    }
+
+    #[test]
+    fn test_relayer_solana_swap_strategy_default() {
+        let default_strategy = RelayerSolanaSwapStrategy::default();
+        assert_eq!(default_strategy, RelayerSolanaSwapStrategy::Noop);
+    }
+
+    #[test]
+    fn test_jupiter_swap_options_default() {
+        let options = JupiterSwapOptions::default();
+        assert_eq!(options.priority_fee_max_lamports, None);
+        assert_eq!(options.priority_level, None);
+        assert_eq!(options.dynamic_compute_unit_limit, None);
+    }
+
+    #[test]
+    fn test_relayer_solana_swap_policy_default() {
+        let policy = RelayerSolanaSwapPolicy::default();
+        assert_eq!(policy.strategy, None);
+        assert_eq!(policy.cron_schedule, None);
+        assert_eq!(policy.min_balance_threshold, None);
+        assert_eq!(policy.jupiter_swap_options, None);
+    }
+
+    #[test]
+    fn test_relayer_solana_policy_default() {
+        let policy = RelayerSolanaPolicy::default();
+        assert_eq!(policy.allowed_programs, None);
+        assert_eq!(policy.max_signatures, None);
+        assert_eq!(policy.max_tx_data_size, None);
+        assert_eq!(policy.min_balance, None);
+        assert_eq!(policy.allowed_tokens, None);
+        assert_eq!(policy.fee_payment_strategy, None);
+        assert_eq!(policy.fee_margin_percentage, None);
+        assert_eq!(policy.allowed_accounts, None);
+        assert_eq!(policy.disallowed_accounts, None);
+        assert_eq!(policy.max_allowed_fee_lamports, None);
+        assert_eq!(policy.swap_config, None);
+    }
+
+    #[test]
+    fn test_relayer_solana_policy_get_allowed_tokens() {
+        let token1 = AllowedToken::new("mint1".to_string(), Some(1000), None);
+        let token2 = AllowedToken::new("mint2".to_string(), Some(2000), None);
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let tokens = policy.get_allowed_tokens();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0], token1);
+        assert_eq!(tokens[1], token2);
+
+        // Test empty case
+        let empty_policy = RelayerSolanaPolicy::default();
+        let empty_tokens = empty_policy.get_allowed_tokens();
+        assert_eq!(empty_tokens.len(), 0);
+    }
+
+    #[test]
+    fn test_relayer_solana_policy_get_allowed_token_entry() {
+        let token1 = AllowedToken::new("mint1".to_string(), Some(1000), None);
+        let token2 = AllowedToken::new("mint2".to_string(), Some(2000), None);
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let found_token = policy.get_allowed_token_entry("mint1").unwrap();
+        assert_eq!(found_token, token1);
+
+        let not_found = policy.get_allowed_token_entry("mint3");
+        assert!(not_found.is_none());
+
+        // Test empty case
+        let empty_policy = RelayerSolanaPolicy::default();
+        let empty_result = empty_policy.get_allowed_token_entry("mint1");
+        assert!(empty_result.is_none());
+    }
+
+    #[test]
+    fn test_relayer_solana_policy_get_swap_config() {
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            cron_schedule: Some("0 0 * * *".to_string()),
+            min_balance_threshold: Some(1000000),
+            jupiter_swap_options: None,
+        };
+
+        let policy = RelayerSolanaPolicy {
+            swap_config: Some(swap_config.clone()),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let retrieved_config = policy.get_swap_config().unwrap();
+        assert_eq!(retrieved_config, swap_config);
+
+        // Test None case
+        let empty_policy = RelayerSolanaPolicy::default();
+        assert!(empty_policy.get_swap_config().is_none());
+    }
+
+    #[test]
+    fn test_relayer_solana_policy_get_allowed_token_decimals() {
+        let mut token1 = AllowedToken::new("mint1".to_string(), Some(1000), None);
+        token1.decimals = Some(9);
+
+        let token2 = AllowedToken::new("mint2".to_string(), Some(2000), None);
+        // token2.decimals is None
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![token1, token2]),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        assert_eq!(policy.get_allowed_token_decimals("mint1"), Some(9));
+        assert_eq!(policy.get_allowed_token_decimals("mint2"), None);
+        assert_eq!(policy.get_allowed_token_decimals("mint3"), None);
+    }
+
+    #[test]
+    fn test_relayer_stellar_policy_default() {
+        let policy = RelayerStellarPolicy::default();
+        assert_eq!(policy.min_balance, None);
+        assert_eq!(policy.max_fee, None);
+        assert_eq!(policy.timeout_seconds, None);
+    }
+
+    // ===== RelayerNetworkPolicy Tests =====
+
+    #[test]
+    fn test_relayer_network_policy_get_evm_policy() {
+        let evm_policy = RelayerEvmPolicy {
+            gas_price_cap: Some(50000000000),
+            ..RelayerEvmPolicy::default()
+        };
+
+        let network_policy = RelayerNetworkPolicy::Evm(evm_policy.clone());
+        assert_eq!(network_policy.get_evm_policy(), evm_policy);
+
+        // Test non-EVM policy returns default
+        let solana_policy = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default());
+        assert_eq!(solana_policy.get_evm_policy(), RelayerEvmPolicy::default());
+
+        let stellar_policy = RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default());
+        assert_eq!(stellar_policy.get_evm_policy(), RelayerEvmPolicy::default());
+    }
+
+    #[test]
+    fn test_relayer_network_policy_get_solana_policy() {
+        let solana_policy = RelayerSolanaPolicy {
+            min_balance: Some(5000000),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let network_policy = RelayerNetworkPolicy::Solana(solana_policy.clone());
+        assert_eq!(network_policy.get_solana_policy(), solana_policy);
+
+        // Test non-Solana policy returns default
+        let evm_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default());
+        assert_eq!(
+            evm_policy.get_solana_policy(),
+            RelayerSolanaPolicy::default()
+        );
+
+        let stellar_policy = RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default());
+        assert_eq!(
+            stellar_policy.get_solana_policy(),
+            RelayerSolanaPolicy::default()
+        );
+    }
+
+    #[test]
+    fn test_relayer_network_policy_get_stellar_policy() {
+        let stellar_policy = RelayerStellarPolicy {
+            min_balance: Some(20000000),
+            max_fee: Some(100000),
+            timeout_seconds: Some(30),
+        };
+
+        let network_policy = RelayerNetworkPolicy::Stellar(stellar_policy.clone());
+        assert_eq!(network_policy.get_stellar_policy(), stellar_policy);
+
+        // Test non-Stellar policy returns default
+        let evm_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default());
+        assert_eq!(
+            evm_policy.get_stellar_policy(),
+            RelayerStellarPolicy::default()
+        );
+
+        let solana_policy = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default());
+        assert_eq!(
+            solana_policy.get_stellar_policy(),
+            RelayerStellarPolicy::default()
+        );
+    }
+
+    // ===== Relayer Construction and Basic Tests =====
+
+    #[test]
+    fn test_relayer_new() {
+        let relayer = Relayer::new(
+            "test-relayer".to_string(),
+            "Test Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default())),
+            "test-signer".to_string(),
+            Some("test-notification".to_string()),
+            None,
+        );
+
+        assert_eq!(relayer.id, "test-relayer");
+        assert_eq!(relayer.name, "Test Relayer");
+        assert_eq!(relayer.network, "mainnet");
+        assert!(!relayer.paused);
+        assert_eq!(relayer.network_type, RelayerNetworkType::Evm);
+        assert_eq!(relayer.signer_id, "test-signer");
+        assert_eq!(
+            relayer.notification_id,
+            Some("test-notification".to_string())
+        );
+        assert!(relayer.policies.is_some());
+        assert_eq!(relayer.custom_rpc_urls, None);
+    }
+
+    // ===== Relayer Validation Tests =====
+
+    #[test]
+    fn test_relayer_validation_success() {
+        let relayer = Relayer::new(
+            "valid-relayer-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_relayer_validation_empty_id() {
+        let relayer = Relayer::new(
+            "".to_string(), // Empty ID
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerValidationError::EmptyId
+        ));
+    }
+
+    #[test]
+    fn test_relayer_validation_id_too_long() {
+        let long_id = "a".repeat(37); // 37 characters, exceeds 36 limit
+        let relayer = Relayer::new(
+            long_id,
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerValidationError::IdTooLong
+        ));
+    }
+
+    #[test]
+    fn test_relayer_validation_invalid_id_format() {
+        let relayer = Relayer::new(
+            "invalid@id".to_string(), // Contains invalid character @
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerValidationError::InvalidIdFormat
+        ));
+    }
+
+    #[test]
+    fn test_relayer_validation_empty_name() {
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "".to_string(), // Empty name
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerValidationError::EmptyName
+        ));
+    }
+
+    #[test]
+    fn test_relayer_validation_empty_network() {
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "".to_string(), // Empty network
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerValidationError::EmptyNetwork
+        ));
+    }
+
+    #[test]
+    fn test_relayer_validation_empty_signer_id() {
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "".to_string(), // Empty signer ID
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        // This should trigger InvalidPolicy error due to empty signer ID
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Signer ID cannot be empty"));
+        } else {
+            panic!("Expected InvalidPolicy error for empty signer ID");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_mismatched_network_type_and_policy() {
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm, // EVM network type
+            Some(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default())), // But Solana policy
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Network type") && msg.contains("does not match policy type"));
+        } else {
+            panic!("Expected InvalidPolicy error for mismatched network type and policy");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_invalid_rpc_url() {
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            Some(vec![RpcConfig::new("invalid-url".to_string())]), // Invalid URL
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerValidationError::InvalidRpcUrl(_)
+        ));
+    }
+
+    #[test]
+    fn test_relayer_validation_invalid_rpc_weight() {
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Evm,
+            None,
+            "valid-signer".to_string(),
+            None,
+            Some(vec![RpcConfig {
+                url: "https://example.com".to_string(),
+                weight: 150,
+            }]), // Weight > 100
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayerValidationError::InvalidRpcWeight
+        ));
+    }
+
+    // ===== Solana-specific Validation Tests =====
+
+    #[test]
+    fn test_relayer_validation_solana_invalid_public_key() {
+        let policy = RelayerSolanaPolicy {
+            allowed_programs: Some(vec!["invalid-pubkey".to_string()]), // Invalid Solana pubkey
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Public key must be a valid Solana address"));
+        } else {
+            panic!("Expected InvalidPolicy error for invalid Solana public key");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_valid_public_key() {
+        let policy = RelayerSolanaPolicy {
+            allowed_programs: Some(vec!["11111111111111111111111111111111".to_string()]), // Valid Solana pubkey
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        assert!(relayer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_negative_fee_margin() {
+        let policy = RelayerSolanaPolicy {
+            fee_margin_percentage: Some(-1.0), // Negative fee margin
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Negative fee margin percentage values are not accepted"));
+        } else {
+            panic!("Expected InvalidPolicy error for negative fee margin");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_conflicting_accounts() {
+        let policy = RelayerSolanaPolicy {
+            allowed_accounts: Some(vec!["11111111111111111111111111111111".to_string()]),
+            disallowed_accounts: Some(vec!["22222222222222222222222222222222".to_string()]),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("allowed_accounts and disallowed_accounts cannot be both present"));
+        } else {
+            panic!("Expected InvalidPolicy error for conflicting accounts");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_swap_config_wrong_fee_payment_strategy() {
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer), // Relayer strategy
+            swap_config: Some(swap_config), // But has swap config
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Swap config only supported for user fee payment strategy"));
+        } else {
+            panic!("Expected InvalidPolicy error for swap config with relayer fee payment");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_jupiter_strategy_wrong_network() {
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "testnet".to_string(), // Not mainnet-beta
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("strategy is only supported on mainnet-beta"));
+        } else {
+            panic!("Expected InvalidPolicy error for Jupiter strategy on wrong network");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_empty_cron_schedule() {
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            cron_schedule: Some("".to_string()), // Empty cron schedule
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Empty cron schedule is not accepted"));
+        } else {
+            panic!("Expected InvalidPolicy error for empty cron schedule");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_invalid_cron_schedule() {
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            cron_schedule: Some("invalid cron".to_string()), // Invalid cron format
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Invalid cron schedule format"));
+        } else {
+            panic!("Expected InvalidPolicy error for invalid cron schedule");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_jupiter_options_wrong_strategy() {
+        let jupiter_options = JupiterSwapOptions {
+            priority_fee_max_lamports: Some(10000),
+            priority_level: Some("high".to_string()),
+            dynamic_compute_unit_limit: Some(true),
+        };
+
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterUltra), // Wrong strategy
+            jupiter_swap_options: Some(jupiter_options),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("JupiterSwap options are only valid for JupiterSwap strategy"));
+        } else {
+            panic!("Expected InvalidPolicy error for Jupiter options with wrong strategy");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_jupiter_zero_max_lamports() {
+        let jupiter_options = JupiterSwapOptions {
+            priority_fee_max_lamports: Some(0), // Zero is invalid
+            priority_level: Some("high".to_string()),
+            dynamic_compute_unit_limit: Some(true),
+        };
+
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            jupiter_swap_options: Some(jupiter_options),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Max lamports must be greater than 0"));
+        } else {
+            panic!("Expected InvalidPolicy error for zero max lamports");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_jupiter_empty_priority_level() {
+        let jupiter_options = JupiterSwapOptions {
+            priority_fee_max_lamports: Some(10000),
+            priority_level: Some("".to_string()), // Empty priority level
+            dynamic_compute_unit_limit: Some(true),
+        };
+
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            jupiter_swap_options: Some(jupiter_options),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Priority level cannot be empty"));
+        } else {
+            panic!("Expected InvalidPolicy error for empty priority level");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_jupiter_invalid_priority_level() {
+        let jupiter_options = JupiterSwapOptions {
+            priority_fee_max_lamports: Some(10000),
+            priority_level: Some("invalid".to_string()), // Invalid priority level
+            dynamic_compute_unit_limit: Some(true),
+        };
+
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            jupiter_swap_options: Some(jupiter_options),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Priority level must be one of: medium, high, veryHigh"));
+        } else {
+            panic!("Expected InvalidPolicy error for invalid priority level");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_jupiter_missing_priority_fee() {
+        let jupiter_options = JupiterSwapOptions {
+            priority_fee_max_lamports: None, // Missing
+            priority_level: Some("high".to_string()),
+            dynamic_compute_unit_limit: Some(true),
+        };
+
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            jupiter_swap_options: Some(jupiter_options),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Priority Fee Max lamports must be set if priority level is set"));
+        } else {
+            panic!("Expected InvalidPolicy error for missing priority fee");
+        }
+    }
+
+    #[test]
+    fn test_relayer_validation_solana_jupiter_missing_priority_level() {
+        let jupiter_options = JupiterSwapOptions {
+            priority_fee_max_lamports: Some(10000),
+            priority_level: None, // Missing
+            dynamic_compute_unit_limit: Some(true),
+        };
+
+        let swap_config = RelayerSolanaSwapPolicy {
+            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+            jupiter_swap_options: Some(jupiter_options),
+            ..RelayerSolanaSwapPolicy::default()
+        };
+
+        let policy = RelayerSolanaPolicy {
+            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            swap_config: Some(swap_config),
+            ..RelayerSolanaPolicy::default()
+        };
+
+        let relayer = Relayer::new(
+            "valid-id".to_string(),
+            "Valid Relayer".to_string(),
+            "mainnet-beta".to_string(),
+            false,
+            RelayerNetworkType::Solana,
+            Some(RelayerNetworkPolicy::Solana(policy)),
+            "valid-signer".to_string(),
+            None,
+            None,
+        );
+
+        let result = relayer.validate();
+        assert!(result.is_err());
+        if let Err(RelayerValidationError::InvalidPolicy(msg)) = result {
+            assert!(msg.contains("Priority level must be set if priority fee max lamports is set"));
+        } else {
+            panic!("Expected InvalidPolicy error for missing priority level");
+        }
+    }
+
+    // ===== Error Conversion Tests =====
+
+    #[test]
+    fn test_relayer_validation_error_to_api_error() {
+        use crate::models::ApiError;
+
+        // Test each variant
+        let errors = vec![
+            (RelayerValidationError::EmptyId, "ID cannot be empty"),
+            (RelayerValidationError::InvalidIdFormat, "ID must contain only letters, numbers, dashes and underscores and must be at most 36 characters long"),
+            (RelayerValidationError::IdTooLong, "ID must not exceed 36 characters"),
+            (RelayerValidationError::EmptyName, "Name cannot be empty"),
+            (RelayerValidationError::EmptyNetwork, "Network cannot be empty"),
+            (RelayerValidationError::InvalidPolicy("test error".to_string()), "Invalid relayer policy: test error"),
+            (RelayerValidationError::InvalidRpcUrl("http://invalid".to_string()), "Invalid RPC URL: http://invalid"),
+            (RelayerValidationError::InvalidRpcWeight, "RPC URL weight must be in range 0-100"),
+            (RelayerValidationError::InvalidField("test field error".to_string()), "test field error"),
+        ];
+
+        for (validation_error, expected_message) in errors {
+            let api_error: ApiError = validation_error.into();
+            if let ApiError::BadRequest(message) = api_error {
+                assert_eq!(message, expected_message);
+            } else {
+                panic!("Expected BadRequest variant");
+            }
+        }
+    }
+
+    // ===== JSON Patch Tests (already existing) =====
 
     #[test]
     fn test_apply_json_patch_comprehensive() {

@@ -251,7 +251,10 @@ impl TryFrom<CreateRelayerRequest> for Relayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::relayer::{RelayerEvmPolicy, RelayerSolanaPolicy};
+    use crate::models::relayer::{
+        RelayerEvmPolicy, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
+        RelayerStellarPolicy,
+    };
 
     #[test]
     fn test_valid_create_request() {
@@ -277,6 +280,85 @@ mod tests {
         // Convert to domain model and validate there
         let domain_relayer = Relayer::try_from(request);
         assert!(domain_relayer.is_ok());
+    }
+
+    #[test]
+    fn test_valid_create_request_stellar() {
+        let request = CreateRelayerRequest {
+            id: Some("test-stellar-relayer".to_string()),
+            name: "Test Stellar Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Stellar,
+            policies: Some(CreateRelayerPolicyRequest::Stellar(RelayerStellarPolicy {
+                min_balance: Some(20000000),
+                max_fee: Some(100000),
+                timeout_seconds: Some(30),
+            })),
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Convert to domain model and validate there
+        let domain_relayer = Relayer::try_from(request);
+        assert!(domain_relayer.is_ok());
+
+        // Verify the domain model has correct values
+        let relayer = domain_relayer.unwrap();
+        assert_eq!(relayer.network_type, RelayerNetworkType::Stellar);
+        if let Some(RelayerNetworkPolicy::Stellar(stellar_policy)) = relayer.policies {
+            assert_eq!(stellar_policy.min_balance, Some(20000000));
+            assert_eq!(stellar_policy.max_fee, Some(100000));
+            assert_eq!(stellar_policy.timeout_seconds, Some(30));
+        } else {
+            panic!("Expected Stellar policy");
+        }
+    }
+
+    #[test]
+    fn test_valid_create_request_solana() {
+        let request = CreateRelayerRequest {
+            id: Some("test-solana-relayer".to_string()),
+            name: "Test Solana Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Solana,
+            policies: Some(CreateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+                min_balance: Some(1000000),
+                max_signatures: Some(5),
+                allowed_tokens: None,
+                allowed_programs: None,
+                allowed_accounts: None,
+                disallowed_accounts: None,
+                max_tx_data_size: None,
+                max_allowed_fee_lamports: None,
+                swap_config: None,
+                fee_margin_percentage: None,
+            })),
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Convert to domain model and validate there
+        let domain_relayer = Relayer::try_from(request);
+        assert!(domain_relayer.is_ok());
+
+        // Verify the domain model has correct values
+        let relayer = domain_relayer.unwrap();
+        assert_eq!(relayer.network_type, RelayerNetworkType::Solana);
+        if let Some(RelayerNetworkPolicy::Solana(solana_policy)) = relayer.policies {
+            assert_eq!(solana_policy.min_balance, Some(1000000));
+            assert_eq!(solana_policy.max_signatures, Some(5));
+            assert_eq!(
+                solana_policy.fee_payment_strategy,
+                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+            );
+        } else {
+            panic!("Expected Solana policy");
+        }
     }
 
     #[test]
@@ -347,6 +429,46 @@ mod tests {
     }
 
     #[test]
+    fn test_create_request_stellar_policy_conversion() {
+        // Test that Stellar policies are correctly converted from request type to domain type
+        let request = CreateRelayerRequest {
+            id: Some("test-stellar-relayer".to_string()),
+            name: "Test Stellar Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Stellar,
+            policies: Some(CreateRelayerPolicyRequest::Stellar(RelayerStellarPolicy {
+                min_balance: Some(50000000),
+                max_fee: Some(150000),
+                timeout_seconds: Some(60),
+            })),
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Test policy conversion
+        if let Some(policy_request) = &request.policies {
+            let policy = policy_request
+                .to_domain_policy(request.network_type)
+                .unwrap();
+            if let RelayerNetworkPolicy::Stellar(stellar_policy) = policy {
+                assert_eq!(stellar_policy.min_balance, Some(50000000));
+                assert_eq!(stellar_policy.max_fee, Some(150000));
+                assert_eq!(stellar_policy.timeout_seconds, Some(60));
+            } else {
+                panic!("Expected Stellar policy");
+            }
+        } else {
+            panic!("Expected policies to be present");
+        }
+
+        // Test full conversion to domain relayer
+        let domain_relayer = Relayer::try_from(request);
+        assert!(domain_relayer.is_ok());
+    }
+
+    #[test]
     fn test_create_request_wrong_policy_type() {
         // Test that providing wrong policy type for network type fails
         let request = CreateRelayerRequest {
@@ -365,6 +487,36 @@ mod tests {
 
         // Should fail during policy conversion - since the policy was auto-detected as Solana
         // but the network type is EVM, the conversion should fail
+        if let Some(policy_request) = &request.policies {
+            let result = policy_request.to_domain_policy(request.network_type);
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Policy type does not match relayer network type"));
+        } else {
+            panic!("Expected policies to be present");
+        }
+    }
+
+    #[test]
+    fn test_create_request_stellar_wrong_policy_type() {
+        // Test that providing Stellar policy for EVM network type fails
+        let request = CreateRelayerRequest {
+            id: Some("test-relayer".to_string()),
+            name: "Test Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Evm, // EVM network type
+            policies: Some(CreateRelayerPolicyRequest::Stellar(
+                RelayerStellarPolicy::default(),
+            )), // But Stellar policy
+            signer_id: "test-signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Should fail during policy conversion
         if let Some(policy_request) = &request.policies {
             let result = policy_request.to_domain_policy(request.network_type);
             assert!(result.is_err());
@@ -406,6 +558,79 @@ mod tests {
             assert_eq!(evm_policy.eip1559_pricing, Some(true));
         } else {
             panic!("Expected EVM policy");
+        }
+    }
+
+    #[test]
+    fn test_create_request_stellar_json_deserialization() {
+        // Test that Stellar JSON deserializes correctly
+        let json_input = r#"{
+            "name": "Test Stellar Relayer",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "stellar",
+            "signer_id": "test-signer",
+            "policies": {
+                "min_balance": 25000000,
+                "max_fee": 200000,
+                "timeout_seconds": 45
+            }
+        }"#;
+
+        let request: CreateRelayerRequest = serde_json::from_str(json_input).unwrap();
+        assert_eq!(request.network_type, RelayerNetworkType::Stellar);
+        assert!(request.policies.is_some());
+
+        // Test that it converts to domain model correctly
+        let domain_relayer = Relayer::try_from(request).unwrap();
+        assert_eq!(domain_relayer.network_type, RelayerNetworkType::Stellar);
+
+        if let Some(RelayerNetworkPolicy::Stellar(stellar_policy)) = domain_relayer.policies {
+            assert_eq!(stellar_policy.min_balance, Some(25000000));
+            assert_eq!(stellar_policy.max_fee, Some(200000));
+            assert_eq!(stellar_policy.timeout_seconds, Some(45));
+        } else {
+            panic!("Expected Stellar policy");
+        }
+    }
+
+    #[test]
+    fn test_create_request_solana_json_deserialization() {
+        // Test that Solana JSON deserializes correctly with complex policy
+        let json_input = r#"{
+            "name": "Test Solana Relayer",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "solana",
+            "signer_id": "test-signer",
+            "policies": {
+                "fee_payment_strategy": "relayer",
+                "min_balance": 5000000,
+                "max_signatures": 8,
+                "max_tx_data_size": 1024,
+                "fee_margin_percentage": 2.5
+            }
+        }"#;
+
+        let request: CreateRelayerRequest = serde_json::from_str(json_input).unwrap();
+        assert_eq!(request.network_type, RelayerNetworkType::Solana);
+        assert!(request.policies.is_some());
+
+        // Test that it converts to domain model correctly
+        let domain_relayer = Relayer::try_from(request).unwrap();
+        assert_eq!(domain_relayer.network_type, RelayerNetworkType::Solana);
+
+        if let Some(RelayerNetworkPolicy::Solana(solana_policy)) = domain_relayer.policies {
+            assert_eq!(solana_policy.min_balance, Some(5000000));
+            assert_eq!(solana_policy.max_signatures, Some(8));
+            assert_eq!(solana_policy.max_tx_data_size, Some(1024));
+            assert_eq!(solana_policy.fee_margin_percentage, Some(2.5));
+            assert_eq!(
+                solana_policy.fee_payment_strategy,
+                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+            );
+        } else {
+            panic!("Expected Solana policy");
         }
     }
 
@@ -495,6 +720,35 @@ mod tests {
     }
 
     #[test]
+    fn test_update_request_policy_deserialization_stellar() {
+        // Test Stellar policy deserialization without network_type in user input
+        let json_input = r#"{
+            "policies": {
+                "max_fee": 75000,
+                "timeout_seconds": 120,
+                "min_balance": 15000000
+            }
+        }"#;
+
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
+
+        // Validation happens during domain conversion based on network type
+        // Test with the utility function for Stellar
+        if let Some(policies_json) = &request.policies {
+            let network_policy =
+                deserialize_policy_for_network_type(policies_json, RelayerNetworkType::Stellar)
+                    .unwrap();
+            if let RelayerNetworkPolicy::Stellar(stellar_policy) = network_policy {
+                assert_eq!(stellar_policy.max_fee, Some(75000));
+                assert_eq!(stellar_policy.timeout_seconds, Some(120));
+                assert_eq!(stellar_policy.min_balance, Some(15000000));
+            } else {
+                panic!("Expected Stellar policy");
+            }
+        }
+    }
+
+    #[test]
     fn test_update_request_invalid_policy_format() {
         // Test that invalid policy format fails during validation with utility function
         let valid_json = r#"{
@@ -543,6 +797,35 @@ mod tests {
 
         // Should correctly deserialize as raw JSON - validation happens during domain conversion
         assert!(request.policies.is_some());
+    }
+
+    #[test]
+    fn test_update_request_stellar_policy_partial() {
+        // Test Stellar policy with only some fields (partial update)
+        let json_input = r#"{
+            "policies": {
+                "max_fee": 50000
+            }
+        }"#;
+
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
+
+        // Should correctly deserialize as raw JSON
+        assert!(request.policies.is_some());
+
+        // Test domain conversion with utility function
+        if let Some(policies_json) = &request.policies {
+            let network_policy =
+                deserialize_policy_for_network_type(policies_json, RelayerNetworkType::Stellar)
+                    .unwrap();
+            if let RelayerNetworkPolicy::Stellar(stellar_policy) = network_policy {
+                assert_eq!(stellar_policy.max_fee, Some(50000));
+                assert_eq!(stellar_policy.timeout_seconds, None);
+                assert_eq!(stellar_policy.min_balance, None);
+            } else {
+                panic!("Expected Stellar policy");
+            }
+        }
     }
 
     #[test]
@@ -615,6 +898,50 @@ mod tests {
     }
 
     #[test]
+    fn test_comprehensive_update_request_stellar() {
+        // Test a comprehensive Stellar update request
+        let json_input = r#"{
+            "name": "Updated Stellar Relayer",
+            "paused": false,
+            "notification_id": "stellar-notification",
+            "policies": {
+                "min_balance": 30000000,
+                "max_fee": 250000,
+                "timeout_seconds": 90
+            },
+            "custom_rpc_urls": [
+                {"url": "https://stellar-node.example.com", "weight": 100}
+            ]
+        }"#;
+
+        let request: UpdateRelayerRequestRaw = serde_json::from_str(json_input).unwrap();
+
+        // Verify all fields are correctly deserialized
+        assert_eq!(request.name, Some("Updated Stellar Relayer".to_string()));
+        assert_eq!(request.paused, Some(false));
+        assert_eq!(
+            request.notification_id,
+            Some("stellar-notification".to_string())
+        );
+        assert!(request.policies.is_some());
+        assert!(request.custom_rpc_urls.is_some());
+
+        // Test domain conversion
+        if let Some(policies_json) = &request.policies {
+            let network_policy =
+                deserialize_policy_for_network_type(policies_json, RelayerNetworkType::Stellar)
+                    .unwrap();
+            if let RelayerNetworkPolicy::Stellar(stellar_policy) = network_policy {
+                assert_eq!(stellar_policy.min_balance, Some(30000000));
+                assert_eq!(stellar_policy.max_fee, Some(250000));
+                assert_eq!(stellar_policy.timeout_seconds, Some(90));
+            } else {
+                panic!("Expected Stellar policy");
+            }
+        }
+    }
+
+    #[test]
     fn test_create_request_network_type_based_policy_deserialization() {
         // Test that policies are correctly deserialized based on network_type
         // EVM network with EVM policy fields
@@ -666,6 +993,32 @@ mod tests {
             panic!("Expected Solana policy");
         }
 
+        // Stellar network with Stellar policy fields
+        let stellar_json = r#"{
+            "name": "Stellar Relayer",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "stellar",
+            "signer_id": "test-signer",
+            "policies": {
+                "min_balance": 40000000,
+                "max_fee": 300000,
+                "timeout_seconds": 180
+            }
+        }"#;
+
+        let stellar_request: CreateRelayerRequest = serde_json::from_str(stellar_json).unwrap();
+        assert_eq!(stellar_request.network_type, RelayerNetworkType::Stellar);
+
+        if let Some(CreateRelayerPolicyRequest::Stellar(stellar_policy)) = stellar_request.policies
+        {
+            assert_eq!(stellar_policy.min_balance, Some(40000000));
+            assert_eq!(stellar_policy.max_fee, Some(300000));
+            assert_eq!(stellar_policy.timeout_seconds, Some(180));
+        } else {
+            panic!("Expected Stellar policy");
+        }
+
         // Test that wrong policy fields for network type fails
         let invalid_json = r#"{
             "name": "Invalid Relayer",
@@ -681,5 +1034,123 @@ mod tests {
         let result = serde_json::from_str::<CreateRelayerRequest>(invalid_json);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn test_create_request_invalid_stellar_policy_fields() {
+        // Test that invalid Stellar policy fields fail during deserialization
+        let invalid_json = r#"{
+            "name": "Invalid Stellar Relayer",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "stellar",
+            "signer_id": "test-signer",
+            "policies": {
+                "gas_price_cap": 100000000000
+            }
+        }"#;
+
+        let result = serde_json::from_str::<CreateRelayerRequest>(invalid_json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn test_create_request_empty_policies() {
+        // Test create request with empty policies for each network type
+        let evm_json = r#"{
+            "name": "EVM Relayer No Policies",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "evm",
+            "signer_id": "test-signer"
+        }"#;
+
+        let evm_request: CreateRelayerRequest = serde_json::from_str(evm_json).unwrap();
+        assert_eq!(evm_request.network_type, RelayerNetworkType::Evm);
+        assert!(evm_request.policies.is_none());
+
+        let stellar_json = r#"{
+            "name": "Stellar Relayer No Policies",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "stellar",
+            "signer_id": "test-signer"
+        }"#;
+
+        let stellar_request: CreateRelayerRequest = serde_json::from_str(stellar_json).unwrap();
+        assert_eq!(stellar_request.network_type, RelayerNetworkType::Stellar);
+        assert!(stellar_request.policies.is_none());
+
+        let solana_json = r#"{
+            "name": "Solana Relayer No Policies",
+            "network": "mainnet",
+            "paused": false,
+            "network_type": "solana",
+            "signer_id": "test-signer"
+        }"#;
+
+        let solana_request: CreateRelayerRequest = serde_json::from_str(solana_json).unwrap();
+        assert_eq!(solana_request.network_type, RelayerNetworkType::Solana);
+        assert!(solana_request.policies.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_policy_utility_function_all_networks() {
+        // Test the utility function with all network types
+
+        // EVM policy
+        let evm_json = serde_json::json!({
+            "gas_price_cap": "75000000000",
+            "private_transactions": false,
+            "min_balance": "2000000000000000000"
+        });
+
+        let evm_policy =
+            deserialize_policy_for_network_type(&evm_json, RelayerNetworkType::Evm).unwrap();
+        if let RelayerNetworkPolicy::Evm(policy) = evm_policy {
+            assert_eq!(policy.gas_price_cap, Some(75000000000));
+            assert_eq!(policy.private_transactions, Some(false));
+            assert_eq!(policy.min_balance, Some(2000000000000000000));
+        } else {
+            panic!("Expected EVM policy");
+        }
+
+        // Solana policy
+        let solana_json = serde_json::json!({
+            "fee_payment_strategy": "user",
+            "max_tx_data_size": 512,
+            "fee_margin_percentage": 1.5
+        });
+
+        let solana_policy =
+            deserialize_policy_for_network_type(&solana_json, RelayerNetworkType::Solana).unwrap();
+        if let RelayerNetworkPolicy::Solana(policy) = solana_policy {
+            assert_eq!(
+                policy.fee_payment_strategy,
+                Some(RelayerSolanaFeePaymentStrategy::User)
+            );
+            assert_eq!(policy.max_tx_data_size, Some(512));
+            assert_eq!(policy.fee_margin_percentage, Some(1.5));
+        } else {
+            panic!("Expected Solana policy");
+        }
+
+        // Stellar policy
+        let stellar_json = serde_json::json!({
+            "max_fee": 125000,
+            "timeout_seconds": 240
+        });
+
+        let stellar_policy =
+            deserialize_policy_for_network_type(&stellar_json, RelayerNetworkType::Stellar)
+                .unwrap();
+        if let RelayerNetworkPolicy::Stellar(policy) = stellar_policy {
+            assert_eq!(policy.max_fee, Some(125000));
+            assert_eq!(policy.timeout_seconds, Some(240));
+            assert_eq!(policy.min_balance, None);
+        } else {
+            panic!("Expected Stellar policy");
+        }
     }
 }
