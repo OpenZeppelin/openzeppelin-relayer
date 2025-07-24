@@ -23,7 +23,7 @@ use crate::{
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
         RelayerResponse, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
-        TransactionResponse, UpdateRelayerRequestRaw,
+        TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -141,7 +141,7 @@ where
     // Convert request to domain relayer (validates automatically)
     let relayer = crate::models::Relayer::try_from(request)?;
 
-    // Validate dependencies before creating the relayer
+    // Check if signer exists
     let signer_model = state
         .signer_repository
         .get_by_id(relayer.signer_id.clone())
@@ -161,7 +161,7 @@ where
         )));
     }
 
-    // check if signer is already in use by another relayer on the same network
+    // Check if signer is already in use by another relayer on the same network
     let relayers = state
         .relayer_repository
         .list_by_signer_id(&relayer.signer_id)
@@ -259,7 +259,7 @@ where
         .apply_json_patch(&patch)
         .map_err(ApiError::from)?;
 
-    // 3. Repository concern - Use existing RelayerRepoUpdater to preserve runtime fields
+    // Use existing RelayerRepoUpdater to preserve runtime fields
     let updated_repo_model =
         RelayerRepoUpdater::from_existing(relayer).apply_domain_update(updated_domain);
 
@@ -301,27 +301,27 @@ where
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
-    // First check if the relayer exists
+    // Check if the relayer exists
     let _relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     // Check if the relayer has any transactions (pending or otherwise)
-    use crate::models::PaginationQuery;
     let transactions = state
         .transaction_repository
-        .find_by_relayer_id(
+        .find_by_status(
             &relayer_id,
-            PaginationQuery {
-                page: 1,
-                per_page: 1,
-            },
+            &[
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ],
         )
         .await?;
 
-    if transactions.total > 0 {
+    if !transactions.is_empty() {
         return Err(ApiError::BadRequest(format!(
             "Cannot delete relayer '{}' because it has {} transaction(s). Please wait for all transactions to complete or cancel them before deleting the relayer.",
             relayer_id,
-            transactions.total
+            transactions.len()
         )));
     }
 
@@ -1057,9 +1057,9 @@ mod tests {
                 solana_policy.fee_payment_strategy,
                 Some(RelayerSolanaFeePaymentStrategy::Relayer)
             );
-            assert_eq!(solana_policy.min_balance, Some(5000000));
+            assert_eq!(solana_policy.min_balance, 5000000);
             assert_eq!(solana_policy.max_signatures, Some(10));
-            assert_eq!(solana_policy.max_tx_data_size, Some(1232));
+            assert_eq!(solana_policy.max_tx_data_size, 1232);
             assert_eq!(solana_policy.max_allowed_fee_lamports, Some(50000));
         } else {
             panic!("Expected Solana policies");
@@ -1879,9 +1879,9 @@ mod tests {
                 solana_policy.fee_payment_strategy,
                 Some(RelayerSolanaFeePaymentStrategy::User)
             );
-            assert_eq!(solana_policy.min_balance, Some(2000000));
+            assert_eq!(solana_policy.min_balance, 2000000);
             assert_eq!(solana_policy.max_signatures, Some(5));
-            assert_eq!(solana_policy.max_tx_data_size, Some(800));
+            assert_eq!(solana_policy.max_tx_data_size, 800);
             assert_eq!(solana_policy.max_allowed_fee_lamports, Some(25000));
             assert_eq!(solana_policy.fee_margin_percentage, Some(15.0));
         } else {

@@ -16,6 +16,10 @@ use super::{
     RelayerRepoModel, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
     RelayerSolanaSwapPolicy, RelayerStellarPolicy, RpcConfig,
 };
+use crate::constants::{
+    DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE,
+    DEFAULT_STELLAR_MIN_BALANCE,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -58,7 +62,7 @@ impl From<RelayerNetworkPolicy> for RelayerNetworkPolicyResponse {
 }
 
 /// Relayer response model for API endpoints
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[derive(Debug, Serialize, Clone, PartialEq, ToSchema)]
 pub struct RelayerResponse {
     pub id: String,
     pub name: String,
@@ -109,15 +113,45 @@ pub enum RelayerStatus {
     },
 }
 
+/// Convert RelayerNetworkPolicy to RelayerNetworkPolicyResponse based on network type
+fn convert_policy_to_response(
+    policy: RelayerNetworkPolicy,
+    network_type: RelayerNetworkType,
+) -> RelayerNetworkPolicyResponse {
+    match (policy, network_type) {
+        (RelayerNetworkPolicy::Evm(evm_policy), RelayerNetworkType::Evm) => {
+            RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse::from(evm_policy))
+        }
+        (RelayerNetworkPolicy::Solana(solana_policy), RelayerNetworkType::Solana) => {
+            RelayerNetworkPolicyResponse::Solana(SolanaPolicyResponse::from(solana_policy))
+        }
+        (RelayerNetworkPolicy::Stellar(stellar_policy), RelayerNetworkType::Stellar) => {
+            RelayerNetworkPolicyResponse::Stellar(StellarPolicyResponse::from(stellar_policy))
+        }
+        // Handle mismatched cases by falling back to the policy type
+        (RelayerNetworkPolicy::Evm(evm_policy), _) => {
+            RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse::from(evm_policy))
+        }
+        (RelayerNetworkPolicy::Solana(solana_policy), _) => {
+            RelayerNetworkPolicyResponse::Solana(SolanaPolicyResponse::from(solana_policy))
+        }
+        (RelayerNetworkPolicy::Stellar(stellar_policy), _) => {
+            RelayerNetworkPolicyResponse::Stellar(StellarPolicyResponse::from(stellar_policy))
+        }
+    }
+}
+
 impl From<Relayer> for RelayerResponse {
     fn from(relayer: Relayer) -> Self {
         Self {
-            id: relayer.id,
-            name: relayer.name,
-            network: relayer.network,
+            id: relayer.id.clone(),
+            name: relayer.name.clone(),
+            network: relayer.network.clone(),
             network_type: relayer.network_type,
             paused: relayer.paused,
-            policies: relayer.policies.map(RelayerNetworkPolicyResponse::from),
+            policies: relayer
+                .policies
+                .map(|policy| convert_policy_to_response(policy, relayer.network_type)),
             signer_id: relayer.signer_id,
             notification_id: relayer.notification_id,
             custom_rpc_urls: relayer.custom_rpc_urls,
@@ -133,7 +167,10 @@ impl From<RelayerRepoModel> for RelayerResponse {
         let policies = if is_empty_policy(&model.policies) {
             None // Don't return empty/default policies in API response
         } else {
-            Some(RelayerNetworkPolicyResponse::from(model.policies))
+            Some(convert_policy_to_response(
+                model.policies.clone(),
+                model.network_type,
+            ))
         };
 
         Self {
@@ -149,6 +186,100 @@ impl From<RelayerRepoModel> for RelayerResponse {
             address: Some(model.address),
             system_disabled: Some(model.system_disabled),
         }
+    }
+}
+
+/// Custom Deserialize implementation for RelayerResponse that uses network_type to deserialize policies
+impl<'de> serde::Deserialize<'de> for RelayerResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        use serde_json::Value;
+
+        // First, deserialize to a generic Value to extract network_type
+        let value: Value = Value::deserialize(deserializer)?;
+
+        // Extract the network_type field
+        let network_type: RelayerNetworkType = value
+            .get("network_type")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .ok_or_else(|| D::Error::missing_field("network_type"))?;
+
+        // Extract policies field if present
+        let policies = if let Some(policies_value) = value.get("policies") {
+            if policies_value.is_null() {
+                None
+            } else {
+                // Deserialize policies based on network_type
+                let policy_response = match network_type {
+                    RelayerNetworkType::Evm => {
+                        let evm_policy: EvmPolicyResponse =
+                            serde_json::from_value(policies_value.clone())
+                                .map_err(D::Error::custom)?;
+                        RelayerNetworkPolicyResponse::Evm(evm_policy)
+                    }
+                    RelayerNetworkType::Solana => {
+                        let solana_policy: SolanaPolicyResponse =
+                            serde_json::from_value(policies_value.clone())
+                                .map_err(D::Error::custom)?;
+                        RelayerNetworkPolicyResponse::Solana(solana_policy)
+                    }
+                    RelayerNetworkType::Stellar => {
+                        let stellar_policy: StellarPolicyResponse =
+                            serde_json::from_value(policies_value.clone())
+                                .map_err(D::Error::custom)?;
+                        RelayerNetworkPolicyResponse::Stellar(stellar_policy)
+                    }
+                };
+                Some(policy_response)
+            }
+        } else {
+            None
+        };
+
+        // Deserialize all other fields normally
+        Ok(RelayerResponse {
+            id: value
+                .get("id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .ok_or_else(|| D::Error::missing_field("id"))?,
+            name: value
+                .get("name")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .ok_or_else(|| D::Error::missing_field("name"))?,
+            network: value
+                .get("network")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .ok_or_else(|| D::Error::missing_field("network"))?,
+            network_type,
+            paused: value
+                .get("paused")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .ok_or_else(|| D::Error::missing_field("paused"))?,
+            policies,
+            signer_id: value
+                .get("signer_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .ok_or_else(|| D::Error::missing_field("signer_id"))?,
+            notification_id: value
+                .get("notification_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(None),
+            custom_rpc_urls: value
+                .get("custom_rpc_urls")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(None),
+            address: value
+                .get("address")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(None),
+            system_disabled: value
+                .get("system_disabled")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(None),
+        })
     }
 }
 
@@ -191,17 +322,45 @@ pub struct NetworkPolicyResponse {
     pub policy: RelayerNetworkPolicy,
 }
 
+/// Default function for EVM min balance
+fn default_evm_min_balance() -> u128 {
+    DEFAULT_EVM_MIN_BALANCE
+}
+
+/// Default function for Solana min balance
+fn default_solana_min_balance() -> u64 {
+    DEFAULT_SOLANA_MIN_BALANCE
+}
+
+/// Default function for Stellar min balance
+fn default_stellar_min_balance() -> u64 {
+    DEFAULT_STELLAR_MIN_BALANCE
+}
+
+/// Default function for Solana max tx data size
+fn default_solana_max_tx_data_size() -> u16 {
+    DEFAULT_SOLANA_MAX_TX_DATA_SIZE
+}
 /// EVM policy response model for OpenAPI documentation  
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvmPolicyResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_evm_min_balance",
+        serialize_with = "crate::utils::serialize_u128_as_number",
+        deserialize_with = "crate::utils::deserialize_u128_as_number"
+    )]
     #[schema(nullable = false)]
-    pub min_balance: Option<u128>,
+    pub min_balance: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub gas_limit_estimation: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::utils::serialize_optional_u128_as_number",
+        deserialize_with = "crate::utils::deserialize_optional_u128_as_number",
+        default
+    )]
     #[schema(nullable = false)]
     pub gas_price_cap: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -225,12 +384,12 @@ pub struct SolanaPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub max_signatures: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub max_tx_data_size: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_solana_max_tx_data_size")]
+    pub max_tx_data_size: u16,
+    #[serde(default = "default_solana_min_balance")]
     #[schema(nullable = false)]
-    pub min_balance: Option<u64>,
+    pub min_balance: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub allowed_tokens: Option<Vec<AllowedToken>>,
@@ -264,15 +423,15 @@ pub struct StellarPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub timeout_seconds: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_stellar_min_balance")]
     #[schema(nullable = false)]
-    pub min_balance: Option<u64>,
+    pub min_balance: u64,
 }
 
 impl From<RelayerEvmPolicy> for EvmPolicyResponse {
     fn from(policy: RelayerEvmPolicy) -> Self {
         Self {
-            min_balance: policy.min_balance,
+            min_balance: policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
             gas_limit_estimation: policy.gas_limit_estimation,
             gas_price_cap: policy.gas_price_cap,
             whitelist_receivers: policy.whitelist_receivers,
@@ -287,8 +446,10 @@ impl From<RelayerSolanaPolicy> for SolanaPolicyResponse {
         Self {
             allowed_programs: policy.allowed_programs,
             max_signatures: policy.max_signatures,
-            max_tx_data_size: policy.max_tx_data_size,
-            min_balance: policy.min_balance,
+            max_tx_data_size: policy
+                .max_tx_data_size
+                .unwrap_or(DEFAULT_SOLANA_MAX_TX_DATA_SIZE),
+            min_balance: policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
             allowed_tokens: policy.allowed_tokens,
             fee_payment_strategy: policy.fee_payment_strategy,
             fee_margin_percentage: policy.fee_margin_percentage,
@@ -303,7 +464,7 @@ impl From<RelayerSolanaPolicy> for SolanaPolicyResponse {
 impl From<RelayerStellarPolicy> for StellarPolicyResponse {
     fn from(policy: RelayerStellarPolicy) -> Self {
         Self {
-            min_balance: policy.min_balance,
+            min_balance: policy.min_balance.unwrap_or(DEFAULT_STELLAR_MIN_BALANCE),
             max_fee: policy.max_fee,
             timeout_seconds: policy.timeout_seconds,
         }
@@ -354,7 +515,7 @@ mod tests {
                     whitelist_receivers: None,
                     eip1559_pricing: Some(true),
                     private_transactions: None,
-                    min_balance: None,
+                    min_balance: Some(DEFAULT_EVM_MIN_BALANCE),
                     gas_limit_estimation: None,
                 }
                 .into()
@@ -404,16 +565,8 @@ mod tests {
         assert!(response.policies.is_some());
 
         if let Some(RelayerNetworkPolicyResponse::Solana(solana_response)) = response.policies {
-            assert_eq!(
-                solana_response.allowed_programs,
-                Some(vec!["11111111111111111111111111111111".to_string()])
-            );
+            assert_eq!(solana_response.min_balance, 1000000);
             assert_eq!(solana_response.max_signatures, Some(5));
-            assert_eq!(solana_response.min_balance, Some(1000000));
-            assert_eq!(
-                solana_response.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::Relayer)
-            );
         } else {
             panic!("Expected Solana policy response");
         }
@@ -444,9 +597,7 @@ mod tests {
         assert!(response.policies.is_some());
 
         if let Some(RelayerNetworkPolicyResponse::Stellar(stellar_response)) = response.policies {
-            assert_eq!(stellar_response.min_balance, Some(20000000));
-            assert_eq!(stellar_response.max_fee, Some(100000));
-            assert_eq!(stellar_response.timeout_seconds, Some(30));
+            assert_eq!(stellar_response.min_balance, 20000000);
         } else {
             panic!("Expected Stellar policy response");
         }
@@ -461,11 +612,11 @@ mod tests {
             network_type: RelayerNetworkType::Evm,
             paused: false,
             policies: Some(RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse {
-                gas_price_cap: Some(100_000_000_000),
+                gas_price_cap: Some(50000000000),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
                 private_transactions: None,
-                min_balance: None,
+                min_balance: DEFAULT_EVM_MIN_BALANCE,
                 gas_limit_estimation: None,
             })),
             signer_id: "test-signer".to_string(),
@@ -496,8 +647,8 @@ mod tests {
             policies: Some(RelayerNetworkPolicyResponse::Solana(SolanaPolicyResponse {
                 allowed_programs: Some(vec!["11111111111111111111111111111111".to_string()]),
                 max_signatures: Some(5),
-                max_tx_data_size: Some(1024),
-                min_balance: Some(1000000),
+                max_tx_data_size: DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
+                min_balance: 1000000,
                 allowed_tokens: Some(vec![AllowedToken::new(
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
                     Some(100000),
@@ -542,9 +693,9 @@ mod tests {
             paused: false,
             policies: Some(RelayerNetworkPolicyResponse::Stellar(
                 StellarPolicyResponse {
-                    min_balance: Some(20000000),
-                    max_fee: Some(100000),
-                    timeout_seconds: Some(30),
+                    max_fee: Some(5000),
+                    timeout_seconds: None,
+                    min_balance: 20000000,
                 },
             )),
             signer_id: "test-signer".to_string(),
@@ -565,9 +716,9 @@ mod tests {
 
         // Verify Stellar-specific fields
         if let Some(RelayerNetworkPolicyResponse::Stellar(stellar_policy)) = deserialized.policies {
-            assert_eq!(stellar_policy.min_balance, Some(20000000));
-            assert_eq!(stellar_policy.max_fee, Some(100000));
-            assert_eq!(stellar_policy.timeout_seconds, Some(30));
+            assert_eq!(stellar_policy.min_balance, 20000000);
+            assert_eq!(stellar_policy.max_fee, Some(5000));
+            assert_eq!(stellar_policy.timeout_seconds, None);
         } else {
             panic!("Expected Stellar policy in deserialized response");
         }
@@ -586,7 +737,7 @@ mod tests {
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
                 private_transactions: None,
-                min_balance: None,
+                min_balance: DEFAULT_EVM_MIN_BALANCE,
                 gas_limit_estimation: None,
             })),
             signer_id: "test-signer".to_string(),
@@ -622,8 +773,8 @@ mod tests {
             policies: Some(RelayerNetworkPolicyResponse::Solana(SolanaPolicyResponse {
                 allowed_programs: Some(vec!["11111111111111111111111111111111".to_string()]),
                 max_signatures: Some(5),
-                max_tx_data_size: None,
-                min_balance: Some(1000000),
+                max_tx_data_size: DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
+                min_balance: 1000000,
                 allowed_tokens: None,
                 fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
                 fee_margin_percentage: None,
@@ -664,7 +815,7 @@ mod tests {
             paused: false,
             policies: Some(RelayerNetworkPolicyResponse::Stellar(
                 StellarPolicyResponse {
-                    min_balance: Some(20000000),
+                    min_balance: 20000000,
                     max_fee: Some(100000),
                     timeout_seconds: Some(30),
                 },

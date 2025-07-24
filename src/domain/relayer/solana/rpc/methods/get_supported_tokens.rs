@@ -12,6 +12,7 @@
 use log::info;
 
 use crate::{
+    constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE,
     jobs::JobProducerTrait,
     models::{GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
@@ -45,10 +46,13 @@ where
                         symbol: token.symbol.as_deref().unwrap_or("").to_string(),
                         decimals: token.decimals.unwrap_or(0),
                         max_allowed_fee: token.max_allowed_fee,
-                        conversion_slippage_percentage: token
-                            .swap_config
-                            .as_ref()
-                            .and_then(|config| config.slippage_percentage),
+                        conversion_slippage_percentage: Some(
+                            token
+                                .swap_config
+                                .as_ref()
+                                .and_then(|config| config.slippage_percentage)
+                                .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE),
+                        ),
                     })
                     .collect()
             })

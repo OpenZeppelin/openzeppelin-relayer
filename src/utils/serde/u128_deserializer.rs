@@ -111,6 +111,22 @@ where
     Ok(value)
 }
 
+/// Serialize u128 as number (non-optional)
+pub fn serialize_u128_as_number<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_u128(*value)
+}
+
+/// Deserialize u128 from number (non-optional)
+pub fn deserialize_u128_as_number<'de, D>(deserializer: D) -> Result<u128, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    u128::deserialize(deserializer)
+}
+
 // Deserialize optional u64
 pub fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
