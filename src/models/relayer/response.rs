@@ -17,8 +17,8 @@ use super::{
     RelayerSolanaSwapPolicy, RelayerStellarPolicy, RpcConfig,
 };
 use crate::constants::{
-    DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE,
-    DEFAULT_STELLAR_MIN_BALANCE,
+    DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
+    DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -327,6 +327,10 @@ fn default_evm_min_balance() -> u128 {
     DEFAULT_EVM_MIN_BALANCE
 }
 
+fn default_evm_gas_limit_estimation() -> bool {
+    DEFAULT_EVM_GAS_LIMIT_ESTIMATION
+}
+
 /// Default function for Solana min balance
 fn default_solana_min_balance() -> u64 {
     DEFAULT_SOLANA_MIN_BALANCE
@@ -352,9 +356,9 @@ pub struct EvmPolicyResponse {
     )]
     #[schema(nullable = false)]
     pub min_balance: u128,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_evm_gas_limit_estimation")]
     #[schema(nullable = false)]
-    pub gas_limit_estimation: Option<bool>,
+    pub gas_limit_estimation: bool,
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::utils::serialize_optional_u128_as_number",
@@ -432,7 +436,9 @@ impl From<RelayerEvmPolicy> for EvmPolicyResponse {
     fn from(policy: RelayerEvmPolicy) -> Self {
         Self {
             min_balance: policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
-            gas_limit_estimation: policy.gas_limit_estimation,
+            gas_limit_estimation: policy
+                .gas_limit_estimation
+                .unwrap_or(DEFAULT_EVM_GAS_LIMIT_ESTIMATION),
             gas_price_cap: policy.gas_price_cap,
             whitelist_receivers: policy.whitelist_receivers,
             eip1559_pricing: policy.eip1559_pricing,
@@ -516,7 +522,7 @@ mod tests {
                     eip1559_pricing: Some(true),
                     private_transactions: None,
                     min_balance: Some(DEFAULT_EVM_MIN_BALANCE),
-                    gas_limit_estimation: None,
+                    gas_limit_estimation: Some(DEFAULT_EVM_GAS_LIMIT_ESTIMATION),
                 }
                 .into()
             ))
@@ -617,7 +623,7 @@ mod tests {
                 eip1559_pricing: Some(true),
                 private_transactions: None,
                 min_balance: DEFAULT_EVM_MIN_BALANCE,
-                gas_limit_estimation: None,
+                gas_limit_estimation: DEFAULT_EVM_GAS_LIMIT_ESTIMATION,
             })),
             signer_id: "test-signer".to_string(),
             notification_id: None,
@@ -738,7 +744,7 @@ mod tests {
                 eip1559_pricing: Some(true),
                 private_transactions: None,
                 min_balance: DEFAULT_EVM_MIN_BALANCE,
-                gas_limit_estimation: None,
+                gas_limit_estimation: DEFAULT_EVM_GAS_LIMIT_ESTIMATION,
             })),
             signer_id: "test-signer".to_string(),
             notification_id: None,
