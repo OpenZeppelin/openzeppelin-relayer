@@ -791,7 +791,7 @@ mod tests {
     use std::env;
 
     fn setup_test_env() {
-        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost
+        env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost nosemgrep
         env::set_var("REDIS_URL", "redis://localhost:6379");
     }
 
