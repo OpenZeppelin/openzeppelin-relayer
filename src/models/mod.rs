@@ -14,8 +14,15 @@ pub use api_response::*;
 mod transaction;
 pub use transaction::*;
 
-mod relayer;
+pub mod relayer;
 pub use relayer::*;
+
+// Type aliases for backward compatibility with domain logic
+pub use relayer::{
+    AllowedToken as SolanaAllowedTokensPolicy,
+    RelayerSolanaFeePaymentStrategy as SolanaFeePaymentStrategy,
+    RelayerSolanaSwapStrategy as SolanaSwapStrategy,
+};
 
 mod error;
 pub use error::*;
@@ -35,7 +42,7 @@ pub use notification::*;
 mod rpc;
 pub use rpc::*;
 
-mod types;
+pub mod types;
 pub use types::*;
 
 mod secret_string;

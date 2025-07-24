@@ -65,8 +65,8 @@ async fn handle_request(
 mod tests {
     use super::*;
     use crate::models::{
-        EvmPolicyResponse, EvmTransactionResponse, NetworkPolicyResponse, NetworkType,
-        RelayerDisabledPayload, RelayerResponse, TransactionResponse, TransactionStatus,
+        EvmTransactionResponse, NetworkType, RelayerDisabledPayload, RelayerEvmPolicy,
+        RelayerNetworkPolicyResponse, RelayerResponse, TransactionResponse, TransactionStatus,
         WebhookNotification, WebhookPayload, U256,
     };
 
@@ -150,15 +150,22 @@ mod tests {
                 network: "ethereum".to_string(),
                 network_type: NetworkType::Evm,
                 paused: false,
-                policies: NetworkPolicyResponse::Evm(EvmPolicyResponse {
-                    gas_price_cap: None,
-                    whitelist_receivers: None,
-                    eip1559_pricing: None,
-                    private_transactions: false,
-                    min_balance: 0,
-                }),
-                address: "0xabc".to_string(),
-                system_disabled: false,
+                policies: Some(RelayerNetworkPolicyResponse::Evm(
+                    RelayerEvmPolicy {
+                        gas_price_cap: None,
+                        whitelist_receivers: None,
+                        eip1559_pricing: None,
+                        private_transactions: Some(false),
+                        min_balance: Some(0),
+                        gas_limit_estimation: None,
+                    }
+                    .into(),
+                )),
+                signer_id: "signer-1".to_string(),
+                notification_id: None,
+                custom_rpc_urls: None,
+                address: Some("0xabc".to_string()),
+                system_disabled: Some(false),
             },
             disable_reason: "test".to_string(),
         }));

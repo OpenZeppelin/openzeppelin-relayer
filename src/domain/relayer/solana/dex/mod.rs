@@ -148,10 +148,10 @@ mod tests {
 
     use crate::{
         models::{
-            LocalSignerConfig, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RpcConfig,
-            SignerConfig, SignerRepoModel,
+            LocalSignerConfig, RelayerSolanaPolicy, RelayerSolanaSwapPolicy, SignerConfig,
+            SignerRepoModel,
         },
-        services::SolanaSignerFactory,
+        services::{MockSolanaProviderTrait, SolanaSignerFactory},
     };
 
     use super::*;
@@ -169,7 +169,7 @@ mod tests {
     fn test_create_network_dex_jupiter_swap_explicit() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            swap_config: Some(RelayerSolanaSwapConfig {
+            swap_config: Some(RelayerSolanaSwapPolicy {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: None,
@@ -180,16 +180,8 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );
@@ -209,7 +201,7 @@ mod tests {
     fn test_create_network_dex_jupiter_ultra_explicit() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            swap_config: Some(RelayerSolanaSwapConfig {
+            swap_config: Some(RelayerSolanaSwapPolicy {
                 strategy: Some(SolanaSwapStrategy::JupiterUltra),
                 cron_schedule: None,
                 min_balance_threshold: None,
@@ -220,16 +212,8 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );
@@ -249,7 +233,7 @@ mod tests {
     fn test_create_network_dex_default_when_no_strategy() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            swap_config: Some(RelayerSolanaSwapConfig {
+            swap_config: Some(RelayerSolanaSwapPolicy {
                 strategy: None,
                 cron_schedule: None,
                 min_balance_threshold: None,
@@ -260,16 +244,8 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );
@@ -295,16 +271,8 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
             SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
         );

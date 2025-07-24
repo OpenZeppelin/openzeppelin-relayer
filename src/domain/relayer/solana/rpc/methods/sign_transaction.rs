@@ -58,7 +58,8 @@ where
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        let user_pays_fee = policy.fee_payment_strategy == SolanaFeePaymentStrategy::User;
+        let user_pays_fee =
+            policy.fee_payment_strategy.unwrap_or_default() == SolanaFeePaymentStrategy::User;
 
         if user_pays_fee {
             self.confirm_user_fee_payment(&transaction_request, total_fee)
@@ -444,7 +445,7 @@ mod tests {
             Err(SolanaRpcError::InsufficientFunds(err)) => {
                 let error_string = err.to_string();
                 assert!(
-                    error_string.contains("Insufficient funds:"),
+                    error_string.contains("Insufficient balance:"),
                     "Unexpected error message: {}",
                     err
                 );
@@ -598,7 +599,7 @@ mod tests {
             Err(SolanaRpcError::InsufficientFunds(err)) => {
                 let error_string = err.to_string();
                 assert!(
-                    error_string.contains("Insufficient funds:"),
+                    error_string.contains("Insufficient balance:"),
                     "Unexpected error message: {}",
                     err
                 );
@@ -613,7 +614,7 @@ mod tests {
             setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             ..Default::default()
         });
 
@@ -644,7 +645,7 @@ mod tests {
             setup_test_context();
         // Update policy with low max signatures
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             max_signatures: Some(0),
             ..Default::default()
         });
@@ -760,7 +761,7 @@ mod tests {
 
         // Update policy with small max data size
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            max_tx_data_size: 10,
+            max_tx_data_size: Some(10),
             ..Default::default()
         });
 
@@ -865,7 +866,7 @@ mod tests {
         // Update policy with disallowed accounts
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             disallowed_accounts: Some(vec![Pubkey::new_unique().to_string()]),
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             ..Default::default()
         });
 
@@ -928,7 +929,7 @@ mod tests {
         // Set max allowed transfer amount in policy
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             max_allowed_fee_lamports: Some(500),
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             ..Default::default()
         });
 

@@ -115,8 +115,10 @@ impl RedisSignerRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self.deserialize_entity::<SignerRepoModel>(&json, &ids[i], "signer") {
-                        Ok(signer) => signers.push(signer),
+                    match self
+                        .deserialize_entity::<SignerRepoModelStorage>(&json, &ids[i], "signer")
+                    {
+                        Ok(signer) => signers.push(SignerRepoModel::from(signer)),
                         Err(e) => {
                             failed_count += 1;
                             error!("Failed to deserialize signer {}: {}", ids[i], e);
@@ -221,7 +223,9 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let result: Result<Option<String>, RedisError> = conn.get(&key).await;
         match result {
             Ok(Some(data)) => {
-                let signer = self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")?;
+                let signer_storage =
+                    self.deserialize_entity::<SignerRepoModelStorage>(&data, &id, "signer")?;
+                let signer = SignerRepoModel::from(signer_storage);
                 debug!("Retrieved signer with ID: {}", id);
                 Ok(signer)
             }

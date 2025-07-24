@@ -3,7 +3,7 @@
 //! and handling transaction compatibility checks.
 
 use crate::{
-    constants::DEFAULT_GAS_LIMIT,
+    constants::{DEFAULT_EVM_GAS_PRICE_CAP, DEFAULT_GAS_LIMIT},
     domain::transaction::evm::price_calculator::{calculate_min_bump, PriceCalculatorTrait},
     models::{
         EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel, TransactionError, U256,
@@ -138,7 +138,7 @@ pub fn validate_explicit_price_bump(
         .policies
         .get_evm_policy()
         .gas_price_cap
-        .unwrap_or(u128::MAX);
+        .unwrap_or(DEFAULT_EVM_GAS_PRICE_CAP);
 
     // Check if gas prices exceed gas price cap
     if let Some(gas_price) = new_evm_data.gas_price {

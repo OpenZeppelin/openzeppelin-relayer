@@ -1,7 +1,8 @@
 use thiserror::Error;
 
 use crate::{
-    models::{RelayerEvmPolicy, U256},
+    constants::DEFAULT_EVM_MIN_BALANCE,
+    models::{types::U256, RelayerEvmPolicy},
     services::EvmProviderTrait,
 };
 
@@ -28,12 +29,12 @@ impl EvmTransactionValidator {
             .await
             .map_err(|e| EvmTransactionValidationError::ProviderError(e.to_string()))?;
 
-        let min_balance = U256::from(policy.min_balance);
+        let min_balance = U256::from(policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE));
 
         if balance < min_balance {
             return Err(EvmTransactionValidationError::InsufficientBalance(format!(
-                "Relayer balance {balance} is less than the minimum enforced balance of {}",
-                policy.min_balance
+                "Relayer balance ({}) is below minimum required balance ({})",
+                balance, min_balance
             )));
         }
 
@@ -51,7 +52,8 @@ impl EvmTransactionValidator {
             .await
             .map_err(|e| EvmTransactionValidationError::ProviderError(e.to_string()))?;
 
-        let min_balance = U256::from(policy.min_balance);
+        let min_balance = U256::from(policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE));
+
         let remaining_balance = balance.saturating_sub(balance_to_use);
 
         // Check if balance is insufficient to cover transaction cost
@@ -64,7 +66,7 @@ impl EvmTransactionValidator {
         // Check if remaining balance would fall below minimum requirement
         if !min_balance.is_zero() && remaining_balance < min_balance {
             return Err(EvmTransactionValidationError::InsufficientBalance(
-                format!("Relayer balance {balance} is insufficient to cover {balance_to_use}, with an enforced minimum balance of {}", policy.min_balance)
+                format!("Relayer balance {balance} is insufficient to cover {balance_to_use}, with an enforced minimum balance of {}", policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE))
             ));
         }
 
@@ -83,12 +85,12 @@ mod tests {
 
     fn create_test_policy(min_balance: u128) -> RelayerEvmPolicy {
         RelayerEvmPolicy {
+            min_balance: Some(min_balance),
+            gas_limit_estimation: Some(true),
             gas_price_cap: None,
             whitelist_receivers: None,
             eip1559_pricing: None,
-            private_transactions: false,
-            min_balance,
-            gas_limit_estimation: Some(true),
+            private_transactions: Some(false),
         }
     }
 

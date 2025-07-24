@@ -32,5 +32,8 @@ pub use redis::*;
 mod service_info_log;
 pub use service_info_log::*;
 
+mod uuid;
+pub use uuid::*;
+
 #[cfg(test)]
 pub mod mocks;

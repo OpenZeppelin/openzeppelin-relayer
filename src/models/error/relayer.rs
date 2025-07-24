@@ -35,6 +35,8 @@ pub enum RelayerError {
     TransactionSequenceError(#[from] TransactionCounterError),
     #[error("Insufficient balance error: {0}")]
     InsufficientBalanceError(String),
+    #[error("Insufficient relayer balance: {0}")]
+    InsufficientRelayerBalance(String),
     #[error("Relayer Policy configuration error: {0}")]
     PolicyConfigurationError(String),
     #[error("Invalid Dex name : {0}")]
@@ -60,6 +62,7 @@ impl From<RelayerError> for ApiError {
             RelayerError::RelayerPaused => ApiError::ForbiddenError("Relayer paused".to_string()),
             RelayerError::TransactionSequenceError(err) => ApiError::InternalError(err.to_string()),
             RelayerError::InsufficientBalanceError(msg) => ApiError::BadRequest(msg),
+            RelayerError::InsufficientRelayerBalance(msg) => ApiError::BadRequest(msg),
             RelayerError::UnderlyingProvider(err) => ApiError::InternalError(err.to_string()),
             RelayerError::UnderlyingSolanaProvider(err) => ApiError::InternalError(err.to_string()),
             RelayerError::PolicyConfigurationError(msg) => ApiError::InternalError(msg),

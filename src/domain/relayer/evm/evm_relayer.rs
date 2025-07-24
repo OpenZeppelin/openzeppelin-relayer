@@ -633,11 +633,11 @@ mod tests {
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
-                min_balance: 100000000000000000u128, // 0.1 ETH
+                min_balance: Some(100000000000000000u128), // 0.1 ETH
                 whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
                 gas_price_cap: Some(100000000000), // 100 Gwei
-                eip1559_pricing: Some(false),
-                private_transactions: false,
+                eip1559_pricing: Some(true),
+                private_transactions: Some(false),
                 gas_limit_estimation: Some(true),
             }),
             network_type: NetworkType::Evm,

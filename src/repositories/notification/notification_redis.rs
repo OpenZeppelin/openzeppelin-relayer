@@ -161,7 +161,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         if existing.is_some() {
             return Err(RepositoryError::ConstraintViolation(format!(
-                "Notification with ID {} already exists",
+                "Notification with ID '{}' already exists",
                 entity.id
             )));
         }
@@ -207,7 +207,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             None => {
                 debug!("Notification {} not found", id);
                 Err(RepositoryError::NotFound(format!(
-                    "Notification with ID {} not found",
+                    "Notification with ID '{}' not found",
                     id
                 )))
             }
@@ -318,7 +318,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         if existing.is_none() {
             return Err(RepositoryError::NotFound(format!(
-                "Notification with ID {} not found",
+                "Notification with ID '{}' not found",
                 id
             )));
         }
@@ -356,7 +356,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
 
         if existing.is_none() {
             return Err(RepositoryError::NotFound(format!(
-                "Notification with ID {} not found",
+                "Notification with ID '{}' not found",
                 id
             )));
         }

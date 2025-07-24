@@ -1,6 +1,6 @@
 //! Redis-backed implementation of the RelayerRepository.
 
-use crate::domain::RelayerUpdateRequest;
+use crate::models::UpdateRelayerRequest;
 use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
@@ -482,7 +482,7 @@ impl RelayerRepository for RedisRelayerRepository {
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         // First get the current relayer
         let mut relayer = self.get_by_id(id.clone()).await?;
@@ -809,7 +809,10 @@ mod tests {
 
         repo.create(relayer.clone()).await.unwrap();
 
-        let update = RelayerUpdateRequest { paused: Some(true) };
+        let update = UpdateRelayerRequest {
+            paused: Some(true),
+            ..Default::default()
+        };
         let result = repo.partial_update(relayer.id.clone(), update).await;
         assert!(result.is_ok());
 
@@ -849,8 +852,8 @@ mod tests {
             gas_price_cap: Some(50_000_000_000),
             whitelist_receivers: Some(vec!["0x123".to_string()]),
             eip1559_pricing: Some(true),
-            private_transactions: true,
-            min_balance: 1000000000000000000,
+            private_transactions: Some(true),
+            min_balance: Some(1000000000000000000),
             gas_limit_estimation: Some(true),
         });
 
@@ -865,8 +868,8 @@ mod tests {
                 Some(vec!["0x123".to_string()])
             );
             assert_eq!(evm_policy.eip1559_pricing, Some(true));
-            assert!(evm_policy.private_transactions);
-            assert_eq!(evm_policy.min_balance, 1000000000000000000);
+            assert!(evm_policy.private_transactions.unwrap_or(false));
+            assert_eq!(evm_policy.min_balance, Some(1000000000000000000));
         } else {
             panic!("Expected EVM policy");
         }

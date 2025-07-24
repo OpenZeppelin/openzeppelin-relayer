@@ -3,7 +3,7 @@ use crate::{
         evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
         TransactionStatus, U256,
     },
-    utils::{deserialize_optional_u128, deserialize_optional_u64},
+    utils::{deserialize_optional_u128, deserialize_optional_u64, serialize_optional_u128},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -28,7 +28,11 @@ pub struct EvmTransactionResponse {
     pub sent_at: Option<String>,
     #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
-    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     #[schema(nullable = false)]
     pub gas_price: Option<u128>,
     #[serde(deserialize_with = "deserialize_optional_u64", default)]
@@ -44,10 +48,18 @@ pub struct EvmTransactionResponse {
     pub relayer_id: String,
     #[schema(nullable = false)]
     pub data: Option<String>,
-    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     #[schema(nullable = false)]
     pub max_fee_per_gas: Option<u128>,
-    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     #[schema(nullable = false)]
     pub max_priority_fee_per_gas: Option<u128>,
     pub signature: Option<EvmTransactionDataSignature>,
