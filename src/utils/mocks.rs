@@ -7,13 +7,13 @@ pub mod mockutils {
     use secrets::SecretVec;
 
     use crate::{
-        config::{EvmNetworkConfig, NetworkConfigCommon},
+        config::{EvmNetworkConfig, NetworkConfigCommon, RepositoryStorageType, ServerConfig},
         jobs::MockJobProducerTrait,
         models::{
             ApiKeyModel, AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfig,
-            NetworkRepoModel, NetworkTransactionData, NetworkType, PluginModel, RelayerEvmPolicy,
-            RelayerNetworkPolicy, RelayerRepoModel, SignerConfig, SignerRepoModel,
-            TransactionRepoModel, TransactionStatus,
+            NetworkRepoModel, NetworkTransactionData, NetworkType, NotificationRepoModel,
+            PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SecretString,
+            SignerConfig, SignerRepoModel, TransactionRepoModel, TransactionStatus,
         },
         repositories::{
             ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
@@ -43,6 +43,15 @@ pub mod mockutils {
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+        }
+    }
+
+    pub fn create_mock_notification(id: String) -> NotificationRepoModel {
+        NotificationRepoModel {
+            id,
+            notification_type: crate::models::NotificationType::Webhook,
+            url: "https://example.com/webhook".to_string(),
+            signing_key: None,
         }
     }
 
@@ -205,6 +214,29 @@ pub mod mockutils {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             valid_until: None,
+        }
+    }
+
+    pub fn create_test_server_config(storage_type: RepositoryStorageType) -> ServerConfig {
+        ServerConfig {
+            host: "localhost".to_string(),
+            port: 8080,
+            redis_url: "redis://localhost:6379".to_string(),
+            config_file_path: "./config/test.json".to_string(),
+            api_key: SecretString::new("test_api_key_1234567890_test_key_32"),
+            rate_limit_requests_per_second: 100,
+            rate_limit_burst_size: 300,
+            metrics_port: 8081,
+            enable_swagger: false,
+            redis_connection_timeout_ms: 5000,
+            redis_key_prefix: "test-oz-relayer".to_string(),
+            rpc_timeout_ms: 10000,
+            provider_max_retries: 3,
+            provider_retry_base_delay_ms: 100,
+            provider_retry_max_delay_ms: 2000,
+            provider_max_failovers: 3,
+            repository_storage_type: storage_type,
+            reset_storage_on_start: false,
         }
     }
 }

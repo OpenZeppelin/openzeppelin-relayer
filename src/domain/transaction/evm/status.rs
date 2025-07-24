@@ -11,6 +11,7 @@ use super::{
     get_age_of_sent_at, has_enough_confirmations, is_noop, is_transaction_valid, make_noop,
     too_many_attempts, too_many_noop_attempts,
 };
+use crate::constants::ARBITRUM_TIME_TO_RESUBMIT;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
 use crate::{
@@ -111,13 +112,36 @@ where
             )));
         }
 
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
         let age = get_age_of_sent_at(tx)?;
-        let timeout = match tx.network_data.get_evm_transaction_data() {
-            Ok(data) => get_resubmit_timeout_for_speed(&data.speed),
-            Err(e) => return Err(e),
+
+        // Check if network lacks mempool and determine appropriate timeout
+        let network_model = self
+            .network_repository()
+            .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+            .await?
+            .ok_or(TransactionError::UnexpectedError(format!(
+                "Network with chain id {} not found",
+                evm_data.chain_id
+            )))?;
+
+        let network = EvmNetwork::try_from(network_model).map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Error converting network model to EvmNetwork: {}",
+                e
+            ))
+        })?;
+
+        let timeout = match network.is_arbitrum() {
+            true => ARBITRUM_TIME_TO_RESUBMIT,
+            false => get_resubmit_timeout_for_speed(&evm_data.speed),
         };
 
-        let timeout_with_backoff = get_resubmit_timeout_with_backoff(timeout, tx.hashes.len());
+        let timeout_with_backoff = match network.is_arbitrum() {
+            true => timeout, // Use base timeout without backoff for Arbitrum
+            false => get_resubmit_timeout_with_backoff(timeout, tx.hashes.len()),
+        };
+
         if age > Duration::milliseconds(timeout_with_backoff) {
             info!("Transaction has been pending for too long, resubmitting");
             return Ok(true);
@@ -201,7 +225,23 @@ where
         is_cancellation: bool,
     ) -> Result<TransactionUpdateRequest, TransactionError> {
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
-        make_noop(&mut evm_data).await?;
+        let network_model = self
+            .network_repository()
+            .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+            .await?
+            .ok_or(TransactionError::UnexpectedError(format!(
+                "Network with chain id {} not found",
+                evm_data.chain_id
+            )))?;
+
+        let network = EvmNetwork::try_from(network_model).map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Error converting network model to EvmNetwork: {}",
+                e
+            ))
+        })?;
+
+        make_noop(&mut evm_data, &network, Some(self.provider())).await?;
 
         let noop_count = tx.noop_count.unwrap_or(0) + 1;
         let update_request = TransactionUpdateRequest {
@@ -389,6 +429,23 @@ mod tests {
         }
     }
 
+    /// Returns a `TestMocks` with network repository configured for prepare_noop_update_request tests.
+    pub fn default_test_mocks_with_network() -> TestMocks {
+        let mut mocks = default_test_mocks();
+        // Set up default expectation for get_by_chain_id that prepare_noop_update_request tests need
+        mocks
+            .network_repo
+            .expect_get_by_chain_id()
+            .returning(|network_type, chain_id| {
+                if network_type == NetworkType::Evm && chain_id == 1 {
+                    Ok(Some(create_test_network_model()))
+                } else {
+                    Ok(None)
+                }
+            });
+        mocks
+    }
+
     /// Creates a test NetworkRepoModel for chain_id 1 (mainnet)
     pub fn create_test_network_model() -> NetworkRepoModel {
         let evm_config = EvmNetworkConfig {
@@ -409,6 +466,31 @@ mod tests {
         NetworkRepoModel {
             id: "evm:mainnet".to_string(),
             name: "mainnet".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(evm_config),
+        }
+    }
+
+    /// Creates a test NetworkRepoModel for chain_id 42161 (Arbitrum-like) with no-mempool tag
+    pub fn create_test_no_mempool_network_model() -> NetworkRepoModel {
+        let evm_config = EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "arbitrum".to_string(),
+                from: None,
+                rpc_urls: Some(vec!["https://arb-rpc.example.com".to_string()]),
+                explorer_urls: Some(vec!["https://arb-explorer.example.com".to_string()]),
+                average_blocktime_ms: Some(1000),
+                is_testnet: Some(false),
+                tags: Some(vec!["arbitrum".to_string(), "no-mempool".to_string()]),
+            },
+            chain_id: Some(42161),
+            required_confirmations: Some(12),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+        };
+        NetworkRepoModel {
+            id: "evm:arbitrum".to_string(),
+            name: "arbitrum".to_string(),
             network_type: NetworkType::Evm,
             config: NetworkConfigData::Evm(evm_config),
         }
@@ -652,15 +734,22 @@ mod tests {
     // Tests for `should_resubmit`
     mod should_resubmit_tests {
         use super::*;
+        use crate::models::TransactionError;
 
         #[tokio::test]
         async fn test_should_resubmit_true() {
-            let mocks = default_test_mocks();
+            let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
             // Set sent_at to 600 seconds ago to force resubmission
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
+
+            // Mock network repository to return a regular network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let res = evm_transaction.should_resubmit(&tx).await.unwrap();
@@ -669,16 +758,133 @@ mod tests {
 
         #[tokio::test]
         async fn test_should_resubmit_false() {
-            let mocks = default_test_mocks();
+            let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
             // Make a transaction with status Submitted but recently sent
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.sent_at = Some(Utc::now().to_rfc3339());
 
+            // Mock network repository to return a regular network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let res = evm_transaction.should_resubmit(&tx).await.unwrap();
             assert!(!res, "Transaction should not be resubmitted immediately.");
+        }
+
+        #[tokio::test]
+        async fn test_should_resubmit_true_for_no_mempool_network() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            // Set up a transaction that would normally be resubmitted (sent_at long ago)
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
+
+            // Set chain_id to match the no-mempool network
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.chain_id = 42161; // Arbitrum chain ID
+            }
+
+            // Mock network repository to return a no-mempool network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_no_mempool_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let res = evm_transaction.should_resubmit(&tx).await.unwrap();
+            assert!(
+                res,
+                "Transaction should be resubmitted for no-mempool networks."
+            );
+        }
+
+        #[tokio::test]
+        async fn test_should_resubmit_network_not_found() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
+
+            // Mock network repository to return None (network not found)
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(None));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.should_resubmit(&tx).await;
+
+            assert!(
+                result.is_err(),
+                "should_resubmit should return error when network not found"
+            );
+            let error = result.unwrap_err();
+            match error {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("Network with chain id 1 not found"));
+                }
+                _ => panic!("Expected UnexpectedError for network not found"),
+            }
+        }
+
+        #[tokio::test]
+        async fn test_should_resubmit_network_conversion_error() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
+
+            // Create a network model with invalid EVM config (missing chain_id)
+            let invalid_evm_config = EvmNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "invalid-network".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                    explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
+                    average_blocktime_ms: Some(12000),
+                    is_testnet: Some(false),
+                    tags: Some(vec!["testnet".to_string()]),
+                },
+                chain_id: None, // This will cause the conversion to fail
+                required_confirmations: Some(12),
+                features: Some(vec!["eip1559".to_string()]),
+                symbol: Some("ETH".to_string()),
+            };
+            let invalid_network = NetworkRepoModel {
+                id: "evm:invalid".to_string(),
+                name: "invalid-network".to_string(),
+                network_type: NetworkType::Evm,
+                config: NetworkConfigData::Evm(invalid_evm_config),
+            };
+
+            // Mock network repository to return the invalid network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(move |_, _| Ok(Some(invalid_network.clone())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.should_resubmit(&tx).await;
+
+            assert!(
+                result.is_err(),
+                "should_resubmit should return error when network conversion fails"
+            );
+            let error = result.unwrap_err();
+            match error {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("Error converting network model to EvmNetwork"));
+                }
+                _ => panic!("Expected UnexpectedError for network conversion failure"),
+            }
         }
     }
 
@@ -737,7 +943,7 @@ mod tests {
         #[tokio::test]
         async fn test_noop_request_without_cancellation() {
             // Create a transaction with an initial noop_count of 2 and is_canceled set to false.
-            let mocks = default_test_mocks();
+            let mocks = default_test_mocks_with_network();
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.noop_count = Some(2);
@@ -758,7 +964,7 @@ mod tests {
         #[tokio::test]
         async fn test_noop_request_with_cancellation() {
             // Create a transaction with no initial noop_count (None) and is_canceled false.
-            let mocks = default_test_mocks();
+            let mocks = default_test_mocks_with_network();
             let relayer = create_test_relayer();
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.noop_count = None;
@@ -1028,6 +1234,11 @@ mod tests {
                 .provider
                 .expect_get_transaction_receipt()
                 .returning(|_| Box::pin(async { Ok(None) }));
+            // Mock network repository for should_resubmit check
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
             // Expect that a status check job is scheduled.
             mocks
                 .job_producer

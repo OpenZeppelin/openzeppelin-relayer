@@ -23,3 +23,9 @@ pub const MIN_BUMP_FACTOR: f64 = 1.1;
 pub const MAXIMUM_TX_ATTEMPTS: usize = 50;
 // Maximum number of NOOP transactions to attempt
 pub const MAXIMUM_NOOP_RETRY_ATTEMPTS: u32 = 50;
+
+/// Time to resubmit for Arbitrum networks
+pub const ARBITRUM_TIME_TO_RESUBMIT: i64 = 20_000;
+
+// Gas limit for Arbitrum networks (mainly used for NOOP transactions (with no data), covers L1 + L2 costs)
+pub const ARBITRUM_GAS_LIMIT: u64 = 50_000;

@@ -125,6 +125,20 @@ impl Repository<NetworkRepoModel, String> for NetworkRepositoryStorage {
             NetworkRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        match self {
+            NetworkRepositoryStorage::InMemory(repo) => repo.has_entries().await,
+            NetworkRepositoryStorage::Redis(repo) => repo.has_entries().await,
+        }
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        match self {
+            NetworkRepositoryStorage::InMemory(repo) => repo.drop_all_entries().await,
+            NetworkRepositoryStorage::Redis(repo) => repo.drop_all_entries().await,
+        }
+    }
 }
 
 #[async_trait]
@@ -169,11 +183,41 @@ mockall::mock! {
         async fn update(&self, id: String, entity: NetworkRepoModel) -> Result<NetworkRepoModel, RepositoryError>;
         async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
         async fn count(&self) -> Result<usize, RepositoryError>;
+        async fn has_entries(&self) -> Result<bool, RepositoryError>;
+        async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
     }
 
     #[async_trait]
     impl NetworkRepository for NetworkRepository {
         async fn get_by_name(&self, network_type: NetworkType, name: &str) -> Result<Option<NetworkRepoModel>, RepositoryError>;
         async fn get_by_chain_id(&self, network_type: NetworkType, chain_id: u64) -> Result<Option<NetworkRepoModel>, RepositoryError>;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::mocks::mockutils::create_mock_network;
+    #[tokio::test]
+    async fn test_trait_methods_accessibility() {
+        // Create in-memory repository through the storage enum
+        let repo: NetworkRepositoryStorage = NetworkRepositoryStorage::new_in_memory();
+
+        // These methods are now accessible through the trait!
+        assert!(!repo.has_entries().await.unwrap());
+
+        // Add a network
+        let network = create_mock_network();
+        repo.create(network).await.unwrap();
+
+        // Check entries exist
+        assert!(repo.has_entries().await.unwrap());
+
+        // Drop all entries
+        repo.drop_all_entries().await.unwrap();
+
+        // Verify everything is cleaned up
+        assert!(!repo.has_entries().await.unwrap());
+        assert_eq!(repo.count().await.unwrap(), 0);
     }
 }

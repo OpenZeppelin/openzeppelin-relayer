@@ -141,6 +141,20 @@ impl Repository<RelayerRepoModel, String> for RelayerRepositoryStorage {
             RelayerRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.has_entries().await,
+            RelayerRepositoryStorage::Redis(repo) => repo.has_entries().await,
+        }
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.drop_all_entries().await,
+            RelayerRepositoryStorage::Redis(repo) => repo.drop_all_entries().await,
+        }
+    }
 }
 
 #[async_trait]
@@ -364,6 +378,32 @@ mod tests {
         let delete_result = impl_repo.delete_by_id("nonexistent".to_string()).await;
         assert!(delete_result.is_err());
     }
+
+    #[actix_web::test]
+    async fn test_has_entries() {
+        let repo = InMemoryRelayerRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
+
+        let relayer = create_test_relayer("test".to_string());
+
+        repo.create(relayer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.delete_by_id(relayer.id.clone()).await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
+    }
+
+    #[actix_web::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemoryRelayerRepository::new();
+        let relayer = create_test_relayer("test".to_string());
+
+        repo.create(relayer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
+    }
 }
 
 #[cfg(test)]
@@ -379,6 +419,8 @@ mockall::mock! {
         async fn update(&self, id: String, entity: RelayerRepoModel) -> Result<RelayerRepoModel, RepositoryError>;
         async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
         async fn count(&self) -> Result<usize, RepositoryError>;
+        async fn has_entries(&self) -> Result<bool, RepositoryError>;
+        async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
     }
 
     #[async_trait]

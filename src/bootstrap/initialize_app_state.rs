@@ -11,12 +11,12 @@ use crate::{
         PluginRepositoryStorage, RelayerRepositoryStorage, SignerRepositoryStorage,
         TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
+    utils::initialize_redis_connection,
 };
 use actix_web::web;
 use color_eyre::Result;
 use log::warn;
-use std::{sync::Arc, time::Duration};
-use tokio::time::timeout;
+use std::sync::Arc;
 
 pub struct RepositoryCollection {
     pub relayer: Arc<RelayerRepositoryStorage>,
@@ -49,20 +49,8 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
             api_key: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         },
         RepositoryStorageType::Redis => {
-            warn!("Redis repository storage support is experimental");
-            let redis_client = redis::Client::open(config.redis_url.as_str())?;
-            let connection_manager = timeout(
-                Duration::from_millis(config.redis_connection_timeout_ms),
-                redis::aio::ConnectionManager::new(redis_client),
-            )
-            .await
-            .map_err(|_| {
-                eyre::eyre!(
-                    "Redis connection timeout after {}ms",
-                    config.redis_connection_timeout_ms
-                )
-            })??;
-            let connection_manager = Arc::new(connection_manager);
+            warn!("⚠️ Redis repository storage support is experimental. Use with caution.");
+            let connection_manager = initialize_redis_connection(config).await?;
 
             RepositoryCollection {
                 relayer: Arc::new(RelayerRepositoryStorage::new_redis(
@@ -143,34 +131,12 @@ mod tests {
     use super::*;
     use crate::{
         config::RepositoryStorageType,
-        models::SecretString,
         repositories::Repository,
-        utils::mocks::mockutils::{create_mock_network, create_mock_relayer, create_mock_signer},
+        utils::mocks::mockutils::{
+            create_mock_network, create_mock_relayer, create_mock_signer, create_test_server_config,
+        },
     };
     use std::sync::Arc;
-
-    /// Helper function to create a test ServerConfig
-    fn create_test_server_config(storage_type: RepositoryStorageType) -> ServerConfig {
-        ServerConfig {
-            host: "localhost".to_string(),
-            port: 8080,
-            redis_url: "redis://localhost:6379".to_string(),
-            config_file_path: "./config/test.json".to_string(),
-            api_key: SecretString::new("test_api_key_1234567890_test_key_32"),
-            rate_limit_requests_per_second: 100,
-            rate_limit_burst_size: 300,
-            metrics_port: 8081,
-            enable_swagger: false,
-            redis_connection_timeout_ms: 5000,
-            redis_key_prefix: "test-oz-relayer".to_string(),
-            rpc_timeout_ms: 10000,
-            provider_max_retries: 3,
-            provider_retry_base_delay_ms: 100,
-            provider_retry_max_delay_ms: 2000,
-            provider_max_failovers: 3,
-            repository_storage_type: storage_type,
-        }
-    }
 
     #[tokio::test]
     async fn test_initialize_repositories_in_memory() {

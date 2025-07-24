@@ -221,6 +221,17 @@ impl Repository<RelayerRepoModel, String> for InMemoryRelayerRepository {
     async fn count(&self) -> Result<usize, RepositoryError> {
         Ok(self.store.lock().await.len())
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -425,5 +436,30 @@ mod tests {
             }
             _ => panic!("Unexpected policy type"),
         }
+    }
+
+    // test has_entries
+    #[actix_web::test]
+    async fn test_has_entries() {
+        let repo = InMemoryRelayerRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
+
+        let relayer = create_test_relayer("test".to_string());
+
+        repo.create(relayer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[actix_web::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemoryRelayerRepository::new();
+        let relayer = create_test_relayer("test".to_string());
+
+        repo.create(relayer.clone()).await.unwrap();
+
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

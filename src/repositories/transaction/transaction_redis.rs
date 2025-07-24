@@ -656,6 +656,108 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         debug!("Transaction count: {}", total_count);
         Ok(total_count)
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let relayer_list_key = self.relayer_list_key();
+
+        debug!("Checking if transaction entries exist");
+
+        let exists: bool = conn
+            .exists(&relayer_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
+
+        debug!("Transaction entries exist: {}", exists);
+        Ok(exists)
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let relayer_list_key = self.relayer_list_key();
+
+        debug!("Dropping all transaction entries");
+
+        // Get all relayer IDs first
+        let relayer_ids: Vec<String> = conn
+            .smembers(&relayer_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_relayer_ids"))?;
+
+        if relayer_ids.is_empty() {
+            debug!("No transaction entries to drop");
+            return Ok(());
+        }
+
+        // Use pipeline for atomic operations
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Delete all transactions and their indexes for each relayer
+        for relayer_id in &relayer_ids {
+            // Get all transaction IDs for this relayer
+            let pattern = format!(
+                "{}:{}:{}:{}:*",
+                self.key_prefix, RELAYER_PREFIX, relayer_id, TX_PREFIX
+            );
+            let mut cursor = 0;
+            let mut tx_ids = Vec::new();
+
+            loop {
+                let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                    .cursor_arg(cursor)
+                    .arg("MATCH")
+                    .arg(&pattern)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "drop_all_entries_scan"))?;
+
+                // Extract transaction IDs from keys and delete keys
+                for key in keys {
+                    pipe.del(&key);
+                    if let Some(tx_id) = key.split(':').next_back() {
+                        tx_ids.push(tx_id.to_string());
+                    }
+                }
+
+                cursor = next_cursor;
+                if cursor == 0 {
+                    break;
+                }
+            }
+
+            // Delete reverse lookup keys and indexes
+            for tx_id in tx_ids {
+                let reverse_key = self.tx_to_relayer_key(&tx_id);
+                pipe.del(&reverse_key);
+
+                // Delete status indexes (we can't know the specific status, so we'll clean up known ones)
+                for status in &[
+                    TransactionStatus::Pending,
+                    TransactionStatus::Sent,
+                    TransactionStatus::Confirmed,
+                    TransactionStatus::Failed,
+                    TransactionStatus::Canceled,
+                ] {
+                    let status_key = self.relayer_status_key(relayer_id, status);
+                    pipe.srem(&status_key, &tx_id);
+                }
+            }
+        }
+
+        // Delete the relayer list key
+        pipe.del(&relayer_list_key);
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
+
+        debug!(
+            "Dropped all transaction entries for {} relayers",
+            relayer_ids.len()
+        );
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -1504,5 +1606,31 @@ mod tests {
         // Verify new nonce index works
         let new_nonce_result = repo.find_by_nonce(&relayer_id, 43).await.unwrap();
         assert!(new_nonce_result.is_some());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries() {
+        let repo = setup_test_repo().await;
+        assert!(!repo.has_entries().await.unwrap());
+
+        let tx_id = uuid::Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&tx_id);
+        repo.create(tx.clone()).await.unwrap();
+
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries() {
+        let repo = setup_test_repo().await;
+        let tx_id = uuid::Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&tx_id);
+        repo.create(tx.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

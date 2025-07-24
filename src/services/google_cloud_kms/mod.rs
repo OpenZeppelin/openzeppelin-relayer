@@ -28,6 +28,7 @@ use reqwest::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[cfg(test)]
 use mockall::automock;
@@ -94,6 +95,7 @@ pub struct GoogleCloudKmsService {
     pub config: GoogleCloudKmsSignerConfig,
     credentials: Arc<Credentials>,
     client: Client,
+    cached_headers: Arc<RwLock<Option<HeaderMap>>>,
 }
 
 impl GoogleCloudKmsService {
@@ -119,11 +121,11 @@ impl GoogleCloudKmsService {
             config: config.clone(),
             credentials: Arc::new(credentials),
             client: Client::new(),
+            cached_headers: Arc::new(RwLock::new(None)),
         })
     }
 
     async fn get_auth_headers(&self) -> GoogleCloudKmsResult<HeaderMap> {
-        // makes writing tests easier
         #[cfg(test)]
         {
             // In test mode, return empty headers or mock headers
@@ -134,10 +136,29 @@ impl GoogleCloudKmsService {
 
         #[cfg(not(test))]
         {
-            self.credentials
+            let cacheable_headers = self
+                .credentials
                 .headers(Extensions::new())
                 .await
-                .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))
+                .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))?;
+
+            match cacheable_headers {
+                google_cloud_auth::credentials::CacheableResource::New { data, .. } => {
+                    let mut cached = self.cached_headers.write().await;
+                    *cached = Some(data.clone());
+                    Ok(data)
+                }
+                google_cloud_auth::credentials::CacheableResource::NotModified => {
+                    let cached = self.cached_headers.read().await;
+                    if let Some(headers) = cached.as_ref() {
+                        Ok(headers.clone())
+                    } else {
+                        Err(GoogleCloudKmsError::ConfigError(
+                            "KMS auth token not modified, but not found in cache".to_string(),
+                        ))
+                    }
+                }
+            }
         }
     }
 

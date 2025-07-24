@@ -117,6 +117,20 @@ impl Repository<SignerRepoModel, String> for SignerRepositoryStorage {
             SignerRepositoryStorage::Redis(repo) => repo.count().await,
         }
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        match self {
+            SignerRepositoryStorage::InMemory(repo) => repo.has_entries().await,
+            SignerRepositoryStorage::Redis(repo) => repo.has_entries().await,
+        }
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        match self {
+            SignerRepositoryStorage::InMemory(repo) => repo.drop_all_entries().await,
+            SignerRepositoryStorage::Redis(repo) => repo.drop_all_entries().await,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +285,27 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), RepositoryError::NotFound(_)));
     }
+
+    #[actix_web::test]
+    async fn test_has_entries() {
+        let repo = InMemorySignerRepository::new();
+        assert!(!repo.has_entries().await.unwrap());
+
+        let signer = create_test_signer("test".to_string());
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[actix_web::test]
+    async fn test_drop_all_entries() {
+        let repo = InMemorySignerRepository::new();
+        let signer = create_test_signer("test".to_string());
+        repo.create(signer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
+    }
 }
 
 #[cfg(test)]
@@ -286,5 +321,7 @@ mockall::mock! {
         async fn update(&self, id: String, entity: SignerRepoModel) -> Result<SignerRepoModel, RepositoryError>;
         async fn delete_by_id(&self, id: String) -> Result<(), RepositoryError>;
         async fn count(&self) -> Result<usize, RepositoryError>;
+        async fn has_entries(&self) -> Result<bool, RepositoryError>;
+        async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
     }
 }

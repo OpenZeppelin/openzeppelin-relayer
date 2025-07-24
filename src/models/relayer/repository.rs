@@ -159,9 +159,13 @@ pub struct JupiterSwapOptions {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RelayerSolanaSwapConfig {
+    #[schema(nullable = false)]
     pub strategy: Option<SolanaSwapStrategy>,
+    #[schema(nullable = false)]
     pub cron_schedule: Option<String>,
+    #[schema(nullable = false)]
     pub min_balance_threshold: Option<u64>,
+    #[schema(nullable = false)]
     pub jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 

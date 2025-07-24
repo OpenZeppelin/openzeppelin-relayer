@@ -66,6 +66,14 @@ pub trait Repository<T, ID> {
     async fn update(&self, id: ID, entity: T) -> Result<T, RepositoryError>;
     async fn delete_by_id(&self, id: ID) -> Result<(), RepositoryError>;
     async fn count(&self) -> Result<usize, RepositoryError>;
+
+    /// Check if the repository contains any entries.
+    async fn has_entries(&self) -> Result<bool, RepositoryError>;
+
+    /// Drop all entries from storage.
+    /// This completely clears all data, indexes, and metadata.
+    /// Use with caution as this permanently deletes all data.
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
 }
 
 #[derive(Error, Debug)]

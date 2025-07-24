@@ -509,6 +509,85 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         debug!("Total networks count: {}", count);
         Ok(count)
     }
+
+    /// Check if Redis storage contains any network entries.
+    /// This is used to determine if Redis storage is being used for networks.
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let network_list_key = self.network_list_key();
+        let mut conn = self.client.as_ref().clone();
+
+        debug!("Checking if network storage has entries");
+
+        let exists: bool = conn
+            .exists(&network_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "check_network_entries_exist"))?;
+
+        debug!("Network storage has entries: {}", exists);
+        Ok(exists)
+    }
+
+    /// Drop all network-related entries from Redis storage.
+    /// This includes all network data, indexes, and the network list.
+    /// Use with caution as this will permanently delete all network data.
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+
+        debug!("Starting to drop all network entries from Redis storage");
+
+        // First, get all network IDs to clean up their data and indexes
+        let network_list_key = self.network_list_key();
+        let network_ids: Vec<String> = conn
+            .smembers(&network_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_network_ids_for_cleanup"))?;
+
+        if network_ids.is_empty() {
+            debug!("No network entries found to clean up");
+            return Ok(());
+        }
+
+        debug!("Found {} networks to clean up", network_ids.len());
+
+        // Get all networks to clean up their indexes properly
+        let networks_result = self.get_networks_by_ids(&network_ids).await?;
+        let networks = networks_result.results;
+
+        // Use a pipeline for efficient batch operations
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Delete all network data entries
+        for network_id in &network_ids {
+            let network_key = self.network_key(network_id);
+            pipe.del(&network_key);
+        }
+
+        // Delete all index entries
+        for network in &networks {
+            // Delete name index
+            let name_key = self.network_name_index_key(&network.network_type, &network.name);
+            pipe.del(&name_key);
+
+            // Delete chain ID index if applicable
+            if let Some(chain_id) = self.extract_chain_id(network) {
+                let chain_id_key = self.network_chain_id_index_key(&network.network_type, chain_id);
+                pipe.del(&chain_id_key);
+            }
+        }
+
+        // Delete the network list
+        pipe.del(&network_list_key);
+
+        // Execute all deletions
+        pipe.exec_async(&mut conn).await.map_err(|e| {
+            error!("Failed to execute cleanup pipeline: {}", e);
+            self.map_redis_error(e, "drop_all_network_entries_pipeline")
+        })?;
+
+        debug!("Successfully dropped all network entries from Redis storage");
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -987,5 +1066,133 @@ mod tests {
 
         let result = repo.get_by_name(NetworkType::Evm, "").await;
         assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries_empty_storage() {
+        let repo = setup_test_repo().await;
+
+        let result = repo.has_entries().await.unwrap();
+        assert!(!result, "Empty storage should return false");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries_with_data() {
+        let repo = setup_test_repo().await;
+        let test_network_random = Uuid::new_v4().to_string();
+        let network = create_test_network(&test_network_random, NetworkType::Evm);
+
+        assert!(!repo.has_entries().await.unwrap());
+
+        repo.create(network).await.unwrap();
+
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries_empty_storage() {
+        let repo = setup_test_repo().await;
+
+        let result = repo.drop_all_entries().await;
+        assert!(result.is_ok());
+
+        assert!(!repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries_with_data() {
+        let repo = setup_test_repo().await;
+        let test_network_random1 = Uuid::new_v4().to_string();
+        let test_network_random2 = Uuid::new_v4().to_string();
+        let network1 = create_test_network(&test_network_random1, NetworkType::Evm);
+        let network2 = create_test_network(&test_network_random2, NetworkType::Solana);
+
+        // Add networks
+        repo.create(network1.clone()).await.unwrap();
+        repo.create(network2.clone()).await.unwrap();
+
+        // Verify they exist
+        assert!(repo.has_entries().await.unwrap());
+        assert_eq!(repo.count().await.unwrap(), 2);
+        assert!(repo
+            .get_by_name(NetworkType::Evm, &test_network_random1)
+            .await
+            .unwrap()
+            .is_some());
+
+        // Drop all entries
+        let result = repo.drop_all_entries().await;
+        assert!(result.is_ok());
+
+        // Verify everything is cleaned up
+        assert!(!repo.has_entries().await.unwrap());
+        assert_eq!(repo.count().await.unwrap(), 0);
+        assert!(repo
+            .get_by_name(NetworkType::Evm, &test_network_random1)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .get_by_name(NetworkType::Solana, &test_network_random2)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Verify individual networks are gone
+        assert!(matches!(
+            repo.get_by_id(network1.id).await,
+            Err(RepositoryError::NotFound(_))
+        ));
+        assert!(matches!(
+            repo.get_by_id(network2.id).await,
+            Err(RepositoryError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries_cleans_indexes() {
+        let repo = setup_test_repo().await;
+        let test_network_random = Uuid::new_v4().to_string();
+        let mut network = create_test_network(&test_network_random, NetworkType::Evm);
+
+        // Ensure we have a specific chain ID for testing
+        if let crate::models::NetworkConfigData::Evm(ref mut evm_config) = network.config {
+            evm_config.chain_id = Some(12345);
+        }
+
+        // Add network
+        repo.create(network.clone()).await.unwrap();
+
+        // Verify indexes work
+        assert!(repo
+            .get_by_name(NetworkType::Evm, &test_network_random)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(repo
+            .get_by_chain_id(NetworkType::Evm, 12345)
+            .await
+            .unwrap()
+            .is_some());
+
+        // Drop all entries
+        repo.drop_all_entries().await.unwrap();
+
+        // Verify indexes are cleaned up
+        assert!(repo
+            .get_by_name(NetworkType::Evm, &test_network_random)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .get_by_chain_id(NetworkType::Evm, 12345)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

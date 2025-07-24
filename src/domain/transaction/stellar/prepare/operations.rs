@@ -5,6 +5,7 @@ use log::info;
 
 use super::common::{get_next_sequence, sign_stellar_transaction, simulate_if_needed};
 use crate::{
+    constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::extract_operations,
     models::{StellarTransactionData, TransactionError, TransactionRepoModel},
     repositories::TransactionCounterTrait,
@@ -76,7 +77,12 @@ where
                     ))
                 })?
         }
-        None => stellar_data,
+        None => {
+            // For non-simulated transactions, ensure fee is set to default
+            let op_count = extract_operations(&unsigned_env)?.len() as u32;
+            let fee = STELLAR_DEFAULT_TRANSACTION_FEE * op_count;
+            stellar_data.with_fee(fee)
+        }
     };
 
     // Sign the transaction
@@ -378,5 +384,57 @@ mod tests {
             result.unwrap_err(),
             TransactionError::SignerError(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn test_process_operations_simulation_failure() {
+        let relayer_id = "test-relayer";
+        let relayer_address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(100))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        // Mock simulation to fail
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(async { Err(eyre::eyre!("Simulation failed: insufficient resources")) })
+            });
+
+        let signer = MockSigner::new();
+
+        let tx = create_test_transaction();
+        let mut stellar_data = create_test_stellar_data();
+        // Use Soroban operation to trigger simulation
+        stellar_data.transaction_input =
+            TransactionInput::Operations(vec![OperationSpec::InvokeContract {
+                contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                    .to_string(),
+                function_name: "test".to_string(),
+                args: vec![],
+                auth: None,
+            }]);
+
+        let result = process_operations(
+            &counter,
+            relayer_id,
+            relayer_address,
+            &tx,
+            stellar_data,
+            &provider,
+            &signer,
+        )
+        .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::UnexpectedError(msg) => {
+                assert!(msg.contains("Simulation failed"));
+            }
+            _ => panic!("Expected UnexpectedError"),
+        }
     }
 }

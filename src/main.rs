@@ -69,10 +69,14 @@ async fn main() -> Result<()> {
     dotenv().ok();
     setup_logging();
 
+    // Log service information at startup
+    openzeppelin_relayer::utils::log_service_info();
+
     // Set metrics enabled flag to false by default
     let metrics_enabled = env::var("METRICS_ENABLED")
         .map(|v| v.to_lowercase() == "true")
         .unwrap_or(false);
+
     let config = Arc::new(config::ServerConfig::from_env());
     let server_config = Arc::clone(&config); // clone for use in binding below
     let config_file = load_config_file(&config.config_file_path)?;
@@ -82,8 +86,7 @@ async fn main() -> Result<()> {
     // Setup workers for processing jobs
     initialize_workers(app_state.clone()).await?;
 
-    info!("Processing config file");
-    process_config_file(config_file, app_state.clone()).await?;
+    process_config_file(config_file, server_config.clone(), &app_state).await?;
 
     info!("Initializing relayers");
     // Initialize relayers: sync and validate relayers
@@ -102,10 +105,10 @@ async fn main() -> Result<()> {
     info!("Starting server on {}:{}", config.host, config.port);
     let app_server = HttpServer::new({
         // Clone the config for use within the closure.
-        let server_config = Arc::clone(&server_config);
+        let server_config_clone = Arc::clone(&server_config);
         let app_state = app_state.clone();
         move || {
-            let config = Arc::clone(&server_config);
+            let config = Arc::clone(&server_config_clone);
             let app = App::new();
 
             app

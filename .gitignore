@@ -43,3 +43,5 @@ node_modules
 **/local-signer.json
 
 openapi.json
+
+**/config/keys/*.json

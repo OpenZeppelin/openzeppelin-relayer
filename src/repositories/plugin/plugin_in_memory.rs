@@ -97,6 +97,17 @@ impl PluginRepositoryTrait for InMemoryPluginRepository {
         let store = self.store.lock().await;
         Ok(store.len())
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +205,40 @@ mod tests {
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_has_entries() {
+        let plugin_repository = Arc::new(InMemoryPluginRepository::new());
+        assert!(!plugin_repository.has_entries().await.unwrap());
+        plugin_repository
+            .add(PluginModel {
+                id: "test-plugin".to_string(),
+                path: "test-path".to_string(),
+                timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            })
+            .await
+            .unwrap();
+
+        assert!(plugin_repository.has_entries().await.unwrap());
+        plugin_repository.drop_all_entries().await.unwrap();
+        assert!(!plugin_repository.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_drop_all_entries() {
+        let plugin_repository = Arc::new(InMemoryPluginRepository::new());
+        plugin_repository
+            .add(PluginModel {
+                id: "test-plugin".to_string(),
+                path: "test-path".to_string(),
+                timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            })
+            .await
+            .unwrap();
+
+        assert!(plugin_repository.has_entries().await.unwrap());
+        plugin_repository.drop_all_entries().await.unwrap();
+        assert!(!plugin_repository.has_entries().await.unwrap());
     }
 }

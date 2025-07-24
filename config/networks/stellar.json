@@ -3,7 +3,7 @@
     {
       "type": "stellar",
       "network": "mainnet",
-      "rpc_urls": ["https://horizon.stellar.org"],
+      "rpc_urls": ["https://mainnet.sorobanrpc.com"],
       "explorer_urls": ["https://stellar.expert/explorer/public"],
       "average_blocktime_ms": 5000,
       "is_testnet": false,

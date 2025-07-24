@@ -346,7 +346,7 @@ Note: if your pull request isn't getting enough attention, you can contact us on
 
 ## Coding Standards
 
-- Use **Rust 2021 edition**, version `1.85` or later.
+- Use **Rust 2021 edition**, version `1.86` or later.
 - Follow the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/).
 - Run pre-commit hooks on your code to ensure code quality.
 

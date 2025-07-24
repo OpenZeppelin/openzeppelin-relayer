@@ -389,6 +389,59 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         debug!("Notification count: {}", count);
         Ok(count as usize)
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let notification_list_key = self.notification_list_key();
+
+        debug!("Checking if notification entries exist");
+
+        let exists: bool = conn
+            .exists(&notification_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
+
+        debug!("Notification entries exist: {}", exists);
+        Ok(exists)
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let notification_list_key = self.notification_list_key();
+
+        debug!("Dropping all notification entries");
+
+        // Get all notification IDs first
+        let notification_ids: Vec<String> = conn
+            .smembers(&notification_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
+
+        if notification_ids.is_empty() {
+            debug!("No notification entries to drop");
+            return Ok(());
+        }
+
+        // Use pipeline for atomic operations
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Delete all individual notification entries
+        for notification_id in &notification_ids {
+            let notification_key = self.notification_key(notification_id);
+            pipe.del(&notification_key);
+        }
+
+        // Delete the notification list key
+        pipe.del(&notification_list_key);
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
+
+        debug!("Dropped {} notification entries", notification_ids.len());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -754,5 +807,30 @@ mod tests {
         // Verify it's no longer in the list
         let all_notifications = repo.list_all().await.unwrap();
         assert!(!all_notifications.iter().any(|n| n.id == random_id));
+    }
+
+    // test has_entries
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries() {
+        let repo = setup_test_repo().await;
+        assert!(!repo.has_entries().await.unwrap());
+
+        let notification = create_test_notification("test");
+        repo.create(notification.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries() {
+        let repo = setup_test_repo().await;
+        let notification = create_test_notification("test");
+
+        repo.create(notification.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

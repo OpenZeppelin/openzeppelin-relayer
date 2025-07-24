@@ -370,6 +370,59 @@ impl Repository<RelayerRepoModel, String> for RedisRelayerRepository {
 
         Ok(count as usize)
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let relayer_list_key = self.relayer_list_key();
+
+        debug!("Checking if relayer entries exist");
+
+        let exists: bool = conn
+            .exists(&relayer_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
+
+        debug!("Relayer entries exist: {}", exists);
+        Ok(exists)
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let relayer_list_key = self.relayer_list_key();
+
+        debug!("Dropping all relayer entries");
+
+        // Get all relayer IDs first
+        let relayer_ids: Vec<String> = conn
+            .smembers(&relayer_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
+
+        if relayer_ids.is_empty() {
+            debug!("No relayer entries to drop");
+            return Ok(());
+        }
+
+        // Use pipeline for atomic operations
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Delete all individual relayer entries
+        for relayer_id in &relayer_ids {
+            let relayer_key = self.relayer_key(relayer_id);
+            pipe.del(&relayer_key);
+        }
+
+        // Delete the relayer list key
+        pipe.del(&relayer_list_key);
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
+
+        debug!("Dropped {} relayer entries", relayer_ids.len());
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -877,5 +930,30 @@ mod tests {
 
         let result = repo.delete_by_id("nonexistent-relayer".to_string()).await;
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries() {
+        let repo = setup_test_repo().await;
+        assert!(!repo.has_entries().await.unwrap());
+
+        let relayer_id = uuid::Uuid::new_v4().to_string();
+        let relayer = create_test_relayer(&relayer_id);
+        repo.create(relayer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries() {
+        let repo = setup_test_repo().await;
+        let relayer_id = uuid::Uuid::new_v4().to_string();
+        let relayer = create_test_relayer(&relayer_id);
+        repo.create(relayer.clone()).await.unwrap();
+        assert!(repo.has_entries().await.unwrap());
+
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
     }
 }

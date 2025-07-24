@@ -47,7 +47,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use super::{
     create_error_response, create_success_response, map_provider_error, EvmTransactionValidator,
@@ -137,12 +137,23 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
 
-        info!(
-            "Setting nonce: {} for relayer: {}",
-            on_chain_nonce, self.relayer.id
+        let transaction_counter_nonce = self
+            .transaction_counter_service
+            .get()
+            .await
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
+
+        let nonce = std::cmp::max(on_chain_nonce, transaction_counter_nonce);
+
+        debug!(
+            "Relayer: {} - On-chain nonce: {}, Transaction counter nonce: {}",
+            self.relayer.id, on_chain_nonce, transaction_counter_nonce
         );
 
-        self.transaction_counter_service.set(on_chain_nonce).await?;
+        info!("Setting nonce: {} for relayer: {}", nonce, self.relayer.id);
+
+        self.transaction_counter_service.set(nonce).await?;
 
         Ok(())
     }
@@ -805,6 +816,82 @@ mod tests {
         counter
             .expect_set()
             .returning(|_nonce| Box::pin(ready(Ok(()))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.sync_nonce().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_nonce_lower_on_chain_nonce() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(40u64))));
+
+        counter
+            .expect_set()
+            .with(eq(42u64))
+            .returning(|_nonce| Box::pin(ready(Ok(()))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.sync_nonce().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_nonce_lower_transaction_counter_nonce() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(42u64))));
+
+        counter
+            .expect_set()
+            .with(eq(42u64))
+            .returning(|_nonce| Box::pin(ready(Ok(()))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(40u64)))));
 
         let relayer = EvmRelayer::new(
             relayer_model,
