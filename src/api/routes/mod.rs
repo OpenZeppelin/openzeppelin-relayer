@@ -19,6 +19,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.configure(health::init)
         .configure(relayer::init)
         .configure(plugin::init)
-        .configure(metrics::init)
-        .configure(api_keys::init);
+        .configure(metrics::init);
+
+    #[cfg(feature = "api-keys")]
+    cfg.configure(api_keys::init);
 }

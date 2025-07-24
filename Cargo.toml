@@ -121,3 +121,6 @@ path = "helpers/generate_openapi.rs"
 
 [lib]
 path = "src/lib.rs"
+
+[features]
+api-keys = []

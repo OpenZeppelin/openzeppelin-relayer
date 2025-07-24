@@ -1,10 +1,15 @@
 //! This module defines the HTTP routes for api keys operations.
 //! The routes are integrated with the Actix-web framework and interact with the api key controller.
-use crate::api::controllers::api_key;
-use crate::models::{ApiKeyRequest, DefaultAppState, PaginationQuery};
+#[cfg(feature = "api-keys")]
+use crate::{
+    api::controllers::api_key,
+    models::{ApiKeyRequest, DefaultAppState, PaginationQuery},
+};
+#[cfg(feature = "api-keys")]
 use actix_web::{delete, get, post, web, Responder};
 
 /// List plugins
+#[cfg(feature = "api-keys")]
 #[get("/api-keys")]
 async fn list_api_keys(
     query: web::Query<PaginationQuery>,
@@ -13,6 +18,7 @@ async fn list_api_keys(
     api_key::list_api_keys(query.into_inner(), data).await
 }
 
+#[cfg(feature = "api-keys")]
 #[get("/api-keys/{api_key_id}/permissions")]
 async fn get_api_key_permissions(
     api_key_id: web::Path<String>,
@@ -22,6 +28,7 @@ async fn get_api_key_permissions(
 }
 
 /// Calls a plugin method.
+#[cfg(feature = "api-keys")]
 #[post("/api-keys")]
 async fn create_api_key(
     req: web::Json<ApiKeyRequest>,
@@ -30,6 +37,7 @@ async fn create_api_key(
     api_key::create_api_key(req.into_inner(), data).await
 }
 
+#[cfg(feature = "api-keys")]
 #[delete("/api-keys/{api_key_id}")]
 async fn delete_api_key(
     api_key_id: web::Path<String>,
@@ -39,6 +47,7 @@ async fn delete_api_key(
 }
 
 /// Initializes the routes for api keys.
+#[cfg(feature = "api-keys")]
 pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
     cfg.service(create_api_key); // /api-keys
