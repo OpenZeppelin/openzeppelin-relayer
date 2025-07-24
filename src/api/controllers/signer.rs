@@ -229,7 +229,12 @@ where
 mod tests {
     use super::*;
     use crate::{
-        models::{LocalSignerConfig, SignerConfig, SignerType},
+        models::{
+            AwsKmsSignerRequestConfig, GoogleCloudKmsSignerKeyRequestConfig,
+            GoogleCloudKmsSignerRequestConfig, GoogleCloudKmsSignerServiceAccountRequestConfig,
+            LocalSignerConfig, LocalSignerRequestConfig, SignerConfig, SignerConfigRequest,
+            SignerType, SignerTypeRequest, TurnkeySignerRequestConfig, VaultSignerRequestConfig,
+        },
         utils::mocks::mockutils::create_mock_app_state,
     };
     use secrets::SecretVec;
@@ -453,6 +458,320 @@ mod tests {
             result.is_ok(),
             "AWS KMS signer with valid config should succeed"
         );
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_local_with_valid_key() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("local-signer-test".to_string()),
+            signer_type: SignerTypeRequest::Local,
+            config: SignerConfigRequest::Local(LocalSignerRequestConfig {
+                key: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(), // 32 bytes as hex
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<SignerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "local-signer-test");
+        assert_eq!(data.r#type, SignerType::Local);
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_aws_kms_comprehensive() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("aws-kms-signer".to_string()),
+            signer_type: SignerTypeRequest::AwsKms,
+            config: SignerConfigRequest::AwsKms(AwsKmsSignerRequestConfig {
+                region: "us-west-2".to_string(),
+                key_id:
+                    "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
+                        .to_string(),
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<SignerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "aws-kms-signer");
+        assert_eq!(data.r#type, SignerType::AwsKms);
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_vault() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("vault-signer".to_string()),
+            signer_type: SignerTypeRequest::Vault,
+            config: SignerConfigRequest::Vault(VaultSignerRequestConfig {
+                address: "https://vault.example.com:8200".to_string(),
+                namespace: Some("development".to_string()),
+                role_id: "test-role-id-12345".to_string(),
+                secret_id: "test-secret-id-67890".to_string(),
+                key_name: "ethereum-key".to_string(),
+                mount_point: Some("secret".to_string()),
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<SignerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "vault-signer");
+        assert_eq!(data.r#type, SignerType::Vault);
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_vault_transit() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        use crate::models::{
+            SignerConfigRequest, SignerTypeRequest, VaultTransitSignerRequestConfig,
+        };
+        let request = SignerCreateRequest {
+            id: Some("vault-transit-signer".to_string()),
+            signer_type: SignerTypeRequest::VaultTransit,
+            config: SignerConfigRequest::VaultTransit(VaultTransitSignerRequestConfig {
+                key_name: "ethereum-transit-key".to_string(),
+                address: "https://vault.example.com:8200".to_string(),
+                namespace: None,
+                role_id: "transit-role-id-12345".to_string(),
+                secret_id: "transit-secret-id-67890".to_string(),
+                pubkey: "0x04a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd5b8dec5235a0fa8722476c7709c02559e3aa73aa03918ba2d492eea75abea235".to_string(),
+                mount_point: Some("transit".to_string()),
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<SignerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "vault-transit-signer");
+        assert_eq!(data.r#type, SignerType::VaultTransit);
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_turnkey() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("turnkey-signer".to_string()),
+            signer_type: SignerTypeRequest::Turnkey,
+            config: SignerConfigRequest::Turnkey(TurnkeySignerRequestConfig {
+                api_public_key: "turnkey-api-public-key-example".to_string(),
+                api_private_key: "turnkey-api-private-key-example".to_string(),
+                organization_id: "turnkey-org-12345".to_string(),
+                private_key_id: "turnkey-private-key-67890".to_string(),
+                public_key: "0x04a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd5b8dec5235a0fa8722476c7709c02559e3aa73aa03918ba2d492eea75abea235".to_string(),
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<SignerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "turnkey-signer");
+        assert_eq!(data.r#type, SignerType::Turnkey);
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_google_cloud_kms() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("gcp-kms-signer".to_string()),
+            signer_type: SignerTypeRequest::GoogleCloudKms,
+            config: SignerConfigRequest::GoogleCloudKms(GoogleCloudKmsSignerRequestConfig {
+                service_account: GoogleCloudKmsSignerServiceAccountRequestConfig {
+                    private_key: "-----BEGIN PRIVATE KEY-----\nSDFGSDFGSDGSDFGSDFGSDFGSDFGSDFGSAFAS...\n-----END PRIVATE KEY-----\n".to_string(), // noboost
+                    private_key_id: "gcp-private-key-id-12345".to_string(),
+                    project_id: "my-gcp-project".to_string(),
+                    client_email: "service-account@my-gcp-project.iam.gserviceaccount.com".to_string(),
+                    client_id: "123456789012345678901".to_string(),
+                    auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
+                    token_uri: "https://oauth2.googleapis.com/token".to_string(),
+                    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
+                    client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/service-account%40my-gcp-project.iam.gserviceaccount.com".to_string(),
+                    universe_domain: "googleapis.com".to_string(),
+                },
+                key: GoogleCloudKmsSignerKeyRequestConfig {
+                    location: "global".to_string(),
+                    key_ring_id: "ethereum-keyring".to_string(),
+                    key_id: "ethereum-signing-key".to_string(),
+                    key_version: 1,
+                },
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<SignerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert_eq!(data.id, "gcp-kms-signer");
+        assert_eq!(data.r#type, SignerType::GoogleCloudKms);
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_auto_generated_id() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: None, // Let the system generate an ID
+            signer_type: SignerTypeRequest::Local,
+            config: SignerConfigRequest::Local(LocalSignerRequestConfig {
+                key: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321".to_string(),
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+
+        let body = actix_web::body::to_bytes(response.into_body())
+            .await
+            .unwrap();
+        let api_response: ApiResponse<SignerResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(api_response.success);
+        let data = api_response.data.unwrap();
+        assert!(!data.id.is_empty());
+        assert!(uuid::Uuid::parse_str(&data.id).is_ok()); // Should be a valid UUID
+        assert_eq!(data.r#type, SignerType::Local);
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_invalid_local_key() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("invalid-key-signer".to_string()),
+            signer_type: SignerTypeRequest::Local,
+            config: SignerConfigRequest::Local(LocalSignerRequestConfig {
+                key: "invalid-hex-key".to_string(), // Invalid hex
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Invalid hex key format"));
+        } else {
+            panic!("Expected BadRequest error for invalid hex key");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_invalid_vault_address() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("invalid-vault-signer".to_string()),
+            signer_type: SignerTypeRequest::Vault,
+            config: SignerConfigRequest::Vault(VaultSignerRequestConfig {
+                address: "not-a-valid-url".to_string(), // Invalid URL
+                namespace: None,
+                role_id: "test-role".to_string(),
+                secret_id: "test-secret".to_string(),
+                key_name: "test-key".to_string(),
+                mount_point: None,
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Address must be a valid URL"));
+        } else {
+            panic!("Expected BadRequest error for invalid Vault address");
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_signer_empty_aws_kms_key_id() {
+        let app_state = create_mock_app_state(None, None, None, None, None).await;
+
+        let request = SignerCreateRequest {
+            id: Some("empty-key-id-signer".to_string()),
+            signer_type: SignerTypeRequest::AwsKms,
+            config: SignerConfigRequest::AwsKms(AwsKmsSignerRequestConfig {
+                region: "us-east-1".to_string(),
+                key_id: "".to_string(), // Empty key ID
+            }),
+        };
+
+        let result = create_signer(request, actix_web::web::ThinData(app_state)).await;
+
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("Key ID cannot be empty"));
+        } else {
+            panic!("Expected BadRequest error for empty AWS KMS key ID");
+        }
     }
 
     #[actix_web::test]
