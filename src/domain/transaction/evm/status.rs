@@ -137,7 +137,11 @@ where
             false => get_resubmit_timeout_for_speed(&evm_data.speed),
         };
 
-        let timeout_with_backoff = get_resubmit_timeout_with_backoff(timeout, tx.hashes.len());
+        let timeout_with_backoff = match network.is_arbitrum() {
+            true => timeout, // Use base timeout without backoff for Arbitrum
+            false => get_resubmit_timeout_with_backoff(timeout, tx.hashes.len()),
+        };
+
         if age > Duration::milliseconds(timeout_with_backoff) {
             info!("Transaction has been pending for too long, resubmitting");
             return Ok(true);

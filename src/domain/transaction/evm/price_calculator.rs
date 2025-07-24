@@ -242,7 +242,9 @@ impl<G: EvmGasPriceServiceTrait> PriceCalculator<G> {
         relayer: &RelayerRepoModel,
     ) -> Result<PriceParams, TransactionError> {
         // Check if network lacks mempool (e.g., Arbitrum) - skip bump and use current prices
-        if self.gas_price_service.network().lacks_mempool() {
+        if self.gas_price_service.network().lacks_mempool()
+            || self.gas_price_service.network().is_arbitrum()
+        {
             let mut price_params = self.get_transaction_price_params(tx_data, relayer).await?;
 
             // For mempool-less networks, we don't need to bump - just use current market prices
@@ -1900,5 +1902,97 @@ mod tests {
         // The key difference is that no-mempool networks should set is_min_bumped to true
         // Regular networks may or may not set is_min_bumped depending on the actual implementation
         assert_eq!(result_no_mempool.is_min_bumped, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_calculate_bumped_gas_price_arbitrum_network() {
+        let mut mock_service = MockEvmGasPriceServiceTrait::new();
+
+        // Create a network that returns true for is_arbitrum() but not lacks_mempool()
+        let arbitrum_network = EvmNetwork {
+            network: "arbitrum-one".to_string(),
+            rpc_urls: vec!["https://arb1.arbitrum.io/rpc".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 1000, // 1 second for arbitrum
+            is_testnet: false,
+            tags: vec!["arbitrum-based".to_string()], // This makes is_arbitrum() return true
+            chain_id: 42161,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        };
+
+        // Mock the network to return our arbitrum network
+        mock_service.expect_network().return_const(arbitrum_network);
+
+        // Mock get_prices_from_json_rpc for get_transaction_price_params call
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 100_000_000, // 0.1 Gwei (typical for Arbitrum)
+                average: 200_000_000,
+                fast: 300_000_000,
+                fastest: 400_000_000,
+            },
+            max_priority_fee_per_gas: SpeedPrices {
+                safe_low: 10_000_000, // 0.01 Gwei
+                average: 20_000_000,
+                fast: 30_000_000,
+                fastest: 40_000_000,
+            },
+            base_fee_per_gas: 100_000_000, // 0.1 Gwei
+        };
+
+        mock_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+
+        let pc = PriceCalculator::new(mock_service, NetworkExtraFeeCalculator::None);
+        let relayer = create_mock_relayer();
+
+        // Create a speed-based transaction that would normally be bumped on regular networks
+        let tx_data = EvmTransactionData {
+            speed: Some(Speed::Fast),
+            gas_limit: Some(21000),
+            value: U256::from(1_000_000_000_000_000_000u128), // 1 ETH
+            ..Default::default()
+        };
+
+        let result = pc.calculate_bumped_gas_price(&tx_data, &relayer).await;
+
+        assert!(result.is_ok());
+        let price_params = result.unwrap();
+
+        // For Arbitrum networks (is_arbitrum() == true), should skip bump and use current market prices
+        assert_eq!(
+            price_params.is_min_bumped,
+            Some(true),
+            "Arbitrum networks should skip bumping and use current market prices"
+        );
+
+        // Should return pricing based on current market conditions, not bumped prices
+        assert!(
+            price_params.max_priority_fee_per_gas.is_some() || price_params.gas_price.is_some(),
+            "Should return some form of pricing"
+        );
+
+        // Should have calculated total cost
+        assert!(
+            price_params.total_cost > U256::ZERO,
+            "Should have non-zero total cost"
+        );
+
+        // Verify that the prices returned are based on current market (Speed::Fast)
+        // and not bumped versions of existing transaction prices
+        if let Some(priority_fee) = price_params.max_priority_fee_per_gas {
+            // For Speed::Fast, should be around 30_000_000 (0.03 Gwei) based on our mock
+            assert!(
+                priority_fee <= 50_000_000, // Should be reasonable for current market, not a bump
+                "Priority fee should be based on current market, not bumped: {}",
+                priority_fee
+            );
+        }
     }
 }
