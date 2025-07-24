@@ -474,10 +474,10 @@ mod tests {
     use secrets::SecretVec;
     use std::sync::Arc;
 
-    fn create_test_signer(id: &str) -> SignerRepoModel {
+    fn create_local_signer(id: &str) -> SignerRepoModel {
         SignerRepoModel {
             id: id.to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         }
@@ -533,7 +533,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_serialize_deserialize_signer() {
         let repo = setup_test_repo().await;
-        let signer = create_test_signer("test-signer");
+        let signer = create_local_signer("test-signer");
 
         let serialized = repo.serialize_entity(&signer, |s| &s.id, "signer").unwrap();
         let deserialized: SignerRepoModel = repo
@@ -541,8 +541,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(signer.id, deserialized.id);
-        assert!(matches!(signer.config, SignerConfig::Test(_)));
-        assert!(matches!(deserialized.config, SignerConfig::Test(_)));
+        assert!(matches!(signer.config, SignerConfig::Local(_)));
+        assert!(matches!(deserialized.config, SignerConfig::Local(_)));
     }
 
     #[tokio::test]
@@ -550,7 +550,7 @@ mod tests {
     async fn test_create_signer() {
         let repo = setup_test_repo().await;
         let signer_name = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_name);
+        let signer = create_local_signer(&signer_name);
 
         let result = repo.create(signer).await;
         assert!(result.is_ok());
@@ -564,7 +564,7 @@ mod tests {
     async fn test_get_signer() {
         let repo = setup_test_repo().await;
         let signer_name = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_name);
+        let signer = create_local_signer(&signer_name);
 
         // Create the signer first
         repo.create(signer.clone()).await.unwrap();
@@ -572,7 +572,7 @@ mod tests {
         // Get the signer
         let retrieved = repo.get_by_id(signer_name.clone()).await.unwrap();
         assert_eq!(retrieved.id, signer.id);
-        assert!(matches!(retrieved.config, SignerConfig::Test(_)));
+        assert!(matches!(retrieved.config, SignerConfig::Local(_)));
     }
 
     #[tokio::test]
@@ -590,7 +590,7 @@ mod tests {
     async fn test_update_signer() {
         let repo = setup_test_repo().await;
         let signer_name = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_name);
+        let signer = create_local_signer(&signer_name);
 
         // Create the signer first
         repo.create(signer.clone()).await.unwrap();
@@ -616,7 +616,7 @@ mod tests {
     async fn test_delete_signer() {
         let repo = setup_test_repo().await;
         let signer_name = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_name);
+        let signer = create_local_signer(&signer_name);
 
         // Create the signer first
         repo.create(signer).await.unwrap();
@@ -640,8 +640,8 @@ mod tests {
         let repo = setup_test_repo().await;
         let signer1_name = uuid::Uuid::new_v4().to_string();
         let signer2_name = uuid::Uuid::new_v4().to_string();
-        let signer1 = create_test_signer(&signer1_name);
-        let signer2 = create_test_signer(&signer2_name);
+        let signer1 = create_local_signer(&signer1_name);
+        let signer2 = create_local_signer(&signer2_name);
 
         // Create signers
         repo.create(signer1).await.unwrap();
@@ -663,7 +663,7 @@ mod tests {
         let initial_count = repo.count().await.unwrap();
 
         let signer_name = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_name);
+        let signer = create_local_signer(&signer_name);
 
         // Create a signer
         repo.create(signer).await.unwrap();
@@ -679,8 +679,8 @@ mod tests {
         let repo = setup_test_repo().await;
         let signer1_name = uuid::Uuid::new_v4().to_string();
         let signer2_name = uuid::Uuid::new_v4().to_string();
-        let signer1 = create_test_signer(&signer1_name);
-        let signer2 = create_test_signer(&signer2_name);
+        let signer1 = create_local_signer(&signer1_name);
+        let signer2 = create_local_signer(&signer2_name);
 
         // Create signers
         repo.create(signer1).await.unwrap();
@@ -704,7 +704,7 @@ mod tests {
     async fn test_duplicate_signer_creation() {
         let repo = setup_test_repo().await;
         let signer_name = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_name);
+        let signer = create_local_signer(&signer_name);
 
         // Create the signer first time
         repo.create(signer.clone()).await.unwrap();
@@ -746,7 +746,7 @@ mod tests {
         let repo = setup_test_repo().await;
         let signer = SignerRepoModel {
             id: "".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         };
@@ -763,7 +763,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_update_nonexistent_signer() {
         let repo = setup_test_repo().await;
-        let signer = create_test_signer("nonexistent-id");
+        let signer = create_local_signer("nonexistent-id");
 
         let result = repo.update("nonexistent-id".to_string(), signer).await;
         assert!(result.is_err());
@@ -785,13 +785,13 @@ mod tests {
     async fn test_update_with_mismatched_id() {
         let repo = setup_test_repo().await;
         let signer_name = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_name);
+        let signer = create_local_signer(&signer_name);
 
         // Create the signer first
         repo.create(signer).await.unwrap();
 
         // Try to update with different ID
-        let updated_signer = create_test_signer("different-id");
+        let updated_signer = create_local_signer("different-id");
         let result = repo.update(signer_name, updated_signer).await;
         assert!(result.is_err());
         assert!(result
@@ -806,7 +806,7 @@ mod tests {
         let repo = setup_test_repo().await;
 
         let signer_id = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_id);
+        let signer = create_local_signer(&signer_id);
         repo.create(signer.clone()).await.unwrap();
         assert!(repo.has_entries().await.unwrap());
     }
@@ -816,7 +816,7 @@ mod tests {
     async fn test_drop_all_entries() {
         let repo = setup_test_repo().await;
         let signer_id = uuid::Uuid::new_v4().to_string();
-        let signer = create_test_signer(&signer_id);
+        let signer = create_local_signer(&signer_id);
 
         repo.create(signer.clone()).await.unwrap();
         assert!(repo.has_entries().await.unwrap());

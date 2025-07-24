@@ -23,7 +23,7 @@ pub use error::*;
 mod pagination;
 pub use pagination::*;
 
-mod signer;
+pub mod signer;
 pub use signer::*;
 
 mod address;

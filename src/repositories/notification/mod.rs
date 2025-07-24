@@ -274,7 +274,6 @@ mod tests {
         // Create notification first
         storage.create(notification.clone()).await?;
 
-        // Update it - should return NotSupported error
         let mut updated_notification = notification.clone();
         updated_notification.url = "https://updated.webhook.com".to_string();
 
@@ -284,13 +283,13 @@ mod tests {
                 updated_notification.clone(),
             )
             .await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RepositoryError::NotSupported(_) => {
-                // Expected error
-            }
-            _ => panic!("Expected NotSupported error"),
-        }
+        assert!(result.is_ok());
+        let updated = result.unwrap();
+        assert_eq!(updated.url, "https://updated.webhook.com");
+
+        // Verify the update persisted
+        let retrieved = storage.get_by_id("test-notification".to_string()).await?;
+        assert_eq!(retrieved.url, "https://updated.webhook.com");
 
         Ok(())
     }
@@ -320,15 +319,12 @@ mod tests {
         let retrieved = storage.get_by_id("test-notification".to_string()).await?;
         assert_eq!(retrieved.id, "test-notification");
 
-        // Delete it - should return NotSupported error
         let result = storage.delete_by_id("test-notification".to_string()).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RepositoryError::NotSupported(_) => {
-                // Expected error
-            }
-            _ => panic!("Expected NotSupported error"),
-        }
+        assert!(result.is_ok());
+
+        // Verify it's gone
+        let get_result = storage.get_by_id("test-notification".to_string()).await;
+        assert!(matches!(get_result, Err(RepositoryError::NotFound(_))));
 
         Ok(())
     }
@@ -363,19 +359,13 @@ mod tests {
         let count_after_two = storage.count().await?;
         assert_eq!(count_after_two, 2);
 
-        // Try to delete one - should return NotSupported error
+        // Delete one - should now succeed
         let delete_result = storage.delete_by_id("notification-1".to_string()).await;
-        assert!(delete_result.is_err());
-        match delete_result.unwrap_err() {
-            RepositoryError::NotSupported(_) => {
-                // Expected error
-            }
-            _ => panic!("Expected NotSupported error"),
-        }
+        assert!(delete_result.is_ok());
 
-        // Count should remain the same since delete is not supported
-        let count_after_delete_attempt = storage.count().await?;
-        assert_eq!(count_after_delete_attempt, 2);
+        // Count should decrease after successful delete
+        let count_after_delete = storage.count().await?;
+        assert_eq!(count_after_delete, 1);
 
         Ok(())
     }
@@ -395,19 +385,13 @@ mod tests {
         let has_entries_after_create = storage.has_entries().await?;
         assert!(has_entries_after_create);
 
-        // Try to delete notification - should return NotSupported error
+        // Delete notification - should now succeed
         let delete_result = storage.delete_by_id("test-notification".to_string()).await;
-        assert!(delete_result.is_err());
-        match delete_result.unwrap_err() {
-            RepositoryError::NotSupported(_) => {
-                // Expected error
-            }
-            _ => panic!("Expected NotSupported error"),
-        }
+        assert!(delete_result.is_ok());
 
-        // Should still have entries since delete is not supported
-        let has_entries_after_delete_attempt = storage.has_entries().await?;
-        assert!(has_entries_after_delete_attempt);
+        // Should no longer have entries after successful delete
+        let has_entries_after_delete = storage.has_entries().await?;
+        assert!(!has_entries_after_delete);
 
         Ok(())
     }
@@ -481,34 +465,28 @@ mod tests {
         let retrieved = storage.get_by_id("workflow-test".to_string()).await?;
         assert_eq!(retrieved.id, "workflow-test");
 
-        // 5. Try to update it - should return NotSupported error
+        // 5. Update it - should now succeed
         let mut updated = retrieved.clone();
         updated.url = "https://updated.example.com".to_string();
         let update_result = storage.update("workflow-test".to_string(), updated).await;
-        assert!(update_result.is_err());
-        match update_result.unwrap_err() {
-            RepositoryError::NotSupported(_) => {
-                // Expected error
-            }
-            _ => panic!("Expected NotSupported error"),
-        }
+        assert!(update_result.is_ok());
+        let updated_notification = update_result.unwrap();
+        assert_eq!(updated_notification.url, "https://updated.example.com");
 
-        // 6. Try to delete it - should return NotSupported error
+        // 6. Verify the update persisted
+        let after_update = storage.get_by_id("workflow-test".to_string()).await?;
+        assert_eq!(after_update.url, "https://updated.example.com");
+
+        // 7. Delete it - should now succeed
         let delete_result = storage.delete_by_id("workflow-test".to_string()).await;
-        assert!(delete_result.is_err());
-        match delete_result.unwrap_err() {
-            RepositoryError::NotSupported(_) => {
-                // Expected error
-            }
-            _ => panic!("Expected NotSupported error"),
-        }
+        assert!(delete_result.is_ok());
 
-        // 7. Verify it still exists since delete is not supported
-        assert!(storage.has_entries().await?);
-        assert_eq!(storage.count().await?, 1);
+        // 8. Verify it's gone
+        assert!(!storage.has_entries().await?);
+        assert_eq!(storage.count().await?, 0);
 
         let result = storage.get_by_id("workflow-test".to_string()).await;
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
 
         Ok(())
     }
