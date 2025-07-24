@@ -10,14 +10,15 @@ pub mod mockutils {
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
         models::{
-            AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfig,
+            ApiKeyModel, AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfig,
             NetworkRepoModel, NetworkTransactionData, NetworkType, PluginModel, RelayerEvmPolicy,
             RelayerNetworkPolicy, RelayerRepoModel, SignerConfig, SignerRepoModel,
             TransactionRepoModel, TransactionStatus,
         },
         repositories::{
-            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-            PluginRepositoryTrait, RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
+            ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
+            NotificationRepositoryStorage, PluginRepositoryStorage, PluginRepositoryTrait,
+            RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
             TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
@@ -97,6 +98,7 @@ pub mod mockutils {
     }
 
     pub async fn create_mock_app_state(
+        api_keys: Option<Vec<ApiKeyModel>>,
         relayers: Option<Vec<RelayerRepoModel>>,
         signers: Option<Vec<SignerRepoModel>>,
         networks: Option<Vec<NetworkRepoModel>>,
@@ -111,6 +113,7 @@ pub mod mockutils {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
+        ApiKeyRepositoryStorage,
     > {
         let relayer_repository = Arc::new(RelayerRepositoryStorage::new_in_memory());
         if let Some(relayers) = relayers {
@@ -147,6 +150,13 @@ pub mod mockutils {
             }
         }
 
+        let api_key_repository = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+        if let Some(api_keys) = api_keys {
+            for api_key in api_keys {
+                api_key_repository.create(api_key).await.unwrap();
+            }
+        }
+
         let mut mock_job_producer = MockJobProducerTrait::new();
 
         mock_job_producer
@@ -180,6 +190,7 @@ pub mod mockutils {
             ),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
+            api_key_repository,
         }
     }
 

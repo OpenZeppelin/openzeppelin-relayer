@@ -7,9 +7,9 @@ use crate::{
     jobs::{self, Queue},
     models::{AppState, DefaultAppState},
     repositories::{
-        NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-        RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
-        TransactionRepositoryStorage,
+        ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
+        PluginRepositoryStorage, RelayerRepositoryStorage, SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
 };
 use actix_web::web;
@@ -26,6 +26,7 @@ pub struct RepositoryCollection {
     pub network: Arc<NetworkRepositoryStorage>,
     pub transaction_counter: Arc<TransactionCounterRepositoryStorage>,
     pub plugin: Arc<PluginRepositoryStorage>,
+    pub api_key: Arc<ApiKeyRepositoryStorage>,
 }
 
 /// Initializes repositories based on the server configuration
@@ -45,6 +46,7 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
             network: Arc::new(NetworkRepositoryStorage::new_in_memory()),
             transaction_counter: Arc::new(TransactionCounterRepositoryStorage::new_in_memory()),
             plugin: Arc::new(PluginRepositoryStorage::new_in_memory()),
+            api_key: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
         },
         RepositoryStorageType::Redis => {
             warn!("Redis repository storage support is experimental");
@@ -88,6 +90,10 @@ pub async fn initialize_repositories(config: &ServerConfig) -> eyre::Result<Repo
                     config.redis_key_prefix.clone(),
                 )?),
                 plugin: Arc::new(PluginRepositoryStorage::new_redis(
+                    connection_manager.clone(),
+                    config.redis_key_prefix.clone(),
+                )?),
+                api_key: Arc::new(ApiKeyRepositoryStorage::new_redis(
                     connection_manager,
                     config.redis_key_prefix.clone(),
                 )?),
@@ -126,6 +132,7 @@ pub async fn initialize_app_state(
         transaction_counter_store: repositories.transaction_counter,
         job_producer,
         plugin_repository: repositories.plugin,
+        api_key_repository: repositories.api_key,
     });
 
     Ok(app_state)
