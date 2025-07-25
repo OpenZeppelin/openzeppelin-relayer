@@ -4,7 +4,7 @@
 //! - Create api keys
 //! - List api keys
 //! - Delete api keys
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -17,13 +17,13 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
 };
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 use actix_web::HttpResponse;
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 use chrono::Utc;
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 use eyre::Result;
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 use uuid::Uuid;
 
 /// Create api key
@@ -39,7 +39,7 @@ use uuid::Uuid;
 /// # Returns
 ///
 /// The result of the plugin call.
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 pub async fn create_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     api_key_request: ApiKeyRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -83,7 +83,7 @@ where
 /// # Returns
 ///
 /// The result of the api key list.
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 pub async fn list_api_keys<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     query: PaginationQuery,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -132,7 +132,7 @@ where
 /// * `api_key_id` - The id of the api key.
 /// * `state` - The application state containing the api key repository.
 ///
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 pub async fn get_api_key_permissions<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     api_key_id: String,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -165,7 +165,7 @@ where
 ///
 /// If the API key is the last Admin API key in the system, it will return an error.
 ///
-#[cfg(feature = "api-keys")]
+#[cfg(feature = "authV2")]
 pub async fn delete_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     api_key_id: String,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
