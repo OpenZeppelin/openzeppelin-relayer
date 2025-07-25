@@ -76,6 +76,7 @@ secrets = { version = "1.2"}
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
+aes-gcm = "0.10"
 ed25519-dalek = "2.1"
 stellar-strkey = "0.0.13"
 soroban-rs = "0.2.5"
@@ -119,6 +120,18 @@ path = "helpers/generate_uuid.rs"
 [[example]]
 name = "generate_openapi"
 path = "helpers/generate_openapi.rs"
+
+[[example]]
+name = "test_encryption"
+path = "helpers/test_encryption.rs"
+
+[[example]]
+name = "test_signer_encryption"
+path = "helpers/test_signer_encryption.rs"
+
+[[example]]
+name = "test_storage_encryption"
+path = "helpers/test_storage_encryption.rs"
 
 [lib]
 path = "src/lib.rs"

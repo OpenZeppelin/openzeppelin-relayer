@@ -264,9 +264,11 @@ mod tests {
         // Create local signer first
         let test_signer = crate::models::SignerRepoModel {
             id: "test-signer".to_string(),
-            config: crate::models::SignerConfig::Local(crate::models::LocalSignerConfig {
-                raw_key: secrets::SecretVec::new(32, |v| v.copy_from_slice(&[0u8; 32])),
-            }),
+            config: crate::models::SignerConfigStorage::Local(
+                crate::models::LocalSignerConfigStorage {
+                    raw_key: secrets::SecretVec::new(32, |v| v.copy_from_slice(&[0u8; 32])),
+                },
+            ),
         };
         signer_repo.create(test_signer).await.unwrap();
 

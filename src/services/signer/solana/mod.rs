@@ -38,8 +38,8 @@ use crate::{
         SignTypedDataRequest,
     },
     models::{
-        Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
-        TransactionRepoModel, VaultSignerConfig,
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerConfig,
+        SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
     services::{GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
 };
@@ -132,7 +132,7 @@ pub struct SolanaSignerFactory;
 
 impl SolanaSignerFactory {
     pub fn create_solana_signer(
-        signer_model: &SignerRepoModel,
+        signer_model: &SignerDomainModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
         let signer = match &signer_model.config {
             SignerConfig::Local(_) => SolanaSigner::Local(LocalSigner::new(signer_model)?),
@@ -209,7 +209,8 @@ mod solana_signer_factory_tests {
     use crate::models::{
         AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
         GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, SecretString, SignerConfig,
-        SignerRepoModel, SolanaTransactionData, TurnkeySignerConfig, VaultTransitSignerConfig,
+        SignerRepoModel, SolanaTransactionData, TurnkeySignerConfig, VaultSignerConfig,
+        VaultTransitSignerConfig,
     };
     use mockall::predicate::*;
     use secrets::SecretVec;
@@ -229,7 +230,7 @@ mod solana_signer_factory_tests {
 
     #[test]
     fn test_create_solana_signer_local() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -246,7 +247,7 @@ mod solana_signer_factory_tests {
 
     #[test]
     fn test_create_solana_signer_test() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -263,7 +264,7 @@ mod solana_signer_factory_tests {
 
     #[test]
     fn test_create_solana_signer_vault() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Vault(VaultSignerConfig {
                 address: "https://vault.test.com".to_string(),
@@ -285,7 +286,7 @@ mod solana_signer_factory_tests {
 
     #[test]
     fn test_create_solana_signer_vault_transit() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
                 key_name: "test".to_string(),
@@ -308,7 +309,7 @@ mod solana_signer_factory_tests {
 
     #[test]
     fn test_create_solana_signer_turnkey() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Turnkey(TurnkeySignerConfig {
                 api_private_key: SecretString::new("api_private_key"),
@@ -329,7 +330,7 @@ mod solana_signer_factory_tests {
 
     #[tokio::test]
     async fn test_create_solana_signer_google_cloud_kms() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountConfig {
@@ -363,7 +364,7 @@ mod solana_signer_factory_tests {
 
     #[tokio::test]
     async fn test_address_solana_signer_local() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -380,7 +381,7 @@ mod solana_signer_factory_tests {
 
     #[tokio::test]
     async fn test_address_solana_signer_vault_transit() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
                 key_name: "test".to_string(),
@@ -405,7 +406,7 @@ mod solana_signer_factory_tests {
 
     #[tokio::test]
     async fn test_address_solana_signer_turnkey() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Turnkey(TurnkeySignerConfig {
                 api_private_key: SecretString::new("api_private_key"),
@@ -429,7 +430,7 @@ mod solana_signer_factory_tests {
 
     #[tokio::test]
     async fn test_address_solana_signer_google_cloud_kms() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountConfig {
@@ -464,7 +465,7 @@ mod solana_signer_factory_tests {
 
     #[tokio::test]
     async fn test_sign_solana_signer_local() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -480,7 +481,7 @@ mod solana_signer_factory_tests {
 
     #[tokio::test]
     async fn test_sign_solana_signer_test() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),

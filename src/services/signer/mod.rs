@@ -41,8 +41,8 @@ pub use stellar::*;
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
     models::{
-        Address, NetworkTransactionData, NetworkType, SignerError, SignerFactoryError,
-        SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
+        Address, NetworkTransactionData, NetworkType, Signer as SignerDomainModel, SignerError,
+        SignerFactoryError, SignerType, TransactionError, TransactionRepoModel,
     },
 };
 
@@ -134,7 +134,7 @@ pub struct SignerFactory;
 impl SignerFactory {
     pub async fn create_signer(
         network_type: &NetworkType,
-        signer_model: &SignerRepoModel,
+        signer_model: &SignerDomainModel,
     ) -> Result<NetworkSigner, SignerFactoryError> {
         let signer = match network_type {
             NetworkType::Evm => {

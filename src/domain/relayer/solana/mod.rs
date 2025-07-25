@@ -52,7 +52,7 @@ pub async fn create_solana_relayer<
         &network,
         relayer.custom_rpc_urls.clone(),
     )?);
-    let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
+    let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer.into())?);
     let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
     let rpc_methods = SolanaRpcMethodsImpl::new(
         relayer.clone(),

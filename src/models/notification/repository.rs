@@ -9,7 +9,10 @@
 //! Acts as the bridge between the domain layer and actual data storage implementations
 //! (in-memory, Redis, etc.), ensuring consistent data representation across repositories.
 
-use crate::models::{notification::Notification, NotificationType, NotificationValidationError};
+use crate::models::{
+    notification::Notification, NotificationType, NotificationValidationError, SecretString,
+};
+use crate::utils::{deserialize_option_secret_string, serialize_option_secret_string};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -18,7 +21,11 @@ pub struct NotificationRepoModel {
     pub id: String,
     pub notification_type: NotificationType,
     pub url: String,
-    pub signing_key: Option<crate::models::SecretString>,
+    #[serde(
+        serialize_with = "serialize_option_secret_string",
+        deserialize_with = "deserialize_option_secret_string"
+    )]
+    pub signing_key: Option<SecretString>,
 }
 
 impl From<Notification> for NotificationRepoModel {

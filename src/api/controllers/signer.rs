@@ -230,10 +230,11 @@ mod tests {
     use super::*;
     use crate::{
         models::{
-            AwsKmsSignerRequestConfig, GoogleCloudKmsSignerKeyRequestConfig,
-            GoogleCloudKmsSignerRequestConfig, GoogleCloudKmsSignerServiceAccountRequestConfig,
-            LocalSignerConfig, LocalSignerRequestConfig, SignerConfig, SignerConfigRequest,
-            SignerType, SignerTypeRequest, TurnkeySignerRequestConfig, VaultSignerRequestConfig,
+            AwsKmsSignerConfigStorage, AwsKmsSignerRequestConfig,
+            GoogleCloudKmsSignerKeyRequestConfig, GoogleCloudKmsSignerRequestConfig,
+            GoogleCloudKmsSignerServiceAccountRequestConfig, LocalSignerConfigStorage,
+            LocalSignerRequestConfig, SignerConfigRequest, SignerConfigStorage, SignerType,
+            SignerTypeRequest, TurnkeySignerRequestConfig, VaultSignerRequestConfig,
         },
         utils::mocks::mockutils::create_mock_app_state,
     };
@@ -242,14 +243,14 @@ mod tests {
     /// Helper function to create a test signer model
     fn create_test_signer_model(id: &str, signer_type: SignerType) -> SignerRepoModel {
         let config = match signer_type {
-            SignerType::Local => SignerConfig::Local(LocalSignerConfig {
+            SignerType::Local => SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
-            SignerType::AwsKms => SignerConfig::AwsKms(crate::models::AwsKmsSignerConfig {
+            SignerType::AwsKms => SignerConfigStorage::AwsKms(AwsKmsSignerConfigStorage {
                 region: Some("us-east-1".to_string()),
                 key_id: "test-key-id".to_string(),
             }),
-            _ => SignerConfig::Local(LocalSignerConfig {
+            _ => SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         };
@@ -967,7 +968,7 @@ mod tests {
     async fn test_signer_response_conversion() {
         let signer_model = SignerRepoModel {
             id: "test-id".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         };

@@ -18,7 +18,10 @@ use crate::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
         SignTypedDataRequest,
     },
-    models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, VaultSignerConfig},
+    models::{
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError, SignerRepoModel,
+        VaultSignerConfig,
+    },
     services::{
         signer::evm::{local_signer::LocalSigner, DataSignerTrait},
         vault::{VaultService, VaultServiceTrait},
@@ -131,7 +134,7 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
     async fn load_signer_from_vault(&self) -> Result<LocalSigner, SignerError> {
         let raw_key = self.fetch_private_key().await?;
         let local_config = crate::models::LocalSignerConfig { raw_key };
-        let local_model = SignerRepoModel {
+        let local_model = SignerDomainModel {
             id: self.key_name.clone(),
             config: crate::models::SignerConfig::Local(local_config),
         };

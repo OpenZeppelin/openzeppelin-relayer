@@ -22,8 +22,8 @@ use crate::{
         ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
-        RelayerResponse, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
-        TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
+        RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
+        TransactionRepoModel, TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -185,9 +185,12 @@ where
     let mut relayer_model = RelayerRepoModel::from(relayer);
 
     // get address from signer and set it to relayer model
-    let signer_service = SignerFactory::create_signer(&relayer_model.network_type, &signer_model)
-        .await
-        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+    let signer_service = SignerFactory::create_signer(
+        &relayer_model.network_type,
+        &SignerDomainModel::from(signer_model.clone()),
+    )
+    .await
+    .map_err(|e| ApiError::InternalError(e.to_string()))?;
     let address = signer_service
         .address()
         .await

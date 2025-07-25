@@ -15,8 +15,8 @@ mod repository;
 pub use repository::{
     AwsKmsSignerConfigStorage, GoogleCloudKmsSignerConfigStorage,
     GoogleCloudKmsSignerKeyConfigStorage, GoogleCloudKmsSignerServiceAccountConfigStorage,
-    LocalSignerConfigStorage, SignerConfigStorage, SignerRepoModel, SignerRepoModelStorage,
-    TurnkeySignerConfigStorage, VaultSignerConfigStorage, VaultTransitSignerConfigStorage,
+    LocalSignerConfigStorage, SignerConfigStorage, SignerRepoModel, TurnkeySignerConfigStorage,
+    VaultSignerConfigStorage, VaultTransitSignerConfigStorage,
 };
 
 mod config;

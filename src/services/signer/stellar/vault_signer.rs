@@ -13,9 +13,13 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use zeroize::Zeroizing;
 
+use crate::models::{LocalSignerConfig, SignerConfig};
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
-    models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, VaultSignerConfig},
+    models::{
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
+        VaultSignerConfig,
+    },
     services::{
         signer::stellar::local_signer::LocalSigner,
         vault::{VaultService, VaultServiceTrait},
@@ -127,10 +131,10 @@ impl<T: VaultServiceTrait + Clone> VaultSigner<T> {
     /// Loads a new signer from vault
     async fn load_signer_from_vault(&self) -> Result<LocalSigner, SignerError> {
         let raw_key = self.fetch_private_key().await?;
-        let local_config = crate::models::LocalSignerConfig { raw_key };
-        let local_model = SignerRepoModel {
+        let local_config = LocalSignerConfig { raw_key };
+        let local_model = SignerDomainModel {
             id: self.key_name.clone(),
-            config: crate::models::SignerConfig::Local(local_config),
+            config: SignerConfig::Local(local_config),
         };
 
         LocalSigner::new(&local_model)
