@@ -143,4 +143,323 @@ impl PartialEq for ApiKeyModel {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    use chrono::Utc;
+
+    // Helper function to create a test api key
+    fn create_test_api_key(
+        id: &str,
+        name: &str,
+        value: &str,
+        allowed_origins: &[&str],
+        permissions: &[&str],
+    ) -> ApiKeyModel {
+        ApiKeyModel {
+            id: id.to_string(),
+            name: name.to_string(),
+            value: value.to_string(),
+            allowed_origins: allowed_origins.iter().map(|s| s.to_string()).collect(),
+            permissions: permissions.iter().map(|s| s.to_string()).collect(),
+            created_at: Utc::now().to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_get_by_id_existing() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+        let api_key = create_test_api_key(
+            "test-api-key",
+            "test-name",
+            "test-value",
+            &["*"],
+            &["relayer:all:execute"],
+        );
+
+        // Add the api key first
+        storage.create(api_key.clone()).await.unwrap();
+
+        // Get the api key
+        let result = storage.get_by_id("test-api-key").await.unwrap();
+        assert_eq!(result, Some(api_key));
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_get_by_id_non_existing() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        let result = storage.get_by_id("non-existent").await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_add_success() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+        let api_key = create_test_api_key(
+            "test-api-key",
+            "test-name",
+            "test-value",
+            &["*"],
+            &["relayer:all:execute"],
+        );
+
+        let result = storage.create(api_key).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_add_duplicate() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+        let api_key = create_test_api_key(
+            "test-api-key",
+            "test-name",
+            "test-value",
+            &["*"],
+            &["relayer:all:execute"],
+        );
+
+        // Add the api key first time
+        storage.create(api_key.clone()).await.unwrap();
+
+        // Try to add the same api key again - should succeed (overwrite)
+        let result = storage.create(api_key).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_count_empty() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        let count = storage.count().await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_count_with_api_keys() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        // Add multiple plugins
+        storage
+            .create(create_test_api_key(
+                "api-key1",
+                "test-name1",
+                "test-value1",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+        storage
+            .create(create_test_api_key(
+                "api-key2",
+                "test-name2",
+                "test-value2",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+        storage
+            .create(create_test_api_key(
+                "api-key3",
+                "test-name3",
+                "test-value3",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+
+        let count = storage.count().await.unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_has_entries_empty() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        let has_entries = storage.has_entries().await.unwrap();
+        assert!(!has_entries);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_has_entries_with_api_keys() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        storage
+            .create(create_test_api_key(
+                "api-key1",
+                "test-name1",
+                "test-value1",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+
+        let has_entries = storage.has_entries().await.unwrap();
+        assert!(has_entries);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_drop_all_entries_empty() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        let result = storage.drop_all_entries().await;
+        assert!(result.is_ok());
+
+        let count = storage.count().await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_drop_all_entries_with_api_keys() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        // Add multiple plugins
+        storage
+            .create(create_test_api_key(
+                "api-key1",
+                "test-name1",
+                "test-value1",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+        storage
+            .create(create_test_api_key(
+                "api-key2",
+                "test-name2",
+                "test-value2",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+
+        let result = storage.drop_all_entries().await;
+        assert!(result.is_ok());
+
+        let count = storage.count().await.unwrap();
+        assert_eq!(count, 0);
+
+        let has_entries = storage.has_entries().await.unwrap();
+        assert!(!has_entries);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_list_paginated_empty() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = storage.list_paginated(query).await.unwrap();
+
+        assert_eq!(result.items.len(), 0);
+        assert_eq!(result.total, 0);
+        assert_eq!(result.page, 1);
+        assert_eq!(result.per_page, 10);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_list_paginated_with_api_keys() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        // Add multiple plugins
+        storage
+            .create(create_test_api_key(
+                "api-key1",
+                "test-name1",
+                "test-value1",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+        storage
+            .create(create_test_api_key(
+                "api-key2",
+                "test-name2",
+                "test-value2",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+        storage
+            .create(create_test_api_key(
+                "api-key3",
+                "test-name3",
+                "test-value3",
+                &["*"],
+                &["relayer:all:execute"],
+            ))
+            .await
+            .unwrap();
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 2,
+        };
+        let result = storage.list_paginated(query).await.unwrap();
+
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.total, 3);
+        assert_eq!(result.page, 1);
+        assert_eq!(result.per_page, 2);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_workflow() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        // Initially empty
+        assert!(!storage.has_entries().await.unwrap());
+        assert_eq!(storage.count().await.unwrap(), 0);
+
+        // Add plugins
+        let api_key1 = create_test_api_key(
+            "api-key1",
+            "test-name1",
+            "test-value1",
+            &["*"],
+            &["relayer:all:execute"],
+        );
+        let api_key2 = create_test_api_key(
+            "api-key2",
+            "test-name2",
+            "test-value2",
+            &["*"],
+            &["relayer:all:execute"],
+        );
+
+        storage.create(api_key1.clone()).await.unwrap();
+        storage.create(api_key2.clone()).await.unwrap();
+
+        // Check state
+        assert!(storage.has_entries().await.unwrap());
+        assert_eq!(storage.count().await.unwrap(), 2);
+
+        // Retrieve specific plugin
+        let retrieved = storage.get_by_id("api-key1").await.unwrap();
+        assert_eq!(retrieved, Some(api_key1));
+
+        // List all plugins
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+        let result = storage.list_paginated(query).await.unwrap();
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.total, 2);
+
+        // Clear all plugins
+        storage.drop_all_entries().await.unwrap();
+        assert!(!storage.has_entries().await.unwrap());
+        assert_eq!(storage.count().await.unwrap(), 0);
+    }
+}

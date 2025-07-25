@@ -123,4 +123,181 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use chrono::Utc;
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_in_memory_api_key_repository() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+
+        // Test add and get_by_id
+        let api_key = ApiKeyModel {
+            id: "test-api-key".to_string(),
+            value: "test-value".to_string(),
+            name: "test-name".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
+        };
+        api_key_repository.create(api_key.clone()).await.unwrap();
+        assert_eq!(
+            api_key_repository.get_by_id("test-api-key").await.unwrap(),
+            Some(api_key)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_api_key() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+
+        let result = api_key_repository.get_by_id("test-api-key").await;
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+
+        let api_key = ApiKeyModel {
+            id: "test-api-key".to_string(),
+            value: "test-value".to_string(),
+            name: "test-name".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
+        };
+        api_key_repository.create(api_key.clone()).await.unwrap();
+        assert_eq!(
+            api_key_repository.get_by_id("test-api-key").await.unwrap(),
+            Some(api_key)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_paginated_api_keys() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+
+        let api_key1 = ApiKeyModel {
+            id: "test-api-key1".to_string(),
+            value: "test-value1".to_string(),
+            name: "test-name1".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
+        };
+
+        let api_key2 = ApiKeyModel {
+            id: "test-api-key2".to_string(),
+            value: "test-value2".to_string(),
+            name: "test-name2".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
+        };
+
+        api_key_repository.create(api_key1.clone()).await.unwrap();
+        api_key_repository.create(api_key2.clone()).await.unwrap();
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 2,
+        };
+
+        let result = api_key_repository.list_paginated(query).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_has_entries() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        assert!(!api_key_repository.has_entries().await.unwrap());
+        api_key_repository
+            .create(ApiKeyModel {
+                id: "test-api-key".to_string(),
+                value: "test-value".to_string(),
+                name: "test-name".to_string(),
+                allowed_origins: vec!["*".to_string()],
+                permissions: vec!["relayer:all:execute".to_string()],
+                created_at: Utc::now().to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(api_key_repository.has_entries().await.unwrap());
+        api_key_repository.drop_all_entries().await.unwrap();
+        assert!(!api_key_repository.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_id_api_key() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        api_key_repository
+            .create(ApiKeyModel {
+                id: "test-api-key".to_string(),
+                value: "test-value".to_string(),
+                name: "test-name".to_string(),
+                allowed_origins: vec!["*".to_string()],
+                permissions: vec!["relayer:all:execute".to_string()],
+                created_at: Utc::now().to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(api_key_repository.has_entries().await.unwrap());
+        api_key_repository
+            .delete_by_id("test-api-key")
+            .await
+            .unwrap();
+        assert!(!api_key_repository.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_list_permissions_api_key() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        api_key_repository
+            .create(ApiKeyModel {
+                id: "test-api-key".to_string(),
+                value: "test-value".to_string(),
+                name: "test-name".to_string(),
+                allowed_origins: vec!["*".to_string()],
+                permissions: vec![
+                    "relayer:all:execute".to_string(),
+                    "relayer:all:read".to_string(),
+                ],
+                created_at: Utc::now().to_string(),
+            })
+            .await
+            .unwrap();
+
+        let permissions = api_key_repository
+            .list_permissions("test-api-key")
+            .await
+            .unwrap();
+        assert_eq!(permissions, vec!["relayer:all:execute", "relayer:all:read"]);
+    }
+
+    #[tokio::test]
+    async fn test_drop_all_entries() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        api_key_repository
+            .create(ApiKeyModel {
+                id: "test-api-key".to_string(),
+                value: "test-value".to_string(),
+                name: "test-name".to_string(),
+                allowed_origins: vec!["*".to_string()],
+                permissions: vec!["relayer:all:execute".to_string()],
+                created_at: Utc::now().to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(api_key_repository.has_entries().await.unwrap());
+        api_key_repository.drop_all_entries().await.unwrap();
+        assert!(!api_key_repository.has_entries().await.unwrap());
+    }
+}
