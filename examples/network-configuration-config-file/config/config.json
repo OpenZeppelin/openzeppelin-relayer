@@ -68,7 +68,7 @@
         "https://ethereum-sepolia-public.nodies.app"
       ],
       "symbol": "ETH",
-      "chain_id": 343434324, 
+      "chain_id": 343434324,
       "tags": ["ethereum", "testnet", "custom"]
     }
   ],

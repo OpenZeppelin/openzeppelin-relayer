@@ -29,7 +29,7 @@
         "https://api-sepolia.etherscan.io/api",
         "https://sepolia.etherscan.io"
       ],
-  
+
       "is_testnet": true,
       "network": "sepolia",
       "required_confirmations": 6,
