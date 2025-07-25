@@ -287,4 +287,14 @@ mod tests {
         assert!(Arc::ptr_eq(&store1, &store2));
         assert!(Arc::ptr_eq(&store1, &app_state.plugin_repository));
     }
+
+    #[test]
+    fn test_api_key_repository_getter() {
+        let app_state = create_test_app_state();
+        let repo1 = app_state.api_key_repository();
+        let repo2 = app_state.api_key_repository();
+
+        assert!(Arc::ptr_eq(&repo1, &repo2));
+        assert!(Arc::ptr_eq(&repo1, &app_state.api_key_repository));
+    }
 }
