@@ -270,6 +270,25 @@ cargo test properties
 cargo test integration
 ```
 
+#### Run tests against Redis
+
+1. You can start a Redis instance using the following command:
+
+```bash
+docker run -d \
+  --name redis \
+  -p 6379:6379 \
+  redis:latest
+```
+
+2. Then remove the `#[ignore = "Requires active Redis instance"]` attribute from the tests you want to run.
+
+3. Run the tests using single thread to avoid race conditions within suites:
+
+```bash
+cargo test your_test_regex -- --test-threads=1
+```
+
 ### Config files
 
 Create `config/config.json` file. You can use `config/config.example.json` as a starting point:

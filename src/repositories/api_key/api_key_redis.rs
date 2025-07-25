@@ -122,6 +122,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         }
 
         let key = self.api_key_key(&entity.id);
+        let list_key = self.api_key_list_key();
         let json = self.serialize_entity(&entity, |a| &a.id, "apikey")?;
 
         let mut conn = self.client.as_ref().clone();
@@ -142,6 +143,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
         pipe.set(&key, json);
+        pipe.sadd(&list_key, &entity.id);
 
         pipe.exec_async(&mut conn)
             .await
@@ -295,7 +297,251 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
         Ok(count as usize)
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let plugin_list_key = self.api_key_list_key();
+
+        debug!("Checking if plugin entries exist");
+
+        let exists: bool = conn
+            .exists(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
+
+        debug!("Plugin entries exist: {}", exists);
+        Ok(exists)
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self.client.as_ref().clone();
+        let plugin_list_key = self.api_key_list_key();
+
+        debug!("Dropping all plugin entries");
+
+        // Get all plugin IDs first
+        let plugin_ids: Vec<String> = conn
+            .smembers(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
+
+        if plugin_ids.is_empty() {
+            debug!("No plugin entries to drop");
+            return Ok(());
+        }
+
+        // Use pipeline for atomic operations
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        // Delete all individual plugin entries
+        for plugin_id in &plugin_ids {
+            let plugin_key = self.api_key_key(plugin_id);
+            pipe.del(&plugin_key);
+        }
+
+        // Delete the plugin list key
+        pipe.del(&plugin_list_key);
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
+
+        debug!("Dropped {} plugin entries", plugin_ids.len());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn create_test_api_key(id: &str) -> ApiKeyModel {
+        ApiKeyModel {
+            id: id.to_string(),
+            value: "test-value".to_string(),
+            name: "test-name".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
+        }
+    }
+
+    async fn setup_test_repo() -> RedisApiKeyRepository {
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
+        let mut connection_manager = ConnectionManager::new(client)
+            .await
+            .expect("Failed to create Redis connection manager");
+
+        // Clear the api key list
+        connection_manager
+            .del::<&str, ()>("test_api_key:apikey_list")
+            .await
+            .unwrap();
+
+        RedisApiKeyRepository::new(Arc::new(connection_manager), "test_api_key".to_string())
+            .expect("Failed to create Redis api key repository")
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_new_repository_creation() {
+        let repo = setup_test_repo().await;
+        assert_eq!(repo.key_prefix, "test_api_key");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_new_repository_empty_prefix_fails() {
+        let client =
+            redis::Client::open("redis://127.0.0.1:6379/").expect("Failed to create Redis client");
+        let connection_manager = redis::aio::ConnectionManager::new(client)
+            .await
+            .expect("Failed to create Redis connection manager");
+
+        let result = RedisApiKeyRepository::new(Arc::new(connection_manager), "".to_string());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("key prefix cannot be empty"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_key_generation() {
+        let repo = setup_test_repo().await;
+
+        let api_key_key = repo.api_key_key("test-api-key");
+        assert_eq!(api_key_key, "test_api_key:apikey:test-api-key");
+
+        let list_key = repo.api_key_list_key();
+        assert_eq!(list_key, "test_api_key:apikey_list");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_serialize_deserialize_api_key() {
+        let repo = setup_test_repo().await;
+        let api_key = create_test_api_key("test-api-key");
+
+        let json = repo
+            .serialize_entity(&api_key, |a| &a.id, "apikey")
+            .unwrap();
+        let deserialized: ApiKeyModel = repo
+            .deserialize_entity(&json, &api_key.id, "apikey")
+            .unwrap();
+
+        assert_eq!(api_key.id, deserialized.id);
+        assert_eq!(api_key.value, deserialized.value);
+        assert_eq!(api_key.name, deserialized.name);
+        assert_eq!(api_key.allowed_origins, deserialized.allowed_origins);
+        assert_eq!(api_key.permissions, deserialized.permissions);
+        assert_eq!(api_key.created_at, deserialized.created_at);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_create_api_key() {
+        let repo = setup_test_repo().await;
+        let api_key_id = uuid::Uuid::new_v4().to_string();
+        let api_key = create_test_api_key(&api_key_id);
+
+        let result = repo.create(api_key.clone()).await;
+        assert!(result.is_ok());
+
+        let retrieved = repo.get_by_id(&api_key_id).await.unwrap();
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.id, api_key.id);
+        assert_eq!(retrieved.value, api_key.value);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_nonexistent_api_key() {
+        let repo = setup_test_repo().await;
+
+        let result = repo.get_by_id("nonexistent-api-key").await;
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_error_handling_empty_id() {
+        let repo = setup_test_repo().await;
+
+        let result = repo.get_by_id("").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("ID cannot be empty"));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_by_ids_api_keys() {
+        let repo = setup_test_repo().await;
+        let api_key_id1 = uuid::Uuid::new_v4().to_string();
+        let api_key_id2 = uuid::Uuid::new_v4().to_string();
+        let api_key1 = create_test_api_key(&api_key_id1);
+        let api_key2 = create_test_api_key(&api_key_id2);
+
+        repo.create(api_key1.clone()).await.unwrap();
+        repo.create(api_key2.clone()).await.unwrap();
+
+        let retrieved = repo
+            .get_by_ids(&[api_key1.id.clone(), api_key2.id.clone()])
+            .await
+            .unwrap();
+        assert!(retrieved.results.len() == 2);
+        assert_eq!(retrieved.results[0].id, api_key1.id);
+        assert_eq!(retrieved.results[1].id, api_key2.id);
+        assert_eq!(retrieved.failed_ids.len(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_list_paginated_api_keys() {
+        let repo = setup_test_repo().await;
+
+        let api_key_id1 = uuid::Uuid::new_v4().to_string();
+        let api_key_id2 = uuid::Uuid::new_v4().to_string();
+        let api_key_id3 = uuid::Uuid::new_v4().to_string();
+        let api_key1 = create_test_api_key(&api_key_id1);
+        let api_key2 = create_test_api_key(&api_key_id2);
+        let api_key3 = create_test_api_key(&api_key_id3);
+
+        repo.create(api_key1.clone()).await.unwrap();
+        repo.create(api_key2.clone()).await.unwrap();
+        repo.create(api_key3.clone()).await.unwrap();
+
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 2,
+        };
+
+        let result = repo.list_paginated(query).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        println!("result: {:?}", result);
+        assert!(result.items.len() == 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_has_entries() {
+        let repo = setup_test_repo().await;
+        assert!(!repo.has_entries().await.unwrap());
+        repo.create(create_test_api_key("test-api-key"))
+            .await
+            .unwrap();
+        assert!(repo.has_entries().await.unwrap());
+        repo.drop_all_entries().await.unwrap();
+        assert!(!repo.has_entries().await.unwrap());
+    }
+}

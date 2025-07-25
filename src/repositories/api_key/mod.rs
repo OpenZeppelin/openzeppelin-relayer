@@ -46,6 +46,8 @@ pub trait ApiKeyRepositoryTrait {
     async fn count(&self) -> Result<usize, RepositoryError>;
     async fn list_permissions(&self, api_key_id: &str) -> Result<Vec<String>, RepositoryError>;
     async fn delete_by_id(&self, api_key_id: &str) -> Result<(), RepositoryError>;
+    async fn has_entries(&self) -> Result<bool, RepositoryError>;
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
 }
 
 /// Enum wrapper for different plugin repository implementations
@@ -113,6 +115,20 @@ impl ApiKeyRepositoryTrait for ApiKeyRepositoryStorage {
         match self {
             ApiKeyRepositoryStorage::InMemory(repo) => repo.count().await,
             ApiKeyRepositoryStorage::Redis(repo) => repo.count().await,
+        }
+    }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        match self {
+            ApiKeyRepositoryStorage::InMemory(repo) => repo.has_entries().await,
+            ApiKeyRepositoryStorage::Redis(repo) => repo.has_entries().await,
+        }
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        match self {
+            ApiKeyRepositoryStorage::InMemory(repo) => repo.drop_all_entries().await,
+            ApiKeyRepositoryStorage::Redis(repo) => repo.drop_all_entries().await,
         }
     }
 }

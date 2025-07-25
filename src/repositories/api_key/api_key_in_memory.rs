@@ -109,6 +109,17 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
         store.remove(api_key_id);
         Ok(())
     }
+
+    async fn has_entries(&self) -> Result<bool, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        Ok(!store.is_empty())
+    }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        store.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
