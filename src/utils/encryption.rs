@@ -52,7 +52,6 @@ impl FieldEncryption {
     ///
     /// # Environment Variables
     /// - `STORAGE_ENCRYPTION_KEY`: Base64-encoded 32-byte encryption key
-    /// - `STORAGE_ENCRYPTION_KEY_HEX`: Hex-encoded 32-byte encryption key (alternative)
     ///
     /// # Example
     /// ```bash
@@ -73,35 +72,19 @@ impl FieldEncryption {
 
     /// Loads encryption key from environment variables
     fn load_key_from_env() -> Result<Key<Aes256Gcm>, EncryptionError> {
-        // Try base64-encoded key first
-        if let Ok(key_b64) = env::var("STORAGE_ENCRYPTION_KEY") {
-            let key_bytes = base64_decode(&key_b64).map_err(|e| {
-                EncryptionError::KeyDerivationFailed(format!("Invalid base64 key: {}", e))
-            })?;
+        let key_b64 = env::var("STORAGE_ENCRYPTION_KEY").map_err(|_| {
+            EncryptionError::MissingKey("STORAGE_ENCRYPTION_KEY must be set".to_string())
+        })?;
 
-            if key_bytes.len() != 32 {
-                return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
-            }
+        let key_bytes = base64_decode(&key_b64).map_err(|e| {
+            EncryptionError::KeyDerivationFailed(format!("Invalid base64 key: {}", e))
+        })?;
 
-            return Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes));
+        if key_bytes.len() != 32 {
+            return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
         }
 
-        // Try hex-encoded key as alternative
-        if let Ok(key_hex) = env::var("STORAGE_ENCRYPTION_KEY_HEX") {
-            let key_bytes = hex::decode(&key_hex).map_err(|e| {
-                EncryptionError::KeyDerivationFailed(format!("Invalid hex key: {}", e))
-            })?;
-
-            if key_bytes.len() != 32 {
-                return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
-            }
-
-            return Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes));
-        }
-
-        Err(EncryptionError::MissingKey(
-            "Either STORAGE_ENCRYPTION_KEY (base64) or STORAGE_ENCRYPTION_KEY_HEX (hex) must be set".to_string()
-        ))
+        Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
     }
 
     /// Encrypts plaintext data and returns an EncryptedData structure
@@ -204,7 +187,7 @@ impl FieldEncryption {
 
     /// Checks if encryption is properly configured
     pub fn is_configured() -> bool {
-        env::var("STORAGE_ENCRYPTION_KEY").is_ok() || env::var("STORAGE_ENCRYPTION_KEY_HEX").is_ok()
+        env::var("STORAGE_ENCRYPTION_KEY").is_ok()
     }
 }
 
@@ -380,7 +363,6 @@ mod tests {
         // Test base64 key
         let test_key = FieldEncryption::generate_key();
         env::set_var("STORAGE_ENCRYPTION_KEY", &test_key);
-        env::remove_var("STORAGE_ENCRYPTION_KEY_HEX");
 
         let encryption = FieldEncryption::new().unwrap();
         let plaintext = "test message";
@@ -388,20 +370,12 @@ mod tests {
         let decrypted = encryption.decrypt_string(&encrypted).unwrap();
         assert_eq!(plaintext, decrypted);
 
-        // Test hex key
+        // Test missing key
         env::remove_var("STORAGE_ENCRYPTION_KEY");
-        let key_bytes = base64_decode(&test_key).unwrap();
-        let key_hex = hex::encode(&key_bytes);
-        env::set_var("STORAGE_ENCRYPTION_KEY_HEX", &key_hex);
-
-        let encryption2 = FieldEncryption::new().unwrap();
-        let encrypted2 = encryption2.encrypt_string(plaintext).unwrap();
-        let decrypted2 = encryption2.decrypt_string(&encrypted2).unwrap();
-        assert_eq!(plaintext, decrypted2);
+        assert!(FieldEncryption::new().is_err());
 
         // Clean up
-        env::remove_var("STORAGE_ENCRYPTION_KEY");
-        env::remove_var("STORAGE_ENCRYPTION_KEY_HEX");
+        env::set_var("STORAGE_ENCRYPTION_KEY", &test_key);
     }
 
     #[test]
@@ -422,12 +396,10 @@ mod tests {
 
     #[test]
     fn test_fallback_when_encryption_disabled() {
-        // Temporarily clear encryption keys to test fallback
+        // Temporarily clear encryption key to test fallback
         let old_key = env::var("STORAGE_ENCRYPTION_KEY").ok();
-        let old_hex_key = env::var("STORAGE_ENCRYPTION_KEY_HEX").ok();
 
         env::remove_var("STORAGE_ENCRYPTION_KEY");
-        env::remove_var("STORAGE_ENCRYPTION_KEY_HEX");
 
         let plaintext = "fallback test";
 
@@ -444,9 +416,6 @@ mod tests {
         // Restore original environment
         if let Some(key) = old_key {
             env::set_var("STORAGE_ENCRYPTION_KEY", key);
-        }
-        if let Some(hex_key) = old_hex_key {
-            env::set_var("STORAGE_ENCRYPTION_KEY_HEX", hex_key);
         }
     }
 

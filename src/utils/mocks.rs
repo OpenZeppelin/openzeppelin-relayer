@@ -226,8 +226,9 @@ pub mod mockutils {
             provider_max_failovers: 3,
             repository_storage_type: storage_type,
             reset_storage_on_start: false,
-            storage_encryption_key: None,
-            storage_encryption_key_hex: None,
+            storage_encryption_key: Some(SecretString::new(
+                "test_encryption_key_1234567890_test_key_32",
+            )),
         }
     }
 }

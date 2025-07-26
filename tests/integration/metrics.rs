@@ -31,7 +31,6 @@ async fn test_authorization_middleware_success() {
         repository_storage_type: RepositoryStorageType::InMemory,
         reset_storage_on_start: false,
         storage_encryption_key: None,
-        storage_encryption_key_hex: None,
     });
 
     let app = test::init_service(
@@ -89,7 +88,6 @@ async fn test_authorization_middleware_failure() {
         repository_storage_type: RepositoryStorageType::InMemory,
         reset_storage_on_start: false,
         storage_encryption_key: None,
-        storage_encryption_key_hex: None,
     });
 
     let app = test::init_service(

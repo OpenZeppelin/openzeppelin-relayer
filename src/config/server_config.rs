@@ -62,8 +62,6 @@ pub struct ServerConfig {
     pub reset_storage_on_start: bool,
     /// The encryption key for the storage.
     pub storage_encryption_key: Option<SecretString>,
-    /// The encryption key for the storage in hex format.
-    pub storage_encryption_key_hex: Option<SecretString>,
 }
 
 impl ServerConfig {
@@ -173,9 +171,6 @@ impl ServerConfig {
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
             storage_encryption_key: env::var("STORAGE_ENCRYPTION_KEY")
-                .map(|v| SecretString::new(&v))
-                .ok(),
-            storage_encryption_key_hex: env::var("STORAGE_ENCRYPTION_KEY_HEX")
                 .map(|v| SecretString::new(&v))
                 .ok(),
         }

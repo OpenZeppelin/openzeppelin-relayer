@@ -71,18 +71,6 @@ impl Config {
     /// # Errors
     /// Returns a `ConfigFileError` if any validation checks fail.
     pub fn validate(&self) -> Result<(), ConfigFileError> {
-        if self.relayers.is_empty() && self.signers.is_empty() && self.notifications.is_empty() {
-            return Err(ConfigFileError::MissingField(
-                "config must contain at least one relayer, signer or notification".into(),
-            ));
-        }
-
-        if self.networks.is_empty() {
-            return Err(ConfigFileError::MissingField(
-                "config must contain at least one network".into(),
-            ));
-        }
-
         self.validate_networks()?;
         self.validate_relayers(&self.networks)?;
         self.validate_signers()?;
@@ -286,10 +274,7 @@ mod tests {
             .unwrap(),
             plugins: Some(vec![]),
         };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -316,10 +301,7 @@ mod tests {
             .unwrap(),
             plugins: Some(vec![]),
         };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -1001,40 +983,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_config_validation_failure() {
-        let dir = tempdir().expect("Failed to create temp dir");
-        let config_path = dir.path().join("invalid_validation.json");
-
-        let invalid_config = serde_json::json!({
-            "relayers": [],
-            "signers": [],
-            "notifications": [],
-            "plugins": [],
-            "networks": [{
-                "type": "evm",
-                "network": "test-network",
-                "chain_id": 31337,
-                "required_confirmations": 1,
-                "symbol": "ETH",
-                "rpc_urls": ["https://rpc.test.example.com"]
-            }]
-        });
-
-        setup_config_file(
-            dir.path(),
-            "invalid_validation.json",
-            &invalid_config.to_string(),
-        );
-
-        let result = load_config(config_path.to_str().unwrap());
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
-    }
-
-    #[test]
     fn test_load_config_with_unicode_content() {
         let dir = tempdir().expect("Failed to create temp dir");
         let config_path = dir.path().join("unicode_config.json");
@@ -1266,13 +1214,7 @@ mod tests {
         };
 
         let result = config.validate();
-        // This should fail because SignersFileConfig::validate() requires non-empty signers
-        // but the main Config::validate() also requires non-empty relayers
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1306,12 +1248,7 @@ mod tests {
         };
 
         let result = config.validate();
-        // This should fail because the validation requires non-empty relayers AND signers
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]

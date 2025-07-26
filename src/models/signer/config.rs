@@ -184,7 +184,7 @@ impl SignersFileConfig {
 
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         if self.signers.is_empty() {
-            return Err(ConfigFileError::MissingField("signers".into()));
+            return Ok(());
         }
 
         let mut ids = HashSet::new();
