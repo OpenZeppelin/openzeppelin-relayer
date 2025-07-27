@@ -12,7 +12,10 @@ use std::env;
 use thiserror::Error;
 use zeroize::Zeroize;
 
-use crate::utils::{base64_decode, base64_encode};
+use crate::{
+    models::SecretString,
+    utils::{base64_decode, base64_encode},
+};
 
 #[derive(Error, Debug, Clone)]
 pub enum EncryptionError {
@@ -52,10 +55,6 @@ impl FieldEncryption {
     ///
     /// # Environment Variables
     /// - `STORAGE_ENCRYPTION_KEY`: Base64-encoded 32-byte encryption key
-    ///
-    /// # Example
-    /// ```bash
-    /// export STORAGE_ENCRYPTION_KEY=$(openssl rand -base64 32)
     /// ```
     pub fn new() -> Result<Self, EncryptionError> {
         let key = Self::load_key_from_env()?;
@@ -72,19 +71,22 @@ impl FieldEncryption {
 
     /// Loads encryption key from environment variables
     fn load_key_from_env() -> Result<Key<Aes256Gcm>, EncryptionError> {
-        let key_b64 = env::var("STORAGE_ENCRYPTION_KEY").map_err(|_| {
-            EncryptionError::MissingKey("STORAGE_ENCRYPTION_KEY must be set".to_string())
-        })?;
+        let key = env::var("STORAGE_ENCRYPTION_KEY")
+            .map(|v| SecretString::new(&v))
+            .map_err(|_| {
+                EncryptionError::MissingKey("STORAGE_ENCRYPTION_KEY must be set".to_string())
+            })?;
 
-        let key_bytes = base64_decode(&key_b64).map_err(|e| {
-            EncryptionError::KeyDerivationFailed(format!("Invalid base64 key: {}", e))
-        })?;
+        key.as_str(|key_b64| {
+            let mut key_bytes = base64_decode(key_b64)
+                .map_err(|e| EncryptionError::KeyDerivationFailed(e.to_string()))?;
+            if key_bytes.len() != 32 {
+                key_bytes.zeroize(); // Explicit cleanup on error path
+                return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
+            }
 
-        if key_bytes.len() != 32 {
-            return Err(EncryptionError::InvalidKeyLength(key_bytes.len()));
-        }
-
-        Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
+            Ok(*Key::<Aes256Gcm>::from_slice(&key_bytes))
+        })
     }
 
     /// Encrypts plaintext data and returns an EncryptedData structure
