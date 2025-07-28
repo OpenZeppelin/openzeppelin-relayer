@@ -6,10 +6,9 @@ use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
     jobs::JobProducerTrait,
     models::{
-
-        NetworkRepoModel, NotificationRepoModel, PluginModel, RelayerRepoModel,
+        NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer, RelayerRepoModel,
         Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel, ThinDataAppState,
-        Relayer, TransactionRepoModel,
+        TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
