@@ -139,7 +139,7 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     // Convert request to domain relayer (validates automatically)
-    let relayer = crate::models::Relayer::try_from(request)?;
+    let relayer = RelayerDomainModel::try_from(request)?;
 
     // Check if signer exists
     let signer_model = state
@@ -782,8 +782,9 @@ mod tests {
     use super::*;
     use crate::{
         models::{
-            ApiResponse, CreateRelayerRequest, RelayerNetworkPolicyResponse, RelayerNetworkType,
-            RelayerResponse,
+            ApiResponse, CreateRelayerPolicyRequest, CreateRelayerRequest, RelayerEvmPolicy,
+            RelayerNetworkPolicyResponse, RelayerNetworkType, RelayerResponse,
+            RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy, RelayerStellarPolicy,
         },
         utils::mocks::mockutils::{
             create_mock_app_state, create_mock_network, create_mock_notification,
@@ -931,7 +932,6 @@ mod tests {
         );
 
         // Add EVM policies
-        use crate::models::relayer::{CreateRelayerPolicyRequest, RelayerEvmPolicy};
         request.policies = Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
             gas_price_cap: Some(50000000000),
             min_balance: Some(1000000000000000000),
@@ -981,7 +981,6 @@ mod tests {
         );
 
         // Add partial EVM policies
-        use crate::models::relayer::{CreateRelayerPolicyRequest, RelayerEvmPolicy};
         request.policies = Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
             gas_price_cap: Some(30000000000),
             eip1559_pricing: Some(false),
@@ -1027,10 +1026,6 @@ mod tests {
         );
 
         // Change network type to Solana and add Solana policies
-        use crate::models::relayer::{
-            CreateRelayerPolicyRequest, RelayerNetworkType, RelayerSolanaFeePaymentStrategy,
-            RelayerSolanaPolicy,
-        };
         request.network_type = RelayerNetworkType::Solana;
         request.policies = Some(CreateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
             fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
@@ -1098,9 +1093,6 @@ mod tests {
         );
 
         // Change network type to Stellar and add Stellar policies
-        use crate::models::relayer::{
-            CreateRelayerPolicyRequest, RelayerNetworkType, RelayerStellarPolicy,
-        };
         request.network_type = RelayerNetworkType::Stellar;
         request.policies = Some(CreateRelayerPolicyRequest::Stellar(RelayerStellarPolicy {
             min_balance: Some(10000000),
@@ -1145,9 +1137,6 @@ mod tests {
         );
 
         // Set network type to EVM but provide Solana policies (should fail)
-        use crate::models::relayer::{
-            CreateRelayerPolicyRequest, RelayerNetworkType, RelayerSolanaPolicy,
-        };
         request.network_type = RelayerNetworkType::Evm;
         request.policies = Some(CreateRelayerPolicyRequest::Solana(
             RelayerSolanaPolicy::default(),
