@@ -793,7 +793,7 @@ mod tests {
     use actix_web::body::to_bytes;
     use lazy_static::lazy_static;
     use std::env;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex;
 
     lazy_static! {
         static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -881,10 +881,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_success() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -918,10 +915,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_evm_policies() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -971,10 +965,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_partial_evm_policies() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -1020,10 +1011,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_solana_policies() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_solana_network();
         let signer = create_mock_signer();
@@ -1094,10 +1082,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_stellar_policies() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_stellar_network();
         let signer = create_mock_signer();
@@ -1144,10 +1129,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_policy_type_mismatch() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -1184,10 +1166,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_notification() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();

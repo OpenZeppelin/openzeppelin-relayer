@@ -1,6 +1,6 @@
 use crate::{
     api::routes::{
-        docs::{notification_docs, plugin_docs, relayer_docs},
+        docs::{notification_docs, plugin_docs, relayer_docs, signer_docs},
         health, metrics,
     },
     domain, models,
@@ -31,6 +31,8 @@ impl Modify for SecurityAddon {
     tags(
       (name = "Relayers", description = "Relayers are the core components of the OpenZeppelin Relayer API. They are responsible for executing transactions on behalf of users and providing a secure and reliable way to interact with the blockchain."),
       (name = "Plugins", description = "Plugins are TypeScript functions that can be used to extend the OpenZeppelin Relayer API functionality."),
+      (name = "Notifications", description = "Notifications are responsible for showing the notifications related to the relayers."),
+      (name = "Signers", description = "Signers are responsible for signing the transactions related to the relayers."),
       (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
       (name = "Health", description = "Health is responsible for showing the health of the relayers.")
     ),
@@ -71,6 +73,11 @@ impl Modify for SecurityAddon {
         notification_docs::doc_create_notification,
         notification_docs::doc_update_notification,
         notification_docs::doc_delete_notification,
+        signer_docs::doc_list_signers,
+        signer_docs::doc_get_signer,
+        signer_docs::doc_create_signer,
+        signer_docs::doc_update_signer,
+        signer_docs::doc_delete_signer,
     ),
     components(schemas(
         models::RelayerResponse,

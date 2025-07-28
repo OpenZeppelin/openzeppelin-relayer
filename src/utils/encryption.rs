@@ -200,7 +200,7 @@ static ENCRYPTION_INSTANCE: std::sync::OnceLock<Result<FieldEncryption, Encrypti
 /// Gets the global encryption instance
 pub fn get_encryption() -> Result<&'static FieldEncryption, &'static EncryptionError> {
     ENCRYPTION_INSTANCE
-        .get_or_init(|| FieldEncryption::new())
+        .get_or_init(FieldEncryption::new)
         .as_ref()
 }
 

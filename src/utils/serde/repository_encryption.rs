@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_option_secret_string_some() {
-        let secret = Some(SecretString::new("test-optional-secret"));
+        let secret = SecretString::new("test-optional-secret");
 
         // Create a test struct that uses the option secret string serialization
         #[derive(serde::Serialize, serde::Deserialize)]
@@ -209,7 +209,7 @@ mod tests {
         }
 
         let test_struct = TestStruct {
-            optional_secret: secret.clone(),
+            optional_secret: Some(secret.clone()),
         };
 
         // Test serialization
@@ -221,7 +221,7 @@ mod tests {
         // Verify content matches
         assert!(deserialized.optional_secret.is_some());
         assert_eq!(
-            secret.unwrap().to_str(),
+            secret.to_str(),
             deserialized.optional_secret.unwrap().to_str()
         );
     }
