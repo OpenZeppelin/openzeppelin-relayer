@@ -561,10 +561,7 @@ impl SolanaTransactionValidator {
 #[cfg(test)]
 mod tests {
     use crate::{
-        models::{
-            AllowedToken as SolanaAllowedTokensPolicy,
-            AllowedTokenSwapConfig as SolanaAllowedTokensSwapConfig,
-        },
+        models::{relayer::SolanaAllowedTokensSwapConfig, SolanaAllowedTokensPolicy},
         services::{MockSolanaProviderTrait, SolanaProviderError},
     };
 

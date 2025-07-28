@@ -131,8 +131,8 @@ impl From<Relayer> for RelayerRepoModel {
 #[cfg(test)]
 mod tests {
     use crate::models::{
-        AllowedToken, RelayerEvmPolicy, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
-        RelayerStellarPolicy,
+        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaAllowedTokensPolicy,
+        SolanaFeePaymentStrategy,
     };
 
     use super::*;
@@ -163,7 +163,7 @@ mod tests {
             network_type: NetworkType::Solana,
             signer_id: "test_signer".to_string(),
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
                 min_balance: Some(1000000),
                 max_signatures: Some(5),
                 allowed_tokens: None,
@@ -314,7 +314,7 @@ mod tests {
             assert_eq!(solana_policy.max_signatures, Some(5));
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+                Some(SolanaFeePaymentStrategy::Relayer)
             );
         } else {
             panic!("Expected Solana policy");
@@ -394,10 +394,10 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Solana,
             policies: Some(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
                 min_balance: Some(5000000),
                 max_signatures: Some(8),
-                allowed_tokens: Some(vec![AllowedToken::new(
+                allowed_tokens: Some(vec![SolanaAllowedTokensPolicy::new(
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
                     Some(100000),
                     None,
@@ -423,7 +423,7 @@ mod tests {
         if let RelayerNetworkPolicy::Solana(solana_policy) = repo_model.policies {
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::User)
+                Some(SolanaFeePaymentStrategy::User)
             );
             assert_eq!(solana_policy.min_balance, Some(5000000));
             assert_eq!(solana_policy.max_signatures, Some(8));
@@ -874,7 +874,7 @@ mod tests {
             paused: true,
             network_type: RelayerNetworkType::Solana,
             policies: Some(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
                 min_balance: Some(3000000),
                 max_signatures: None,
                 allowed_tokens: None,

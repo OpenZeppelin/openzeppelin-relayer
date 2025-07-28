@@ -148,7 +148,7 @@ mod tests {
 
     use crate::{
         models::{
-            LocalSignerConfigStorage, RelayerSolanaPolicy, RelayerSolanaSwapPolicy,
+            LocalSignerConfigStorage, RelayerSolanaPolicy, RelayerSolanaSwapConfig,
             SignerConfigStorage, SignerRepoModel,
         },
         services::{MockSolanaProviderTrait, SolanaSignerFactory},
@@ -169,7 +169,7 @@ mod tests {
     fn test_create_network_dex_jupiter_swap_explicit() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            swap_config: Some(RelayerSolanaSwapPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
                 strategy: Some(SolanaSwapStrategy::JupiterSwap),
                 cron_schedule: None,
                 min_balance_threshold: None,
@@ -201,7 +201,7 @@ mod tests {
     fn test_create_network_dex_jupiter_ultra_explicit() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            swap_config: Some(RelayerSolanaSwapPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
                 strategy: Some(SolanaSwapStrategy::JupiterUltra),
                 cron_schedule: None,
                 min_balance_threshold: None,
@@ -233,7 +233,7 @@ mod tests {
     fn test_create_network_dex_default_when_no_strategy() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            swap_config: Some(RelayerSolanaSwapPolicy {
+            swap_config: Some(RelayerSolanaSwapConfig {
                 strategy: None,
                 cron_schedule: None,
                 min_balance_threshold: None,

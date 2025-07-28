@@ -214,8 +214,8 @@ mod tests {
             setup_test_context, setup_test_context_single_tx_user_fee_strategy, SolanaRpcMethods,
         },
         models::{
-            AllowedTokenSwapConfig as SolanaAllowedTokensSwapConfig, RelayerNetworkPolicy,
-            RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig,
         },
         services::{
             MockSolanaProviderTrait, QuoteResponse, RoutePlan, SolanaProviderError, SwapInfo,

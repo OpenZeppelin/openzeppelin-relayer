@@ -258,8 +258,7 @@ impl TryFrom<CreateRelayerRequest> for Relayer {
 mod tests {
     use super::*;
     use crate::models::relayer::{
-        RelayerEvmPolicy, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
-        RelayerStellarPolicy,
+        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaFeePaymentStrategy,
     };
 
     #[test]
@@ -331,7 +330,7 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Solana,
             policies: Some(CreateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
                 min_balance: Some(1000000),
                 max_signatures: Some(5),
                 allowed_tokens: None,
@@ -360,7 +359,7 @@ mod tests {
             assert_eq!(solana_policy.max_signatures, Some(5));
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+                Some(SolanaFeePaymentStrategy::Relayer)
             );
         } else {
             panic!("Expected Solana policy");
@@ -397,7 +396,7 @@ mod tests {
             network_type: RelayerNetworkType::Solana,
             policies: Some(CreateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
                 fee_payment_strategy: Some(
-                    crate::models::relayer::RelayerSolanaFeePaymentStrategy::Relayer,
+                    crate::models::relayer::SolanaFeePaymentStrategy::Relayer,
                 ),
                 min_balance: Some(1000000),
                 allowed_tokens: None,
@@ -633,7 +632,7 @@ mod tests {
             assert_eq!(solana_policy.fee_margin_percentage, Some(2.5));
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+                Some(SolanaFeePaymentStrategy::Relayer)
             );
         } else {
             panic!("Expected Solana policy");
@@ -1134,7 +1133,7 @@ mod tests {
         if let RelayerNetworkPolicy::Solana(policy) = solana_policy {
             assert_eq!(
                 policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::User)
+                Some(SolanaFeePaymentStrategy::User)
             );
             assert_eq!(policy.max_tx_data_size, Some(512));
             assert_eq!(policy.fee_margin_percentage, Some(1.5));

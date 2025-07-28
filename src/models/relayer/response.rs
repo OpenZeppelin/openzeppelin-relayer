@@ -12,9 +12,9 @@
 //! with the domain model for business logic.
 
 use super::{
-    AllowedToken, Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType,
-    RelayerRepoModel, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
-    RelayerSolanaSwapPolicy, RelayerStellarPolicy, RpcConfig,
+    Relayer, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerNetworkType, RelayerRepoModel,
+    RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy, RpcConfig,
+    SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
 };
 use crate::constants::{
     DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
@@ -403,10 +403,10 @@ pub struct SolanaPolicyResponse {
     pub min_balance: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub allowed_tokens: Option<Vec<AllowedToken>>,
+    pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub fee_payment_strategy: Option<RelayerSolanaFeePaymentStrategy>,
+    pub fee_payment_strategy: Option<SolanaFeePaymentStrategy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub fee_margin_percentage: Option<f32>,
@@ -421,7 +421,7 @@ pub struct SolanaPolicyResponse {
     pub max_allowed_fee_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
-    pub swap_config: Option<RelayerSolanaSwapPolicy>,
+    pub swap_config: Option<RelayerSolanaSwapConfig>,
 }
 
 /// Stellar policy response model for OpenAPI documentation
@@ -488,8 +488,8 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
 mod tests {
     use super::*;
     use crate::models::relayer::{
-        AllowedToken, RelayerEvmPolicy, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
-        RelayerSolanaSwapPolicy, RelayerSolanaSwapStrategy, RelayerStellarPolicy,
+        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RelayerStellarPolicy,
+        SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy, SolanaSwapStrategy,
     };
 
     #[test]
@@ -553,8 +553,8 @@ mod tests {
                 allowed_programs: Some(vec!["11111111111111111111111111111111".to_string()]),
                 max_signatures: Some(5),
                 min_balance: Some(1000000),
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
-                allowed_tokens: Some(vec![AllowedToken::new(
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+                allowed_tokens: Some(vec![SolanaAllowedTokensPolicy::new(
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
                     Some(100000),
                     None,
@@ -662,18 +662,18 @@ mod tests {
                 max_signatures: Some(5),
                 max_tx_data_size: DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
                 min_balance: 1000000,
-                allowed_tokens: Some(vec![AllowedToken::new(
+                allowed_tokens: Some(vec![SolanaAllowedTokensPolicy::new(
                     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
                     Some(100000),
                     None,
                 )]),
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
                 fee_margin_percentage: Some(5.0),
                 allowed_accounts: None,
                 disallowed_accounts: None,
                 max_allowed_fee_lamports: Some(500000),
-                swap_config: Some(RelayerSolanaSwapPolicy {
-                    strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+                swap_config: Some(RelayerSolanaSwapConfig {
+                    strategy: Some(SolanaSwapStrategy::JupiterSwap),
                     cron_schedule: Some("0 0 * * *".to_string()),
                     min_balance_threshold: Some(500000),
                     jupiter_swap_options: None,
@@ -789,7 +789,7 @@ mod tests {
                 max_tx_data_size: DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
                 min_balance: 1000000,
                 allowed_tokens: None,
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
                 fee_margin_percentage: None,
                 allowed_accounts: None,
                 disallowed_accounts: None,
@@ -1002,7 +1002,7 @@ mod tests {
             paused: false,
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
                 max_signatures: Some(5),
-                fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
                 min_balance: Some(1000000),
                 allowed_programs: None, // Some fields can still be None
                 max_tx_data_size: None,
