@@ -194,6 +194,7 @@ mod tests {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -241,6 +242,7 @@ mod tests {
             network_type: NetworkType::Solana,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -290,6 +292,7 @@ mod tests {
             network_type: NetworkType::Stellar,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -343,6 +346,7 @@ mod tests {
             network_type: NetworkType::Stellar,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -386,6 +390,7 @@ mod tests {
             network_type: NetworkType::Solana,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model);

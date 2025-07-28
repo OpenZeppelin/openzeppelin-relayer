@@ -322,6 +322,7 @@ mod tests {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
         transaction_repo.create(test_transaction).await.unwrap();
 
