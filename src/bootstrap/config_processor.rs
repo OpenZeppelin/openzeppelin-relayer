@@ -6,8 +6,9 @@ use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
     jobs::JobProducerTrait,
     models::{
-        signer::Signer, NetworkRepoModel, NotificationRepoModel, PluginModel, RelayerRepoModel,
-        SignerFileConfig, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        signer::Signer, NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer,
+        RelayerRepoModel, SignerFileConfig, SignerRepoModel, ThinDataAppState,
+        TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -209,8 +210,10 @@ where
     let signers = app_state.signer_repository.list_all().await?;
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
-        let mut repo_model = RelayerRepoModel::try_from(relayer.clone())
-            .wrap_err("Failed to convert relayer config")?;
+        // Convert config to domain model first, then to repository model
+        let domain_relayer = Relayer::try_from(relayer.clone())
+            .wrap_err("Failed to convert relayer config to domain model")?;
+        let mut repo_model = RelayerRepoModel::from(domain_relayer);
         let signer_model = signers
             .iter()
             .find(|s| s.id == repo_model.signer_id)
@@ -340,9 +343,10 @@ where
 mod tests {
     use super::*;
     use crate::{
-        config::{ConfigFileNetworkType, NetworksFileConfig, PluginFileConfig, RelayerFileConfig},
+        config::{ConfigFileNetworkType, NetworksFileConfig, PluginFileConfig},
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
+        models::relayer::RelayerFileConfig,
         models::{
             AppState, AwsKmsSignerFileConfig, GoogleCloudKmsKeyFileConfig,
             GoogleCloudKmsServiceAccountFileConfig, GoogleCloudKmsSignerFileConfig,

@@ -60,7 +60,8 @@ where
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        let user_pays_fee = policy.fee_payment_strategy == SolanaFeePaymentStrategy::User;
+        let user_pays_fee =
+            policy.fee_payment_strategy.unwrap_or_default() == SolanaFeePaymentStrategy::User;
 
         if user_pays_fee {
             self.confirm_user_fee_payment(&transaction_request, total_fee)
@@ -715,7 +716,7 @@ mod tests {
             Err(SolanaRpcError::InsufficientFunds(err)) => {
                 let error_string = err.to_string();
                 assert!(
-                    error_string.contains("Insufficient funds:"),
+                    error_string.contains("Insufficient balance:"),
                     "Unexpected error message: {}",
                     err
                 );

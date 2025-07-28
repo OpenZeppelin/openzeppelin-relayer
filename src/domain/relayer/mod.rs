@@ -513,9 +513,3 @@ pub struct BalanceResponse {
     #[schema(example = "wei")]
     pub unit: String,
 }
-
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct RelayerUpdateRequest {
-    #[schema(nullable = false)]
-    pub paused: Option<bool>,
-}

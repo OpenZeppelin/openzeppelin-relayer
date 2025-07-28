@@ -59,7 +59,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         let mut store = Self::acquire_lock(&self.store).await?;
         if store.contains_key(&notification.id) {
             return Err(RepositoryError::ConstraintViolation(format!(
-                "Notification with ID {} already exists",
+                "Notification with ID '{}' already exists",
                 notification.id
             )));
         }
@@ -72,7 +72,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         match store.get(&id) {
             Some(entity) => Ok(entity.clone()),
             None => Err(RepositoryError::NotFound(format!(
-                "Notification with ID {} not found",
+                "Notification with ID '{}' not found",
                 id
             ))),
         }
@@ -89,7 +89,7 @@ impl Repository<NotificationRepoModel, String> for InMemoryNotificationRepositor
         // Check if notification exists
         if !store.contains_key(&id) {
             return Err(RepositoryError::NotFound(format!(
-                "Notification with ID {} not found",
+                "Notification with ID '{}' not found",
                 id
             )));
         }

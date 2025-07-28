@@ -9,7 +9,7 @@
 //! implementation is useful for testing and development purposes.
 use crate::models::PaginationQuery;
 use crate::{
-    domain::RelayerUpdateRequest,
+    models::UpdateRelayerRequest,
     models::{RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
 };
 use async_trait::async_trait;
@@ -102,7 +102,7 @@ impl RelayerRepository for InMemoryRelayerRepository {
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
         if let Some(relayer) = store.get_mut(&id) {
@@ -282,8 +282,8 @@ mod tests {
                 gas_price_cap: None,
                 whitelist_receivers: None,
                 eip1559_pricing: Some(false),
-                private_transactions: false,
-                min_balance: 0,
+                private_transactions: Some(false),
+                min_balance: Some(0),
                 gas_limit_estimation: Some(true),
             }),
             signer_id: "test".to_string(),
@@ -386,7 +386,13 @@ mod tests {
         repo.create(initial_relayer.clone()).await.unwrap();
 
         // Perform a partial update on the relayer
-        let update_req = RelayerUpdateRequest { paused: Some(true) };
+        let update_req = UpdateRelayerRequest {
+            name: None,
+            paused: Some(true),
+            policies: None,
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
 
         let updated_relayer = repo
             .partial_update(relayer_id.clone(), update_req)
@@ -445,8 +451,8 @@ mod tests {
             gas_price_cap: Some(50000000000),
             whitelist_receivers: Some(vec!["0x1234".to_string()]),
             eip1559_pricing: Some(true),
-            private_transactions: true,
-            min_balance: 1000000,
+            private_transactions: Some(true),
+            min_balance: Some(1000000),
             gas_limit_estimation: Some(true),
         });
 
@@ -462,8 +468,8 @@ mod tests {
                 assert_eq!(policy.gas_price_cap, Some(50000000000));
                 assert_eq!(policy.whitelist_receivers, Some(vec!["0x1234".to_string()]));
                 assert_eq!(policy.eip1559_pricing, Some(true));
-                assert!(policy.private_transactions);
-                assert_eq!(policy.min_balance, 1000000);
+                assert!(policy.private_transactions.unwrap_or(false));
+                assert_eq!(policy.min_balance, Some(1000000));
             }
             _ => panic!("Unexpected policy type"),
         }

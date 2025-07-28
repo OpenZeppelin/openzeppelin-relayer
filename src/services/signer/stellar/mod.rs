@@ -20,7 +20,7 @@ use crate::{
 use super::DataSignerTrait;
 
 pub enum StellarSigner {
-    Local(LocalSigner),
+    Local(Box<LocalSigner>),
     Vault(VaultSigner<VaultService>),
 }
 
@@ -49,7 +49,10 @@ pub struct StellarSignerFactory;
 impl StellarSignerFactory {
     pub fn create_stellar_signer(m: &SignerRepoModel) -> Result<StellarSigner, SignerFactoryError> {
         let signer = match &m.config {
-            SignerConfig::Local(_) => StellarSigner::Local(LocalSigner::new(m)?),
+            SignerConfig::Local(_) => {
+                let local_signer = LocalSigner::new(m)?;
+                StellarSigner::Local(Box::new(local_signer))
+            }
             SignerConfig::Vault(config) => {
                 let vault_config = VaultConfig::new(
                     config.address.clone(),
