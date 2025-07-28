@@ -1,6 +1,6 @@
 use crate::models::{ApiResponse, SignerCreateRequest, SignerResponse, SignerUpdateRequest};
 
-/// Notification routes implementation
+/// Signer routes implementation
 ///
 /// Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file
 ///
@@ -58,7 +58,7 @@ use crate::models::{ApiResponse, SignerCreateRequest, SignerResponse, SignerUpda
 #[allow(dead_code)]
 fn doc_list_signers() {}
 
-/// Retrieves details of a specific notification by ID.
+/// Retrieves details of a specific signer by ID.
 #[utoipa::path(
   get,
   path = "/api/v1/signers/{signer_id}",
@@ -121,7 +121,7 @@ fn doc_list_signers() {}
 #[allow(dead_code)]
 fn doc_get_signer() {}
 
-/// Creates a new notification.
+/// Creates a new signer.
 #[utoipa::path(
   post,
   path = "/api/v1/signers",
@@ -182,7 +182,7 @@ fn doc_get_signer() {}
 #[allow(dead_code)]
 fn doc_create_signer() {}
 
-/// Updates an existing notification.
+/// Updates an existing signer.
 #[utoipa::path(
   patch,
   path = "/api/v1/signers/{signer_id}",
@@ -246,7 +246,7 @@ fn doc_create_signer() {}
 #[allow(dead_code)]
 fn doc_update_signer() {}
 
-/// Deletes a notification by ID.
+/// Deletes a signer by ID.
 #[utoipa::path(
   delete,
   path = "/api/v1/signers/{signer_id}",
