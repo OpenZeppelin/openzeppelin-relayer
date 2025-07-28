@@ -23,6 +23,7 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRelayerRequest {
+    #[schema(nullable = false)]
     pub id: Option<String>,
     pub name: String,
     pub network: String,
@@ -30,9 +31,13 @@ pub struct CreateRelayerRequest {
     pub network_type: RelayerNetworkType,
     /// Policies - will be deserialized based on the network_type field
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub policies: Option<CreateRelayerPolicyRequest>,
+    #[schema(nullable = false)]
     pub signer_id: String,
+    #[schema(nullable = false)]
     pub notification_id: Option<String>,
+    #[schema(nullable = false)]
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
 }
 
@@ -158,6 +163,7 @@ pub fn deserialize_policy_for_network_type(
 #[serde(deny_unknown_fields)]
 pub struct UpdateRelayerRequest {
     pub name: Option<String>,
+    #[schema(nullable = false)]
     pub paused: Option<bool>,
     /// Raw policy JSON - will be validated against relayer's network type during application
     #[serde(skip_serializing_if = "Option::is_none")]

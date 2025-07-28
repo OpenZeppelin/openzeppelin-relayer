@@ -17,10 +17,13 @@ use utoipa::ToSchema;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationCreateRequest {
+    #[schema(nullable = false)]
     pub id: Option<String>,
+    #[schema(nullable = false)]
     pub r#type: Option<NotificationType>,
     pub url: String,
     /// Optional signing key for securing webhook notifications
+    #[schema(nullable = false)]
     pub signing_key: Option<String>,
 }
 
@@ -28,7 +31,9 @@ pub struct NotificationCreateRequest {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationUpdateRequest {
+    #[schema(nullable = false)]
     pub r#type: Option<NotificationType>,
+    #[schema(nullable = false)]
     pub url: Option<String>,
     /// Optional signing key for securing webhook notifications.
     /// - None: don't change the existing signing key

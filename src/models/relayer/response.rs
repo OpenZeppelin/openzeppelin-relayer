@@ -72,12 +72,19 @@ pub struct RelayerResponse {
     /// Policies without redundant network_type tag - network type is available at top level
     /// Only included if user explicitly provided policies (not shown for empty/default policies)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub policies: Option<RelayerNetworkPolicyResponse>,
     pub signer_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub notification_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub custom_rpc_urls: Option<Vec<RpcConfig>>,
     // Runtime fields from repository model
+    #[schema(nullable = false)]
     pub address: Option<String>,
+    #[schema(nullable = false)]
     pub system_disabled: Option<bool>,
 }
 
