@@ -957,9 +957,11 @@ mod tests {
     use alloy::primitives::U256;
     use lazy_static::lazy_static;
     use redis::Client;
-    use std::{str::FromStr, sync::Mutex};
+    use std::str::FromStr;
     use tokio;
     use uuid::Uuid;
+
+    use tokio::sync::Mutex;
 
     // Use a mutex to ensure tests don't run in parallel when modifying env vars
     lazy_static! {
@@ -1626,10 +1628,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_update_status_sets_delete_at_for_final_statuses() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
         use std::env;
@@ -1639,7 +1638,7 @@ mod tests {
 
         let repo = setup_test_repo().await;
 
-        let final_statuses = vec![
+        let final_statuses = [
             TransactionStatus::Canceled,
             TransactionStatus::Confirmed,
             TransactionStatus::Failed,
@@ -1696,10 +1695,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_update_status_does_not_set_delete_at_for_non_final_statuses() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use std::env;
 
@@ -1707,7 +1703,7 @@ mod tests {
 
         let repo = setup_test_repo().await;
 
-        let non_final_statuses = vec![
+        let non_final_statuses = [
             TransactionStatus::Pending,
             TransactionStatus::Sent,
             TransactionStatus::Submitted,
@@ -1743,10 +1739,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_partial_update_sets_delete_at_for_final_statuses() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
         use std::env;
@@ -1814,10 +1807,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_update_status_preserves_existing_delete_at() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use std::env;
 
@@ -1853,10 +1843,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_partial_update_without_status_change_preserves_delete_at() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use std::env;
 

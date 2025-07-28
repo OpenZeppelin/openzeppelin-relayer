@@ -307,17 +307,17 @@ impl Default for InMemoryTransactionRepository {
 mod tests {
     use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
     use lazy_static::lazy_static;
-    use std::{str::FromStr, sync::Mutex};
+    use std::str::FromStr;
 
     use crate::models::U256;
 
     use super::*;
 
-    // Use a mutex to ensure tests don't run in parallel when modifying env vars
+    use tokio::sync::Mutex;
+
     lazy_static! {
         static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
     }
-
     // Helper function to create test transactions
     fn create_test_transaction(id: &str) -> TransactionRepoModel {
         TransactionRepoModel {
@@ -949,10 +949,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_status_sets_delete_at_for_final_statuses() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
         use std::env;
@@ -962,7 +959,7 @@ mod tests {
 
         let repo = InMemoryTransactionRepository::new();
 
-        let final_statuses = vec![
+        let final_statuses = [
             TransactionStatus::Canceled,
             TransactionStatus::Confirmed,
             TransactionStatus::Failed,
@@ -1017,10 +1014,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_status_does_not_set_delete_at_for_non_final_statuses() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use std::env;
 
@@ -1028,7 +1022,7 @@ mod tests {
 
         let repo = InMemoryTransactionRepository::new();
 
-        let non_final_statuses = vec![
+        let non_final_statuses = [
             TransactionStatus::Pending,
             TransactionStatus::Sent,
             TransactionStatus::Submitted,
@@ -1061,10 +1055,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partial_update_sets_delete_at_for_final_statuses() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use chrono::{DateTime, Duration, Utc};
         use std::env;
@@ -1131,10 +1122,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_status_preserves_existing_delete_at() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use std::env;
 
@@ -1171,10 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partial_update_without_status_change_preserves_delete_at() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use std::env;
 
@@ -1230,10 +1215,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_status_multiple_updates_idempotent() {
-        let _lock = match ENV_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = ENV_MUTEX.lock().await;
 
         use std::env;
 

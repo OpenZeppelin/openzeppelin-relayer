@@ -119,10 +119,10 @@ impl TransactionRepoModel {
     }
 
     /// Apply partial updates to this transaction model
-    /// 
+    ///
     /// This method encapsulates the business logic for updating transaction fields,
     /// ensuring consistency across all repository implementations.
-    /// 
+    ///
     /// # Arguments
     /// * `update` - The partial update request containing the fields to update
     pub fn apply_partial_update(&mut self, update: TransactionUpdateRequest) {
@@ -2760,12 +2760,24 @@ mod tests {
 
         // Verify the updates were applied
         assert_eq!(transaction.status, TransactionStatus::Confirmed);
-        assert_eq!(transaction.status_reason, Some("Transaction confirmed".to_string()));
-        assert_eq!(transaction.sent_at, Some("2023-01-01T12:00:00Z".to_string()));
-        assert_eq!(transaction.confirmed_at, Some("2023-01-01T12:05:00Z".to_string()));
-        assert_eq!(transaction.hashes, vec!["0x123".to_string(), "0x456".to_string()]);
+        assert_eq!(
+            transaction.status_reason,
+            Some("Transaction confirmed".to_string())
+        );
+        assert_eq!(
+            transaction.sent_at,
+            Some("2023-01-01T12:00:00Z".to_string())
+        );
+        assert_eq!(
+            transaction.confirmed_at,
+            Some("2023-01-01T12:05:00Z".to_string())
+        );
+        assert_eq!(
+            transaction.hashes,
+            vec!["0x123".to_string(), "0x456".to_string()]
+        );
         assert_eq!(transaction.is_canceled, Some(false));
-        
+
         // Verify that delete_at was set because status changed to final
         assert!(transaction.delete_at.is_some());
     }
@@ -2802,13 +2814,19 @@ mod tests {
 
         // Verify only status changed, other fields preserved
         assert_eq!(transaction.status, TransactionStatus::Sent);
-        assert_eq!(transaction.status_reason, Some("Initial reason".to_string()));
-        assert_eq!(transaction.sent_at, Some("2023-01-01T10:00:00Z".to_string()));
+        assert_eq!(
+            transaction.status_reason,
+            Some("Initial reason".to_string())
+        );
+        assert_eq!(
+            transaction.sent_at,
+            Some("2023-01-01T10:00:00Z".to_string())
+        );
         assert_eq!(transaction.confirmed_at, None);
         assert_eq!(transaction.hashes, vec!["0xoriginal".to_string()]);
         assert_eq!(transaction.noop_count, Some(5));
         assert_eq!(transaction.is_canceled, Some(true));
-        
+
         // Status is not final, so delete_at should remain None
         assert!(transaction.delete_at.is_none());
     }
@@ -2826,7 +2844,10 @@ mod tests {
         // Verify nothing changed
         assert_eq!(transaction.id, original_transaction.id);
         assert_eq!(transaction.status, original_transaction.status);
-        assert_eq!(transaction.status_reason, original_transaction.status_reason);
+        assert_eq!(
+            transaction.status_reason,
+            original_transaction.status_reason
+        );
         assert_eq!(transaction.sent_at, original_transaction.sent_at);
         assert_eq!(transaction.confirmed_at, original_transaction.confirmed_at);
         assert_eq!(transaction.hashes, original_transaction.hashes);

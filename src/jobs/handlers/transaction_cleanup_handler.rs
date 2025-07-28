@@ -108,7 +108,7 @@ async fn handle_request(
 /// * `Vec<RelayerCleanupResult>` - Results from processing each relayer
 async fn process_relayers_in_batches(
     relayers: Vec<RelayerRepoModel>,
-    transaction_repo: Arc<impl TransactionRepository + Repository<TransactionRepoModel, String>>,
+    transaction_repo: Arc<impl TransactionRepository>,
     now: DateTime<Utc>,
 ) -> Vec<RelayerCleanupResult> {
     use futures::stream::{self, StreamExt};
@@ -145,7 +145,7 @@ struct RelayerCleanupResult {
 /// * `RelayerCleanupResult` - Result of processing this relayer
 async fn process_single_relayer(
     relayer: RelayerRepoModel,
-    transaction_repo: Arc<impl TransactionRepository + Repository<TransactionRepoModel, String>>,
+    transaction_repo: Arc<impl TransactionRepository>,
     now: DateTime<Utc>,
 ) -> RelayerCleanupResult {
     debug!("Processing cleanup for relayer: {}", relayer.id);
@@ -641,7 +641,7 @@ mod tests {
         let relayer_id = "test-relayer";
 
         // Test each final status to ensure they all pass validation
-        let final_statuses = vec![
+        let final_statuses = [
             TransactionStatus::Confirmed,
             TransactionStatus::Failed,
             TransactionStatus::Canceled,
