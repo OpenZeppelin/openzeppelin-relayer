@@ -185,7 +185,6 @@ mod tests {
     use super::*;
     use actix_web::body::MessageBody;
     use alloy::primitives::{keccak256, private::alloy_rlp::*};
-    use rand::rngs::mock;
 
     use crate::{
         models::{SecretString, TurnkeySignerConfig},

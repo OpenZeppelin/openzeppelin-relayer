@@ -37,11 +37,16 @@ jobs:
       changed-tests-files: ${{ steps.changed-files-yaml.outputs.tests_any_changed }}
     steps:
       # Checkout the repository
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Get changed files
         id: changed-files-yaml
-        uses: tj-actions/changed-files@115870536a85eaf050e369291c7895748ff12aea  # v46.0.4
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c  # v46.0.5
         with:
           files_yaml: |
             code:
@@ -71,6 +76,11 @@ jobs:
       - clippy
     runs-on: ubuntu-latest
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Failed
         run: exit 1
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
@@ -80,6 +90,11 @@ jobs:
     needs: changed_files
     steps:
       # Checkout the repository
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Prepare
@@ -90,7 +105,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@cargo-hack
+        uses: taiki-e/install-action@7689010b667477e55299b24c373cdf719c945fdf # cargo-hack
 
       # Check the minimum supported Rust version
       - name: Default features
@@ -101,6 +116,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Prepare
@@ -120,6 +140,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Prepare
@@ -147,7 +172,7 @@ jobs:
           path: clippy-results.sarif
           retention-days: 1
       - name: Upload
-        uses: github/codeql-action/upload-sarif@fca7ace96b7d713c7035871441bd52efbe39e27e  # v3.28.19
+        uses: github/codeql-action/upload-sarif@d6bbdef45e766d081b84a2def353b0055f728d3e  # v3.29.3
         with:
           sarif_file: clippy-results.sarif
           wait-for-processing: true
@@ -162,10 +187,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
       - name: Install TypeScript and ts-node
@@ -195,9 +225,9 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@cargo-hack
+        uses: taiki-e/install-action@7689010b667477e55299b24c373cdf719c945fdf # cargo-hack
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@16edcff251c6bb06f6878981359f84b77b28e7e2 # cargo-llvm-cov
       - name: Build
         run: cargo test --no-run --locked
 
@@ -208,7 +238,7 @@ jobs:
           RUSTFLAGS: -Cinstrument-coverage
           RUST_TEST_THREADS: 1
         run: cargo hack llvm-cov --locked --lib --ignore-filename-regex "(.*/relayer_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path unit-lcov.info
-      
+
       # Integration tests coverage
       - name: Run Integration Tests and Generate Coverage Report
         env:
@@ -263,6 +293,11 @@ jobs:
       ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-docker-files == 'true' }}
     steps:
       # Checkout the repository
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Checkout Code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Set up Docker Buildx

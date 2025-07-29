@@ -1,16 +1,19 @@
+---
 name: Semgrep
-
 on:
   # Scan changed files in PRs (diff-aware scanning):
-  pull_request: {}
+  pull_request_target: {}
   # Scan on-demand through GitHub Actions interface:
   workflow_dispatch: {}
   # Scan mainline branches and report all findings:
   push:
-    branches: ["main"]
+    branches:
+      - main
   # Schedule the CI job (this method uses cron syntax):
   schedule:
-    - cron: '15 11 * * *' # Sets Semgrep to scan every day at 11:15 UTC.
+    - cron: 15 11 * * *  # Sets Semgrep to scan every day at 11:15 UTC.
+permissions:
+  contents: read
 
 jobs:
   semgrep:
@@ -18,15 +21,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       security-events: write
-      contents: read
-      actions: read
-
+      # contents: read
+      # actions: read
     container:
       image: semgrep/semgrep@sha256:85f9de554201cc891c470774bb93a7f4faf41ea198ddccc34a855b53f7a51443  # v1.127.1
 
     # Skip any PR created by dependabot to avoid permission issues:
     if: (github.actor != 'dependabot[bot]')
-
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@0634a2670c59f64b4a01f0f96f84700a4088b9f0  # v2.12.0
@@ -39,8 +40,11 @@ jobs:
         env:
           # Connect to Semgrep AppSec Platform through your SEMGREP_APP_TOKEN.
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+          # Do not check for new version
+          SEMGREP_ENABLE_VERSION_CHECK: 0
+          # No metrics
+          SEMGREP_SEND_METRICS: 'off'
       - name: Upload SARIF file for GitHub Advanced Security Dashboard
-        uses: github/codeql-action/upload-sarif@fca7ace96b7d713c7035871441bd52efbe39e27e  # v3.28.19
+        uses: github/codeql-action/upload-sarif@d6bbdef45e766d081b84a2def353b0055f728d3e  # v3.29.3
         with:
           sarif_file: semgrep.sarif
-

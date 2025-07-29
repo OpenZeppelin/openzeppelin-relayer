@@ -104,6 +104,10 @@ impl EvmNetwork {
         self.tags.contains(&"no-mempool".to_string())
     }
 
+    pub fn is_arbitrum(&self) -> bool {
+        self.tags.contains(&"arbitrum-based".to_string())
+    }
+
     pub fn is_testnet(&self) -> bool {
         self.is_testnet
     }

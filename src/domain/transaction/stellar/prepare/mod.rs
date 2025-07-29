@@ -15,7 +15,10 @@ use super::{lane_gate, StellarRelayerTransaction};
 use crate::models::RelayerRepoModel;
 use crate::{
     jobs::JobProducerTrait,
-    models::{TransactionError, TransactionInput, TransactionRepoModel, TransactionStatus},
+    models::{
+        TransactionError, TransactionInput, TransactionRepoModel, TransactionStatus,
+        TransactionUpdateRequest,
+    },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
 };
@@ -145,14 +148,40 @@ where
         let tx_id = tx.id.clone(); // Clone the ID before moving tx
         warn!("Transaction {} preparation failed: {}", tx_id, error_reason);
 
-        // Step 1: Mark transaction as Failed with detailed reason
+        // Step 1: Sync sequence from chain to recover from any potential sequence drift
+        if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
+            info!(
+                "Syncing sequence from chain after failed transaction {} preparation",
+                tx_id
+            );
+            // Always sync from chain on preparation failure to ensure correct sequence state
+            match self
+                .sync_sequence_from_chain(&stellar_data.source_account)
+                .await
+            {
+                Ok(()) => {
+                    info!(
+                        "Successfully synced sequence from chain for transaction {}",
+                        tx_id
+                    );
+                }
+                Err(sync_error) => {
+                    warn!(
+                        "Failed to sync sequence from chain for transaction {}: {}",
+                        tx_id, sync_error
+                    );
+                }
+            }
+        }
+
+        // Step 2: Mark transaction as Failed with detailed reason
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(error_reason.clone()),
+            ..Default::default()
+        };
         let _failed_tx = match self
-            .finalize_transaction_state(
-                tx_id.clone(),
-                TransactionStatus::Failed,
-                Some(error_reason.clone()),
-                None,
-            )
+            .finalize_transaction_state(tx_id.clone(), update_request)
             .await
         {
             Ok(updated_tx) => updated_tx,
@@ -166,7 +195,7 @@ where
             }
         };
 
-        // Step 2: Attempt to enqueue next pending transaction or release lane
+        // Step 3: Attempt to enqueue next pending transaction or release lane
         if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
             warn!(
                 "Failed to enqueue next pending transaction after {} failure: {}. Releasing lane directly.",
@@ -176,13 +205,13 @@ where
             lane_gate::free(&self.relayer().id, &tx_id);
         }
 
-        // Step 3: Log failure for monitoring (prepare_fail_total metric would go here)
+        // Step 4: Log failure for monitoring (prepare_fail_total metric would go here)
         info!(
             "Transaction {} preparation failure handled. Lane cleaned up. Error: {}",
             tx_id, error_reason
         );
 
-        // Step 4: Return original error to maintain API compatibility
+        // Step 5: Return original error to maintain API compatibility
         Err(error)
     }
 }
@@ -194,7 +223,7 @@ mod prepare_transaction_tests {
     use super::*;
     use crate::{
         domain::SignTransactionResponse,
-        models::{NetworkTransactionData, RepositoryError, TransactionStatus},
+        models::{NetworkTransactionData, OperationSpec, RepositoryError, TransactionStatus},
     };
     use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope};
 
@@ -355,6 +384,38 @@ mod prepare_transaction_tests {
             })
         });
 
+        // Mock sync_sequence_from_chain for error handling
+        mocks.provider.expect_get_account().returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(0),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        mocks
+            .counter
+            .expect_set()
+            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+
         // Mock finalize_transaction_state for failure handling
         mocks
             .tx_repo
@@ -381,7 +442,12 @@ mod prepare_transaction_tests {
             .returning(|_, _| Ok(vec![])); // No pending transactions
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-        let tx = create_test_transaction(&relayer.id);
+        let mut tx = create_test_transaction(&relayer.id);
+
+        // Remove the sequence number since it wouldn't be set if get_and_increment fails
+        if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+            data.sequence_number = None;
+        }
 
         // Verify that lane is claimed initially
         assert!(lane_gate::claim(&relayer.id, &tx.id));
@@ -407,6 +473,38 @@ mod prepare_transaction_tests {
             .counter
             .expect_get_and_increment()
             .returning(|_, _| Box::pin(ready(Ok(1))));
+
+        // Expect sync_sequence_from_chain to be called in handle_prepare_failure
+        mocks.provider.expect_get_account().returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(0),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        mocks
+            .counter
+            .expect_set()
+            .returning(|_, _, _| Box::pin(ready(Ok(()))));
 
         // signer fails
         mocks.signer.expect_sign_transaction().returning(|_| {
@@ -478,6 +576,299 @@ mod prepare_transaction_tests {
 
         // Cleanup
         lane_gate::free(&relayer.id, "other-tx");
+    }
+
+    #[tokio::test]
+    async fn test_prepare_failure_syncs_sequence() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Track sequence operations
+        let sequence_value = 42u64;
+
+        // Mock get_and_increment to return 42
+        mocks
+            .counter
+            .expect_get_and_increment()
+            .times(1)
+            .returning(move |_, _| Box::pin(ready(Ok(sequence_value))));
+
+        // Mock sync_sequence_from_chain to verify it's called on failure
+        mocks.provider.expect_get_account().times(1).returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(41), // On-chain sequence is 41
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        mocks
+            .counter
+            .expect_set()
+            .times(1)
+            .withf(|_, _, seq| *seq == 42) // Next usable = 41 + 1
+            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+
+        // Mock signer to fail after sequence is incremented
+        mocks
+            .signer
+            .expect_sign_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::models::SignerError::SigningError(
+                        "Simulated signing failure".to_string(),
+                    ))
+                })
+            });
+
+        // Mock transaction update for failure
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        // Mock notification
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // Mock find_by_status for enqueue_next_pending_transaction
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .returning(|_, _| Ok(vec![]));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+        let tx = create_test_transaction(&relayer.id);
+
+        let result = handler.prepare_transaction_impl(tx).await;
+
+        // Should fail with signing error
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::SignerError(msg) => {
+                assert!(msg.contains("Simulated signing failure"));
+            }
+            _ => panic!("Expected SignerError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepare_simulation_failure_syncs_sequence() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Mock sequence increment
+        mocks
+            .counter
+            .expect_get_and_increment()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(100))));
+
+        // Mock sync on failure
+        mocks.provider.expect_get_account().times(1).returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(99),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        mocks
+            .counter
+            .expect_set()
+            .times(1)
+            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+
+        // Mock provider to fail simulation for Soroban operations
+        mocks
+            .provider
+            .expect_simulate_transaction_envelope()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Err(eyre::eyre!("Simulation failed: insufficient resources")) })
+            });
+
+        // Mock transaction update for failure
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        // Mock notification and enqueue
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .returning(|_, _| Ok(vec![]));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        // Create transaction with Soroban operation to trigger simulation
+        let mut tx = create_test_transaction(&relayer.id);
+        if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+            data.transaction_input =
+                crate::models::TransactionInput::Operations(vec![OperationSpec::InvokeContract {
+                    contract_address: "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA"
+                        .to_string(),
+                    function_name: "test".to_string(),
+                    args: vec![],
+                    auth: None,
+                }]);
+        }
+
+        let result = handler.prepare_transaction_impl(tx).await;
+
+        // Should fail with provider error
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_prepare_xdr_parsing_failure_syncs_sequence() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // For unsigned XDR, validation happens before sequence increment
+        // Source account mismatch is detected before get_and_increment is called
+        // But we still sync sequence on any prepare failure
+
+        // Mock sync_sequence_from_chain
+        mocks.provider.expect_get_account().times(1).returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(50),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        mocks
+            .counter
+            .expect_set()
+            .times(1)
+            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+
+        // Mock transaction update for failure
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        // Mock notification and enqueue
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .returning(|_, _| Ok(vec![]));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        // Create transaction with invalid unsigned XDR
+        let mut tx = create_test_transaction(&relayer.id);
+        if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+            // Remove sequence since it will never be set due to early validation failure
+            data.sequence_number = None;
+            // Use a different source account to trigger validation error
+            data.transaction_input = crate::models::TransactionInput::UnsignedXdr(
+                // This will fail validation due to source account mismatch
+                "AAAAAgAAAAA5MbUzuTfU6p3NeJp5w3TpKhZmx6p1pR7mq9wFwCnEIgAAAGQAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAADk4GIHV/3i2tOMBkqKqN3Y9x3FvNm8z4B5PEzPn7hEaAAAAAAAAAAAAAAAZAAAAAAAAAAA".to_string()
+            );
+        }
+
+        let result = handler.prepare_transaction_impl(tx).await;
+
+        // Should fail with validation error
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(msg.contains("does not match relayer account"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
     }
 }
 

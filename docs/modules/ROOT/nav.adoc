@@ -5,6 +5,7 @@
 ** xref:network_configuration.adoc[Network Configuration]
 * xref:evm.adoc[EVM Integration]
 * xref:solana.adoc[Solana Integration]
+* xref:stellar.adoc[Stellar Integration]
 * link:https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^]
 * xref:structure.adoc[Project Structure]
 * xref:roadmap.adoc[Project Roadmap]

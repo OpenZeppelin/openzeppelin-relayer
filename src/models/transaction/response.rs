@@ -72,6 +72,7 @@ pub struct SolanaTransactionResponse {
     #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
+    pub status_reason: Option<String>,
     pub created_at: String,
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
@@ -87,6 +88,7 @@ pub struct StellarTransactionResponse {
     #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
+    pub status_reason: Option<String>,
     pub created_at: String,
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
@@ -128,6 +130,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     id: model.id,
                     hash: solana_data.hash,
                     status: model.status,
+                    status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
@@ -140,6 +143,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     id: model.id,
                     hash: stellar_data.hash,
                     status: model.status,
+                    status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,

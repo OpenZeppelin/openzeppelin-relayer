@@ -51,6 +51,9 @@ where
     let signed_stellar_data =
         sign_fee_bump_transaction(stellar_data, fee_bump_envelope, relayer_address, signer).await?;
 
+    // Step 5: Update the fee in stellar data
+    let signed_stellar_data = signed_stellar_data.with_fee(required_fee);
+
     Ok(signed_stellar_data)
 }
 

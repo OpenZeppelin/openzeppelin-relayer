@@ -28,6 +28,11 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
       TAG: ${{ inputs.tag || github.event.inputs.tag }}
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
       - name: Get github app token
         uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e  # v2.0.6
         id: gh-app-token
