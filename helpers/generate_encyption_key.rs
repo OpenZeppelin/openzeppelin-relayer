@@ -1,48 +1,26 @@
 //! Encryption Key Generation Tool
 //!
-//! This tool generates a random 32-byte encryption key using OpenSSL and prints it to the console.
+//! This tool generates a random 32-byte base64-encoded encryption key and prints it to the console.
+//!
+//! Other tools can be used to generate key like:
+//!
+//! ```bash
+//! openssl rand -base64 32
+//! ```
 //!
 //! # Usage
 //!
 //! ```bash
 //! cargo run --example generate_encryption_key
 //! ```
-//!
-//! # Requirements
-//!
-//! This tool requires OpenSSL to be installed and available in the system PATH.
-use eyre::{eyre, Result};
-use std::process::Command;
+use eyre::Result;
+use openzeppelin_relayer::utils::generate_encryption_key;
 
 /// Main entry point for encryption key generation tool
 fn main() -> Result<()> {
-    let encryption_key = generate_encryption_key()?;
+    let encryption_key = generate_encryption_key();
     println!("Generated new encryption key: {}", encryption_key);
     Ok(())
-}
-
-/// Generates a 32-byte base64-encoded encryption key using OpenSSL
-fn generate_encryption_key() -> Result<String> {
-    let output = Command::new("openssl")
-        .args(["rand", "-base64", "32"])
-        .output()
-        .map_err(|e| eyre!("Failed to execute openssl command: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(eyre!("OpenSSL command failed: {}", stderr));
-    }
-
-    let key = String::from_utf8(output.stdout)
-        .map_err(|e| eyre!("Failed to parse openssl output as UTF-8: {}", e))?
-        .trim()
-        .to_string();
-
-    if key.is_empty() {
-        return Err(eyre!("OpenSSL returned empty key"));
-    }
-
-    Ok(key)
 }
 
 #[cfg(test)]
@@ -53,9 +31,8 @@ mod tests {
     #[test]
     fn test_encryption_key_generation() {
         let key = generate_encryption_key();
-        assert!(key.is_ok(), "Failed to generate encryption key");
 
-        let key_string = key.unwrap();
+        let key_string = key;
         assert!(!key_string.is_empty(), "Generated key should not be empty");
 
         // Verify it's valid base64
@@ -72,14 +49,6 @@ mod tests {
         let key1 = generate_encryption_key();
         let key2 = generate_encryption_key();
 
-        assert!(
-            key1.is_ok() && key2.is_ok(),
-            "Both key generations should succeed"
-        );
-        assert_ne!(
-            key1.unwrap(),
-            key2.unwrap(),
-            "Two generated keys should be different"
-        );
+        assert_ne!(key1, key2, "Two generated keys should be different");
     }
 }
