@@ -39,10 +39,12 @@ pub struct AwsKmsSignerRequestConfig {
 #[serde(deny_unknown_fields)]
 pub struct VaultSignerRequestConfig {
     pub address: String,
+    #[schema(nullable = false)]
     pub namespace: Option<String>,
     pub role_id: String,
     pub secret_id: String,
     pub key_name: String,
+    #[schema(nullable = false)]
     pub mount_point: Option<String>,
 }
 
@@ -52,10 +54,12 @@ pub struct VaultSignerRequestConfig {
 pub struct VaultTransitSignerRequestConfig {
     pub key_name: String,
     pub address: String,
+    #[schema(nullable = false)]
     pub namespace: Option<String>,
     pub role_id: String,
     pub secret_id: String,
     pub pubkey: String,
+    #[schema(nullable = false)]
     pub mount_point: Option<String>,
 }
 
@@ -143,6 +147,7 @@ impl zeroize::Zeroize for SignerTypeRequest {
 #[serde(deny_unknown_fields)]
 pub struct SignerCreateRequest {
     /// Optional ID - if not provided, a UUID will be generated
+    #[schema(nullable = false)]
     pub id: Option<String>,
     /// The type of signer
     #[serde(rename = "type")]

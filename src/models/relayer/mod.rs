@@ -108,38 +108,46 @@ pub struct RelayerEvmPolicy {
 /// Solana token swap configuration
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct AllowedTokenSwapConfig {
+pub struct SolanaAllowedTokensSwapConfig {
     /// Conversion slippage percentage for token. Optional.
+    #[schema(nullable = false)]
     pub slippage_percentage: Option<f32>,
     /// Minimum amount of tokens to swap. Optional.
+    #[schema(nullable = false)]
     pub min_amount: Option<u64>,
     /// Maximum amount of tokens to swap. Optional.
+    #[schema(nullable = false)]
     pub max_amount: Option<u64>,
     /// Minimum amount of tokens to retain after swap. Optional.
+    #[schema(nullable = false)]
     pub retain_min_amount: Option<u64>,
 }
 
 /// Configuration for allowed token handling on Solana
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AllowedToken {
+pub struct SolanaAllowedTokensPolicy {
     pub mint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub decimals: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub symbol: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub max_allowed_fee: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub swap_config: Option<AllowedTokenSwapConfig>,
+    #[schema(nullable = false)]
+    pub swap_config: Option<SolanaAllowedTokensSwapConfig>,
 }
 
-impl AllowedToken {
+impl SolanaAllowedTokensPolicy {
     /// Create a new AllowedToken with required parameters
     pub fn new(
         mint: String,
         max_allowed_fee: Option<u64>,
-        swap_config: Option<AllowedTokenSwapConfig>,
+        swap_config: Option<SolanaAllowedTokensSwapConfig>,
     ) -> Self {
         Self {
             mint,
@@ -154,7 +162,7 @@ impl AllowedToken {
     pub fn new_partial(
         mint: String,
         max_allowed_fee: Option<u64>,
-        swap_config: Option<AllowedTokenSwapConfig>,
+        swap_config: Option<SolanaAllowedTokensSwapConfig>,
     ) -> Self {
         Self::new(mint, max_allowed_fee, swap_config)
     }
@@ -163,7 +171,7 @@ impl AllowedToken {
 /// Solana fee payment strategy
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum RelayerSolanaFeePaymentStrategy {
+pub enum SolanaFeePaymentStrategy {
     #[default]
     User,
     Relayer,
@@ -172,7 +180,7 @@ pub enum RelayerSolanaFeePaymentStrategy {
 /// Solana swap strategy
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum RelayerSolanaSwapStrategy {
+pub enum SolanaSwapStrategy {
     JupiterSwap,
     JupiterUltra,
     #[default]
@@ -184,23 +192,30 @@ pub enum RelayerSolanaSwapStrategy {
 #[serde(deny_unknown_fields)]
 pub struct JupiterSwapOptions {
     /// Maximum priority fee (in lamports) for a transaction. Optional.
+    #[schema(nullable = false)]
     pub priority_fee_max_lamports: Option<u64>,
     /// Priority. Optional.
+    #[schema(nullable = false)]
     pub priority_level: Option<String>,
+    #[schema(nullable = false)]
     pub dynamic_compute_unit_limit: Option<bool>,
 }
 
 /// Solana swap policy configuration
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct RelayerSolanaSwapPolicy {
+pub struct RelayerSolanaSwapConfig {
     /// DEX strategy to use for token swaps.
-    pub strategy: Option<RelayerSolanaSwapStrategy>,
+    #[schema(nullable = false)]
+    pub strategy: Option<SolanaSwapStrategy>,
     /// Cron schedule for executing token swap logic to keep relayer funded. Optional.
+    #[schema(nullable = false)]
     pub cron_schedule: Option<String>,
     /// Min sol balance to execute token swap logic to keep relayer funded. Optional.
+    #[schema(nullable = false)]
     pub min_balance_threshold: Option<u64>,
     /// Swap options for JupiterSwap strategy. Optional.
+    #[schema(nullable = false)]
     pub jupiter_swap_options: Option<JupiterSwapOptions>,
 }
 
@@ -217,9 +232,9 @@ pub struct RelayerSolanaPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_balance: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_tokens: Option<Vec<AllowedToken>>,
+    pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee_payment_strategy: Option<RelayerSolanaFeePaymentStrategy>,
+    pub fee_payment_strategy: Option<SolanaFeePaymentStrategy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_margin_percentage: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -229,17 +244,17 @@ pub struct RelayerSolanaPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_allowed_fee_lamports: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub swap_config: Option<RelayerSolanaSwapPolicy>,
+    pub swap_config: Option<RelayerSolanaSwapConfig>,
 }
 
 impl RelayerSolanaPolicy {
     /// Get allowed tokens for this policy
-    pub fn get_allowed_tokens(&self) -> Vec<AllowedToken> {
+    pub fn get_allowed_tokens(&self) -> Vec<SolanaAllowedTokensPolicy> {
         self.allowed_tokens.clone().unwrap_or_default()
     }
 
     /// Get allowed token entry by mint address
-    pub fn get_allowed_token_entry(&self, mint: &str) -> Option<AllowedToken> {
+    pub fn get_allowed_token_entry(&self, mint: &str) -> Option<SolanaAllowedTokensPolicy> {
         self.allowed_tokens
             .clone()
             .unwrap_or_default()
@@ -248,7 +263,7 @@ impl RelayerSolanaPolicy {
     }
 
     /// Get swap configuration for this policy
-    pub fn get_swap_config(&self) -> Option<RelayerSolanaSwapPolicy> {
+    pub fn get_swap_config(&self) -> Option<RelayerSolanaSwapConfig> {
         self.swap_config.clone()
     }
 
@@ -500,12 +515,12 @@ impl Relayer {
     /// Validates Solana swap configuration
     fn validate_solana_swap_config(
         &self,
-        swap_config: &RelayerSolanaSwapPolicy,
+        swap_config: &RelayerSolanaSwapConfig,
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), RelayerValidationError> {
         // Swap config only supported for user fee payment strategy
         if let Some(fee_payment_strategy) = &policy.fee_payment_strategy {
-            if *fee_payment_strategy == RelayerSolanaFeePaymentStrategy::Relayer {
+            if *fee_payment_strategy == SolanaFeePaymentStrategy::Relayer {
                 return Err(RelayerValidationError::InvalidPolicy(
                     "Swap config only supported for user fee payment strategy".into(),
                 ));
@@ -515,8 +530,7 @@ impl Relayer {
         // Validate strategy-specific restrictions
         if let Some(strategy) = &swap_config.strategy {
             match strategy {
-                RelayerSolanaSwapStrategy::JupiterSwap
-                | RelayerSolanaSwapStrategy::JupiterUltra => {
+                SolanaSwapStrategy::JupiterSwap | SolanaSwapStrategy::JupiterUltra => {
                     if self.network != "mainnet-beta" {
                         return Err(RelayerValidationError::InvalidPolicy(format!(
                             "{:?} strategy is only supported on mainnet-beta",
@@ -524,7 +538,7 @@ impl Relayer {
                         )));
                     }
                 }
-                RelayerSolanaSwapStrategy::Noop => {
+                SolanaSwapStrategy::Noop => {
                     // No-op strategy doesn't need validation
                 }
             }
@@ -546,7 +560,7 @@ impl Relayer {
         // Validate Jupiter swap options
         if let Some(jupiter_options) = &swap_config.jupiter_swap_options {
             // Jupiter options only valid for JupiterSwap strategy
-            if swap_config.strategy != Some(RelayerSolanaSwapStrategy::JupiterSwap) {
+            if swap_config.strategy != Some(SolanaSwapStrategy::JupiterSwap) {
                 return Err(RelayerValidationError::InvalidPolicy(
                     "JupiterSwap options are only valid for JupiterSwap strategy".into(),
                 ));
@@ -799,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_allowed_token_new() {
-        let token = AllowedToken::new(
+        let token = SolanaAllowedTokensPolicy::new(
             "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             Some(100000),
             None,
@@ -814,14 +828,14 @@ mod tests {
 
     #[test]
     fn test_allowed_token_new_partial() {
-        let swap_config = AllowedTokenSwapConfig {
+        let swap_config = SolanaAllowedTokensSwapConfig {
             slippage_percentage: Some(0.5),
             min_amount: Some(1000),
             max_amount: Some(10000000),
             retain_min_amount: Some(500),
         };
 
-        let token = AllowedToken::new_partial(
+        let token = SolanaAllowedTokensPolicy::new_partial(
             "TokenMint123".to_string(),
             Some(50000),
             Some(swap_config.clone()),
@@ -843,14 +857,14 @@ mod tests {
 
     #[test]
     fn test_relayer_solana_fee_payment_strategy_default() {
-        let default_strategy = RelayerSolanaFeePaymentStrategy::default();
-        assert_eq!(default_strategy, RelayerSolanaFeePaymentStrategy::User);
+        let default_strategy = SolanaFeePaymentStrategy::default();
+        assert_eq!(default_strategy, SolanaFeePaymentStrategy::User);
     }
 
     #[test]
     fn test_relayer_solana_swap_strategy_default() {
-        let default_strategy = RelayerSolanaSwapStrategy::default();
-        assert_eq!(default_strategy, RelayerSolanaSwapStrategy::Noop);
+        let default_strategy = SolanaSwapStrategy::default();
+        assert_eq!(default_strategy, SolanaSwapStrategy::Noop);
     }
 
     #[test]
@@ -863,7 +877,7 @@ mod tests {
 
     #[test]
     fn test_relayer_solana_swap_policy_default() {
-        let policy = RelayerSolanaSwapPolicy::default();
+        let policy = RelayerSolanaSwapConfig::default();
         assert_eq!(policy.strategy, None);
         assert_eq!(policy.cron_schedule, None);
         assert_eq!(policy.min_balance_threshold, None);
@@ -888,8 +902,8 @@ mod tests {
 
     #[test]
     fn test_relayer_solana_policy_get_allowed_tokens() {
-        let token1 = AllowedToken::new("mint1".to_string(), Some(1000), None);
-        let token2 = AllowedToken::new("mint2".to_string(), Some(2000), None);
+        let token1 = SolanaAllowedTokensPolicy::new("mint1".to_string(), Some(1000), None);
+        let token2 = SolanaAllowedTokensPolicy::new("mint2".to_string(), Some(2000), None);
 
         let policy = RelayerSolanaPolicy {
             allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
@@ -909,8 +923,8 @@ mod tests {
 
     #[test]
     fn test_relayer_solana_policy_get_allowed_token_entry() {
-        let token1 = AllowedToken::new("mint1".to_string(), Some(1000), None);
-        let token2 = AllowedToken::new("mint2".to_string(), Some(2000), None);
+        let token1 = SolanaAllowedTokensPolicy::new("mint1".to_string(), Some(1000), None);
+        let token2 = SolanaAllowedTokensPolicy::new("mint2".to_string(), Some(2000), None);
 
         let policy = RelayerSolanaPolicy {
             allowed_tokens: Some(vec![token1.clone(), token2.clone()]),
@@ -931,8 +945,8 @@ mod tests {
 
     #[test]
     fn test_relayer_solana_policy_get_swap_config() {
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             cron_schedule: Some("0 0 * * *".to_string()),
             min_balance_threshold: Some(1000000),
             jupiter_swap_options: None,
@@ -953,10 +967,10 @@ mod tests {
 
     #[test]
     fn test_relayer_solana_policy_get_allowed_token_decimals() {
-        let mut token1 = AllowedToken::new("mint1".to_string(), Some(1000), None);
+        let mut token1 = SolanaAllowedTokensPolicy::new("mint1".to_string(), Some(1000), None);
         token1.decimals = Some(9);
 
-        let token2 = AllowedToken::new("mint2".to_string(), Some(2000), None);
+        let token2 = SolanaAllowedTokensPolicy::new("mint2".to_string(), Some(2000), None);
         // token2.decimals is None
 
         let policy = RelayerSolanaPolicy {
@@ -1411,14 +1425,14 @@ mod tests {
 
     #[test]
     fn test_relayer_validation_solana_swap_config_wrong_fee_payment_strategy() {
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
-            ..RelayerSolanaSwapPolicy::default()
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer), // Relayer strategy
-            swap_config: Some(swap_config), // But has swap config
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer), // Relayer strategy
+            swap_config: Some(swap_config),                                // But has swap config
             ..RelayerSolanaPolicy::default()
         };
 
@@ -1445,13 +1459,13 @@ mod tests {
 
     #[test]
     fn test_relayer_validation_solana_jupiter_strategy_wrong_network() {
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
-            ..RelayerSolanaSwapPolicy::default()
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1479,14 +1493,14 @@ mod tests {
 
     #[test]
     fn test_relayer_validation_solana_empty_cron_schedule() {
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             cron_schedule: Some("".to_string()), // Empty cron schedule
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1514,14 +1528,14 @@ mod tests {
 
     #[test]
     fn test_relayer_validation_solana_invalid_cron_schedule() {
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             cron_schedule: Some("invalid cron".to_string()), // Invalid cron format
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1555,14 +1569,14 @@ mod tests {
             dynamic_compute_unit_limit: Some(true),
         };
 
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterUltra), // Wrong strategy
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterUltra), // Wrong strategy
             jupiter_swap_options: Some(jupiter_options),
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1596,14 +1610,14 @@ mod tests {
             dynamic_compute_unit_limit: Some(true),
         };
 
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             jupiter_swap_options: Some(jupiter_options),
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1637,14 +1651,14 @@ mod tests {
             dynamic_compute_unit_limit: Some(true),
         };
 
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             jupiter_swap_options: Some(jupiter_options),
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1678,14 +1692,14 @@ mod tests {
             dynamic_compute_unit_limit: Some(true),
         };
 
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             jupiter_swap_options: Some(jupiter_options),
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1719,14 +1733,14 @@ mod tests {
             dynamic_compute_unit_limit: Some(true),
         };
 
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             jupiter_swap_options: Some(jupiter_options),
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };
@@ -1760,14 +1774,14 @@ mod tests {
             dynamic_compute_unit_limit: Some(true),
         };
 
-        let swap_config = RelayerSolanaSwapPolicy {
-            strategy: Some(RelayerSolanaSwapStrategy::JupiterSwap),
+        let swap_config = RelayerSolanaSwapConfig {
+            strategy: Some(SolanaSwapStrategy::JupiterSwap),
             jupiter_swap_options: Some(jupiter_options),
-            ..RelayerSolanaSwapPolicy::default()
+            ..RelayerSolanaSwapConfig::default()
         };
 
         let policy = RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             swap_config: Some(swap_config),
             ..RelayerSolanaPolicy::default()
         };

@@ -743,10 +743,9 @@ mod tests {
         domain::create_network_dex_generic,
         jobs::MockJobProducerTrait,
         models::{
-            AllowedTokenSwapConfig as SolanaAllowedTokensSwapConfig, EncodedSerializedTransaction,
-            FeeEstimateRequestParams, GetFeaturesEnabledRequestParams, JsonRpcId,
-            NetworkConfigData, NetworkRepoModel,
-            RelayerSolanaSwapPolicy as RelayerSolanaSwapConfig, SolanaRpcResult,
+            EncodedSerializedTransaction, FeeEstimateRequestParams,
+            GetFeaturesEnabledRequestParams, JsonRpcId, NetworkConfigData, NetworkRepoModel,
+            RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
             SolanaSwapStrategy,
         },
         repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},

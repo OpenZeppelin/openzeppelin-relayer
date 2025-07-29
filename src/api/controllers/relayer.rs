@@ -783,8 +783,8 @@ mod tests {
     use crate::{
         models::{
             ApiResponse, CreateRelayerPolicyRequest, CreateRelayerRequest, RelayerEvmPolicy,
-            RelayerNetworkPolicyResponse, RelayerNetworkType, RelayerResponse,
-            RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy, RelayerStellarPolicy,
+            RelayerNetworkPolicyResponse, RelayerNetworkType, RelayerResponse, RelayerSolanaPolicy,
+            RelayerStellarPolicy, SolanaFeePaymentStrategy,
         },
         utils::mocks::mockutils::{
             create_mock_app_state, create_mock_network, create_mock_notification,
@@ -1028,7 +1028,7 @@ mod tests {
         // Change network type to Solana and add Solana policies
         request.network_type = RelayerNetworkType::Solana;
         request.policies = Some(CreateRelayerPolicyRequest::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: Some(RelayerSolanaFeePaymentStrategy::Relayer),
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             min_balance: Some(5000000),
             max_signatures: Some(10),
             max_tx_data_size: Some(1232),
@@ -1063,7 +1063,7 @@ mod tests {
         if let RelayerNetworkPolicyResponse::Solana(solana_policy) = policies {
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+                Some(SolanaFeePaymentStrategy::Relayer)
             );
             assert_eq!(solana_policy.min_balance, 5000000);
             assert_eq!(solana_policy.max_signatures, Some(10));
@@ -1837,7 +1837,7 @@ mod tests {
     #[actix_web::test]
     async fn test_update_relayer_solana_policies() {
         use crate::models::{
-            NetworkType, RelayerNetworkPolicy, RelayerSolanaFeePaymentStrategy, RelayerSolanaPolicy,
+            NetworkType, RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaFeePaymentStrategy,
         };
 
         // Create a Solana relayer (not the default EVM one)
@@ -1882,7 +1882,7 @@ mod tests {
         if let RelayerNetworkPolicyResponse::Solana(solana_policy) = policies {
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::User)
+                Some(SolanaFeePaymentStrategy::User)
             );
             assert_eq!(solana_policy.min_balance, 2000000);
             assert_eq!(solana_policy.max_signatures, Some(5));

@@ -10,9 +10,9 @@ use std::str::FromStr;
 use crate::{
     jobs::MockJobProducerTrait,
     models::{
-        AllowedTokenSwapConfig as SolanaAllowedTokensSwapConfig, EncodedSerializedTransaction,
-        NetworkType, RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy,
-        SolanaAllowedTokensPolicy, SolanaFeePaymentStrategy,
+        EncodedSerializedTransaction, NetworkType, RelayerNetworkPolicy, RelayerRepoModel,
+        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
+        SolanaFeePaymentStrategy,
     },
     services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
 };

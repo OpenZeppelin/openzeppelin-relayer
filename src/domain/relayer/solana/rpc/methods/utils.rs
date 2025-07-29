@@ -887,8 +887,8 @@ mod tests {
     use crate::{
         constants::WRAPPED_SOL_MINT,
         models::{
-            AllowedTokenSwapConfig as SolanaAllowedTokensSwapConfig, RelayerNetworkPolicy,
-            RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+            SolanaAllowedTokensSwapConfig,
         },
         services::{QuoteResponse, RoutePlan, SwapInfo},
     };

@@ -61,7 +61,7 @@ pub struct AllowedToken {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub enum ConfigFileRelayerSolanaFeePaymentStrategy {
+pub enum ConfigFileSolanaFeePaymentStrategy {
     User,
     Relayer,
 }
@@ -85,7 +85,7 @@ pub struct JupiterSwapOptions {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct ConfigFileRelayerSolanaSwapPolicy {
+pub struct ConfigFileRelayerSolanaSwapConfig {
     /// DEX strategy to use for token swaps.
     pub strategy: Option<ConfigFileRelayerSolanaSwapStrategy>,
 
@@ -103,7 +103,7 @@ pub struct ConfigFileRelayerSolanaSwapPolicy {
 #[serde(deny_unknown_fields)]
 pub struct ConfigFileRelayerSolanaPolicy {
     /// Determines if the relayer pays the transaction fee or the user. Optional.
-    pub fee_payment_strategy: Option<ConfigFileRelayerSolanaFeePaymentStrategy>,
+    pub fee_payment_strategy: Option<ConfigFileSolanaFeePaymentStrategy>,
 
     /// Fee margin percentage for the relayer. Optional.
     pub fee_margin_percentage: Option<f32>,
@@ -136,7 +136,7 @@ pub struct ConfigFileRelayerSolanaPolicy {
     pub max_allowed_fee_lamports: Option<u64>,
 
     /// Swap dex config to use for token swaps. Optional.
-    pub swap_config: Option<ConfigFileRelayerSolanaSwapPolicy>,
+    pub swap_config: Option<ConfigFileRelayerSolanaSwapConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -344,13 +344,13 @@ fn convert_config_policies_to_domain(
         }
         ConfigFileRelayerNetworkPolicy::Solana(solana_policy) => {
             let swap_config = if let Some(config_swap) = solana_policy.swap_config {
-                Some(super::RelayerSolanaSwapPolicy {
+                Some(super::RelayerSolanaSwapConfig {
                     strategy: config_swap.strategy.map(|s| match s {
                         ConfigFileRelayerSolanaSwapStrategy::JupiterSwap => {
-                            super::RelayerSolanaSwapStrategy::JupiterSwap
+                            super::SolanaSwapStrategy::JupiterSwap
                         }
                         ConfigFileRelayerSolanaSwapStrategy::JupiterUltra => {
-                            super::RelayerSolanaSwapStrategy::JupiterUltra
+                            super::SolanaSwapStrategy::JupiterUltra
                         }
                     }),
                     cron_schedule: config_swap.cron_schedule,
@@ -375,26 +375,28 @@ fn convert_config_policies_to_domain(
                 allowed_tokens: solana_policy.allowed_tokens.map(|tokens| {
                     tokens
                         .into_iter()
-                        .map(|t| super::AllowedToken {
+                        .map(|t| super::SolanaAllowedTokensPolicy {
                             mint: t.mint,
                             decimals: t.decimals,
                             symbol: t.symbol,
                             max_allowed_fee: t.max_allowed_fee,
-                            swap_config: t.swap_config.map(|sc| super::AllowedTokenSwapConfig {
-                                slippage_percentage: sc.slippage_percentage,
-                                min_amount: sc.min_amount,
-                                max_amount: sc.max_amount,
-                                retain_min_amount: sc.retain_min_amount,
+                            swap_config: t.swap_config.map(|sc| {
+                                super::SolanaAllowedTokensSwapConfig {
+                                    slippage_percentage: sc.slippage_percentage,
+                                    min_amount: sc.min_amount,
+                                    max_amount: sc.max_amount,
+                                    retain_min_amount: sc.retain_min_amount,
+                                }
                             }),
                         })
                         .collect()
                 }),
                 fee_payment_strategy: solana_policy.fee_payment_strategy.map(|s| match s {
-                    ConfigFileRelayerSolanaFeePaymentStrategy::User => {
-                        super::RelayerSolanaFeePaymentStrategy::User
+                    ConfigFileSolanaFeePaymentStrategy::User => {
+                        super::SolanaFeePaymentStrategy::User
                     }
-                    ConfigFileRelayerSolanaFeePaymentStrategy::Relayer => {
-                        super::RelayerSolanaFeePaymentStrategy::Relayer
+                    ConfigFileSolanaFeePaymentStrategy::Relayer => {
+                        super::SolanaFeePaymentStrategy::Relayer
                     }
                 }),
                 fee_margin_percentage: solana_policy.fee_margin_percentage,
@@ -488,7 +490,7 @@ impl RelayersFileConfig {
 mod tests {
     use super::*;
     use crate::config::ConfigFileNetworkType;
-    use crate::models::relayer::{RelayerSolanaFeePaymentStrategy, RelayerSolanaSwapStrategy};
+    use crate::models::relayer::{SolanaFeePaymentStrategy, SolanaSwapStrategy};
     use serde_json;
 
     fn create_test_networks_config() -> NetworksFileConfig {
@@ -607,7 +609,7 @@ mod tests {
         if let Some(ConfigFileRelayerNetworkPolicy::Solana(solana_policy)) = config.policies {
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(ConfigFileRelayerSolanaFeePaymentStrategy::Relayer)
+                Some(ConfigFileSolanaFeePaymentStrategy::Relayer)
             );
             assert_eq!(solana_policy.min_balance, Some(5000000));
             assert_eq!(solana_policy.max_signatures, Some(8));
@@ -799,7 +801,7 @@ mod tests {
     #[test]
     fn test_convert_config_policies_to_domain_solana() {
         let config_policy = ConfigFileRelayerNetworkPolicy::Solana(ConfigFileRelayerSolanaPolicy {
-            fee_payment_strategy: Some(ConfigFileRelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(ConfigFileSolanaFeePaymentStrategy::User),
             fee_margin_percentage: Some(1.5),
             min_balance: Some(3000000),
             allowed_tokens: Some(vec![AllowedToken {
@@ -820,7 +822,7 @@ mod tests {
             max_tx_data_size: Some(2048),
             max_signatures: Some(10),
             max_allowed_fee_lamports: Some(100000),
-            swap_config: Some(ConfigFileRelayerSolanaSwapPolicy {
+            swap_config: Some(ConfigFileRelayerSolanaSwapConfig {
                 strategy: Some(ConfigFileRelayerSolanaSwapStrategy::JupiterUltra),
                 cron_schedule: Some("0 */6 * * *".to_string()),
                 min_balance_threshold: Some(2000000),
@@ -837,7 +839,7 @@ mod tests {
         if let RelayerNetworkPolicy::Solana(solana_policy) = domain_policy {
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::User)
+                Some(SolanaFeePaymentStrategy::User)
             );
             assert_eq!(solana_policy.fee_margin_percentage, Some(1.5));
             assert_eq!(solana_policy.min_balance, Some(3000000));
@@ -856,10 +858,7 @@ mod tests {
             // Test swap config conversion
             assert!(solana_policy.swap_config.is_some());
             let swap_config = solana_policy.swap_config.unwrap();
-            assert_eq!(
-                swap_config.strategy,
-                Some(RelayerSolanaSwapStrategy::JupiterUltra)
-            );
+            assert_eq!(swap_config.strategy, Some(SolanaSwapStrategy::JupiterUltra));
             assert_eq!(swap_config.cron_schedule, Some("0 */6 * * *".to_string()));
             assert_eq!(swap_config.min_balance_threshold, Some(2000000));
         } else {
@@ -946,7 +945,7 @@ mod tests {
             network_type: ConfigFileNetworkType::Solana,
             policies: Some(ConfigFileRelayerNetworkPolicy::Solana(
                 ConfigFileRelayerSolanaPolicy {
-                    fee_payment_strategy: Some(ConfigFileRelayerSolanaFeePaymentStrategy::Relayer),
+                    fee_payment_strategy: Some(ConfigFileSolanaFeePaymentStrategy::Relayer),
                     fee_margin_percentage: None,
                     min_balance: Some(4000000),
                     allowed_tokens: None,
@@ -977,7 +976,7 @@ mod tests {
         if let Some(RelayerNetworkPolicy::Solana(solana_policy)) = domain_relayer.policies {
             assert_eq!(
                 solana_policy.fee_payment_strategy,
-                Some(RelayerSolanaFeePaymentStrategy::Relayer)
+                Some(SolanaFeePaymentStrategy::Relayer)
             );
             assert_eq!(solana_policy.min_balance, Some(4000000));
             assert_eq!(solana_policy.max_signatures, Some(7));
@@ -1199,7 +1198,7 @@ mod tests {
         assert_eq!(evm_policy, deserialized);
 
         let solana_policy = ConfigFileRelayerSolanaPolicy {
-            fee_payment_strategy: Some(ConfigFileRelayerSolanaFeePaymentStrategy::User),
+            fee_payment_strategy: Some(ConfigFileSolanaFeePaymentStrategy::User),
             fee_margin_percentage: Some(3.0),
             min_balance: Some(6000000),
             allowed_tokens: None,
