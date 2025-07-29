@@ -3,6 +3,7 @@
 * xref:configuration.adoc[Configuration]
 ** xref:signers.adoc[Signers]
 ** xref:network_configuration.adoc[Network Configuration]
+** xref:storage.adoc[Storage Configuration]
 * xref:evm.adoc[EVM Integration]
 * xref:solana.adoc[Solana Integration]
 * link:https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^]
