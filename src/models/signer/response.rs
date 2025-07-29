@@ -164,14 +164,14 @@ impl From<Signer> for SignerResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{LocalSignerConfig, SignerConfig};
+    use crate::models::{LocalSignerConfigStorage, SignerConfigStorage};
     use secrets::SecretVec;
 
     #[test]
     fn test_signer_response_from_repo_model() {
         let repo_model = SignerRepoModel {
             id: "test-signer".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         };
@@ -214,14 +214,14 @@ mod tests {
     fn test_signer_type_mapping_from_config() {
         let test_cases = vec![
             (
-                SignerConfig::Local(LocalSignerConfig {
+                SignerConfigStorage::Local(LocalSignerConfigStorage {
                     raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
                 }),
                 SignerType::Local,
                 SignerConfigResponse::Plain {},
             ),
             (
-                SignerConfig::AwsKms(crate::models::AwsKmsSignerConfig {
+                SignerConfigStorage::AwsKms(crate::models::AwsKmsSignerConfigStorage {
                     region: Some("us-east-1".to_string()),
                     key_id: "test-key".to_string(),
                 }),

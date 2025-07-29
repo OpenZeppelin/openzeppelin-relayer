@@ -22,8 +22,8 @@ use crate::{
         ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
-        RelayerResponse, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
-        TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
+        RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
+        TransactionRepoModel, TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
@@ -185,9 +185,12 @@ where
     let mut relayer_model = RelayerRepoModel::from(relayer);
 
     // get address from signer and set it to relayer model
-    let signer_service = SignerFactory::create_signer(&relayer_model.network_type, &signer_model)
-        .await
-        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+    let signer_service = SignerFactory::create_signer(
+        &relayer_model.network_type,
+        &SignerDomainModel::from(signer_model.clone()),
+    )
+    .await
+    .map_err(|e| ApiError::InternalError(e.to_string()))?;
     let address = signer_service
         .address()
         .await
@@ -789,7 +792,13 @@ mod tests {
         },
     };
     use actix_web::body::to_bytes;
+    use lazy_static::lazy_static;
     use std::env;
+    use tokio::sync::Mutex;
+
+    lazy_static! {
+        static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
 
     fn setup_test_env() {
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost nosemgrep
@@ -873,6 +882,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_success() {
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -906,6 +916,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_evm_policies() {
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -954,6 +965,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_partial_evm_policies() {
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -998,6 +1010,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_solana_policies() {
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_solana_network();
         let signer = create_mock_signer();
@@ -1064,6 +1077,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_stellar_policies() {
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_stellar_network();
         let signer = create_mock_signer();
@@ -1107,6 +1121,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_policy_type_mismatch() {
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();
@@ -1140,6 +1155,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_create_relayer_with_notification() {
+        let _lock = ENV_MUTEX.lock().await;
         setup_test_env();
         let network = create_mock_network();
         let signer = create_mock_signer();

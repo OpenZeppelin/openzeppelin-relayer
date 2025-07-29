@@ -128,7 +128,7 @@ impl NotificationConfigs {
     /// Validates all notification configurations
     pub fn validate(&self) -> Result<(), ConfigFileError> {
         if self.notifications.is_empty() {
-            return Err(ConfigFileError::MissingField("notifications".into()));
+            return Ok(());
         }
 
         let mut ids = HashSet::new();

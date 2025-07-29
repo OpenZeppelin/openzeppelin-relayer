@@ -136,13 +136,13 @@ impl Repository<SignerRepoModel, String> for SignerRepositoryStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{LocalSignerConfig, SignerConfig};
+    use crate::models::{LocalSignerConfigStorage, SignerConfigStorage};
     use secrets::SecretVec;
 
     fn create_local_signer(id: String) -> SignerRepoModel {
         SignerRepoModel {
             id: id.clone(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         }
@@ -235,7 +235,7 @@ mod tests {
         // Update with different config
         let updated_signer = SignerRepoModel {
             id: "update-test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[2; 32])),
             }),
         };
@@ -248,7 +248,7 @@ mod tests {
         // Test updating non-existent signer
         let non_existent_signer = SignerRepoModel {
             id: "non-existent".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[3; 32])),
             }),
         };

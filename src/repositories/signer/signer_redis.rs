@@ -1,6 +1,6 @@
 //! Redis-backed implementation of the signer repository.
 
-use crate::models::{RepositoryError, SignerRepoModel, SignerRepoModelStorage};
+use crate::models::{RepositoryError, SignerRepoModel};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::*;
 use async_trait::async_trait;
@@ -115,10 +115,8 @@ impl RedisSignerRepository {
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
-                    match self
-                        .deserialize_entity::<SignerRepoModelStorage>(&json, &ids[i], "signer")
-                    {
-                        Ok(signer) => signers.push(SignerRepoModel::from(signer)),
+                    match self.deserialize_entity::<SignerRepoModel>(&json, &ids[i], "signer") {
+                        Ok(signer) => signers.push(signer),
                         Err(e) => {
                             failed_count += 1;
                             error!("Failed to deserialize signer {}: {}", ids[i], e);
@@ -190,11 +188,8 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             }
         }
 
-        // Convert to storage model in order to serialize key properly
-        let signer_storage: SignerRepoModelStorage = signer.clone().into();
-
-        // Serialize signer
-        let serialized = self.serialize_entity(&signer_storage, |s| &s.id, "signer")?;
+        // Serialize signer (encryption happens automatically for human-readable formats)
+        let serialized = self.serialize_entity(&signer, |s| &s.id, "signer")?;
 
         // Store signer
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
@@ -223,9 +218,8 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         let result: Result<Option<String>, RedisError> = conn.get(&key).await;
         match result {
             Ok(Some(data)) => {
-                let signer_storage =
-                    self.deserialize_entity::<SignerRepoModelStorage>(&data, &id, "signer")?;
-                let signer = SignerRepoModel::from(signer_storage);
+                // Deserialize signer (decryption happens automatically)
+                let signer = self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")?;
                 debug!("Retrieved signer with ID: {}", id);
                 Ok(signer)
             }
@@ -287,7 +281,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             }
         }
 
-        // Serialize signer
+        // Serialize signer (encryption happens automatically for human-readable formats)
         let serialized = self.serialize_entity(&signer, |s| &s.id, "signer")?;
 
         // Update signer
@@ -474,14 +468,14 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{LocalSignerConfig, SignerConfig};
+    use crate::models::{LocalSignerConfigStorage, SignerConfigStorage};
     use secrets::SecretVec;
     use std::sync::Arc;
 
     fn create_local_signer(id: &str) -> SignerRepoModel {
         SignerRepoModel {
             id: id.to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         }
@@ -545,8 +539,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(signer.id, deserialized.id);
-        assert!(matches!(signer.config, SignerConfig::Local(_)));
-        assert!(matches!(deserialized.config, SignerConfig::Local(_)));
+        assert!(matches!(signer.config, SignerConfigStorage::Local(_)));
+        assert!(matches!(deserialized.config, SignerConfigStorage::Local(_)));
     }
 
     #[tokio::test]
@@ -576,7 +570,7 @@ mod tests {
         // Get the signer
         let retrieved = repo.get_by_id(signer_name.clone()).await.unwrap();
         assert_eq!(retrieved.id, signer.id);
-        assert!(matches!(retrieved.config, SignerConfig::Local(_)));
+        assert!(matches!(retrieved.config, SignerConfigStorage::Local(_)));
     }
 
     #[tokio::test]
@@ -602,7 +596,7 @@ mod tests {
         // Update the signer
         let updated_signer = SignerRepoModel {
             id: signer_name.clone(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[2; 32])),
             }),
         };
@@ -612,7 +606,7 @@ mod tests {
 
         // Verify the update
         let retrieved = repo.get_by_id(signer_name).await.unwrap();
-        assert!(matches!(retrieved.config, SignerConfig::Local(_)));
+        assert!(matches!(retrieved.config, SignerConfigStorage::Local(_)));
     }
 
     #[tokio::test]
@@ -750,7 +744,7 @@ mod tests {
         let repo = setup_test_repo().await;
         let signer = SignerRepoModel {
             id: "".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1; 32])),
             }),
         };

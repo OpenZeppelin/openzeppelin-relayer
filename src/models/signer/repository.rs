@@ -20,48 +20,20 @@ use crate::{
         },
         SecretString,
     },
-    utils::{base64_decode, base64_encode},
+    utils::{
+        deserialize_secret_string, deserialize_secret_vec, serialize_secret_string,
+        serialize_secret_vec,
+    },
 };
 use secrets::SecretVec;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-/// Helper function to serialize secrets as base64 for storage
-fn serialize_secret_base64<S>(secret: &SecretVec<u8>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let base64 = base64_encode(secret.borrow().as_ref());
-    serializer.serialize_str(&base64)
-}
-
-/// Helper function to deserialize secrets from base64 storage
-fn deserialize_secret_base64<'de, D>(deserializer: D) -> Result<SecretVec<u8>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let base64_str = String::deserialize(deserializer)?;
-    let decoded = base64_decode(&base64_str)
-        .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
-    Ok(SecretVec::new(decoded.len(), |v| {
-        v.copy_from_slice(&decoded)
-    }))
-}
-
+use serde::{Deserialize, Serialize};
 /// Repository model for signer storage and retrieval
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignerRepoModel {
     pub id: String,
-    pub config: SignerConfig,
-}
-
-/// Storage model for direct serialization/deserialization
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignerRepoModelStorage {
-    pub id: String,
     pub config: SignerConfigStorage,
 }
 
-/// Storage-optimized configuration for signers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SignerConfigStorage {
     Local(LocalSignerConfigStorage),
@@ -76,10 +48,26 @@ pub enum SignerConfigStorage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalSignerConfigStorage {
     #[serde(
-        serialize_with = "serialize_secret_base64",
-        deserialize_with = "deserialize_secret_base64"
+        serialize_with = "serialize_secret_vec",
+        deserialize_with = "deserialize_secret_vec"
     )]
     pub raw_key: SecretVec<u8>,
+}
+
+impl From<LocalSignerConfig> for LocalSignerConfigStorage {
+    fn from(config: LocalSignerConfig) -> Self {
+        Self {
+            raw_key: config.raw_key,
+        }
+    }
+}
+
+impl From<LocalSignerConfigStorage> for LocalSignerConfig {
+    fn from(storage: LocalSignerConfigStorage) -> Self {
+        Self {
+            raw_key: storage.raw_key,
+        }
+    }
 }
 
 /// Storage representations for other signer types (these are simpler as they don't contain secrets that need encoding)
@@ -93,8 +81,16 @@ pub struct AwsKmsSignerConfigStorage {
 pub struct VaultSignerConfigStorage {
     pub address: String,
     pub namespace: Option<String>,
-    pub role_id: String,   // Stored as string for simplicity
-    pub secret_id: String, // Stored as string for simplicity
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub role_id: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub secret_id: SecretString,
     pub key_name: String,
     pub mount_point: Option<String>,
 }
@@ -104,8 +100,16 @@ pub struct VaultTransitSignerConfigStorage {
     pub key_name: String,
     pub address: String,
     pub namespace: Option<String>,
-    pub role_id: String,   // Stored as string for simplicity
-    pub secret_id: String, // Stored as string for simplicity
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub role_id: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub secret_id: SecretString,
     pub pubkey: String,
     pub mount_point: Option<String>,
 }
@@ -113,7 +117,11 @@ pub struct VaultTransitSignerConfigStorage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnkeySignerConfigStorage {
     pub api_public_key: String,
-    pub api_private_key: String, // Stored as string for simplicity
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub api_private_key: SecretString,
     pub organization_id: String,
     pub private_key_id: String,
     pub public_key: String,
@@ -121,10 +129,22 @@ pub struct TurnkeySignerConfigStorage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleCloudKmsSignerServiceAccountConfigStorage {
-    pub private_key: String,    // Stored as string for simplicity
-    pub private_key_id: String, // Stored as string for simplicity
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub private_key: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub private_key_id: SecretString,
     pub project_id: String,
-    pub client_email: String, // Stored as string for simplicity
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub client_email: SecretString,
     pub client_id: String,
     pub auth_uri: String,
     pub token_uri: String,
@@ -152,85 +172,17 @@ impl From<Signer> for SignerRepoModel {
     fn from(signer: Signer) -> Self {
         Self {
             id: signer.id,
-            config: signer.config,
+            config: signer.config.into(),
         }
     }
 }
 
-/// Convert repository model to storage model
-impl From<SignerRepoModel> for SignerRepoModelStorage {
-    fn from(model: SignerRepoModel) -> Self {
-        Self {
-            id: model.id,
-            config: model.config.into(),
-        }
-    }
-}
-
-/// Convert storage model back to repository model
-impl From<SignerRepoModelStorage> for SignerRepoModel {
-    fn from(storage_model: SignerRepoModelStorage) -> Self {
-        Self {
-            id: storage_model.id,
-            config: storage_model.config.into(),
-        }
-    }
-}
-
-/// Convert from repository model to domain model  
+/// Convert from repository model to domain model
 impl From<SignerRepoModel> for Signer {
     fn from(repo_model: SignerRepoModel) -> Self {
         Self {
             id: repo_model.id,
-            config: repo_model.config,
-        }
-    }
-}
-
-/// Convert domain config to storage config
-impl From<SignerConfig> for SignerConfigStorage {
-    fn from(config: SignerConfig) -> Self {
-        match config {
-            SignerConfig::Local(local) => SignerConfigStorage::Local(local.into()),
-            SignerConfig::AwsKms(aws) => SignerConfigStorage::AwsKms(aws.into()),
-            SignerConfig::Vault(vault) => SignerConfigStorage::Vault(vault.into()),
-            SignerConfig::VaultTransit(vault_transit) => {
-                SignerConfigStorage::VaultTransit(vault_transit.into())
-            }
-            SignerConfig::Turnkey(turnkey) => SignerConfigStorage::Turnkey(turnkey.into()),
-            SignerConfig::GoogleCloudKms(gcp) => SignerConfigStorage::GoogleCloudKms(gcp.into()),
-        }
-    }
-}
-
-/// Convert storage config to domain config
-impl From<SignerConfigStorage> for SignerConfig {
-    fn from(storage: SignerConfigStorage) -> Self {
-        match storage {
-            SignerConfigStorage::Local(local) => SignerConfig::Local(local.into()),
-            SignerConfigStorage::AwsKms(aws) => SignerConfig::AwsKms(aws.into()),
-            SignerConfigStorage::Vault(vault) => SignerConfig::Vault(vault.into()),
-            SignerConfigStorage::VaultTransit(vault_transit) => {
-                SignerConfig::VaultTransit(vault_transit.into())
-            }
-            SignerConfigStorage::Turnkey(turnkey) => SignerConfig::Turnkey(turnkey.into()),
-            SignerConfigStorage::GoogleCloudKms(gcp) => SignerConfig::GoogleCloudKms(gcp.into()),
-        }
-    }
-}
-
-impl From<LocalSignerConfig> for LocalSignerConfigStorage {
-    fn from(config: LocalSignerConfig) -> Self {
-        Self {
-            raw_key: config.raw_key,
-        }
-    }
-}
-
-impl From<LocalSignerConfigStorage> for LocalSignerConfig {
-    fn from(storage: LocalSignerConfigStorage) -> Self {
-        Self {
-            raw_key: storage.raw_key,
+            config: repo_model.config.into(),
         }
     }
 }
@@ -258,8 +210,8 @@ impl From<VaultSignerConfig> for VaultSignerConfigStorage {
         Self {
             address: config.address,
             namespace: config.namespace,
-            role_id: config.role_id.to_str().to_string(),
-            secret_id: config.secret_id.to_str().to_string(),
+            role_id: config.role_id,
+            secret_id: config.secret_id,
             key_name: config.key_name,
             mount_point: config.mount_point,
         }
@@ -271,8 +223,8 @@ impl From<VaultSignerConfigStorage> for VaultSignerConfig {
         Self {
             address: storage.address,
             namespace: storage.namespace,
-            role_id: SecretString::new(&storage.role_id),
-            secret_id: SecretString::new(&storage.secret_id),
+            role_id: storage.role_id,
+            secret_id: storage.secret_id,
             key_name: storage.key_name,
             mount_point: storage.mount_point,
         }
@@ -285,8 +237,8 @@ impl From<VaultTransitSignerConfig> for VaultTransitSignerConfigStorage {
             key_name: config.key_name,
             address: config.address,
             namespace: config.namespace,
-            role_id: config.role_id.to_str().to_string(),
-            secret_id: config.secret_id.to_str().to_string(),
+            role_id: config.role_id,
+            secret_id: config.secret_id,
             pubkey: config.pubkey,
             mount_point: config.mount_point,
         }
@@ -299,8 +251,8 @@ impl From<VaultTransitSignerConfigStorage> for VaultTransitSignerConfig {
             key_name: storage.key_name,
             address: storage.address,
             namespace: storage.namespace,
-            role_id: SecretString::new(&storage.role_id),
-            secret_id: SecretString::new(&storage.secret_id),
+            role_id: storage.role_id,
+            secret_id: storage.secret_id,
             pubkey: storage.pubkey,
             mount_point: storage.mount_point,
         }
@@ -311,7 +263,7 @@ impl From<TurnkeySignerConfig> for TurnkeySignerConfigStorage {
     fn from(config: TurnkeySignerConfig) -> Self {
         Self {
             api_public_key: config.api_public_key,
-            api_private_key: config.api_private_key.to_str().to_string(),
+            api_private_key: config.api_private_key,
             organization_id: config.organization_id,
             private_key_id: config.private_key_id,
             public_key: config.public_key,
@@ -323,7 +275,7 @@ impl From<TurnkeySignerConfigStorage> for TurnkeySignerConfig {
     fn from(storage: TurnkeySignerConfigStorage) -> Self {
         Self {
             api_public_key: storage.api_public_key,
-            api_private_key: SecretString::new(&storage.api_private_key),
+            api_private_key: storage.api_private_key,
             organization_id: storage.organization_id,
             private_key_id: storage.private_key_id,
             public_key: storage.public_key,
@@ -354,10 +306,10 @@ impl From<GoogleCloudKmsSignerServiceAccountConfig>
 {
     fn from(config: GoogleCloudKmsSignerServiceAccountConfig) -> Self {
         Self {
-            private_key: config.private_key.to_str().to_string(),
-            private_key_id: config.private_key_id.to_str().to_string(),
+            private_key: config.private_key,
+            private_key_id: config.private_key_id,
             project_id: config.project_id,
-            client_email: config.client_email.to_str().to_string(),
+            client_email: config.client_email,
             client_id: config.client_id,
             auth_uri: config.auth_uri,
             token_uri: config.token_uri,
@@ -373,10 +325,10 @@ impl From<GoogleCloudKmsSignerServiceAccountConfigStorage>
 {
     fn from(storage: GoogleCloudKmsSignerServiceAccountConfigStorage) -> Self {
         Self {
-            private_key: SecretString::new(&storage.private_key),
-            private_key_id: SecretString::new(&storage.private_key_id),
+            private_key: storage.private_key,
+            private_key_id: storage.private_key_id,
             project_id: storage.project_id,
-            client_email: SecretString::new(&storage.client_email),
+            client_email: storage.client_email,
             client_id: storage.client_id,
             auth_uri: storage.auth_uri,
             token_uri: storage.token_uri,
@@ -417,6 +369,86 @@ impl SignerRepoModel {
     }
 }
 
+impl From<SignerConfig> for SignerConfigStorage {
+    fn from(config: SignerConfig) -> Self {
+        match config {
+            SignerConfig::Local(local) => SignerConfigStorage::Local(local.into()),
+            SignerConfig::Vault(vault) => SignerConfigStorage::Vault(vault.into()),
+            SignerConfig::VaultTransit(vault_transit) => {
+                SignerConfigStorage::VaultTransit(vault_transit.into())
+            }
+            SignerConfig::AwsKms(aws_kms) => SignerConfigStorage::AwsKms(aws_kms.into()),
+            SignerConfig::Turnkey(turnkey) => SignerConfigStorage::Turnkey(turnkey.into()),
+            SignerConfig::GoogleCloudKms(gcp) => SignerConfigStorage::GoogleCloudKms(gcp.into()),
+        }
+    }
+}
+
+impl From<SignerConfigStorage> for SignerConfig {
+    fn from(storage: SignerConfigStorage) -> Self {
+        match storage {
+            SignerConfigStorage::Local(local) => SignerConfig::Local(local.into()),
+            SignerConfigStorage::Vault(vault) => SignerConfig::Vault(vault.into()),
+            SignerConfigStorage::VaultTransit(vault_transit) => {
+                SignerConfig::VaultTransit(vault_transit.into())
+            }
+            SignerConfigStorage::AwsKms(aws_kms) => SignerConfig::AwsKms(aws_kms.into()),
+            SignerConfigStorage::Turnkey(turnkey) => SignerConfig::Turnkey(turnkey.into()),
+            SignerConfigStorage::GoogleCloudKms(gcp) => SignerConfig::GoogleCloudKms(gcp.into()),
+        }
+    }
+}
+
+impl SignerConfigStorage {
+    /// Get local signer config, returns error if not a local signer
+    pub fn get_local(&self) -> Option<&LocalSignerConfigStorage> {
+        match self {
+            Self::Local(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get vault transit signer config, returns error if not a vault transit signer
+    pub fn get_vault_transit(&self) -> Option<&VaultTransitSignerConfigStorage> {
+        match self {
+            Self::VaultTransit(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get vault signer config, returns error if not a vault signer
+    pub fn get_vault(&self) -> Option<&VaultSignerConfigStorage> {
+        match self {
+            Self::Vault(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get turnkey signer config, returns error if not a turnkey signer
+    pub fn get_turnkey(&self) -> Option<&TurnkeySignerConfigStorage> {
+        match self {
+            Self::Turnkey(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get google cloud kms signer config, returns error if not a google cloud kms signer
+    pub fn get_google_cloud_kms(&self) -> Option<&GoogleCloudKmsSignerConfigStorage> {
+        match self {
+            Self::GoogleCloudKms(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get aws kms signer config, returns error if not an aws kms signer
+    pub fn get_aws_kms(&self) -> Option<&AwsKmsSignerConfigStorage> {
+        match self {
+            Self::AwsKms(config) => Some(config),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,21 +466,21 @@ mod tests {
 
         let repo_model = SignerRepoModel::from(core);
         assert_eq!(repo_model.id, "test-id");
-        assert!(matches!(repo_model.config, SignerConfig::Local(_)));
+        assert!(matches!(repo_model.config, SignerConfigStorage::Local(_)));
     }
 
     #[test]
     fn test_to_core_signer() {
-        use crate::models::signer::AwsKmsSignerConfig;
+        use crate::models::signer::AwsKmsSignerConfigStorage;
 
-        let domain_config = AwsKmsSignerConfig {
+        let domain_config = AwsKmsSignerConfigStorage {
             region: Some("us-east-1".to_string()),
             key_id: "test-key".to_string(),
         };
 
         let repo_model = SignerRepoModel {
             id: "test-id".to_string(),
-            config: SignerConfig::AwsKms(domain_config),
+            config: SignerConfigStorage::AwsKms(domain_config),
         };
 
         let core = Signer::from(repo_model);
@@ -461,13 +493,17 @@ mod tests {
 
     #[test]
     fn test_validation() {
+        use secrets::SecretVec;
+
         let domain_config = LocalSignerConfig {
             raw_key: SecretVec::new(32, |v| v.fill(1)),
         };
+        // Convert to storage config properly
+        let storage_config = LocalSignerConfigStorage::from(domain_config);
 
         let repo_model = SignerRepoModel {
             id: "test-id".to_string(),
-            config: SignerConfig::Local(domain_config),
+            config: SignerConfigStorage::Local(storage_config),
         };
 
         assert!(repo_model.validate().is_ok());

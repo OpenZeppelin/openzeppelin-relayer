@@ -10,7 +10,10 @@ use vault_signer::*;
 
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
-    models::{Address, NetworkTransactionData, SignerConfig, SignerRepoModel},
+    models::{
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerConfig,
+        SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
+    },
     services::{
         signer::{SignerError, SignerFactoryError},
         Signer, VaultConfig, VaultService,
@@ -47,7 +50,9 @@ impl Signer for StellarSigner {
 pub struct StellarSignerFactory;
 
 impl StellarSignerFactory {
-    pub fn create_stellar_signer(m: &SignerRepoModel) -> Result<StellarSigner, SignerFactoryError> {
+    pub fn create_stellar_signer(
+        m: &SignerDomainModel,
+    ) -> Result<StellarSigner, SignerFactoryError> {
         let signer = match &m.config {
             SignerConfig::Local(_) => {
                 let local_signer = LocalSigner::new(m)?;

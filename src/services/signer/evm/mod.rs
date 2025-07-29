@@ -34,8 +34,8 @@ use crate::{
         SignTypedDataRequest,
     },
     models::{
-        Address, NetworkTransactionData, SignerConfig, SignerRepoModel, SignerType,
-        TransactionRepoModel, VaultSignerConfig,
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerConfig,
+        SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
     services::{
         signer::Signer,
@@ -124,7 +124,7 @@ pub struct EvmSignerFactory;
 
 impl EvmSignerFactory {
     pub async fn create_evm_signer(
-        signer_model: SignerRepoModel,
+        signer_model: SignerDomainModel,
     ) -> Result<EvmSigner, SignerFactoryError> {
         let signer = match &signer_model.config {
             SignerConfig::Local(_) => EvmSigner::Local(LocalSigner::new(&signer_model)?),
@@ -208,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_evm_signer_local() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -224,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_evm_signer_test() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -240,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_evm_signer_vault() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Vault(VaultSignerConfig {
                 address: "https://vault.test.com".to_string(),
@@ -261,7 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_evm_signer_aws_kms() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::AwsKms(AwsKmsSignerConfig {
                 region: Some("us-east-1".to_string()),
@@ -278,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_evm_signer_vault_transit() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
                 key_name: "test".to_string(),
@@ -301,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_evm_signer_turnkey() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Turnkey(TurnkeySignerConfig {
                 api_private_key: SecretString::new("api_private_key"),
@@ -325,7 +325,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_evm_signer_local() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -342,7 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_evm_signer_test() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -359,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_evm_signer_turnkey() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Turnkey(TurnkeySignerConfig {
                 api_private_key: SecretString::new("api_private_key"),
@@ -383,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_data_evm_signer_local() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -414,7 +414,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_evm() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),
@@ -459,7 +459,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_evm_signer_google_cloud_kms() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountConfig {
@@ -491,7 +491,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_data_with_different_message_types() {
-        let signer_model = SignerRepoModel {
+        let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: test_key_bytes(),

@@ -427,7 +427,7 @@ impl RelayersFileConfig {
 
     pub fn validate(&self, networks: &NetworksFileConfig) -> Result<(), ConfigFileError> {
         if self.relayers.is_empty() {
-            return Err(ConfigFileError::MissingField("relayers".into()));
+            return Ok(());
         }
 
         let mut ids = HashSet::new();
@@ -1099,21 +1099,6 @@ mod tests {
             // Expected - network doesn't exist in our mock config
         } else {
             panic!("Expected InvalidReference error");
-        }
-    }
-
-    #[test]
-    fn test_relayers_file_config_validation_empty_relayers() {
-        let relayers_config = RelayersFileConfig::new(vec![]);
-        let networks_config = create_test_networks_config();
-
-        let result = relayers_config.validate(&networks_config);
-        assert!(result.is_err());
-
-        if let Err(ConfigFileError::MissingField(field)) = result {
-            assert_eq!(field, "relayers");
-        } else {
-            panic!("Expected MissingField error for empty relayers");
         }
     }
 

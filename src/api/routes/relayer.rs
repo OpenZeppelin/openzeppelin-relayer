@@ -210,7 +210,12 @@ mod tests {
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
-        models::AppState,
+        models::{
+            AppState, EvmTransactionData, LocalSignerConfigStorage, NetworkConfigData,
+            NetworkRepoModel, NetworkTransactionData, NetworkType, RelayerEvmPolicy,
+            RelayerNetworkPolicy, RelayerRepoModel, SignerConfigStorage, SignerRepoModel,
+            TransactionRepoModel, TransactionStatus, U256,
+        },
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
             RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
@@ -239,11 +244,11 @@ mod tests {
         // Create test entities so routes don't return 404
 
         // Create test network configuration first
-        let test_network = crate::models::NetworkRepoModel {
+        let test_network = NetworkRepoModel {
             id: "evm:ethereum".to_string(),
             name: "ethereum".to_string(),
-            network_type: crate::models::NetworkType::Evm,
-            config: crate::models::NetworkConfigData::Evm(EvmNetworkConfig {
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(EvmNetworkConfig {
                 common: NetworkConfigCommon {
                     network: "ethereum".to_string(),
                     from: None,
@@ -262,63 +267,59 @@ mod tests {
         network_repo.create(test_network).await.unwrap();
 
         // Create local signer first
-        let test_signer = crate::models::SignerRepoModel {
+        let test_signer = SignerRepoModel {
             id: "test-signer".to_string(),
-            config: crate::models::SignerConfig::Local(crate::models::LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: secrets::SecretVec::new(32, |v| v.copy_from_slice(&[0u8; 32])),
             }),
         };
         signer_repo.create(test_signer).await.unwrap();
 
         // Create test relayer
-        let test_relayer = crate::models::RelayerRepoModel {
+        let test_relayer = RelayerRepoModel {
             id: "test-id".to_string(),
             name: "Test Relayer".to_string(),
             network: "ethereum".to_string(),
-            network_type: crate::models::NetworkType::Evm,
+            network_type: NetworkType::Evm,
             signer_id: "test-signer".to_string(),
             address: "0x1234567890123456789012345678901234567890".to_string(),
             paused: false,
             system_disabled: false,
-            policies: crate::models::RelayerNetworkPolicy::Evm(
-                crate::models::RelayerEvmPolicy::default(),
-            ),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
             notification_id: None,
             custom_rpc_urls: None,
         };
         relayer_repo.create(test_relayer).await.unwrap();
 
         // Create test transaction
-        let test_transaction = crate::models::TransactionRepoModel {
+        let test_transaction = TransactionRepoModel {
             id: "tx-123".to_string(),
             relayer_id: "test-id".to_string(),
-            status: crate::models::TransactionStatus::Pending,
+            status: TransactionStatus::Pending,
             status_reason: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
-            network_data: crate::models::NetworkTransactionData::Evm(
-                crate::models::EvmTransactionData {
-                    gas_price: Some(20000000000u128),
-                    gas_limit: Some(21000u64),
-                    nonce: Some(1u64),
-                    value: crate::models::U256::from(0u64),
-                    data: Some("0x".to_string()),
-                    from: "0x1234567890123456789012345678901234567890".to_string(),
-                    to: Some("0x9876543210987654321098765432109876543210".to_string()),
-                    chain_id: 1u64,
-                    hash: Some("0xabcdef".to_string()),
-                    signature: None,
-                    speed: None,
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                    raw: None,
-                },
-            ),
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                gas_price: Some(20000000000u128),
+                gas_limit: Some(21000u64),
+                nonce: Some(1u64),
+                value: U256::from(0u64),
+                data: Some("0x".to_string()),
+                from: "0x1234567890123456789012345678901234567890".to_string(),
+                to: Some("0x9876543210987654321098765432109876543210".to_string()),
+                chain_id: 1u64,
+                hash: Some("0xabcdef".to_string()),
+                signature: None,
+                speed: None,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                raw: None,
+            }),
             priced_at: None,
             hashes: vec!["0xabcdef".to_string()],
-            network_type: crate::models::NetworkType::Evm,
+            network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: Some(false),
         };

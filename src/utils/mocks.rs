@@ -10,10 +10,10 @@ pub mod mockutils {
         config::{EvmNetworkConfig, NetworkConfigCommon, RepositoryStorageType, ServerConfig},
         jobs::MockJobProducerTrait,
         models::{
-            AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfig,
+            AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfigStorage,
             NetworkRepoModel, NetworkTransactionData, NetworkType, NotificationRepoModel,
             PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SecretString,
-            SignerConfig, SignerRepoModel, TransactionRepoModel, TransactionStatus,
+            SignerConfigStorage, SignerRepoModel, TransactionRepoModel, TransactionStatus,
         },
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
@@ -59,7 +59,7 @@ pub mod mockutils {
         let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
         SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig { raw_key }),
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage { raw_key }),
         }
     }
 
@@ -226,6 +226,9 @@ pub mod mockutils {
             provider_max_failovers: 3,
             repository_storage_type: storage_type,
             reset_storage_on_start: false,
+            storage_encryption_key: Some(SecretString::new(
+                "test_encryption_key_1234567890_test_key_32",
+            )),
         }
     }
 }

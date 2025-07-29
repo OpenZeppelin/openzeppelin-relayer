@@ -17,7 +17,9 @@ use crate::{
         SignDataRequest, SignDataResponse, SignTransactionResponse, SignTransactionResponseStellar,
         SignTypedDataRequest,
     },
-    models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, TransactionInput},
+    models::{
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError, TransactionInput,
+    },
     services::Signer,
 };
 use async_trait::async_trait;
@@ -39,7 +41,7 @@ pub struct LocalSigner {
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: &SignerRepoModel) -> Result<Self, SignerError> {
+    pub fn new(signer_model: &SignerDomainModel) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_local()
@@ -187,14 +189,15 @@ impl Signer for LocalSigner {
 mod tests {
     use super::*;
     use crate::models::{
-        EvmTransactionData, LocalSignerConfig, SignerConfig, StellarTransactionData,
+        EvmTransactionData, LocalSignerConfig, Signer as SignerDomainModel, SignerConfig,
+        StellarTransactionData,
     };
     use secrets::SecretVec;
 
-    fn create_test_signer_model() -> SignerRepoModel {
+    fn create_test_signer_model() -> SignerDomainModel {
         let seed = vec![1u8; 32];
         let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
-        SignerRepoModel {
+        SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         }

@@ -6,8 +6,8 @@ use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
     jobs::JobProducerTrait,
     models::{
-        signer::Signer, NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer,
-        RelayerRepoModel, SignerFileConfig, SignerRepoModel, ThinDataAppState,
+        NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer, RelayerRepoModel,
+        Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel, ThinDataAppState,
         TransactionRepoModel,
     },
     repositories::{
@@ -59,7 +59,7 @@ where
 /// Process a signer configuration from the config file and convert it into a `SignerRepoModel`.
 async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
     // Convert config to domain model (this validates and applies business logic)
-    let domain_signer = Signer::try_from(signer.clone())
+    let domain_signer = SignerDomainModel::try_from(signer.clone())
         .wrap_err("Failed to convert signer config to domain model")?;
 
     // Convert domain model to repository model for storage
@@ -218,10 +218,14 @@ where
             .iter()
             .find(|s| s.id == repo_model.signer_id)
             .ok_or_else(|| eyre::eyre!("Signer not found"))?;
+
         let network_type = repo_model.network_type;
-        let signer_service = SignerFactory::create_signer(&network_type, signer_model)
-            .await
-            .wrap_err("Failed to create signer service")?;
+        let signer_service = SignerFactory::create_signer(
+            &network_type,
+            &SignerDomainModel::from(signer_model.clone()),
+        )
+        .await
+        .wrap_err("Failed to create signer service")?;
 
         let address = signer_service.address().await?;
         repo_model.address = address.to_string();
@@ -346,13 +350,12 @@ mod tests {
         config::{ConfigFileNetworkType, NetworksFileConfig, PluginFileConfig},
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
-        models::relayer::RelayerFileConfig,
         models::{
-            AppState, AwsKmsSignerFileConfig, GoogleCloudKmsKeyFileConfig,
-            GoogleCloudKmsServiceAccountFileConfig, GoogleCloudKmsSignerFileConfig,
-            LocalSignerFileConfig, NetworkType, NotificationConfig, NotificationType,
-            PlainOrEnvValue, SecretString, SignerConfig, SignerFileConfig, SignerFileConfigEnum,
-            VaultSignerFileConfig, VaultTransitSignerFileConfig,
+            relayer::RelayerFileConfig, AppState, AwsKmsSignerFileConfig,
+            GoogleCloudKmsKeyFileConfig, GoogleCloudKmsServiceAccountFileConfig,
+            GoogleCloudKmsSignerFileConfig, LocalSignerFileConfig, NetworkType, NotificationConfig,
+            NotificationType, PlainOrEnvValue, SecretString, SignerConfigStorage, SignerFileConfig,
+            SignerFileConfigEnum, VaultSignerFileConfig, VaultTransitSignerFileConfig,
         },
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
@@ -440,7 +443,7 @@ mod tests {
         assert_eq!(model.id, "test-signer");
 
         match model.config {
-            SignerConfig::Local(config) => {
+            SignerConfigStorage::Local(config) => {
                 assert!(!config.raw_key.is_empty());
                 assert_eq!(config.raw_key.len(), 32);
             }
@@ -479,7 +482,7 @@ mod tests {
         assert_eq!(model.id, "vault-transit-signer");
 
         match model.config {
-            SignerConfig::VaultTransit(config) => {
+            SignerConfigStorage::VaultTransit(config) => {
                 assert_eq!(config.key_name, "test-transit-key");
                 assert_eq!(config.address, "https://vault.example.com");
                 assert_eq!(config.namespace, Some("test-namespace".to_string()));
@@ -516,7 +519,7 @@ mod tests {
         assert_eq!(model.id, "aws-kms-signer");
 
         match model.config {
-            SignerConfig::AwsKms(_) => {}
+            SignerConfigStorage::AwsKms(_) => {}
             _ => panic!("Expected AwsKms config"),
         }
 
@@ -624,7 +627,7 @@ mod tests {
         assert_eq!(model.id, "vault-signer");
 
         match model.config {
-            SignerConfig::Vault(_) => {}
+            SignerConfigStorage::Vault(_) => {}
             _ => panic!("Expected Vault config"),
         }
 
