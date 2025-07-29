@@ -70,5 +70,9 @@ cat > "$BUILD_DIR/api_docs.html" <<EOF
 </html>
 EOF
 
+<<<<<<< HEAD
 echo "✅ Generated api_docs.html → spec-url=${SPEC_URL}"
 >>>>>>> 4f2ddca (fix: Workaround for openapi documentation)
+=======
+echo "✅ Generated api_docs.html in '$BUILD_DIR'."
+>>>>>>> d55b57c (fix: Script to properly log the output)

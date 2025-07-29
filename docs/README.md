@@ -19,5 +19,5 @@
 - To update openapi documentation, run:
 
   ```sh
-  cargo run --gen-openapi generate_openapi -- ./docs/openapi.json
+  cargo generate_openapi
   ```

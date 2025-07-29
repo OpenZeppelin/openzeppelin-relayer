@@ -23,8 +23,10 @@ impl Modify for SecurityAddon {
         }
     }
 }
-// https://gitbook.com/docs/api-references/guides/managing-api-operations
-
+/// # OpenAPI Specification Generator
+///
+/// This utility generates an OpenAPI specification JSON file from the
+/// OpenZeppelin Relayer API definitions.
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),
@@ -34,7 +36,7 @@ impl Modify for SecurityAddon {
       (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
       (name = "Health", description = "Health is responsible for showing the health of the relayers.")
     ),
-    info(description = "OpenZeppelin Relayer API", version = "0.1.0", title = "OpenZeppelin Relayer API",  license(
+    info(description = "OpenZeppelin Relayer API", version = "1.0.0", title = "OpenZeppelin Relayer API",  license(
         name = "AGPL-3.0 license",
         url = "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     ),

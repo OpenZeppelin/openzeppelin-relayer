@@ -9,11 +9,9 @@
 //! Run the utility with optional output path parameter:
 //!
 //! ```bash
-//! # Generate to default location (openapi.json in current directory)
-//! cargo run --gen-openapi generate_openapi
 //!
-//! # Or specify a custom output path
-//! cargo run --gen-openapi generate_openapi -- ./docs/openapi.json
+//! # By default `openapi.json` will be in ./docs
+//! cargo generate_openapi
 //! ```
 //!
 //! ## Features

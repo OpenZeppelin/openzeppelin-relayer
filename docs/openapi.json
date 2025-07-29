@@ -12,9 +12,131 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "0.1.0"
+    "version": "1.0.0"
   },
   "paths": {
+    "/api/v1/plugins/{plugin_id}/call": {
+      "post": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Calls a plugin method.",
+        "operationId": "callPlugin",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "description": "The unique identifier of the plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Plugin call successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_PluginCallResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Bad Request",
+                  "success": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Unauthorized",
+                  "success": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Plugin with ID plugin_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Too Many Requests",
+                  "success": false
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "message": "Internal Server Error",
+                  "success": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
     "/api/v1/relayers": {
       "get": {
         "tags": [
@@ -869,7 +991,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_bool"
+                  "$ref": "#/components/schemas/ApiResponse_RelayerStatus"
                 }
               }
             }
@@ -1357,7 +1479,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_String"
+                  "$ref": "#/components/schemas/ApiResponse_DeletePendingTransactionsResponse"
                 }
               }
             }
@@ -1591,6 +1713,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkTransactionRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Relayer transaction replaced successfully",
@@ -1978,6 +2110,102 @@
           }
         }
       },
+      "ApiResponse_DeletePendingTransactionsResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "queued_for_cancellation_transaction_ids",
+              "failed_to_queue_transaction_ids",
+              "total_processed"
+            ],
+            "properties": {
+              "failed_to_queue_transaction_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "queued_for_cancellation_transaction_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "total_processed": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_PluginCallResponse": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "success",
+              "return_value",
+              "message",
+              "logs",
+              "error",
+              "traces"
+            ],
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "logs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LogEntry"
+                }
+              },
+              "message": {
+                "type": "string"
+              },
+              "return_value": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              },
+              "traces": {
+                "type": "array",
+                "items": {}
+              }
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_RelayerResponse": {
         "type": "object",
         "required": [
@@ -2022,6 +2250,111 @@
                 "type": "boolean"
               }
             }
+          },
+          "error": {
+            "type": "string"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMeta"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_RelayerStatus": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "balance",
+                  "pending_transactions_count",
+                  "system_disabled",
+                  "paused",
+                  "nonce",
+                  "network_type"
+                ],
+                "properties": {
+                  "balance": {
+                    "type": "string"
+                  },
+                  "last_confirmed_transaction_timestamp": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "network_type": {
+                    "type": "string",
+                    "enum": [
+                      "evm"
+                    ]
+                  },
+                  "nonce": {
+                    "type": "string"
+                  },
+                  "paused": {
+                    "type": "boolean"
+                  },
+                  "pending_transactions_count": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "system_disabled": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "balance",
+                  "pending_transactions_count",
+                  "system_disabled",
+                  "paused",
+                  "sequence_number",
+                  "network_type"
+                ],
+                "properties": {
+                  "balance": {
+                    "type": "string"
+                  },
+                  "last_confirmed_transaction_timestamp": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "network_type": {
+                    "type": "string",
+                    "enum": [
+                      "stellar"
+                    ]
+                  },
+                  "paused": {
+                    "type": "boolean"
+                  },
+                  "pending_transactions_count": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "sequence_number": {
+                    "type": "string"
+                  },
+                  "system_disabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
           },
           "error": {
             "type": "string"
@@ -2203,81 +2536,146 @@
           }
         }
       },
-      "ApiResponse_bool": {
-        "type": "object",
-        "required": [
-          "success"
-        ],
-        "properties": {
-          "data": {
-            "type": "boolean"
-          },
-          "error": {
-            "type": "string"
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/PaginationMeta"
-          },
-          "success": {
-            "type": "boolean"
-          }
-        }
-      },
       "AssetSpec": {
         "oneOf": [
           {
-            "type": "string",
-            "enum": [
-              "NATIVE"
-            ]
-          },
-          {
             "type": "object",
             "required": [
-              "CREDIT4"
+              "type"
             ],
             "properties": {
-              "CREDIT4": {
-                "type": "object",
-                "required": [
-                  "code",
-                  "issuer"
-                ],
-                "properties": {
-                  "code": {
-                    "type": "string"
-                  },
-                  "issuer": {
-                    "type": "string"
-                  }
-                }
+              "type": {
+                "type": "string",
+                "enum": [
+                  "native"
+                ]
               }
             }
           },
           {
             "type": "object",
             "required": [
-              "CREDIT12"
+              "code",
+              "issuer",
+              "type"
             ],
             "properties": {
-              "CREDIT12": {
-                "type": "object",
-                "required": [
-                  "code",
-                  "issuer"
-                ],
-                "properties": {
-                  "code": {
-                    "type": "string"
-                  },
-                  "issuer": {
-                    "type": "string"
-                  }
-                }
+              "code": {
+                "type": "string"
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "credit4"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "code",
+              "issuer",
+              "type"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "credit12"
+                ]
               }
             }
           }
         ]
+      },
+      "AuthSpec": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "No authorization required",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "none"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use the transaction source account for authorization",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "source_account"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use specific addresses for authorization",
+            "required": [
+              "signers",
+              "type"
+            ],
+            "properties": {
+              "signers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "addresses"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Advanced format - provide complete XDR auth entries as base64-encoded strings",
+            "required": [
+              "entries",
+              "type"
+            ],
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "xdr"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Authorization specification for Soroban operations"
       },
       "BalanceResponse": {
         "type": "object",
@@ -2293,6 +2691,74 @@
           "unit": {
             "type": "string",
             "example": "wei"
+          }
+        }
+      },
+      "ContractSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "address",
+              "from"
+            ],
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "address"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "contract",
+              "from"
+            ],
+            "properties": {
+              "contract": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "contract"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Represents the source for contract creation"
+      },
+      "DeletePendingTransactionsResponse": {
+        "type": "object",
+        "required": [
+          "queued_for_cancellation_transaction_ids",
+          "failed_to_queue_transaction_ids",
+          "total_processed"
+        ],
+        "properties": {
+          "failed_to_queue_transaction_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "queued_for_cancellation_transaction_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "total_processed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -2333,19 +2799,29 @@
           {
             "type": "object",
             "required": [
-              "params",
-              "method"
+              "method",
+              "params"
             ],
             "properties": {
               "method": {
-                "type": "string",
-                "enum": [
-                  "GenericRpcRequest"
-                ]
+                "type": "string"
               },
               "params": {
                 "type": "string"
               }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "method",
+              "params"
+            ],
+            "properties": {
+              "method": {
+                "type": "string"
+              },
+              "params": {}
             }
           }
         ]
@@ -2354,21 +2830,49 @@
         "oneOf": [
           {
             "type": "string"
-          }
+          },
+          {}
         ]
+      },
+      "EvmTransactionDataSignature": {
+        "type": "object",
+        "required": [
+          "r",
+          "s",
+          "v",
+          "sig"
+        ],
+        "properties": {
+          "r": {
+            "type": "string"
+          },
+          "s": {
+            "type": "string"
+          },
+          "sig": {
+            "type": "string"
+          },
+          "v": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       },
       "EvmTransactionRequest": {
         "type": "object",
         "required": [
-          "value",
-          "gas_limit"
+          "value"
         ],
         "properties": {
           "data": {
             "type": "string"
           },
           "gas_limit": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
             "minimum": 0
           },
@@ -2406,7 +2910,6 @@
           "id",
           "status",
           "created_at",
-          "gas_limit",
           "value",
           "from",
           "relayer_id"
@@ -2418,11 +2921,17 @@
           "created_at": {
             "type": "string"
           },
+          "data": {
+            "type": "string"
+          },
           "from": {
             "type": "string"
           },
           "gas_limit": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
             "minimum": 0
           },
@@ -2436,6 +2945,14 @@
           "id": {
             "type": "string"
           },
+          "max_fee_per_gas": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_priority_fee_per_gas": {
+            "type": "integer",
+            "minimum": 0
+          },
           "nonce": {
             "type": "integer",
             "format": "int64",
@@ -2446,6 +2963,26 @@
           },
           "sent_at": {
             "type": "string"
+          },
+          "signature": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvmTransactionDataSignature"
+              }
+            ]
+          },
+          "speed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Speed"
+              }
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/TransactionStatus"
@@ -2563,6 +3100,7 @@
       },
       "JsonRpcError": {
         "type": "object",
+        "description": "JSON-RPC 2.0 Error structure.\n\nRepresents an error in a JSON-RPC response.",
         "required": [
           "code",
           "message",
@@ -2580,6 +3118,20 @@
             "type": "string"
           }
         }
+      },
+      "JsonRpcId": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "String identifier"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "Numeric identifier (should not contain fractional parts per spec)"
+          }
+        ],
+        "description": "Represents a JSON-RPC 2.0 ID value.\nAccording to the spec, the ID can be a String or Number.\nWhen used in Option<JsonRpcId>: Some(id) = actual ID, None = explicit null."
       },
       "JsonRpcRequest_NetworkRpcRequest": {
         "allOf": [
@@ -2599,24 +3151,30 @@
           {
             "type": "object",
             "required": [
-              "jsonrpc",
-              "id"
+              "jsonrpc"
             ],
             "properties": {
               "id": {
-                "type": "integer",
-                "format": "int64",
-                "minimum": 0
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/JsonRpcId"
+                  }
+                ]
               },
               "jsonrpc": {
                 "type": "string"
               }
             }
           }
-        ]
+        ],
+        "description": "JSON-RPC 2.0 Request structure.\n\nRepresents a JSON-RPC request with proper ID handling:\n- `Some(JsonRpcId)` = request with ID\n- `None` = explicit null ID or notification"
       },
       "JsonRpcResponse_NetworkRpcResult": {
         "type": "object",
+        "description": "JSON-RPC 2.0 Response structure.\n\nRepresents a JSON-RPC response that can contain either a result or an error.",
         "required": [
           "jsonrpc"
         ],
@@ -2625,9 +3183,7 @@
             "$ref": "#/components/schemas/JsonRpcError"
           },
           "id": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
+            "$ref": "#/components/schemas/JsonRpcId"
           },
           "jsonrpc": {
             "type": "string"
@@ -2673,6 +3229,32 @@
         },
         "additionalProperties": false
       },
+      "LogEntry": {
+        "type": "object",
+        "required": [
+          "level",
+          "message"
+        ],
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/LogLevel"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "LogLevel": {
+        "type": "string",
+        "enum": [
+          "log",
+          "info",
+          "error",
+          "warn",
+          "debug",
+          "result"
+        ]
+      },
       "MemoSpec": {
         "oneOf": [
           {
@@ -2684,7 +3266,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "NONE"
+                  "none"
                 ]
               }
             }
@@ -2699,7 +3281,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "TEXT"
+                  "text"
                 ]
               },
               "value": {
@@ -2717,7 +3299,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "ID"
+                  "id"
                 ]
               },
               "value": {
@@ -2737,7 +3319,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "HASH"
+                  "hash"
                 ]
               },
               "value": {
@@ -2760,7 +3342,7 @@
               "type": {
                 "type": "string",
                 "enum": [
-                  "RETURN"
+                  "return"
                 ]
               },
               "value": {
@@ -2843,7 +3425,7 @@
               "destination",
               "amount",
               "asset",
-              "op"
+              "type"
             ],
             "properties": {
               "amount": {
@@ -2856,11 +3438,121 @@
               "destination": {
                 "type": "string"
               },
-              "op": {
+              "type": {
                 "type": "string",
                 "enum": [
                   "payment"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "contract_address",
+              "function_name",
+              "args",
+              "type"
+            ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "items": {}
+              },
+              "auth": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AuthSpec"
+                  }
+                ]
+              },
+              "contract_address": {
+                "type": "string"
+              },
+              "function_name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "invoke_contract"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "source",
+              "wasm_hash",
+              "type"
+            ],
+            "properties": {
+              "auth": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AuthSpec"
+                  }
+                ]
+              },
+              "constructor_args": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {}
+              },
+              "salt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "$ref": "#/components/schemas/ContractSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "create_contract"
+                ]
+              },
+              "wasm_hash": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "wasm",
+              "type"
+            ],
+            "properties": {
+              "auth": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AuthSpec"
+                  }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "upload_wasm"
+                ]
+              },
+              "wasm": {
+                "$ref": "#/components/schemas/WasmSource"
               }
             }
           }
@@ -2888,6 +3580,52 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "PluginCallRequest": {
+        "type": "object",
+        "required": [
+          "params"
+        ],
+        "properties": {
+          "params": {
+            "description": "Plugin parameters"
+          }
+        }
+      },
+      "PluginCallResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "return_value",
+          "message",
+          "logs",
+          "error",
+          "traces"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogEntry"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "return_value": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "traces": {
+            "type": "array",
+            "items": {}
           }
         }
       },
@@ -2979,41 +3717,109 @@
         "type": "object",
         "properties": {
           "cron_schedule": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "jupiter_swap_options": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/JupiterSwapOptions"
-              }
-            ]
+            "$ref": "#/components/schemas/JupiterSwapOptions"
           },
           "min_balance_threshold": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "minimum": 0
           },
           "strategy": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/SolanaSwapStrategy"
-              }
-            ]
+            "$ref": "#/components/schemas/SolanaSwapStrategy"
           }
         },
         "additionalProperties": false
+      },
+      "RelayerStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "balance",
+              "pending_transactions_count",
+              "system_disabled",
+              "paused",
+              "nonce",
+              "network_type"
+            ],
+            "properties": {
+              "balance": {
+                "type": "string"
+              },
+              "last_confirmed_transaction_timestamp": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "network_type": {
+                "type": "string",
+                "enum": [
+                  "evm"
+                ]
+              },
+              "nonce": {
+                "type": "string"
+              },
+              "paused": {
+                "type": "boolean"
+              },
+              "pending_transactions_count": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "system_disabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "balance",
+              "pending_transactions_count",
+              "system_disabled",
+              "paused",
+              "sequence_number",
+              "network_type"
+            ],
+            "properties": {
+              "balance": {
+                "type": "string"
+              },
+              "last_confirmed_transaction_timestamp": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "network_type": {
+                "type": "string",
+                "enum": [
+                  "stellar"
+                ]
+              },
+              "paused": {
+                "type": "boolean"
+              },
+              "pending_transactions_count": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "string"
+              },
+              "system_disabled": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
       },
       "RelayerUpdateRequest": {
         "type": "object",
@@ -3499,6 +4305,12 @@
           },
           "status": {
             "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "status_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3561,11 +4373,24 @@
       "StellarTransactionRequest": {
         "type": "object",
         "required": [
-          "source_account",
-          "network",
-          "operations"
+          "network"
         ],
         "properties": {
+          "fee_bump": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Explicitly request fee-bump wrapper\nOnly valid when transaction_xdr contains a signed transaction"
+          },
+          "max_fee": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Maximum fee in stroops (defaults to 0.1 XLM = 1,000,000 stroops)"
+          },
           "memo": {
             "oneOf": [
               {
@@ -3580,13 +4405,26 @@
             "type": "string"
           },
           "operations": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/OperationSpec"
             }
           },
           "source_account": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transaction_xdr": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pre-built transaction XDR (base64 encoded, signed or unsigned)\nMutually exclusive with operations field"
           },
           "valid_until": {
             "type": [
@@ -3636,6 +4474,12 @@
           },
           "status": {
             "$ref": "#/components/schemas/TransactionStatus"
+          },
+          "status_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3719,6 +4563,33 @@
             "minimum": 0
           }
         }
+      },
+      "WasmSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "hex"
+            ],
+            "properties": {
+              "hex": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "base64"
+            ],
+            "properties": {
+              "base64": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Represents different ways to provide WASM code"
       }
     },
     "securitySchemes": {
@@ -3732,6 +4603,10 @@
     {
       "name": "Relayers",
       "description": "Relayers are the core components of the OpenZeppelin Relayer API. They are responsible for executing transactions on behalf of users and providing a secure and reliable way to interact with the blockchain."
+    },
+    {
+      "name": "Plugins",
+      "description": "Plugins are TypeScript functions that can be used to extend the OpenZeppelin Relayer API functionality."
     },
     {
       "name": "Metrics",
