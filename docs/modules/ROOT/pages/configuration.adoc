@@ -19,9 +19,7 @@ The OpenZeppelin Relayer supports two configuration approaches:
 - Changes take effect immediately (no container restart required)
 - See the **API Reference** page for detailed endpoints documentation
 
-Both approaches can be used together. File-based configuration is loaded on startup, while API changes provide runtime flexibility. Changes to environment variables (`.env`) always require restarting the container.
-
-**Storage Configuration:** How these approaches interact depends on your storage backend (in-memory vs Redis). See xref:storage.adoc[Storage Configuration] for detailed information about storage behavior and best practices.
+See xref:storage.adoc[Storage Configuration] for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
 
 For quick setup examples with pre-configured files, see the https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[examples directory] in our GitHub repository.
 ====
@@ -753,5 +751,5 @@ The OpenZeppelin Relayer supports two complementary approaches for configuration
 
 [NOTE]
 ====
-How configuration management interacts with storage depends on your storage type. For detailed information about storage behavior, configuration persistence, and best practices, see the xref:storage.adoc[Storage Configuration] guide.
+See xref:storage.adoc[Storage Configuration] for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
 ====
