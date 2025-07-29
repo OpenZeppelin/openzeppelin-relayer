@@ -41,15 +41,6 @@ node_modules
 
 # Ignore local signer keystore files everywhere
 **/local-signer.json
-<<<<<<< HEAD
-<<<<<<< HEAD
-
-openapi.json
-
-**/config/keys/*.json
-=======
->>>>>>> 4f2ddca (fix: Workaround for openapi documentation)
-=======
 **/config/keys/*.json
 
 # Ignore generated OpenAPI files
@@ -57,4 +48,3 @@ openapi.json
 
 # Exclude generated OpenAPI files from the docs directory
 !docs/openapi.json
->>>>>>> 64a7e72 (fix: Switch redocly build with standalone html)

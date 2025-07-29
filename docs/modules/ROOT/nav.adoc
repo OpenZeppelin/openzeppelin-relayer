@@ -1,6 +1,5 @@
 * xref:index.adoc[User Documentation]
 * xref:quickstart.adoc[Quickstart]
-<<<<<<< HEAD
 * xref:configuration.adoc[Configuration]
 ** xref:signers.adoc[Signers]
 ** xref:network_configuration.adoc[Network Configuration]
@@ -8,9 +7,6 @@
 * xref:solana.adoc[Solana Integration]
 * xref:stellar.adoc[Stellar Integration]
 * link:https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^]
-=======
-* link:https://685119642bfc9e00089daf52%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^]
->>>>>>> 4f2ddca (fix: Workaround for openapi documentation)
 * xref:structure.adoc[Project Structure]
 * xref:roadmap.adoc[Project Roadmap]
 * xref:plugins.adoc[Plugins]

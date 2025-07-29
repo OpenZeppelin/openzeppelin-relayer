@@ -39,21 +39,6 @@ else
 fi
 
 # Copy the API docs file to the target directory
-<<<<<<< HEAD
-if [ -f "$API_DOCS_FILE" ]; then
-  # Inject nonce to the script tag in the API docs file
-  echo "Injecting nonce into the script tag in '$API_DOCS_FILE'..."
-  sed -i -e "s/<script>/<script nonce=\"TngzuFQT7LvVFJMfvb8cxW0zN8XF79n6L9OphJOxH8\">/g" "$API_DOCS_FILE"
-  echo "Nonce injected successfully."
-  echo "Copying '$API_DOCS_FILE' to '$BUILD_DIR'..."
-  cp "$API_DOCS_FILE" "$BUILD_DIR/"
-  echo "API docs successfully copied to '$BUILD_DIR'."
-  # Remove the original API docs file
-  echo "Removing original API docs file '$API_DOCS_FILE'..."
-  rm -f "${API_DOCS_FILE}" "${API_DOCS_FILE}-e"
-  echo "Original API docs file '$API_DOCS_FILE' removed."
-fi
-=======
 cat > "$BUILD_DIR/api_docs.html" <<EOF
 <!DOCTYPE html>
 <html lang="en">
@@ -70,9 +55,4 @@ cat > "$BUILD_DIR/api_docs.html" <<EOF
 </html>
 EOF
 
-<<<<<<< HEAD
-echo "✅ Generated api_docs.html → spec-url=${SPEC_URL}"
->>>>>>> 4f2ddca (fix: Workaround for openapi documentation)
-=======
 echo "✅ Generated api_docs.html in '$BUILD_DIR'."
->>>>>>> d55b57c (fix: Script to properly log the output)
