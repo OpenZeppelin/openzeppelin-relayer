@@ -8,7 +8,6 @@
 //! The provider uses the non-blocking `RpcClient` for asynchronous operations
 //! and integrates detailed error handling through the `ProviderError` type.
 //!
-//! TODO: add support for using multiple RPCs and retries
 use async_trait::async_trait;
 use eyre::Result;
 #[cfg(test)]
@@ -34,7 +33,10 @@ use spl_token::state::Mint;
 use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
-use crate::{models::RpcConfig, services::retry_rpc_call};
+use crate::{
+    models::{RpcConfig, SolanaTransactionStatus},
+    services::retry_rpc_call,
+};
 
 use super::ProviderError;
 use super::{
@@ -132,6 +134,12 @@ pub trait SolanaProviderTrait: Send + Sync {
 
     /// calculate total fee
     async fn calculate_total_fee(&self, message: &Message) -> Result<u64, SolanaProviderError>;
+
+    /// get transaction status
+    async fn get_transaction_status(
+        &self,
+        signature: &Signature,
+    ) -> Result<SolanaTransactionStatus, SolanaProviderError>;
 }
 
 #[derive(Debug)]
@@ -547,6 +555,43 @@ impl SolanaProviderTrait for SolanaProvider {
             .unwrap_or(0);
 
         Ok(base_fee + max_priority_fee)
+    }
+
+    async fn get_transaction_status(
+        &self,
+        signature: &Signature,
+    ) -> Result<SolanaTransactionStatus, SolanaProviderError> {
+        let result = self
+            .retry_rpc_call("get_transaction_status", |client| async move {
+                client
+                    .get_signature_statuses_with_history(&[*signature])
+                    .await
+                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+            })
+            .await
+            .map_err(|e| SolanaProviderError::RpcError(e.to_string()))?;
+
+        let status = result.value.first();
+
+        match status {
+            Some(Some(v)) => {
+                if v.err.is_some() {
+                    Ok(SolanaTransactionStatus::Failed)
+                } else if v.satisfies_commitment(CommitmentConfig::finalized()) {
+                    Ok(SolanaTransactionStatus::Finalized)
+                } else if v.satisfies_commitment(CommitmentConfig::confirmed()) {
+                    Ok(SolanaTransactionStatus::Confirmed)
+                } else {
+                    Ok(SolanaTransactionStatus::Processed)
+                }
+            }
+            Some(None) => Err(SolanaProviderError::RpcError(
+                "Transaction confirmation status not available".to_string(),
+            )),
+            None => Err(SolanaProviderError::RpcError(
+                "Transaction confirmation status not available".to_string(),
+            )),
+        }
     }
 }
 

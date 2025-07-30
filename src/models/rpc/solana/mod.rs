@@ -153,6 +153,7 @@ pub struct SignAndSendTransactionRequestParams {
 pub struct SignAndSendTransactionResult {
     pub transaction: EncodedSerializedTransaction,
     pub signature: String,
+    pub id: String,
 }
 
 // getSupportedTokens

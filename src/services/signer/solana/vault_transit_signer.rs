@@ -232,10 +232,8 @@ mod tests {
             mock_vault_service,
         );
         let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            fee_payer: "test".to_string(),
-            hash: None,
-            recent_blockhash: None,
-            instructions: vec![],
+            transaction: "transaction_123".to_string(),
+            signature: None,
         });
 
         let result = signer.sign_transaction(transaction_data).await;

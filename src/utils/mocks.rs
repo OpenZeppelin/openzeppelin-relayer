@@ -7,13 +7,17 @@ pub mod mockutils {
     use secrets::SecretVec;
 
     use crate::{
-        config::{EvmNetworkConfig, NetworkConfigCommon, RepositoryStorageType, ServerConfig},
+        config::{
+            EvmNetworkConfig, NetworkConfigCommon, RepositoryStorageType, ServerConfig,
+            SolanaNetworkConfig,
+        },
         jobs::MockJobProducerTrait,
         models::{
             AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfigStorage,
-            NetworkRepoModel, NetworkTransactionData, NetworkType, NotificationRepoModel,
-            PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SecretString,
-            SignerConfigStorage, SignerRepoModel, TransactionRepoModel, TransactionStatus,
+            NetworkConfigData, NetworkRepoModel, NetworkTransactionData, NetworkType,
+            NotificationRepoModel, PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy,
+            RelayerRepoModel, RelayerSolanaPolicy, SecretString, SignerConfigStorage,
+            SignerRepoModel, SolanaTransactionData, TransactionRepoModel, TransactionStatus,
         },
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
@@ -21,6 +25,25 @@ pub mod mockutils {
             TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
+
+    pub fn create_mock_solana_relayer(id: String, paused: bool) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: id.clone(),
+            name: format!("Relayer {}", id.clone()),
+            network: "test".to_string(),
+            paused,
+            network_type: NetworkType::Solana,
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                min_balance: Some(0),
+                ..Default::default()
+            }),
+            signer_id: "test".to_string(),
+            address: "0x".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        }
+    }
 
     pub fn create_mock_relayer(id: String, paused: bool) -> RelayerRepoModel {
         RelayerRepoModel {
@@ -86,6 +109,25 @@ pub mod mockutils {
         }
     }
 
+    pub fn create_mock_solana_network() -> NetworkRepoModel {
+        NetworkRepoModel {
+            id: "test".to_string(),
+            name: "test".to_string(),
+            network_type: NetworkType::Solana,
+            config: NetworkConfigData::Solana(SolanaNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "devnet".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["http://localhost:8545".to_string()]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(1000),
+                    is_testnet: Some(true),
+                    tags: None,
+                },
+            }),
+        }
+    }
+
     pub fn create_mock_transaction() -> TransactionRepoModel {
         TransactionRepoModel {
             id: "test".to_string(),
@@ -100,6 +142,28 @@ pub mod mockutils {
             priced_at: None,
             hashes: vec![],
             network_type: NetworkType::Evm,
+            noop_count: None,
+            is_canceled: None,
+        }
+    }
+
+    pub fn create_mock_solana_transaction() -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData {
+                transaction: "test".to_string(),
+                signature: None,
+            }),
+            priced_at: None,
+            hashes: vec![],
+            network_type: NetworkType::Solana,
             noop_count: None,
             is_canceled: None,
         }

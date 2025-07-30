@@ -27,14 +27,15 @@ pub use validations::*;
 
 use crate::{
     jobs::{JobProducer, JobProducerTrait},
-    models::RelayerRepoModel,
+    models::{NetworkRepoModel, RelayerRepoModel, TransactionRepoModel},
+    repositories::{Repository, TransactionRepository, TransactionRepositoryStorage},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
 #[cfg(test)]
-use crate::jobs::MockJobProducerTrait;
+use crate::{jobs::MockJobProducerTrait, repositories::MockTransactionRepository};
 
 #[cfg(test)]
 use crate::services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait};
@@ -89,6 +90,7 @@ pub type DefaultProvider = SolanaProvider;
 pub type DefaultSigner = SolanaSigner;
 pub type DefaultJupiterService = JupiterService;
 pub type DefaultJobProducer = JobProducer;
+pub type DefaultTransactionRepository = TransactionRepositoryStorage;
 
 #[cfg(test)]
 impl
@@ -97,73 +99,92 @@ impl
         MockSolanaSignTrait,
         MockJupiterServiceTrait,
         MockJobProducerTrait,
+        MockTransactionRepository,
     >
 {
     pub fn new_mock(
         relayer: RelayerRepoModel,
+        network: NetworkRepoModel,
         provider: Arc<MockSolanaProviderTrait>,
         signer: Arc<MockSolanaSignTrait>,
         jupiter_service: Arc<MockJupiterServiceTrait>,
         job_producer: Arc<MockJobProducerTrait>,
+        transaction_repository: Arc<MockTransactionRepository>,
     ) -> Self {
         Self {
             relayer,
+            network,
             provider,
             signer,
             jupiter_service,
             job_producer,
+            transaction_repository,
         }
     }
 }
 
-pub struct SolanaRpcMethodsImpl<P, S, J, JP>
+pub struct SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     J: JupiterServiceTrait + Send + Sync + 'static,
     JP: JobProducerTrait + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     pub(crate) relayer: RelayerRepoModel,
+    pub(crate) network: NetworkRepoModel,
     pub(crate) provider: Arc<P>,
     pub(crate) signer: Arc<S>,
     pub(crate) jupiter_service: Arc<J>,
     pub(crate) job_producer: Arc<JP>,
+    pub(crate) transaction_repository: Arc<TR>,
 }
 
-pub type DefaultSolanaRpcMethodsImpl =
-    SolanaRpcMethodsImpl<DefaultProvider, DefaultSigner, DefaultJupiterService, DefaultJobProducer>;
+pub type DefaultSolanaRpcMethodsImpl = SolanaRpcMethodsImpl<
+    DefaultProvider,
+    DefaultSigner,
+    DefaultJupiterService,
+    DefaultJobProducer,
+    DefaultTransactionRepository,
+>;
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     J: JupiterServiceTrait + Send + Sync + 'static,
     JP: JobProducerTrait + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     pub fn new(
         relayer: RelayerRepoModel,
+        network: NetworkRepoModel,
         provider: Arc<P>,
         signer: Arc<S>,
         jupiter_service: Arc<J>,
         job_producer: Arc<JP>,
+        transaction_repository: Arc<TR>,
     ) -> Self {
         Self {
             relayer,
+            network,
             provider,
             signer,
             jupiter_service,
             job_producer,
+            transaction_repository,
         }
     }
 }
 
 #[async_trait]
-impl<P, S, J, JP> SolanaRpcMethods for SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethods for SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     async fn fee_estimate(
         &self,
