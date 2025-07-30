@@ -79,7 +79,6 @@ where
             tx.id, error
         );
 
-        // Step 1: Re-queue status check for retry
         if let Err(requeue_error) = self
             .schedule_status_check(&tx, Some(2 * SOLANA_DEFAULT_STATUS_RETRY_DELAY_SECONDS))
             .await
