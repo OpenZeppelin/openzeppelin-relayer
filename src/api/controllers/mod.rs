@@ -7,5 +7,6 @@
 //! * `relayer` - Transaction and relayer management endpoints
 //! * `plugin` - Plugin endpoints
 
+pub mod api_key;
 pub mod plugin;
 pub mod relayer;
