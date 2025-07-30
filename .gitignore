@@ -41,7 +41,10 @@ node_modules
 
 # Ignore local signer keystore files everywhere
 **/local-signer.json
+**/config/keys/*.json
 
+# Ignore generated OpenAPI files
 openapi.json
 
-**/config/keys/*.json
+# Exclude generated OpenAPI files from the docs directory
+!docs/openapi.json

@@ -10,7 +10,14 @@ NAME=$(grep '^name:' "$DOCS_DIR/antora.yml" | awk '{print $2}')
 VERSION=$(grep '^version:' "$DOCS_DIR/antora.yml" | awk '{print $2}')
 BUILD_DIR="$DOCS_DIR/build/site"
 RUST_DOCS_DIR="$DOCS_DIR/rust_docs"
-API_DOCS_FILE="$DOCS_DIR/api_docs.html"
+REMOTE=$(git remote get-url origin)
+REMOTE=${REMOTE%.git}
+REPO_FULL=${REMOTE#*github.com[:/]}
+# For netlify, we need to use $HEAD to determine the branch
+# If HEAD is not set, we default to the current branch
+LOCAL_BRANCH="${HEAD:-$(git rev-parse --abbrev-ref HEAD)}"
+
+SPEC_URL="https://raw.githubusercontent.com/${REPO_FULL}/${LOCAL_BRANCH}/docs/openapi.json"
 
 # Check if the target directory exists
 if [ ! -d "$BUILD_DIR" ]; then
@@ -32,12 +39,20 @@ else
 fi
 
 # Copy the API docs file to the target directory
-if [ -f "$API_DOCS_FILE" ]; then
-  echo "Copying '$API_DOCS_FILE' to '$BUILD_DIR'..."
-  cp "$API_DOCS_FILE" "$BUILD_DIR/"
-  echo "API docs successfully copied to '$BUILD_DIR'."
-  # Remove the original API docs file
-  echo "Removing original API docs file '$API_DOCS_FILE'..."
-  rm "$API_DOCS_FILE"
-  echo "Original API docs file '$API_DOCS_FILE' removed."
-fi
+cat > "$BUILD_DIR/api_docs.html" <<EOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OpenZeppelin Relayer API</title>
+  <style>body{margin:0;padding:0}</style>
+</head>
+<body>
+  <redoc spec-url="${SPEC_URL}" required-props-first="true"></redoc>
+  <script src="https://cdn.redocly.com/redoc/latest/bundles/redoc.standalone.js"></script>
+</body>
+</html>
+EOF
+
+echo "✅ Generated api_docs.html in '$BUILD_DIR'."
