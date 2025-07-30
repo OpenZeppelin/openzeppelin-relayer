@@ -12,7 +12,6 @@
 pub mod docs;
 pub mod health;
 pub mod metrics;
-pub mod network;
 pub mod notification;
 pub mod plugin;
 pub mod relayer;
