@@ -27,15 +27,21 @@
  * runPlugin(main);
  */
 
-import net from "node:net";
-import { v4 as uuidv4 } from "uuid";
-import { LogInterceptor } from "./logger";
-import { NetworkTransactionRequest, TransactionResponse, TransactionStatus } from "@openzeppelin/relayer-sdk";
+import net from 'node:net';
+import { v4 as uuidv4 } from 'uuid';
+import { LogInterceptor } from './logger';
+import {
+  NetworkTransactionRequest,
+  TransactionResponse,
+  TransactionStatus,
+  ApiResponseRelayerStatus,
+  ApiResponseRelayerResponse,
+} from '@openzeppelin/relayer-sdk';
 
 type TransactionWaitOptions = {
   interval?: number;
   timeout?: number;
-}
+};
 
 /**
  * The result of a sendTransaction call.
@@ -80,19 +86,37 @@ type SendTransactionResult = {
    * @returns The transaction response.
    */
   wait: (options?: TransactionWaitOptions) => Promise<TransactionResponse>;
-}
+};
 
 type GetTransactionRequest = {
   transactionId: string;
-}
+};
+
+/**
+ * Sign transaction request for Stellar.
+ */
+export type SignTransactionRequest = {
+  unsignedXdr: string;
+};
+
+/**
+ * Sign transaction response for Stellar.
+ */
+export type SignTransactionResponse = {
+  signedXdr: string;
+  signature: any; // Stellar DecoratedSignature
+};
 
 /**
  * The relayer API.
  *
  * @property sendTransaction - Sends a transaction to the relayer.
  * @property getTransaction - Gets a transaction from the relayer.
+ * @property getRelayerStatus - Gets the relayer status (Stellar).
+ * @property signTransaction - Signs a transaction (Stellar).
+ * @property getRelayer - Gets the relayer info including address.
  */
-type Relayer = {
+export type Relayer = {
   /**
    * Sends a transaction to the relayer.
    * @param payload - The transaction request payload.
@@ -106,7 +130,25 @@ type Relayer = {
    * @returns The transaction response.
    */
   getTransaction: (payload: GetTransactionRequest) => Promise<TransactionResponse>;
-}
+
+  /**
+   * Gets the relayer status (balance, nonce/sequence number, etc).
+   * @returns The relayer status information.
+   */
+  getRelayerStatus: () => Promise<ApiResponseRelayerStatus>;
+  /**
+   * Gets the relayer info including address.
+   * @returns The relayer information.
+   */
+  getRelayer: () => Promise<ApiResponseRelayerResponse>;
+
+  /**
+   * Signs a transaction with the relayer's key (Stellar specific).
+   * @param payload - The unsigned transaction XDR.
+   * @returns The signed transaction XDR and signature.
+   */
+  signTransaction: (payload: SignTransactionRequest) => Promise<SignTransactionResponse>;
+};
 
 type Plugin<T, R> = (plugin: PluginAPI, pluginParams: T) => Promise<R>;
 
@@ -114,15 +156,15 @@ function getPluginParams<T>(): T {
   const pluginParams = process.argv[3];
 
   if (!pluginParams) {
-    throw new Error("Plugin parameters are required but not provided");
+    throw new Error('Plugin parameters are required but not provided');
   }
 
-    try {
-      const parsed = JSON.parse(pluginParams);
-      return parsed as T;
-    } catch (e) {
-      throw new Error(`Failed to parse plugin parameters: ${e}`);
-    }
+  try {
+    const parsed = JSON.parse(pluginParams);
+    return parsed as T;
+  } catch (e) {
+    throw new Error(`Failed to parse plugin parameters: ${e}`);
+  }
 }
 
 /**
@@ -139,7 +181,7 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
     // checks if socket path is provided
     let socketPath = process.argv[2];
     if (!socketPath) {
-      throw new Error("Socket path is required");
+      throw new Error('Socket path is required');
     }
 
     // creates plugin instance
@@ -161,7 +203,7 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
         console.error(error);
         // closes socket signaling error
         plugin.closeErrored(error);
-        })
+      })
       .finally(() => {
         plugin.close();
         process.exit(0);
@@ -170,8 +212,8 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
     // Stop intercepting logs
     logInterceptor.stop();
   } catch (error) {
-      console.error(error);
-      process.exit(1);
+    console.error(error);
+    process.exit(1);
   }
 }
 
@@ -184,7 +226,7 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
  */
 export class PluginAPI {
   socket: net.Socket;
-  pending: Map<string, { resolve: (value: any) => void, reject: (reason: any) => void }>;
+  pending: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }>;
   private _connectionPromise: Promise<void> | null = null;
   private _connected: boolean = false;
 
@@ -199,21 +241,25 @@ export class PluginAPI {
       });
 
       this.socket.on('error', (error) => {
-        console.error("Socket ERROR:", error);
+        console.error('Socket ERROR:', error);
         reject(error);
       });
     });
 
-    this.socket.on('data', data => {
-      data.toString().split('\n').filter(Boolean).forEach((msg: string) => {
-        const parsed = JSON.parse(msg);
-        const { requestId, result, error } = parsed;
-        const resolver = this.pending.get(requestId);
-        if (resolver) {
-          error ? resolver.reject(error) : resolver.resolve(result);
-          this.pending.delete(requestId);
-        }
-      });
+    this.socket.on('data', (data) => {
+      data
+        .toString()
+        .split('\n')
+        .filter(Boolean)
+        .forEach((msg: string) => {
+          const parsed = JSON.parse(msg);
+          const { requestId, result, error } = parsed;
+          const resolver = this.pending.get(requestId);
+          if (resolver) {
+            error ? resolver.reject(error) : resolver.resolve(result);
+            this.pending.delete(requestId);
+          }
+        });
     });
   }
 
@@ -225,18 +271,26 @@ export class PluginAPI {
   useRelayer(relayerId: string): Relayer {
     return {
       sendTransaction: async (payload: NetworkTransactionRequest) => {
-        const result = await this._send<SendTransactionResult>(relayerId, "sendTransaction", payload);
+        const result = await this._send<SendTransactionResult>(relayerId, 'sendTransaction', payload);
         // Add the wait method to the result
         return {
           ...result,
-          wait: (options?: TransactionWaitOptions) => this.transactionWait(result, options)
+          wait: (options?: TransactionWaitOptions) => this.transactionWait(result, options),
         };
       },
-      getTransaction: (payload: GetTransactionRequest) => this._send<TransactionResponse>(relayerId, "getTransaction", payload),
+      getTransaction: (payload: GetTransactionRequest) =>
+        this._send<TransactionResponse>(relayerId, 'getTransaction', payload),
+      getRelayerStatus: () => this._send<ApiResponseRelayerStatus>(relayerId, 'getRelayerStatus', {}),
+      signTransaction: (payload: SignTransactionRequest) =>
+        this._send<SignTransactionResponse>(relayerId, 'signTransaction', payload),
+      getRelayer: () => this._send<ApiResponseRelayerResponse>(relayerId, 'getRelayer', {}),
     };
   }
 
-  async transactionWait(transaction: SendTransactionResult, options?: TransactionWaitOptions): Promise<TransactionResponse> {
+  async transactionWait(
+    transaction: SendTransactionResult,
+    options?: TransactionWaitOptions
+  ): Promise<TransactionResponse> {
     const waitOptions: TransactionWaitOptions = {
       interval: options?.interval || 5000,
       timeout: options?.timeout || 60000,
@@ -251,13 +305,15 @@ export class PluginAPI {
     }, waitOptions.timeout);
 
     // poll for transaction status until mined/confirmed, failed, cancelled or expired.
-    while (transactionResult.status !== TransactionStatus.MINED &&
+    while (
+      transactionResult.status !== TransactionStatus.MINED &&
       transactionResult.status !== TransactionStatus.CONFIRMED &&
       transactionResult.status !== TransactionStatus.CANCELED &&
       transactionResult.status !== TransactionStatus.EXPIRED &&
-      transactionResult.status !== TransactionStatus.FAILED) {
+      transactionResult.status !== TransactionStatus.FAILED
+    ) {
       transactionResult = await relayer.getTransaction({ transactionId: transaction.id });
-      await new Promise(resolve => setTimeout(resolve, waitOptions.interval));
+      await new Promise((resolve) => setTimeout(resolve, waitOptions.interval));
     }
 
     clearTimeout(timeout);
@@ -266,7 +322,7 @@ export class PluginAPI {
 
   async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
     const requestId = uuidv4();
-    const message = JSON.stringify({ requestId, relayerId, method, payload }) + "\n";
+    const message = JSON.stringify({ requestId, relayerId, method, payload }) + '\n';
 
     if (!this._connected) {
       await this._connectionPromise;
@@ -274,7 +330,7 @@ export class PluginAPI {
 
     const result = this.socket.write(message, (error) => {
       if (error) {
-        console.error("Error sending message:", error);
+        console.error('Error sending message:', error);
       }
     });
 

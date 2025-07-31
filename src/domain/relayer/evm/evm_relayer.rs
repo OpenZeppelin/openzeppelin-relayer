@@ -30,7 +30,8 @@ use crate::{
     constants::EVM_SMALLEST_UNIT_NAME,
     domain::{
         relayer::{Relayer, RelayerError},
-        BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -554,6 +555,15 @@ where
             }
         }
         Ok(())
+    }
+
+    async fn sign_transaction(
+        &self,
+        _unsigned_xdr: &str,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "XDR signing not supported for EVM".to_string(),
+        ))
     }
 }
 

@@ -15,7 +15,7 @@
 use crate::{
     domain::{
         SignDataRequest, SignDataResponse, SignTransactionResponse, SignTransactionResponseStellar,
-        SignTypedDataRequest,
+        SignTypedDataRequest, SignXdrTransactionResponseStellar,
     },
     models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, TransactionInput},
     services::Signer,
@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;
 use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use eyre::Result;
+use log::info;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{
     DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
@@ -140,6 +141,39 @@ impl Signer for LocalSigner {
     async fn address(&self) -> Result<Address, SignerError> {
         let account_id = self.local_signer_client.account_id();
         Ok(Address::Stellar(account_id.to_string()))
+    }
+
+    async fn sign_xdr_transaction(
+        &self,
+        unsigned_xdr: &str,
+        network_passphrase: &str,
+    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
+        use crate::domain::{attach_signatures_to_envelope, parse_transaction_xdr};
+
+        // Parse the unsigned XDR
+        let mut envelope = parse_transaction_xdr(unsigned_xdr, false)
+            .map_err(|e| SignerError::SigningError(format!("Invalid XDR: {}", e)))?;
+
+        // Create network ID from passphrase
+        let hash_bytes: [u8; 32] = sha2::Sha256::digest(network_passphrase.as_bytes()).into();
+        let network_id = Hash(hash_bytes);
+
+        // Sign the envelope
+        let signature = self.sign_envelope(&envelope, &network_id)?;
+
+        // Attach the signature to the envelope
+        attach_signatures_to_envelope(&mut envelope, vec![signature.clone()])
+            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {}", e)))?;
+
+        // Serialize the signed envelope
+        let signed_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+            SignerError::SigningError(format!("Failed to serialize signed XDR: {}", e))
+        })?;
+
+        Ok(SignXdrTransactionResponseStellar {
+            signed_xdr,
+            signature,
+        })
     }
 
     async fn sign_transaction(

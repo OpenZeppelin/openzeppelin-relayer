@@ -61,11 +61,41 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let stellar_hash = self.parse_and_validate_hash(&tx)?;
 
-        let provider_response = self
-            .provider()
-            .get_transaction(&stellar_hash)
-            .await
-            .map_err(TransactionError::from)?;
+        let provider_response = match self.provider().get_transaction(&stellar_hash).await {
+            Ok(response) => response,
+            Err(e) => {
+                let error_str = format!("{:?}", e);
+
+                // Check if this is an XDR parsing error (common with fee bump transactions)
+                if error_str.contains("Xdr(Invalid)") || error_str.contains("xdr processing error")
+                {
+                    warn!(
+                        "XDR parsing error for transaction {}, using raw RPC fallback",
+                        tx.id
+                    );
+
+                    // Fallback: Get transaction status via raw RPC request
+                    match self.get_transaction_status_raw(&stellar_hash).await {
+                        Ok(status) => {
+                            // Return a minimal response with just the status
+                            soroban_rs::stellar_rpc_client::GetTransactionResponse {
+                                status,
+                                envelope: None,
+                                result: None,
+                                result_meta: None,
+                            }
+                        }
+                        Err(raw_err) => {
+                            warn!("Raw RPC fallback also failed for {}: {:?}", tx.id, raw_err);
+                            return Err(TransactionError::from(e));
+                        }
+                    }
+                } else {
+                    warn!("Provider get_transaction failed for {}: {:?}", tx.id, e);
+                    return Err(TransactionError::from(e));
+                }
+            }
+        };
 
         match provider_response.status.as_str().to_uppercase().as_str() {
             "SUCCESS" => self.handle_stellar_success(tx, provider_response).await,
@@ -227,6 +257,73 @@ where
         );
         self.requeue_status_check(&tx).await?;
         Ok(tx)
+    }
+
+    /// Get transaction status via raw RPC request (workaround for XDR parsing issues)
+    async fn get_transaction_status_raw(
+        &self,
+        tx_hash: &soroban_rs::xdr::Hash,
+    ) -> Result<String, TransactionError> {
+        use serde_json::{json, Value};
+
+        // Convert hash to hex string (manual implementation to avoid hex dependency)
+        let hash_hex: String = tx_hash
+            .0
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect();
+
+        // Build JSON-RPC request
+        let request_body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTransaction",
+            "params": {
+                "hash": hash_hex
+            }
+        });
+
+        // Get the RPC URL from the provider
+        let rpc_url = self.provider().rpc_url();
+
+        // Make HTTP request using reqwest (already a dependency)
+        let client = reqwest::Client::new();
+        let response = client
+            .post(rpc_url)
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Raw RPC request failed: {}", e))
+            })?;
+
+        // Parse response as generic JSON
+        let json_response: Value = response.json().await.map_err(|e| {
+            TransactionError::UnexpectedError(format!("Failed to parse JSON response: {}", e))
+        })?;
+
+        // Check for RPC error
+        if let Some(error) = json_response.get("error") {
+            if let Some(code) = error.get("code").and_then(|c| c.as_i64()) {
+                if code == -32602 || code == -32600 {
+                    return Ok("NOT_FOUND".to_string());
+                }
+            }
+            return Err(TransactionError::UnexpectedError(format!(
+                "RPC error: {:?}",
+                error
+            )));
+        }
+
+        // Extract status from result
+        json_response
+            .get("result")
+            .and_then(|result| result.get("status"))
+            .and_then(|status| status.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                TransactionError::UnexpectedError("Missing status in response".to_string())
+            })
     }
 }
 

@@ -35,6 +35,7 @@ pub struct GetEventsRequest {
 #[derive(Clone, Debug)]
 pub struct StellarProvider {
     client: Client,
+    rpc_url: String,
 }
 
 #[async_trait]
@@ -60,6 +61,7 @@ pub trait StellarProviderTrait: Send + Sync {
     ) -> Result<GetTransactionsResponse>;
     async fn get_ledger_entries(&self, keys: &[LedgerKey]) -> Result<GetLedgerEntriesResponse>;
     async fn get_events(&self, request: GetEventsRequest) -> Result<GetEventsResponse>;
+    fn rpc_url(&self) -> &str;
 }
 
 impl StellarProvider {
@@ -92,7 +94,14 @@ impl StellarProvider {
                 e, url
             ))
         })?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            rpc_url: url.clone(),
+        })
+    }
+
+    pub fn rpc_url(&self) -> &str {
+        &self.rpc_url
     }
 }
 
@@ -188,6 +197,10 @@ impl StellarProviderTrait for StellarProvider {
             )
             .await
             .map_err(|e| eyre!("Failed to get events: {}", e))
+    }
+
+    fn rpc_url(&self) -> &str {
+        &self.rpc_url
     }
 }
 

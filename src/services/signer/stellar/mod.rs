@@ -6,10 +6,15 @@ use async_trait::async_trait;
 use local_signer::*;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
+    domain::{
+        SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest,
+        SignXdrTransactionResponseStellar,
+    },
     models::{Address, NetworkTransactionData, SignerConfig, SignerRepoModel},
-    services::signer::{SignerError, SignerFactoryError},
-    services::Signer,
+    services::{
+        signer::{SignerError, SignerFactoryError},
+        Signer, XdrSigningResponse,
+    },
 };
 
 use super::DataSignerTrait;
@@ -34,6 +39,19 @@ impl Signer for StellarSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
             Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.sign_transaction(tx).await,
+        }
+    }
+
+    async fn sign_xdr_transaction(
+        &self,
+        unsigned_xdr: &str,
+        network_passphrase: &str,
+    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
+        match self {
+            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => {
+                s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
+                    .await
+            }
         }
     }
 }

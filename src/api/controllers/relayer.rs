@@ -10,7 +10,8 @@ use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id, Relayer,
-        RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTypedDataRequest, Transaction,
+        RelayerUpdateRequest, SignDataRequest, SignDataResponse, SignTransactionRequest,
+        SignTypedDataRequest, Transaction,
     },
     models::{
         convert_to_internal_rpc_request, ApiError, ApiResponse, DefaultAppState,
@@ -460,4 +461,32 @@ pub async fn relayer_rpc(
     let result = network_relayer.rpc(internal_request).await?;
 
     Ok(HttpResponse::Ok().json(result))
+}
+
+/// Signs a transaction using a specific relayer
+///
+/// # Arguments
+///
+/// * `relayer_id` - The ID of the relayer.
+/// * `request` - The sign transaction request containing unsigned XDR.
+/// * `state` - The application state containing the relayer repository.
+///
+/// # Returns
+///
+/// The signed transaction response.
+pub async fn sign_transaction(
+    relayer_id: String,
+    request: SignTransactionRequest,
+    state: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, ApiError> {
+    let relayer = get_relayer_by_id(relayer_id.clone(), &state).await?;
+    relayer.validate_active_state()?;
+
+    // Get the network relayer and use its sign_transaction method
+    let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
+    let result = network_relayer
+        .sign_transaction(&request.unsigned_xdr)
+        .await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }

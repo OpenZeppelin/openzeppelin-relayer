@@ -24,7 +24,7 @@ use crate::{
     constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
         transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest,
+        SignDataResponse, SignTransactionExternalResponse, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -35,7 +35,7 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        StellarProvider, StellarProviderTrait, TransactionCounterService,
+        Signer, StellarProvider, StellarProviderTrait, StellarSigner, TransactionCounterService,
         TransactionCounterServiceTrait,
     },
 };
@@ -101,7 +101,7 @@ where
 }
 
 #[allow(dead_code)]
-pub struct StellarRelayer<P, RR, NR, TR, J, TCS>
+pub struct StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
     P: StellarProviderTrait + Send + Sync,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -109,8 +109,10 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
+    signer: S,
     network: StellarNetwork,
     provider: P,
     relayer_repository: Arc<RR>,
@@ -121,9 +123,9 @@ where
 }
 
 pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> =
-    StellarRelayer<StellarProvider, RR, NR, TR, J, TransactionCounterService<TCR>>;
+    StellarRelayer<StellarProvider, RR, NR, TR, J, TransactionCounterService<TCR>, StellarSigner>;
 
-impl<P, RR, NR, TR, J, TCS> StellarRelayer<P, RR, NR, TR, J, TCS>
+impl<P, RR, NR, TR, J, TCS, S> StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
     P: StellarProviderTrait + Send + Sync,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -131,6 +133,7 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
 {
     /// Creates a new `StellarRelayer` instance.
     ///
@@ -141,6 +144,7 @@ where
     /// # Arguments
     ///
     /// * `relayer` - The relayer model containing configuration like ID, address, network name, and policies
+    /// * `signer` - The Stellar signer for signing transactions
     /// * `provider` - The Stellar provider implementation for blockchain interactions (account queries, transaction submission)
     /// * `dependencies` - Container with all required repositories and services (see [`StellarRelayerDependencies`])
     ///
@@ -151,6 +155,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         relayer: RelayerRepoModel,
+        signer: S,
         provider: P,
         dependencies: StellarRelayerDependencies<RR, NR, TR, J, TCS>,
     ) -> Result<Self, RelayerError> {
@@ -168,6 +173,7 @@ where
 
         Ok(Self {
             relayer,
+            signer,
             network,
             provider,
             relayer_repository: dependencies.relayer_repository,
@@ -221,7 +227,7 @@ where
 }
 
 #[async_trait]
-impl<P, RR, NR, TR, J, TCS> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS>
+impl<P, RR, NR, TR, J, TCS, S> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
     P: StellarProviderTrait + Send + Sync,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -229,6 +235,7 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
 {
     async fn process_transaction_request(
         &self,
@@ -389,6 +396,20 @@ where
         );
         Ok(())
     }
+
+    async fn sign_transaction(
+        &self,
+        unsigned_xdr: &str,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        // Use the signer's sign_xdr_transaction method
+        let response = self
+            .signer
+            .sign_xdr_transaction(unsigned_xdr, &self.network.passphrase)
+            .await
+            .map_err(RelayerError::SignerError)?;
+
+        Ok(SignTransactionExternalResponse::Stellar(response))
+    }
 }
 
 #[cfg(test)]
@@ -405,7 +426,7 @@ mod tests {
         repositories::{
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
-        services::{MockStellarProviderTrait, MockTransactionCounterServiceTrait},
+        services::{MockSigner, MockStellarProviderTrait, MockTransactionCounterServiceTrait},
     };
     use eyre::eyre;
     use mockall::predicate::*;
@@ -504,9 +525,11 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
+        let signer = MockSigner::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo),
@@ -537,9 +560,11 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
+        let signer = MockSigner::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo),
@@ -575,9 +600,11 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let tx_repo = MockTransactionRepository::new();
         let counter = MockTransactionCounterServiceTrait::new();
+        let signer = MockSigner::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo),
@@ -646,9 +673,11 @@ mod tests {
                 Ok(vec![confirmed_tx.clone()]) as Result<Vec<TransactionRepoModel>, RepositoryError>
             })
             .once();
+        let signer = MockSigner::new();
 
         let stellar_relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider_mock,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo_mock),
@@ -701,9 +730,11 @@ mod tests {
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
             .returning(|_| Box::pin(async { Err(eyre!("Stellar provider down")) }));
+        let signer = MockSigner::new();
 
         let stellar_relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider_mock,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo_mock),
@@ -758,9 +789,11 @@ mod tests {
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let signer = MockSigner::new();
 
         let relayer = StellarRelayer::new(
             relayer_model,
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 relayer_repo,
@@ -796,9 +829,11 @@ mod tests {
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let signer = MockSigner::new();
 
         let relayer = StellarRelayer::new(
             relayer_model,
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 relayer_repo,
