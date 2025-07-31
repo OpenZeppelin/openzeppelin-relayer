@@ -1,6 +1,10 @@
 use super::evm::Speed;
 use crate::{
-    constants::{DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED},
+    config::ServerConfig,
+    constants::{
+        DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED, FINAL_TRANSACTION_STATUSES,
+        STELLAR_DEFAULT_MAX_FEE, STELLAR_DEFAULT_TRANSACTION_FEE,
+    },
     domain::{
         evm::PriceParams,
         stellar::validation::{validate_operations, validate_soroban_memo_restriction},
@@ -24,7 +28,7 @@ use alloy::{
     rpc::types::AccessList,
 };
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::{convert::TryFrom, str::FromStr};
 use strum::Display;
@@ -32,7 +36,6 @@ use strum::Display;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::constants::{STELLAR_DEFAULT_MAX_FEE, STELLAR_DEFAULT_TRANSACTION_FEE};
 use soroban_rs::xdr::{
     Transaction as SorobanTransaction, TransactionEnvelope, TransactionV1Envelope, VecM,
 };
@@ -65,6 +68,8 @@ pub struct TransactionUpdateRequest {
     pub noop_count: Option<u32>,
     /// Whether the transaction is canceled
     pub is_canceled: Option<bool>,
+    /// Timestamp when this transaction should be deleted (for final states)
+    pub delete_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +82,8 @@ pub struct TransactionRepoModel {
     pub sent_at: Option<String>,
     pub confirmed_at: Option<String>,
     pub valid_until: Option<String>,
+    /// Timestamp when this transaction should be deleted (for final states)
+    pub delete_at: Option<String>,
     pub network_data: NetworkTransactionData,
     /// Timestamp when gas price was determined
     pub priced_at: Option<String>,
@@ -95,6 +102,62 @@ impl TransactionRepoModel {
     /// * `Err(TransactionError)` if validation fails
     pub fn validate(&self) -> Result<(), TransactionError> {
         Ok(())
+    }
+
+    /// Calculate when this transaction should be deleted based on its status and expiration hours
+    fn calculate_delete_at(expiration_hours: u64) -> Option<String> {
+        let delete_time = Utc::now() + Duration::hours(expiration_hours as i64);
+        Some(delete_time.to_rfc3339())
+    }
+
+    /// Update delete_at field if status changed to a final state
+    pub fn update_delete_at_if_final_status(&mut self) {
+        if self.delete_at.is_none() && FINAL_TRANSACTION_STATUSES.contains(&self.status) {
+            let expiration_hours = ServerConfig::get_transaction_expiration_hours();
+            self.delete_at = Self::calculate_delete_at(expiration_hours);
+        }
+    }
+
+    /// Apply partial updates to this transaction model
+    ///
+    /// This method encapsulates the business logic for updating transaction fields,
+    /// ensuring consistency across all repository implementations.
+    ///
+    /// # Arguments
+    /// * `update` - The partial update request containing the fields to update
+    pub fn apply_partial_update(&mut self, update: TransactionUpdateRequest) {
+        // Apply partial updates
+        if let Some(status) = update.status {
+            self.status = status;
+            self.update_delete_at_if_final_status();
+        }
+        if let Some(status_reason) = update.status_reason {
+            self.status_reason = Some(status_reason);
+        }
+        if let Some(sent_at) = update.sent_at {
+            self.sent_at = Some(sent_at);
+        }
+        if let Some(confirmed_at) = update.confirmed_at {
+            self.confirmed_at = Some(confirmed_at);
+        }
+        if let Some(network_data) = update.network_data {
+            self.network_data = network_data;
+        }
+        if let Some(priced_at) = update.priced_at {
+            self.priced_at = Some(priced_at);
+        }
+        if let Some(hashes) = update.hashes {
+            self.hashes = hashes;
+        }
+        if let Some(noop_count) = update.noop_count {
+            self.noop_count = Some(noop_count);
+        }
+        if let Some(is_canceled) = update.is_canceled {
+            self.is_canceled = Some(is_canceled);
+        }
+        if let Some(delete_at) = update.delete_at {
+            self.delete_at = Some(delete_at);
+        }
     }
 
     /// Creates a TransactionUpdateRequest to reset this transaction to its pre-prepare state.
@@ -128,6 +191,7 @@ impl TransactionRepoModel {
             hashes: Some(vec![]),
             noop_count: None,
             is_canceled: None,
+            delete_at: None,
         })
     }
 }
@@ -341,6 +405,7 @@ impl Default for TransactionRepoModel {
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
+            delete_at: None,
             network_data: NetworkTransactionData::Evm(EvmTransactionData::default()),
             network_type: NetworkType::Evm,
             priced_at: None,
@@ -748,6 +813,7 @@ impl
                     sent_at: None,
                     confirmed_at: None,
                     valid_until: evm_request.valid_until.clone(),
+                    delete_at: None,
                     network_type: NetworkType::Evm,
                     network_data: NetworkTransactionData::Evm(EvmTransactionData {
                         gas_price: evm_request.gas_price,
@@ -780,6 +846,7 @@ impl
                 sent_at: None,
                 confirmed_at: None,
                 valid_until: None,
+                delete_at: None,
                 network_type: NetworkType::Solana,
                 network_data: NetworkTransactionData::Solana(SolanaTransactionData {
                     recent_blockhash: None,
@@ -821,6 +888,7 @@ impl
                     sent_at: None,
                     confirmed_at: None,
                     valid_until: None,
+                    delete_at: None,
                     network_type: NetworkType::Stellar,
                     network_data: NetworkTransactionData::Stellar(stellar_data),
                     priced_at: None,
@@ -991,7 +1059,9 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 
 #[cfg(test)]
 mod tests {
+    use lazy_static::lazy_static;
     use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
+    use std::sync::Mutex;
 
     use super::*;
     use crate::{
@@ -1006,6 +1076,11 @@ mod tests {
             transaction::stellar::AssetSpec,
         },
     };
+
+    // Use a mutex to ensure tests don't run in parallel when modifying env vars
+    lazy_static! {
+        static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
 
     #[test]
     fn test_signature_from_bytes() {
@@ -1102,6 +1177,7 @@ mod tests {
             network_type: NetworkType::Stellar,
             noop_count: None,
             is_canceled: None,
+            delete_at: None,
         };
 
         let update_req = tx.create_reset_update_request().unwrap();
@@ -1903,6 +1979,7 @@ mod tests {
         assert_eq!(default_model.sent_at, None);
         assert_eq!(default_model.confirmed_at, None);
         assert_eq!(default_model.valid_until, None);
+        assert_eq!(default_model.delete_at, None);
         assert_eq!(default_model.network_type, NetworkType::Evm);
         assert_eq!(default_model.priced_at, None);
         assert_eq!(default_model.hashes.len(), 0);
@@ -2514,5 +2591,437 @@ mod tests {
         let request = NetworkTransactionRequest::Stellar(stellar_request);
         let result = TransactionRepoModel::try_from((&request, &relayer_model, &network_model));
         assert!(result.is_ok(), "Payment operation with memo should succeed");
+    }
+
+    #[test]
+    fn test_update_delete_at_if_final_status_does_not_update_when_delete_at_already_set() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        use std::env;
+
+        // Set custom expiration hours for test
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+
+        let mut transaction = create_test_transaction();
+        transaction.delete_at = Some("2024-01-01T00:00:00Z".to_string());
+        transaction.status = TransactionStatus::Confirmed; // Final status
+
+        let original_delete_at = transaction.delete_at.clone();
+
+        transaction.update_delete_at_if_final_status();
+
+        // Should not change delete_at when it's already set
+        assert_eq!(transaction.delete_at, original_delete_at);
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[test]
+    fn test_update_delete_at_if_final_status_does_not_update_when_status_not_final() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        use std::env;
+
+        // Set custom expiration hours for test
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+
+        let mut transaction = create_test_transaction();
+        transaction.delete_at = None;
+        transaction.status = TransactionStatus::Pending; // Non-final status
+
+        transaction.update_delete_at_if_final_status();
+
+        // Should not set delete_at for non-final status
+        assert!(transaction.delete_at.is_none());
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[test]
+    fn test_update_delete_at_if_final_status_sets_delete_at_for_final_statuses() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        use crate::config::ServerConfig;
+        use chrono::{DateTime, Duration, Utc};
+        use std::env;
+
+        // Set custom expiration hours for test
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "3"); // Use 3 hours for this test
+
+        // Verify the env var is actually set correctly
+        let actual_hours = ServerConfig::get_transaction_expiration_hours();
+        assert_eq!(
+            actual_hours, 3,
+            "Environment variable should be set to 3 hours"
+        );
+
+        let final_statuses = vec![
+            TransactionStatus::Canceled,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+        ];
+
+        for status in final_statuses {
+            let mut transaction = create_test_transaction();
+            transaction.delete_at = None;
+            transaction.status = status.clone();
+
+            let before_update = Utc::now();
+            transaction.update_delete_at_if_final_status();
+
+            // Should set delete_at for final status
+            assert!(
+                transaction.delete_at.is_some(),
+                "delete_at should be set for status: {:?}",
+                status
+            );
+
+            // Verify the timestamp is reasonable
+            let delete_at_str = transaction.delete_at.unwrap();
+            let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+                .expect("delete_at should be valid RFC3339")
+                .with_timezone(&Utc);
+
+            // Should be approximately 3 hours from before_update
+            let duration_from_before = delete_at.signed_duration_since(before_update);
+            let expected_duration = Duration::hours(3);
+            let tolerance = Duration::minutes(5); // Allow 5 minutes tolerance
+
+            // Debug information
+            let actual_hours_at_runtime = ServerConfig::get_transaction_expiration_hours();
+
+            assert!(
+                duration_from_before >= expected_duration - tolerance &&
+                duration_from_before <= expected_duration + tolerance,
+                "delete_at should be approximately 3 hours from now for status: {:?}. Duration from start: {:?}, Expected: {:?}, Config hours at runtime: {}",
+                status, duration_from_before, expected_duration, actual_hours_at_runtime
+            );
+        }
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[test]
+    fn test_update_delete_at_if_final_status_uses_default_expiration_hours() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        use chrono::{DateTime, Duration, Utc};
+        use std::env;
+
+        // Remove env var to test default behavior
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+
+        let mut transaction = create_test_transaction();
+        transaction.delete_at = None;
+        transaction.status = TransactionStatus::Confirmed;
+
+        let before_update = Utc::now();
+        transaction.update_delete_at_if_final_status();
+
+        // Should set delete_at using default value (4 hours)
+        assert!(transaction.delete_at.is_some());
+
+        let delete_at_str = transaction.delete_at.unwrap();
+        let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+            .expect("delete_at should be valid RFC3339")
+            .with_timezone(&Utc);
+
+        // Should be approximately 4 hours from before_update (default value)
+        let duration_from_before = delete_at.signed_duration_since(before_update);
+        let expected_duration = Duration::hours(4);
+        let tolerance = Duration::minutes(5); // Allow 5 minutes tolerance
+
+        assert!(
+            duration_from_before >= expected_duration - tolerance &&
+            duration_from_before <= expected_duration + tolerance,
+            "delete_at should be approximately 4 hours from now (default). Duration from start: {:?}, Expected: {:?}",
+            duration_from_before, expected_duration
+        );
+    }
+
+    #[test]
+    fn test_update_delete_at_if_final_status_with_custom_expiration_hours() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        use chrono::{DateTime, Duration, Utc};
+        use std::env;
+
+        // Test with various custom expiration hours
+        let test_cases = vec![1, 2, 6, 12]; // 1 hour, 2 hours, 6 hours, 12 hours
+
+        for expiration_hours in test_cases {
+            env::set_var("TRANSACTION_EXPIRATION_HOURS", expiration_hours.to_string());
+
+            let mut transaction = create_test_transaction();
+            transaction.delete_at = None;
+            transaction.status = TransactionStatus::Failed;
+
+            let before_update = Utc::now();
+            transaction.update_delete_at_if_final_status();
+
+            assert!(
+                transaction.delete_at.is_some(),
+                "delete_at should be set for {} hours",
+                expiration_hours
+            );
+
+            let delete_at_str = transaction.delete_at.unwrap();
+            let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+                .expect("delete_at should be valid RFC3339")
+                .with_timezone(&Utc);
+
+            let duration_from_before = delete_at.signed_duration_since(before_update);
+            let expected_duration = Duration::hours(expiration_hours as i64);
+            let tolerance = Duration::minutes(5); // Allow 5 minutes tolerance
+
+            assert!(
+                duration_from_before >= expected_duration - tolerance &&
+                duration_from_before <= expected_duration + tolerance,
+                "delete_at should be approximately {} hours from now. Duration from start: {:?}, Expected: {:?}",
+                expiration_hours, duration_from_before, expected_duration
+            );
+        }
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[test]
+    fn test_calculate_delete_at_with_various_hours() {
+        use chrono::{DateTime, Utc};
+
+        let test_cases = vec![0, 1, 6, 12, 24, 48];
+
+        for hours in test_cases {
+            let before_calc = Utc::now();
+            let result = TransactionRepoModel::calculate_delete_at(hours);
+            let after_calc = Utc::now();
+
+            assert!(
+                result.is_some(),
+                "calculate_delete_at should return Some for {} hours",
+                hours
+            );
+
+            let delete_at_str = result.unwrap();
+            let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+                .expect("Result should be valid RFC3339")
+                .with_timezone(&Utc);
+
+            let expected_min =
+                before_calc + chrono::Duration::hours(hours as i64) - chrono::Duration::seconds(1);
+            let expected_max =
+                after_calc + chrono::Duration::hours(hours as i64) + chrono::Duration::seconds(1);
+
+            assert!(
+                delete_at >= expected_min && delete_at <= expected_max,
+                "Calculated delete_at should be approximately {} hours from now. Got: {}, Expected between: {} and {}",
+                hours, delete_at, expected_min, expected_max
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_delete_at_if_final_status_idempotent() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+
+        let mut transaction = create_test_transaction();
+        transaction.delete_at = None;
+        transaction.status = TransactionStatus::Confirmed;
+
+        // First call should set delete_at
+        transaction.update_delete_at_if_final_status();
+        let first_delete_at = transaction.delete_at.clone();
+        assert!(first_delete_at.is_some());
+
+        // Second call should not change delete_at (idempotent)
+        transaction.update_delete_at_if_final_status();
+        assert_eq!(transaction.delete_at, first_delete_at);
+
+        // Third call should not change delete_at (idempotent)
+        transaction.update_delete_at_if_final_status();
+        assert_eq!(transaction.delete_at, first_delete_at);
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    /// Helper function to create a test transaction for testing delete_at functionality
+    fn create_test_transaction() -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "test-transaction-id".to_string(),
+            relayer_id: "test-relayer-id".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData {
+                gas_price: None,
+                gas_limit: Some(21000),
+                nonce: Some(0),
+                value: U256::from(0),
+                data: None,
+                from: "0x1234567890123456789012345678901234567890".to_string(),
+                to: Some("0x0987654321098765432109876543210987654321".to_string()),
+                chain_id: 1,
+                hash: None,
+                signature: None,
+                speed: None,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+                raw: None,
+            }),
+            priced_at: None,
+            hashes: vec![],
+            network_type: NetworkType::Evm,
+            noop_count: None,
+            is_canceled: None,
+        }
+    }
+
+    #[test]
+    fn test_apply_partial_update() {
+        // Create a test transaction
+        let mut transaction = create_test_transaction();
+
+        // Create a partial update request
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            status_reason: Some("Transaction confirmed".to_string()),
+            sent_at: Some("2023-01-01T12:00:00Z".to_string()),
+            confirmed_at: Some("2023-01-01T12:05:00Z".to_string()),
+            hashes: Some(vec!["0x123".to_string(), "0x456".to_string()]),
+            is_canceled: Some(false),
+            ..Default::default()
+        };
+
+        // Apply the partial update
+        transaction.apply_partial_update(update);
+
+        // Verify the updates were applied
+        assert_eq!(transaction.status, TransactionStatus::Confirmed);
+        assert_eq!(
+            transaction.status_reason,
+            Some("Transaction confirmed".to_string())
+        );
+        assert_eq!(
+            transaction.sent_at,
+            Some("2023-01-01T12:00:00Z".to_string())
+        );
+        assert_eq!(
+            transaction.confirmed_at,
+            Some("2023-01-01T12:05:00Z".to_string())
+        );
+        assert_eq!(
+            transaction.hashes,
+            vec!["0x123".to_string(), "0x456".to_string()]
+        );
+        assert_eq!(transaction.is_canceled, Some(false));
+
+        // Verify that delete_at was set because status changed to final
+        assert!(transaction.delete_at.is_some());
+    }
+
+    #[test]
+    fn test_apply_partial_update_preserves_unchanged_fields() {
+        // Create a test transaction with initial values
+        let mut transaction = TransactionRepoModel {
+            id: "test-tx".to_string(),
+            relayer_id: "test-relayer".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: Some("Initial reason".to_string()),
+            created_at: Utc::now().to_rfc3339(),
+            sent_at: Some("2023-01-01T10:00:00Z".to_string()),
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData::default()),
+            priced_at: None,
+            hashes: vec!["0xoriginal".to_string()],
+            network_type: NetworkType::Evm,
+            noop_count: Some(5),
+            is_canceled: Some(true),
+        };
+
+        // Create a partial update that only changes status
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Sent),
+            ..Default::default()
+        };
+
+        // Apply the partial update
+        transaction.apply_partial_update(update);
+
+        // Verify only status changed, other fields preserved
+        assert_eq!(transaction.status, TransactionStatus::Sent);
+        assert_eq!(
+            transaction.status_reason,
+            Some("Initial reason".to_string())
+        );
+        assert_eq!(
+            transaction.sent_at,
+            Some("2023-01-01T10:00:00Z".to_string())
+        );
+        assert_eq!(transaction.confirmed_at, None);
+        assert_eq!(transaction.hashes, vec!["0xoriginal".to_string()]);
+        assert_eq!(transaction.noop_count, Some(5));
+        assert_eq!(transaction.is_canceled, Some(true));
+
+        // Status is not final, so delete_at should remain None
+        assert!(transaction.delete_at.is_none());
+    }
+
+    #[test]
+    fn test_apply_partial_update_empty_update() {
+        // Create a test transaction
+        let mut transaction = create_test_transaction();
+        let original_transaction = transaction.clone();
+
+        // Apply an empty update
+        let update = TransactionUpdateRequest::default();
+        transaction.apply_partial_update(update);
+
+        // Verify nothing changed
+        assert_eq!(transaction.id, original_transaction.id);
+        assert_eq!(transaction.status, original_transaction.status);
+        assert_eq!(
+            transaction.status_reason,
+            original_transaction.status_reason
+        );
+        assert_eq!(transaction.sent_at, original_transaction.sent_at);
+        assert_eq!(transaction.confirmed_at, original_transaction.confirmed_at);
+        assert_eq!(transaction.hashes, original_transaction.hashes);
+        assert_eq!(transaction.noop_count, original_transaction.noop_count);
+        assert_eq!(transaction.is_canceled, original_transaction.is_canceled);
+        assert_eq!(transaction.delete_at, original_transaction.delete_at);
     }
 }

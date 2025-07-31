@@ -79,6 +79,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         noop_count: None,
         is_canceled: Some(false),
         status_reason: None,
+        delete_at: None,
     }
 }
 

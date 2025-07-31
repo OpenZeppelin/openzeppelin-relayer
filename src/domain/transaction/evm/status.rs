@@ -509,6 +509,7 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
+            delete_at: None,
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 chain_id: 1,

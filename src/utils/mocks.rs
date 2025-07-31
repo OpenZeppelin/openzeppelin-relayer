@@ -96,6 +96,7 @@ pub mod mockutils {
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
+            delete_at: None,
             network_data: NetworkTransactionData::Evm(EvmTransactionData::default()),
             priced_at: None,
             hashes: vec![],
@@ -229,6 +230,7 @@ pub mod mockutils {
             storage_encryption_key: Some(SecretString::new(
                 "test_encryption_key_1234567890_test_key_32",
             )),
+            transaction_expiration_hours: 4,
         }
     }
 }

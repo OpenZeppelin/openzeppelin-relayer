@@ -123,6 +123,7 @@ mod tests {
             network_type: NetworkType::Stellar,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         }
     }
 

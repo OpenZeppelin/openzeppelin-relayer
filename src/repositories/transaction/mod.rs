@@ -388,6 +388,7 @@ mod tests {
             hashes: Some(vec!["test_hash".to_string()]),
             noop_count: None,
             is_canceled: None,
+            delete_at: None,
         }
     }
 

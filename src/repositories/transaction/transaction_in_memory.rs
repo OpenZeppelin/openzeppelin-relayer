@@ -240,9 +240,11 @@ impl TransactionRepository for InMemoryTransactionRepository {
         tx_id: String,
         status: TransactionStatus,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.status = status;
-        self.update(tx_id, tx).await
+        let update = TransactionUpdateRequest {
+            status: Some(status),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
     }
 
     async fn partial_update(
@@ -253,27 +255,8 @@ impl TransactionRepository for InMemoryTransactionRepository {
         let mut store = Self::acquire_lock(&self.store).await?;
 
         if let Some(tx) = store.get_mut(&tx_id) {
-            if let Some(status) = update.status {
-                tx.status = status;
-            }
-            if let Some(status_reason) = update.status_reason {
-                tx.status_reason = Some(status_reason);
-            }
-            if let Some(sent_at) = update.sent_at {
-                tx.sent_at = Some(sent_at);
-            }
-            if let Some(confirmed_at) = update.confirmed_at {
-                tx.confirmed_at = Some(confirmed_at);
-            }
-            if let Some(network_data) = update.network_data {
-                tx.network_data = network_data;
-            }
-            if let Some(hashes) = update.hashes {
-                tx.hashes = hashes;
-            }
-            if let Some(is_canceled) = update.is_canceled {
-                tx.is_canceled = Some(is_canceled);
-            }
+            // Apply partial updates using the model's business logic
+            tx.apply_partial_update(update);
             Ok(tx.clone())
         } else {
             Err(RepositoryError::NotFound(format!(
@@ -323,12 +306,18 @@ impl Default for InMemoryTransactionRepository {
 #[cfg(test)]
 mod tests {
     use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
+    use lazy_static::lazy_static;
     use std::str::FromStr;
 
     use crate::models::U256;
 
     use super::*;
 
+    use tokio::sync::Mutex;
+
+    lazy_static! {
+        static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
     // Helper function to create test transactions
     fn create_test_transaction(id: &str) -> TransactionRepoModel {
         TransactionRepoModel {
@@ -340,6 +329,7 @@ mod tests {
             sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             valid_until: None,
+            delete_at: None,
             network_type: NetworkType::Evm,
             priced_at: None,
             hashes: vec![],
@@ -374,6 +364,7 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
+            delete_at: None,
             network_type: NetworkType::Evm,
             priced_at: None,
             hashes: vec![],
@@ -516,6 +507,7 @@ mod tests {
             priced_at: None,
             noop_count: None,
             is_canceled: None,
+            delete_at: None,
         };
         let updated_tx1 = repo
             .partial_update("test-tx-id".to_string(), update1)
@@ -535,6 +527,7 @@ mod tests {
             priced_at: None,
             noop_count: None,
             is_canceled: None,
+            delete_at: None,
         };
         let updated_tx2 = repo
             .partial_update("test-tx-id".to_string(), update2)
@@ -561,6 +554,7 @@ mod tests {
             priced_at: None,
             noop_count: None,
             is_canceled: None,
+            delete_at: None,
         };
         let result = repo
             .partial_update("non-existent-id".to_string(), update3)
@@ -949,5 +943,314 @@ mod tests {
 
         repo.drop_all_entries().await.unwrap();
         assert!(!repo.has_entries().await.unwrap());
+    }
+
+    // Tests for delete_at field setting on final status updates
+
+    #[tokio::test]
+    async fn test_update_status_sets_delete_at_for_final_statuses() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use chrono::{DateTime, Duration, Utc};
+        use std::env;
+
+        // Use a unique test environment variable to avoid conflicts
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+
+        let repo = InMemoryTransactionRepository::new();
+
+        let final_statuses = [
+            TransactionStatus::Canceled,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+        ];
+
+        for (i, status) in final_statuses.iter().enumerate() {
+            let tx_id = format!("test-final-{}", i);
+            let tx = create_test_transaction_pending_state(&tx_id);
+
+            // Ensure transaction has no delete_at initially
+            assert!(tx.delete_at.is_none());
+
+            repo.create(tx).await.unwrap();
+
+            let before_update = Utc::now();
+
+            // Update to final status
+            let updated = repo
+                .update_status(tx_id.clone(), status.clone())
+                .await
+                .unwrap();
+
+            // Should have delete_at set
+            assert!(
+                updated.delete_at.is_some(),
+                "delete_at should be set for status: {:?}",
+                status
+            );
+
+            // Verify the timestamp is reasonable (approximately 6 hours from now)
+            let delete_at_str = updated.delete_at.unwrap();
+            let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+                .expect("delete_at should be valid RFC3339")
+                .with_timezone(&Utc);
+
+            let duration_from_before = delete_at.signed_duration_since(before_update);
+            let expected_duration = Duration::hours(6);
+            let tolerance = Duration::minutes(5);
+
+            assert!(
+                duration_from_before >= expected_duration - tolerance &&
+                duration_from_before <= expected_duration + tolerance,
+                "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
+                status, duration_from_before
+            );
+        }
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    async fn test_update_status_does_not_set_delete_at_for_non_final_statuses() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
+
+        let repo = InMemoryTransactionRepository::new();
+
+        let non_final_statuses = [
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+        ];
+
+        for (i, status) in non_final_statuses.iter().enumerate() {
+            let tx_id = format!("test-non-final-{}", i);
+            let tx = create_test_transaction_pending_state(&tx_id);
+
+            repo.create(tx).await.unwrap();
+
+            // Update to non-final status
+            let updated = repo
+                .update_status(tx_id.clone(), status.clone())
+                .await
+                .unwrap();
+
+            // Should NOT have delete_at set
+            assert!(
+                updated.delete_at.is_none(),
+                "delete_at should NOT be set for status: {:?}",
+                status
+            );
+        }
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    async fn test_partial_update_sets_delete_at_for_final_statuses() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use chrono::{DateTime, Duration, Utc};
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("test-partial-final");
+
+        repo.create(tx).await.unwrap();
+
+        let before_update = Utc::now();
+
+        // Use partial_update to set status to Confirmed (final status)
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            status_reason: Some("Transaction completed".to_string()),
+            confirmed_at: Some("2023-01-01T12:05:00Z".to_string()),
+            ..Default::default()
+        };
+
+        let updated = repo
+            .partial_update("test-partial-final".to_string(), update)
+            .await
+            .unwrap();
+
+        // Should have delete_at set
+        assert!(
+            updated.delete_at.is_some(),
+            "delete_at should be set when updating to Confirmed status"
+        );
+
+        // Verify the timestamp is reasonable (approximately 8 hours from now)
+        let delete_at_str = updated.delete_at.unwrap();
+        let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+            .expect("delete_at should be valid RFC3339")
+            .with_timezone(&Utc);
+
+        let duration_from_before = delete_at.signed_duration_since(before_update);
+        let expected_duration = Duration::hours(8);
+        let tolerance = Duration::minutes(5);
+
+        assert!(
+            duration_from_before >= expected_duration - tolerance
+                && duration_from_before <= expected_duration + tolerance,
+            "delete_at should be approximately 8 hours from now. Duration: {:?}",
+            duration_from_before
+        );
+
+        // Also verify other fields were updated
+        assert_eq!(updated.status, TransactionStatus::Confirmed);
+        assert_eq!(
+            updated.status_reason,
+            Some("Transaction completed".to_string())
+        );
+        assert_eq!(
+            updated.confirmed_at,
+            Some("2023-01-01T12:05:00Z".to_string())
+        );
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    async fn test_update_status_preserves_existing_delete_at() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "2");
+
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("test-preserve-delete-at");
+
+        // Set an existing delete_at value
+        let existing_delete_at = "2025-01-01T12:00:00Z".to_string();
+        tx.delete_at = Some(existing_delete_at.clone());
+
+        repo.create(tx).await.unwrap();
+
+        // Update to final status
+        let updated = repo
+            .update_status(
+                "test-preserve-delete-at".to_string(),
+                TransactionStatus::Confirmed,
+            )
+            .await
+            .unwrap();
+
+        // Should preserve the existing delete_at value
+        assert_eq!(
+            updated.delete_at,
+            Some(existing_delete_at),
+            "Existing delete_at should be preserved when updating to final status"
+        );
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    async fn test_partial_update_without_status_change_preserves_delete_at() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "3");
+
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("test-preserve-no-status");
+
+        repo.create(tx).await.unwrap();
+
+        // First, update to final status to set delete_at
+        let updated1 = repo
+            .update_status(
+                "test-preserve-no-status".to_string(),
+                TransactionStatus::Confirmed,
+            )
+            .await
+            .unwrap();
+
+        assert!(updated1.delete_at.is_some());
+        let original_delete_at = updated1.delete_at.clone();
+
+        // Now update other fields without changing status
+        let update = TransactionUpdateRequest {
+            status: None, // No status change
+            status_reason: Some("Updated reason".to_string()),
+            confirmed_at: Some("2023-01-01T12:10:00Z".to_string()),
+            ..Default::default()
+        };
+
+        let updated2 = repo
+            .partial_update("test-preserve-no-status".to_string(), update)
+            .await
+            .unwrap();
+
+        // delete_at should be preserved
+        assert_eq!(
+            updated2.delete_at, original_delete_at,
+            "delete_at should be preserved when status is not updated"
+        );
+
+        // Other fields should be updated
+        assert_eq!(updated2.status, TransactionStatus::Confirmed); // Unchanged
+        assert_eq!(updated2.status_reason, Some("Updated reason".to_string()));
+        assert_eq!(
+            updated2.confirmed_at,
+            Some("2023-01-01T12:10:00Z".to_string())
+        );
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    async fn test_update_status_multiple_updates_idempotent() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("test-idempotent");
+
+        repo.create(tx).await.unwrap();
+
+        // First update to final status
+        let updated1 = repo
+            .update_status("test-idempotent".to_string(), TransactionStatus::Confirmed)
+            .await
+            .unwrap();
+
+        assert!(updated1.delete_at.is_some());
+        let first_delete_at = updated1.delete_at.clone();
+
+        // Second update to another final status
+        let updated2 = repo
+            .update_status("test-idempotent".to_string(), TransactionStatus::Failed)
+            .await
+            .unwrap();
+
+        // delete_at should remain the same (idempotent)
+        assert_eq!(
+            updated2.delete_at, first_delete_at,
+            "delete_at should not change on subsequent final status updates"
+        );
+
+        // Status should be updated
+        assert_eq!(updated2.status, TransactionStatus::Failed);
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
     }
 }

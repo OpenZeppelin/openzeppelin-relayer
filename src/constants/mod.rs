@@ -31,3 +31,6 @@ pub use retry::*;
 
 mod plugins;
 pub use plugins::*;
+
+mod transactions;
+pub use transactions::*;
