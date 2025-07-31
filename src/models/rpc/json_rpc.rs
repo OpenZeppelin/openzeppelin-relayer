@@ -7,7 +7,7 @@ use utoipa::ToSchema;
 
 /// Represents a JSON-RPC 2.0 ID value.
 /// According to the spec, the ID can be a String or Number.
-/// When used in Option<JsonRpcId>: Some(id) = actual ID, None = explicit null.
+/// When used in `Option<JsonRpcId>`: Some(id) = actual ID, None = explicit null.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(untagged)]
 pub enum JsonRpcId {

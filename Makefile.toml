@@ -2,8 +2,6 @@
 description = "Build Antora site and copy rust_docs"
 script = [
   "cargo doc --target-dir docs/rust_docs --release --no-deps --quiet --locked",
-  "cargo run --example generate_openapi",
-  "npx -y @redocly/cli@latest build-docs openapi.json --output docs/api_docs.html",
   "bash scripts/rust_antora.sh"
 ]
 [tasks.docker-compose-up]

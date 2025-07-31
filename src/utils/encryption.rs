@@ -250,6 +250,11 @@ pub fn decrypt_sensitive_field(data: &str) -> Result<String, EncryptionError> {
         .map_err(|e| EncryptionError::DecryptionFailed(format!("Invalid JSON string: {}", e)))
 }
 
+/// Utility function to generate a new encryption key
+pub fn generate_encryption_key() -> String {
+    FieldEncryption::generate_key()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

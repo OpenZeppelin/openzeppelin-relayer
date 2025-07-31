@@ -32,8 +32,7 @@
       "network": "zk-sync-testnet",
       "required_confirmations": 1,
       "rpc_urls": [
-        "https://sepolia.era.zksync.dev",
-        "https://zksync-sepolia.drpc.org"
+        "https://sepolia.era.zksync.dev"
       ],
       "symbol": "ETH",
       "tags": [

@@ -173,6 +173,9 @@ Some tags have special meaning and affect relayer behavior:
 |`optimism`
 |Identifies Optimism-based networks using the OP Stack (e.g., Optimism, Base, World Chain)
 
+|`arbitrum-based`
+|Identifies Arbitrum-based networks using the Arbitrum Stack
+
 |`no-mempool`
 |Indicates networks that lack a traditional mempool (e.g., Arbitrum)
 
@@ -277,7 +280,7 @@ Here's an example showing a Stellar network configuration with passphrase:
 {
   "type": "stellar",
   "network": "pubnet",
-  "rpc_urls": ["https://horizon.stellar.org"],
+  "rpc_urls": ["https://mainnet.sorobanrpc.com"],
   "explorer_urls": ["https://stellar.expert/explorer/public"],
   "passphrase": "Public Global Stellar Network ; September 2015",  // Official mainnet passphrase
   "average_blocktime_ms": 5000,
@@ -348,7 +351,7 @@ Here's an example showing a Stellar network configuration with passphrase:
 {
   "type": "stellar",
   "network": "pubnet",
-  "rpc_urls": ["https://horizon.stellar.org"],
+  "rpc_urls": ["https://mainnet.sorobanrpc.com"],
   "passphrase": "Public Global Stellar Network ; September 2015",
   "explorer_urls": ["https://stellar.expert/explorer/public"],
   "average_blocktime_ms": 5000,

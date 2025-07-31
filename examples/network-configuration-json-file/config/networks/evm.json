@@ -1,0 +1,64 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 12000,
+      "chain_id": 1,
+      "explorer_urls": [
+        "https://api.etherscan.io/api",
+        "https://etherscan.io"
+      ],
+      "features": [
+        "eip1559"
+      ],
+      "is_testnet": false,
+      "network": "mainnet",
+      "required_confirmations": 12,
+      "rpc_urls": [
+        "https://eth.drpc.org",
+        "https://1rpc.io/eth",
+        "https://ethereum-rpc.publicnode.com",
+        "https://ethereum-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "type": "evm"
+    },
+    {
+      "from": "mainnet",
+      "chain_id": 11155111,
+      "explorer_urls": [
+        "https://api-sepolia.etherscan.io/api",
+        "https://sepolia.etherscan.io"
+      ],
+
+      "is_testnet": true,
+      "network": "sepolia",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://sepolia.drpc.org",
+        "https://1rpc.io/sepolia",
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://ethereum-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "type": "evm"
+    },
+    {
+      "from": "mainnet",
+      "chain_id": 17000,
+      "explorer_urls": [
+        "https://api-holesky.etherscan.io/api",
+        "https://holesky.etherscan.io"
+      ],
+      "is_testnet": true,
+      "network": "holesky",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://holesky.drpc.org",
+        "https://1rpc.io/holesky",
+        "https://ethereum-holesky-rpc.publicnode.com"
+      ],
+      "symbol": "ETH",
+      "type": "evm"
+    }
+  ]
+}

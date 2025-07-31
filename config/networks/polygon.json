@@ -43,9 +43,7 @@
         "https://polygon-amoy-bor-rpc.publicnode.com"
       ],
       "symbol": "POL",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": [],
       "type": "evm"
     },
     {
