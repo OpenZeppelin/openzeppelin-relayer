@@ -6,6 +6,7 @@ use log::info;
 use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
 
 use crate::{
+    constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{extract_operations, extract_source_account},
     models::{StellarTransactionData, StellarValidationError, TransactionError, TransactionInput},
     repositories::TransactionCounterTrait,
@@ -104,7 +105,15 @@ where
                     ))
                 })?
         }
-        None => stellar_data,
+        None => {
+            // For non-simulated transactions, ensure fee is set from the envelope
+            let fee = match &envelope {
+                TransactionEnvelope::TxV0(e) => e.tx.fee,
+                TransactionEnvelope::Tx(e) => e.tx.fee,
+                _ => STELLAR_DEFAULT_TRANSACTION_FEE,
+            };
+            stellar_data.with_fee(fee)
+        }
     };
 
     // Step 6: Sign the transaction
@@ -666,11 +675,39 @@ mod xdr_transaction_tests {
         let relayer = create_test_relayer();
         let mut mocks = default_test_mocks();
 
-        // Mock counter service (will be called before validation fails)
+        // Don't expect counter to be called - validation fails before get_next_sequence
+
+        // Mock sync_sequence_from_chain for error handling
+        mocks.provider.expect_get_account().returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(0),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
         mocks
             .counter
-            .expect_get_and_increment()
-            .returning(|_, _| Box::pin(ready(Ok(1))));
+            .expect_set()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         // Mock finalize_transaction_state for failure handling
         mocks
@@ -705,6 +742,9 @@ mod xdr_transaction_tests {
             .get_stellar_transaction_data()
             .unwrap()
             .clone();
+
+        // Remove sequence number since validation fails before it's set
+        stellar_data.sequence_number = None;
 
         // Create unsigned XDR with different source
         let different_account = "GBCFR5QVA3K7JKIPT7WFULRXQVNTDZQLZHTUTGONFSTS5KCEGS6O5AZB";

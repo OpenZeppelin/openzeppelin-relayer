@@ -1,0 +1,76 @@
+{
+  "relayers": [
+    {
+      "id": "sepolia-direct",
+      "name": "Sepolia Direct Network Config",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": [
+    {
+      "type": "evm",
+      "network": "sepolia",
+      "chain_id": 11155111,
+      "required_confirmations": 6,
+      "symbol": "ETH",
+      "features": ["eip1559"],
+      "rpc_urls": [
+        "https://sepolia.drpc.org",
+        "https://1rpc.io/sepolia",
+        "https://ethereum-sepolia-rpc.publicnode.com"
+      ],
+      "explorer_urls": [
+        "https://api-sepolia.etherscan.io/api",
+        "https://sepolia.etherscan.io"
+      ],
+      "average_blocktime_ms": 12000,
+      "is_testnet": true,
+      "tags": ["ethereum", "testnet"]
+    },
+    {
+      "from": "sepolia",
+      "type": "evm",
+      "network": "sepolia-custom",
+      "required_confirmations": 3,
+      "rpc_urls": [
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://ethereum-sepolia-public.nodies.app"
+      ],
+      "symbol": "ETH",
+      "chain_id": 343434324,
+      "tags": ["ethereum", "testnet", "custom"]
+    }
+  ],
+  "plugins": []
+}

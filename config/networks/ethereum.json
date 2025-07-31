@@ -42,9 +42,7 @@
         "https://ethereum-sepolia-public.nodies.app"
       ],
       "symbol": "ETH",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": [],
       "type": "evm"
     },
     {
@@ -66,9 +64,7 @@
         "https://ethereum-holesky-rpc.publicnode.com"
       ],
       "symbol": "ETH",
-      "tags": [
-        "deprecated"
-      ],
+      "tags": [],
       "type": "evm"
     }
   ]

@@ -10,7 +10,10 @@ use super::StellarRelayerTransaction;
 use crate::{
     constants::STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS,
     jobs::{JobProducerTrait, TransactionStatusCheck},
-    models::{RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus},
+    models::{
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
+    },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
 };
@@ -148,15 +151,29 @@ where
     pub async fn handle_stellar_success(
         &self,
         tx: TransactionRepoModel,
-        _provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse, // May be needed later for more details
+        provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        // Extract the actual fee charged from the transaction result and update network data
+        let updated_network_data = provider_response.result.as_ref().and_then(|tx_result| {
+            tx.network_data
+                .get_stellar_transaction_data()
+                .ok()
+                .map(|stellar_data| {
+                    NetworkTransactionData::Stellar(
+                        stellar_data.with_fee(tx_result.fee_charged as u32),
+                    )
+                })
+        });
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            confirmed_at: Some(Utc::now().to_rfc3339()),
+            network_data: updated_network_data,
+            ..Default::default()
+        };
+
         let confirmed_tx = self
-            .finalize_transaction_state(
-                tx.id.clone(),
-                TransactionStatus::Confirmed,
-                None,
-                Some(Utc::now().to_rfc3339()),
-            )
+            .finalize_transaction_state(tx.id.clone(), update_request)
             .await?;
 
         self.enqueue_next_pending_transaction(&tx.id).await?;
@@ -182,13 +199,15 @@ where
         };
 
         warn!("Stellar transaction {} failed: {}", tx.id, detailed_reason);
+
+        let update_request = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            status_reason: Some(detailed_reason),
+            ..Default::default()
+        };
+
         let updated_tx = self
-            .finalize_transaction_state(
-                tx.id.clone(),
-                TransactionStatus::Failed,
-                Some(detailed_reason),
-                None,
-            )
+            .finalize_transaction_state(tx.id.clone(), update_request)
             .await?;
 
         self.enqueue_next_pending_transaction(&tx.id).await?;
@@ -586,6 +605,145 @@ mod tests {
                 }
                 other => panic!("Expected ValidationError, got {:?}", other),
             }
+        }
+
+        #[tokio::test]
+        async fn test_on_chain_failure_does_not_decrement_sequence() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.id = "tx-on-chain-fail".to_string();
+            let tx_hash_bytes = [4u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
+            {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+                stellar_data.sequence_number = Some(100); // Has a sequence
+            }
+            tx_to_handle.status = TransactionStatus::Submitted;
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return FAILED (on-chain failure)
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("FAILED")) })
+                });
+
+            // Decrement should NEVER be called for on-chain failures
+            mocks.counter.expect_decrement().never();
+
+            // Mock partial_update for failure
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .returning(move |id, update| {
+                    let mut updated_tx = create_test_transaction("test");
+                    updated_tx.id = id;
+                    updated_tx.status = update.status.unwrap();
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok::<_, RepositoryError>(updated_tx)
+                });
+
+            // Mock notification
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .returning(move |_, _| Ok(vec![]));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let initial_tx = tx_to_handle.clone();
+
+            let result = handler.handle_transaction_status_impl(initial_tx).await;
+
+            assert!(result.is_ok());
+            let handled_tx = result.unwrap();
+            assert_eq!(handled_tx.id, "tx-on-chain-fail");
+            assert_eq!(handled_tx.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn test_on_chain_success_does_not_decrement_sequence() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.id = "tx-on-chain-success".to_string();
+            let tx_hash_bytes = [5u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
+            {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+                stellar_data.sequence_number = Some(101); // Has a sequence
+            }
+            tx_to_handle.status = TransactionStatus::Submitted;
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return SUCCESS
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("SUCCESS")) })
+                });
+
+            // Decrement should NEVER be called for on-chain success
+            mocks.counter.expect_decrement().never();
+
+            // Mock partial_update for confirmation
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(move |id, update| {
+                    id == "tx-on-chain-success"
+                        && update.status == Some(TransactionStatus::Confirmed)
+                        && update.confirmed_at.is_some()
+                })
+                .times(1)
+                .returning(move |id, update| {
+                    let mut updated_tx = create_test_transaction("test");
+                    updated_tx.id = id;
+                    updated_tx.status = update.status.unwrap();
+                    updated_tx.confirmed_at = update.confirmed_at;
+                    Ok(updated_tx)
+                });
+
+            // Mock notification
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status for next transaction
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .returning(move |_, _| Ok(vec![]));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let initial_tx = tx_to_handle.clone();
+
+            let result = handler.handle_transaction_status_impl(initial_tx).await;
+
+            assert!(result.is_ok());
+            let handled_tx = result.unwrap();
+            assert_eq!(handled_tx.id, "tx-on-chain-success");
+            assert_eq!(handled_tx.status, TransactionStatus::Confirmed);
         }
     }
 }

@@ -30,7 +30,7 @@ pub trait RedisRepository {
         })
     }
 
-    /// Deserialize entity with detailed error context  
+    /// Deserialize entity with detailed error context
     /// Default implementation that works for any Deserialize type
     fn deserialize_entity<T>(
         &self,

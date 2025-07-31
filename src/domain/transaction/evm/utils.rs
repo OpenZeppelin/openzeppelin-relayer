@@ -1,20 +1,54 @@
 use crate::constants::{
-    DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
+    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TX_VALID_TIMESPAN, MAXIMUM_NOOP_RETRY_ATTEMPTS,
+    MAXIMUM_TX_ATTEMPTS,
 };
+use crate::models::EvmNetwork;
 use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
 };
+use crate::services::EvmProviderTrait;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 
 /// Updates an existing transaction to be a "noop" transaction (transaction to self with zero value and no data)
 /// This is commonly used for cancellation and replacement transactions
-pub async fn make_noop(evm_data: &mut EvmTransactionData) -> Result<(), TransactionError> {
+/// For Arbitrum networks, uses eth_estimateGas to account for L1 + L2 costs
+pub async fn make_noop<P: EvmProviderTrait>(
+    evm_data: &mut EvmTransactionData,
+    network: &EvmNetwork,
+    provider: Option<&P>,
+) -> Result<(), TransactionError> {
     // Update the transaction to be a noop
-    evm_data.gas_limit = Some(DEFAULT_GAS_LIMIT);
     evm_data.value = U256::from(0u64);
     evm_data.data = Some("0x".to_string());
     evm_data.to = Some(evm_data.from.clone());
+
+    // Set gas limit based on network type
+    if network.is_arbitrum() {
+        // For Arbitrum networks, try to estimate gas to account for L1 + L2 costs
+        if let Some(provider) = provider {
+            match provider.estimate_gas(evm_data).await {
+                Ok(estimated_gas) => {
+                    // Use the estimated gas, but ensure it's at least the default minimum
+                    evm_data.gas_limit = Some(estimated_gas.max(DEFAULT_GAS_LIMIT));
+                }
+                Err(e) => {
+                    // If estimation fails, fall back to a conservative estimate
+                    log::warn!(
+                        "Failed to estimate gas for Arbitrum noop transaction: {:?}",
+                        e
+                    );
+                    evm_data.gas_limit = Some(ARBITRUM_GAS_LIMIT);
+                }
+            }
+        } else {
+            // No provider available, use conservative estimate
+            evm_data.gas_limit = Some(ARBITRUM_GAS_LIMIT);
+        }
+    } else {
+        // For other networks, use the standard gas limit
+        evm_data.gas_limit = Some(DEFAULT_GAS_LIMIT);
+    }
 
     Ok(())
 }
@@ -92,6 +126,52 @@ pub fn get_age_of_sent_at(tx: &TransactionRepoModel) -> Result<Duration, Transac
 mod tests {
     use super::*;
     use crate::models::{evm::Speed, NetworkTransactionData};
+    use crate::services::{MockEvmProviderTrait, ProviderError};
+
+    fn create_standard_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "ethereum".to_string(),
+            rpc_urls: vec!["https://mainnet.infura.io".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 12000,
+            is_testnet: false,
+            tags: vec!["mainnet".to_string()],
+            chain_id: 1,
+            required_confirmations: 12,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
+
+    fn create_arbitrum_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "arbitrum".to_string(),
+            rpc_urls: vec!["https://arb1.arbitrum.io/rpc".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 1000,
+            is_testnet: false,
+            tags: vec!["rollup".to_string(), "arbitrum-based".to_string()],
+            chain_id: 42161,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
+
+    fn create_arbitrum_nova_network() -> EvmNetwork {
+        EvmNetwork {
+            network: "arbitrum-nova".to_string(),
+            rpc_urls: vec!["https://nova.arbitrum.io/rpc".to_string()],
+            explorer_urls: None,
+            average_blocktime_ms: 1000,
+            is_testnet: false,
+            tags: vec!["rollup".to_string(), "arbitrum-based".to_string()],
+            chain_id: 42170,
+            required_confirmations: 1,
+            features: vec!["eip1559".to_string()],
+            symbol: "ETH".to_string(),
+        }
+    }
 
     #[tokio::test]
     async fn test_make_noop_standard_network() {
@@ -112,7 +192,8 @@ mod tests {
             raw: Some(vec![1, 2, 3]),
         };
 
-        let result = make_noop(&mut evm_data).await;
+        let network = create_standard_network();
+        let result = make_noop(&mut evm_data, &network, None::<&MockEvmProviderTrait>).await;
         assert!(result.is_ok());
 
         // Verify the transaction was updated correctly
@@ -121,6 +202,149 @@ mod tests {
         assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
         assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
         assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
+    }
+
+    #[tokio::test]
+    async fn test_make_noop_arbitrum_network() {
+        let mut evm_data = EvmTransactionData {
+            from: "0x1234567890123456789012345678901234567890".to_string(),
+            to: Some("0xoriginal_destination".to_string()),
+            value: U256::from(1000000000000000000u64), // 1 ETH
+            data: Some("0xoriginal_data".to_string()),
+            gas_limit: Some(50000),
+            gas_price: Some(10_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            nonce: Some(42),
+            signature: None,
+            hash: Some("0xoriginal_hash".to_string()),
+            speed: Some(Speed::Fast),
+            chain_id: 42161, // Arbitrum One
+            raw: Some(vec![1, 2, 3]),
+        };
+
+        let network = create_arbitrum_network();
+        let result = make_noop(&mut evm_data, &network, None::<&MockEvmProviderTrait>).await;
+        assert!(result.is_ok());
+
+        // Verify the transaction was updated correctly for Arbitrum
+        assert_eq!(evm_data.gas_limit, Some(50_000)); // Higher gas limit for Arbitrum
+        assert_eq!(evm_data.to.unwrap(), evm_data.from); // Should send to self
+        assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
+        assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
+        assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
+        assert_eq!(evm_data.chain_id, 42161); // Chain ID preserved
+    }
+
+    #[tokio::test]
+    async fn test_make_noop_arbitrum_nova() {
+        let mut evm_data = EvmTransactionData {
+            from: "0x1234567890123456789012345678901234567890".to_string(),
+            to: Some("0xoriginal_destination".to_string()),
+            value: U256::from(1000000000000000000u64), // 1 ETH
+            data: Some("0xoriginal_data".to_string()),
+            gas_limit: Some(30000),
+            gas_price: Some(10_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            nonce: Some(42),
+            signature: None,
+            hash: Some("0xoriginal_hash".to_string()),
+            speed: Some(Speed::Fast),
+            chain_id: 42170, // Arbitrum Nova
+            raw: Some(vec![1, 2, 3]),
+        };
+
+        let network = create_arbitrum_nova_network();
+        let result = make_noop(&mut evm_data, &network, None::<&MockEvmProviderTrait>).await;
+        assert!(result.is_ok());
+
+        // Verify the transaction was updated correctly for Arbitrum Nova
+        assert_eq!(evm_data.gas_limit, Some(50_000)); // Higher gas limit for Arbitrum
+        assert_eq!(evm_data.to.unwrap(), evm_data.from); // Should send to self
+        assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
+        assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
+        assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
+        assert_eq!(evm_data.chain_id, 42170); // Chain ID preserved
+    }
+
+    #[tokio::test]
+    async fn test_make_noop_arbitrum_with_provider() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+
+        // Mock the gas estimation to return a higher value (simulating L1 + L2 costs)
+        mock_provider
+            .expect_estimate_gas()
+            .times(1)
+            .returning(|_| Box::pin(async move { Ok(35_000) }));
+
+        let mut evm_data = EvmTransactionData {
+            from: "0x1234567890123456789012345678901234567890".to_string(),
+            to: Some("0xoriginal_destination".to_string()),
+            value: U256::from(1000000000000000000u64), // 1 ETH
+            data: Some("0xoriginal_data".to_string()),
+            gas_limit: Some(30000),
+            gas_price: Some(10_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            nonce: Some(42),
+            signature: None,
+            hash: Some("0xoriginal_hash".to_string()),
+            speed: Some(Speed::Fast),
+            chain_id: 42161, // Arbitrum One
+            raw: Some(vec![1, 2, 3]),
+        };
+
+        let network = create_arbitrum_network();
+        let result = make_noop(&mut evm_data, &network, Some(&mock_provider)).await;
+        assert!(result.is_ok());
+
+        // Verify the transaction was updated correctly with estimated gas
+        assert_eq!(evm_data.gas_limit, Some(35_000)); // Should use estimated gas
+        assert_eq!(evm_data.to.unwrap(), evm_data.from); // Should send to self
+        assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
+        assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
+        assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
+        assert_eq!(evm_data.chain_id, 42161); // Chain ID preserved
+    }
+
+    #[tokio::test]
+    async fn test_make_noop_arbitrum_provider_estimation_fails() {
+        let mut mock_provider = MockEvmProviderTrait::new();
+
+        // Mock the gas estimation to fail
+        mock_provider.expect_estimate_gas().times(1).returning(|_| {
+            Box::pin(async move { Err(ProviderError::Other("Network error".to_string())) })
+        });
+
+        let mut evm_data = EvmTransactionData {
+            from: "0x1234567890123456789012345678901234567890".to_string(),
+            to: Some("0xoriginal_destination".to_string()),
+            value: U256::from(1000000000000000000u64), // 1 ETH
+            data: Some("0xoriginal_data".to_string()),
+            gas_limit: Some(30000),
+            gas_price: Some(10_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            nonce: Some(42),
+            signature: None,
+            hash: Some("0xoriginal_hash".to_string()),
+            speed: Some(Speed::Fast),
+            chain_id: 42161, // Arbitrum One
+            raw: Some(vec![1, 2, 3]),
+        };
+
+        let network = create_arbitrum_network();
+        let result = make_noop(&mut evm_data, &network, Some(&mock_provider)).await;
+        assert!(result.is_ok());
+
+        // Verify the transaction falls back to conservative estimate
+        assert_eq!(evm_data.gas_limit, Some(50_000)); // Should use fallback gas limit
+        assert_eq!(evm_data.to.unwrap(), evm_data.from); // Should send to self
+        assert_eq!(evm_data.value, U256::from(0u64)); // Zero value
+        assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
+        assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
+        assert_eq!(evm_data.chain_id, 42161); // Chain ID preserved
     }
 
     #[test]
