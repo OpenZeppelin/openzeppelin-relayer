@@ -118,7 +118,8 @@ where
         fee_token: &str,
     ) -> Result<(Transaction, FeeQuote), SolanaRpcError> {
         let policies = self.relayer.policies.get_solana_policy();
-        let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
+        let user_pays_fee =
+            policies.fee_payment_strategy.unwrap_or_default() == SolanaFeePaymentStrategy::User;
 
         // Get latest blockhash
         let recent_blockhash = self
@@ -233,7 +234,7 @@ mod tests {
 
         // Set up policy with allowed token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "USDC".to_string(),
                 symbol: Some("USDC".to_string()),
@@ -490,7 +491,7 @@ mod tests {
             setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // USDT mint
                 symbol: Some("USDT".to_string()),
@@ -582,7 +583,7 @@ mod tests {
 
         // Set up policy with UNI token (decimals = 8)
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "8qJSyQprMC57TWKaYEmetUR3UUiTP2M3hXW6D2evU9Tt".to_string(), // UNI mint
                 symbol: Some("UNI".to_string()),
@@ -673,7 +674,7 @@ mod tests {
 
         // Set up policy with WSOL token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),

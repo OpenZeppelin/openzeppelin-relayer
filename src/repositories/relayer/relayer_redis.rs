@@ -1,6 +1,6 @@
 //! Redis-backed implementation of the RelayerRepository.
 
-use crate::domain::RelayerUpdateRequest;
+use crate::models::UpdateRelayerRequest;
 use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
@@ -438,10 +438,51 @@ impl RelayerRepository for RedisRelayerRepository {
         Ok(active_relayers)
     }
 
+    async fn list_by_signer_id(
+        &self,
+        signer_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let all_relayers = self.list_all().await?;
+        let relayers_with_signer: Vec<RelayerRepoModel> = all_relayers
+            .into_iter()
+            .filter(|relayer| relayer.signer_id == signer_id)
+            .collect();
+
+        debug!(
+            "Found {} relayers using signer '{}'",
+            relayers_with_signer.len(),
+            signer_id
+        );
+        Ok(relayers_with_signer)
+    }
+
+    async fn list_by_notification_id(
+        &self,
+        notification_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let all_relayers = self.list_all().await?;
+        let relayers_with_notification: Vec<RelayerRepoModel> = all_relayers
+            .into_iter()
+            .filter(|relayer| {
+                relayer
+                    .notification_id
+                    .as_ref()
+                    .is_some_and(|id| id == notification_id)
+            })
+            .collect();
+
+        debug!(
+            "Found {} relayers using notification '{}'",
+            relayers_with_notification.len(),
+            notification_id
+        );
+        Ok(relayers_with_notification)
+    }
+
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         // First get the current relayer
         let mut relayer = self.get_by_id(id.clone()).await?;
@@ -768,7 +809,10 @@ mod tests {
 
         repo.create(relayer.clone()).await.unwrap();
 
-        let update = RelayerUpdateRequest { paused: Some(true) };
+        let update = UpdateRelayerRequest {
+            paused: Some(true),
+            ..Default::default()
+        };
         let result = repo.partial_update(relayer.id.clone(), update).await;
         assert!(result.is_ok());
 
@@ -808,8 +852,8 @@ mod tests {
             gas_price_cap: Some(50_000_000_000),
             whitelist_receivers: Some(vec!["0x123".to_string()]),
             eip1559_pricing: Some(true),
-            private_transactions: true,
-            min_balance: 1000000000000000000,
+            private_transactions: Some(true),
+            min_balance: Some(1000000000000000000),
             gas_limit_estimation: Some(true),
         });
 
@@ -824,8 +868,8 @@ mod tests {
                 Some(vec!["0x123".to_string()])
             );
             assert_eq!(evm_policy.eip1559_pricing, Some(true));
-            assert!(evm_policy.private_transactions);
-            assert_eq!(evm_policy.min_balance, 1000000000000000000);
+            assert!(evm_policy.private_transactions.unwrap_or(false));
+            assert_eq!(evm_policy.min_balance, Some(1000000000000000000));
         } else {
             panic!("Expected EVM policy");
         }
@@ -955,5 +999,80 @@ mod tests {
 
         repo.drop_all_entries().await.unwrap();
         assert!(!repo.has_entries().await.unwrap());
+    }
+
+    #[ignore = "Requires active Redis instance"]
+    #[tokio::test]
+    async fn test_list_by_signer_id() {
+        let repo = setup_test_repo().await;
+
+        let relayer1_id = uuid::Uuid::new_v4().to_string();
+        let relayer2_id = uuid::Uuid::new_v4().to_string();
+        let relayer3_id = uuid::Uuid::new_v4().to_string();
+        let signer1_id = uuid::Uuid::new_v4().to_string();
+        let signer2_id = uuid::Uuid::new_v4().to_string();
+
+        let mut relayer1 = create_test_relayer(&relayer1_id);
+        relayer1.signer_id = signer1_id.clone();
+        repo.create(relayer1).await.unwrap();
+
+        let mut relayer2 = create_test_relayer(&relayer2_id);
+
+        relayer2.signer_id = signer2_id.clone();
+        repo.create(relayer2).await.unwrap();
+
+        let mut relayer3 = create_test_relayer(&relayer3_id);
+        relayer3.signer_id = signer1_id.clone();
+        repo.create(relayer3).await.unwrap();
+
+        let result = repo.list_by_signer_id(&signer1_id).await.unwrap();
+        assert_eq!(result.len(), 2);
+        let ids: Vec<_> = result.iter().map(|r| r.id.clone()).collect();
+        assert!(ids.contains(&relayer1_id));
+        assert!(ids.contains(&relayer3_id));
+
+        let result = repo.list_by_signer_id(&signer2_id).await.unwrap();
+        assert_eq!(result.len(), 1);
+
+        let result = repo.list_by_signer_id("nonexistent").await.unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[ignore = "Requires active Redis instance"]
+    #[tokio::test]
+    async fn test_list_by_notification_id() {
+        let repo = setup_test_repo().await;
+
+        let relayer1_id = uuid::Uuid::new_v4().to_string();
+        let mut relayer1 = create_test_relayer(&relayer1_id);
+        relayer1.notification_id = Some("notif1".to_string());
+        repo.create(relayer1).await.unwrap();
+
+        let relayer2_id = uuid::Uuid::new_v4().to_string();
+        let mut relayer2 = create_test_relayer(&relayer2_id);
+        relayer2.notification_id = Some("notif2".to_string());
+        repo.create(relayer2).await.unwrap();
+
+        let relayer3_id = uuid::Uuid::new_v4().to_string();
+        let mut relayer3 = create_test_relayer(&relayer3_id);
+        relayer3.notification_id = Some("notif1".to_string());
+        repo.create(relayer3).await.unwrap();
+
+        let relayer4_id = uuid::Uuid::new_v4().to_string();
+        let mut relayer4 = create_test_relayer(&relayer4_id);
+        relayer4.notification_id = None;
+        repo.create(relayer4).await.unwrap();
+
+        let result = repo.list_by_notification_id("notif1").await.unwrap();
+        assert_eq!(result.len(), 2);
+        let ids: Vec<_> = result.iter().map(|r| r.id.clone()).collect();
+        assert!(ids.contains(&relayer1_id));
+        assert!(ids.contains(&relayer3_id));
+
+        let result = repo.list_by_notification_id("notif2").await.unwrap();
+        assert_eq!(result.len(), 1);
+
+        let result = repo.list_by_notification_id("nonexistent").await.unwrap();
+        assert_eq!(result.len(), 0);
     }
 }

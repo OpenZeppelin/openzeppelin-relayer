@@ -60,6 +60,8 @@ pub struct ServerConfig {
     pub repository_storage_type: RepositoryStorageType,
     /// Flag to force config file processing.
     pub reset_storage_on_start: bool,
+    /// The encryption key for the storage.
+    pub storage_encryption_key: Option<SecretString>,
 }
 
 impl ServerConfig {
@@ -168,6 +170,9 @@ impl ServerConfig {
             reset_storage_on_start: env::var("RESET_STORAGE_ON_START")
                 .map(|v| v.to_lowercase() == "true")
                 .unwrap_or(false),
+            storage_encryption_key: env::var("STORAGE_ENCRYPTION_KEY")
+                .map(|v| SecretString::new(&v))
+                .ok(),
         }
     }
 }

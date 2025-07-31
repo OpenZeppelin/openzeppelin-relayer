@@ -125,7 +125,8 @@ where
         fee_token: &str,
     ) -> Result<(Transaction, (Hash, u64), u64, FeeQuote), SolanaRpcError> {
         let policies = self.relayer.policies.get_solana_policy();
-        let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
+        let user_pays_fee =
+            policies.fee_payment_strategy.unwrap_or_default() == SolanaFeePaymentStrategy::User;
 
         let result = if user_pays_fee {
             // First create draft transaction with minimal fee to get structure right
@@ -252,7 +253,7 @@ mod tests {
 
         // Setup policy with WSOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -518,8 +519,8 @@ mod tests {
 
         // Set high minimum balance requirement
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-            min_balance: 100_000_000, // 0.1 SOL minimum balance
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(100_000_000), // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -581,8 +582,8 @@ mod tests {
             setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-            min_balance: 100_000_000, // 0.1 SOL minimum balance
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(100_000_000), // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -668,8 +669,8 @@ mod tests {
 
         relayer.address = relayer_keypair.pubkey().to_string();
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-            min_balance: 100_000_000, // 0.1 SOL minimum balance
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(100_000_000), // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -762,7 +763,7 @@ mod tests {
 
         // Configure policy with allowed tokens
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "AllowedToken111111111111111111111111111111".to_string(),
                 symbol: Some("ALLOWED".to_string()),

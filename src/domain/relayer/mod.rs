@@ -401,7 +401,7 @@ impl<
                 let network = EvmNetwork::try_from(network_repo)?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
-                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer.into()).await?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
@@ -453,7 +453,7 @@ impl<
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
                         .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
 
-                let signer_service = StellarSignerFactory::create_stellar_signer(&signer)?;
+                let signer_service = StellarSignerFactory::create_stellar_signer(&signer.into())?;
 
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
@@ -563,10 +563,4 @@ pub struct BalanceResponse {
     pub balance: u128,
     #[schema(example = "wei")]
     pub unit: String,
-}
-
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct RelayerUpdateRequest {
-    #[schema(nullable = false)]
-    pub paused: Option<bool>,
 }

@@ -16,6 +16,7 @@ use crate::{
         RelayerError, RelayerRepoModel, SignerError, StellarNetwork, StellarValidationError,
         TransactionError, U256,
     },
+    utils::{deserialize_optional_u128, serialize_optional_u128},
 };
 use alloy::{
     consensus::{TxEip1559, TxLegacy},
@@ -178,8 +179,12 @@ pub struct EvmTransactionDataSignature {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-
 pub struct EvmTransactionData {
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     pub gas_price: Option<u128>,
     pub gas_limit: Option<u64>,
     pub nonce: Option<u64>,
@@ -191,7 +196,17 @@ pub struct EvmTransactionData {
     pub hash: Option<String>,
     pub signature: Option<EvmTransactionDataSignature>,
     pub speed: Option<Speed>,
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     pub max_fee_per_gas: Option<u128>,
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     pub max_priority_fee_per_gas: Option<u128>,
     pub raw: Option<Vec<u8>>,
 }
@@ -2030,7 +2045,7 @@ mod tests {
             policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
                 max_fee: None,
                 timeout_seconds: None,
-                min_balance: DEFAULT_STELLAR_MIN_BALANCE,
+                min_balance: Some(DEFAULT_STELLAR_MIN_BALANCE),
             }),
             address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
             notification_id: None,

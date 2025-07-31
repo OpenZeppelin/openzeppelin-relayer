@@ -1,30 +1,24 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
-    config::{Config, RepositoryStorageType, ServerConfig, SignerFileConfig, SignerFileConfigEnum},
+    config::{Config, RepositoryStorageType, ServerConfig},
     jobs::JobProducerTrait,
     models::{
-        AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, NetworkRepoModel,
-        NotificationRepoModel, PluginModel, RelayerRepoModel, SignerConfig, SignerRepoModel,
-        ThinDataAppState, TransactionRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
+        NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer, RelayerRepoModel,
+        Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel, ThinDataAppState,
+        TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
         TransactionCounterTrait, TransactionRepository,
     },
-    services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
-    utils::unsafe_generate_random_private_key,
+    services::{Signer as SignerService, SignerFactory},
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use log::info;
-use oz_keystore::{HashicorpCloudClient, LocalClient};
-
-use secrets::SecretVec;
-use zeroize::Zeroizing;
 
 /// Process all plugins from the config file and store them in the repository.
 async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, PR>(
@@ -63,175 +57,13 @@ where
 }
 
 /// Process a signer configuration from the config file and convert it into a `SignerRepoModel`.
-///
-/// This function handles different types of signers including:
-/// - Test signers with randomly generated keys
-/// - Local signers with keys loaded from keystore files
-/// - AWS KMS signers
-/// - Vault signers that retrieve private keys from HashiCorp Vault
-/// - Vault Cloud signers that retrieve private keys from HashiCorp Cloud
-/// - Vault Transit signers that use HashiCorp Vault's Transit engine for signing
 async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
-    let signer_repo_model = match &signer.config {
-        SignerFileConfigEnum::Test(_) => SignerRepoModel {
-            id: signer.id.clone(),
-            config: SignerConfig::Test(LocalSignerConfig {
-                raw_key: SecretVec::new(32, |b| {
-                    b.copy_from_slice(&unsafe_generate_random_private_key())
-                }),
-            }),
-        },
-        SignerFileConfigEnum::Local(local_signer) => {
-            let passphrase = local_signer.passphrase.get_value()?;
+    // Convert config to domain model (this validates and applies business logic)
+    let domain_signer = SignerDomainModel::try_from(signer.clone())
+        .wrap_err("Failed to convert signer config to domain model")?;
 
-            let raw_key = SecretVec::new(32, |buffer| {
-                let loaded = LocalClient::load(
-                    Path::new(&local_signer.path).to_path_buf(),
-                    passphrase.to_str().as_str().to_string(),
-                );
-
-                buffer.copy_from_slice(&loaded);
-            });
-            SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::Local(LocalSignerConfig { raw_key }),
-            }
-        }
-        SignerFileConfigEnum::AwsKms(aws_kms_config) => SignerRepoModel {
-            id: signer.id.clone(),
-            config: SignerConfig::AwsKms(AwsKmsSignerConfig {
-                region: aws_kms_config.region.clone(),
-                key_id: aws_kms_config.key_id.clone(),
-            }),
-        },
-        SignerFileConfigEnum::Vault(vault_config) => {
-            let config = VaultConfig {
-                address: vault_config.address.clone(),
-                namespace: vault_config.namespace.clone(),
-                role_id: vault_config.role_id.get_value()?,
-                secret_id: vault_config.secret_id.get_value()?,
-                mount_path: vault_config
-                    .mount_point
-                    .clone()
-                    .unwrap_or("secret".to_string()),
-                token_ttl: None,
-            };
-
-            let vault_service = VaultService::new(config);
-
-            let raw_key = {
-                let hex_secret = Zeroizing::new(
-                    vault_service
-                        .retrieve_secret(&vault_config.key_name)
-                        .await?,
-                );
-                let decoded_bytes = hex::decode(hex_secret)
-                    .map_err(|e| eyre::eyre!("Invalid hex in vault cloud secret: {}", e))?;
-
-                SecretVec::new(decoded_bytes.len(), |buffer| {
-                    buffer.copy_from_slice(&decoded_bytes);
-                })
-            };
-
-            SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
-            }
-        }
-        SignerFileConfigEnum::VaultCloud(vault_cloud_config) => {
-            let client = HashicorpCloudClient::new(
-                vault_cloud_config.client_id.clone(),
-                vault_cloud_config
-                    .client_secret
-                    .get_value()?
-                    .to_str()
-                    .to_string(),
-                vault_cloud_config.org_id.clone(),
-                vault_cloud_config.project_id.clone(),
-                vault_cloud_config.app_name.clone(),
-            );
-
-            let raw_key = {
-                let response = client.get_secret(&vault_cloud_config.key_name).await?;
-                let hex_secret = Zeroizing::new(response.secret.static_version.value.clone());
-
-                let decoded_bytes = hex::decode(hex_secret)
-                    .map_err(|e| eyre::eyre!("Invalid hex in vault cloud secret: {}", e))?;
-
-                SecretVec::new(decoded_bytes.len(), |buffer| {
-                    buffer.copy_from_slice(&decoded_bytes);
-                })
-            };
-
-            SignerRepoModel {
-                id: signer.id.clone(),
-                config: SignerConfig::Vault(LocalSignerConfig { raw_key }),
-            }
-        }
-        SignerFileConfigEnum::VaultTransit(vault_transit_config) => SignerRepoModel {
-            id: signer.id.clone(),
-            config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
-                key_name: vault_transit_config.key_name.clone(),
-                address: vault_transit_config.address.clone(),
-                namespace: vault_transit_config.namespace.clone(),
-                role_id: vault_transit_config.role_id.get_value()?,
-                secret_id: vault_transit_config.secret_id.get_value()?,
-                pubkey: vault_transit_config.pubkey.clone(),
-                mount_point: vault_transit_config.mount_point.clone(),
-            }),
-        },
-        SignerFileConfigEnum::Turnkey(turnkey_config) => SignerRepoModel {
-            id: signer.id.clone(),
-            config: SignerConfig::Turnkey(TurnkeySignerConfig {
-                private_key_id: turnkey_config.private_key_id.clone(),
-                organization_id: turnkey_config.organization_id.clone(),
-                public_key: turnkey_config.public_key.clone(),
-                api_private_key: turnkey_config.api_private_key.get_value()?,
-                api_public_key: turnkey_config.api_public_key.clone(),
-            }),
-        },
-        SignerFileConfigEnum::GoogleCloudKms(google_cloud_kms_config) => SignerRepoModel {
-            id: signer.id.clone(),
-            config: SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
-                service_account: GoogleCloudKmsSignerServiceAccountConfig {
-                    private_key: google_cloud_kms_config
-                        .service_account
-                        .private_key
-                        .get_value()?,
-                    client_email: google_cloud_kms_config
-                        .service_account
-                        .client_email
-                        .get_value()?,
-                    private_key_id: google_cloud_kms_config
-                        .service_account
-                        .private_key_id
-                        .get_value()?,
-                    client_id: google_cloud_kms_config.service_account.client_id.clone(),
-                    project_id: google_cloud_kms_config.service_account.project_id.clone(),
-                    auth_uri: google_cloud_kms_config.service_account.auth_uri.clone(),
-                    token_uri: google_cloud_kms_config.service_account.token_uri.clone(),
-                    client_x509_cert_url: google_cloud_kms_config
-                        .service_account
-                        .client_x509_cert_url
-                        .clone(),
-                    auth_provider_x509_cert_url: google_cloud_kms_config
-                        .service_account
-                        .auth_provider_x509_cert_url
-                        .clone(),
-                    universe_domain: google_cloud_kms_config
-                        .service_account
-                        .universe_domain
-                        .clone(),
-                },
-                key: GoogleCloudKmsSignerKeyConfig {
-                    location: google_cloud_kms_config.key.location.clone(),
-                    key_id: google_cloud_kms_config.key.key_id.clone(),
-                    key_ring_id: google_cloud_kms_config.key.key_ring_id.clone(),
-                    key_version: google_cloud_kms_config.key.key_version,
-                },
-            }),
-        },
-    };
+    // Convert domain model to repository model for storage
+    let signer_repo_model = SignerRepoModel::from(domain_signer);
 
     Ok(signer_repo_model)
 }
@@ -239,8 +71,8 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
 /// Process all signers from the config file and store them in the repository.
 ///
 /// For each signer in the config file:
-/// 1. Process it using `process_signer`
-/// 2. Store the resulting model in the repository
+/// 1. Process it using `process_signer` (config -> domain -> repository)
+/// 2. Store the resulting repository model
 ///
 /// This function processes signers in parallel using futures.
 async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, PR>(
@@ -378,16 +210,22 @@ where
     let signers = app_state.signer_repository.list_all().await?;
 
     let relayer_futures = config_file.relayers.iter().map(|relayer| async {
-        let mut repo_model = RelayerRepoModel::try_from(relayer.clone())
-            .wrap_err("Failed to convert relayer config")?;
+        // Convert config to domain model first, then to repository model
+        let domain_relayer = Relayer::try_from(relayer.clone())
+            .wrap_err("Failed to convert relayer config to domain model")?;
+        let mut repo_model = RelayerRepoModel::from(domain_relayer);
         let signer_model = signers
             .iter()
             .find(|s| s.id == repo_model.signer_id)
             .ok_or_else(|| eyre::eyre!("Signer not found"))?;
+
         let network_type = repo_model.network_type;
-        let signer_service = SignerFactory::create_signer(&network_type, signer_model)
-            .await
-            .wrap_err("Failed to create signer service")?;
+        let signer_service = SignerFactory::create_signer(
+            &network_type,
+            &SignerDomainModel::from(signer_model.clone()),
+        )
+        .await
+        .wrap_err("Failed to create signer service")?;
 
         let address = signer_service.address().await?;
         repo_model.address = address.to_string();
@@ -509,15 +347,16 @@ where
 mod tests {
     use super::*;
     use crate::{
-        config::{
-            AwsKmsSignerFileConfig, ConfigFileNetworkType, GoogleCloudKmsSignerFileConfig,
-            KmsKeyConfig, NetworksFileConfig, NotificationFileConfig, PluginFileConfig,
-            RelayerFileConfig, ServiceAccountConfig, TestSignerFileConfig, VaultSignerFileConfig,
-            VaultTransitSignerFileConfig,
-        },
+        config::{ConfigFileNetworkType, NetworksFileConfig, PluginFileConfig},
         constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS,
         jobs::MockJobProducerTrait,
-        models::{AppState, NetworkType, PlainOrEnvValue, SecretString},
+        models::{
+            relayer::RelayerFileConfig, AppState, AwsKmsSignerFileConfig,
+            GoogleCloudKmsKeyFileConfig, GoogleCloudKmsServiceAccountFileConfig,
+            GoogleCloudKmsSignerFileConfig, LocalSignerFileConfig, NetworkType, NotificationConfig,
+            NotificationType, PlainOrEnvValue, SecretString, SignerConfigStorage, SignerFileConfig,
+            SignerFileConfigEnum, VaultSignerFileConfig, VaultTransitSignerFileConfig,
+        },
         repositories::{
             InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
             InMemorySignerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
@@ -584,7 +423,12 @@ mod tests {
     async fn test_process_signer_test() {
         let signer = SignerFileConfig {
             id: "test-signer".to_string(),
-            config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+            config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                passphrase: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test"),
+                },
+            }),
         };
 
         let result = process_signer(&signer).await;
@@ -599,11 +443,11 @@ mod tests {
         assert_eq!(model.id, "test-signer");
 
         match model.config {
-            SignerConfig::Test(config) => {
+            SignerConfigStorage::Local(config) => {
                 assert!(!config.raw_key.is_empty());
                 assert_eq!(config.raw_key.len(), 32);
             }
-            _ => panic!("Expected Test config"),
+            _ => panic!("Expected Local config"),
         }
     }
 
@@ -638,7 +482,7 @@ mod tests {
         assert_eq!(model.id, "vault-transit-signer");
 
         match model.config {
-            SignerConfig::VaultTransit(config) => {
+            SignerConfigStorage::VaultTransit(config) => {
                 assert_eq!(config.key_name, "test-transit-key");
                 assert_eq!(config.address, "https://vault.example.com");
                 assert_eq!(config.namespace, Some("test-namespace".to_string()));
@@ -658,7 +502,7 @@ mod tests {
         let signer = SignerFileConfig {
             id: "aws-kms-signer".to_string(),
             config: SignerFileConfigEnum::AwsKms(AwsKmsSignerFileConfig {
-                region: Some("us-east-1".to_string()),
+                region: "us-east-1".to_string(),
                 key_id: "test-key-id".to_string(),
             }),
         };
@@ -675,7 +519,7 @@ mod tests {
         assert_eq!(model.id, "aws-kms-signer");
 
         match model.config {
-            SignerConfig::AwsKms(_) => {}
+            SignerConfigStorage::AwsKms(_) => {}
             _ => panic!("Expected AwsKms config"),
         }
 
@@ -783,7 +627,7 @@ mod tests {
         assert_eq!(model.id, "vault-signer");
 
         match model.config {
-            SignerConfig::Vault(_) => {}
+            SignerConfigStorage::Vault(_) => {}
             _ => panic!("Expected Vault config"),
         }
 
@@ -796,11 +640,21 @@ mod tests {
         let signers = vec![
             SignerFileConfig {
                 id: "test-signer-1".to_string(),
-                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+                config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                    passphrase: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test"),
+                    },
+                }),
             },
             SignerFileConfig {
                 id: "test-signer-2".to_string(),
-                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+                config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                    passphrase: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test"),
+                    },
+                }),
             },
         ];
 
@@ -832,15 +686,15 @@ mod tests {
     async fn test_process_notifications() -> Result<()> {
         // Create test notifications
         let notifications = vec![
-            NotificationFileConfig {
+            NotificationConfig {
                 id: "test-notification-1".to_string(),
-                r#type: crate::config::NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://hooks.slack.com/test1".to_string(),
                 signing_key: None,
             },
-            NotificationFileConfig {
+            NotificationConfig {
                 id: "test-notification-2".to_string(),
-                r#type: crate::config::NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://hooks.slack.com/test2".to_string(),
                 signing_key: None,
             },
@@ -1103,7 +957,12 @@ mod tests {
         // Create test signers
         let signers = vec![SignerFileConfig {
             id: "test-signer-1".to_string(),
-            config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+            config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                passphrase: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test"),
+                },
+            }),
         }];
 
         // Create test relayers
@@ -1215,7 +1074,12 @@ mod tests {
         // Create test signers, relayers, and notifications
         let signers = vec![SignerFileConfig {
             id: "test-signer-1".to_string(),
-            config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+            config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                passphrase: PlainOrEnvValue::Plain {
+                    value: SecretString::new("test"),
+                },
+            }),
         }];
 
         let relayers = vec![RelayerFileConfig {
@@ -1230,9 +1094,9 @@ mod tests {
             custom_rpc_urls: None,
         }];
 
-        let notifications = vec![NotificationFileConfig {
+        let notifications = vec![NotificationConfig {
             id: "test-notification-1".to_string(),
-            r#type: crate::config::NotificationFileConfigType::Webhook,
+            r#type: NotificationType::Webhook,
             url: "https://hooks.slack.com/test1".to_string(),
             signing_key: None,
         }];
@@ -1324,7 +1188,7 @@ mod tests {
         let signer = SignerFileConfig {
             id: "gcp-kms-signer".to_string(),
             config: SignerFileConfigEnum::GoogleCloudKms(GoogleCloudKmsSignerFileConfig {
-                service_account: ServiceAccountConfig {
+                service_account: GoogleCloudKmsServiceAccountFileConfig {
                     private_key: PlainOrEnvValue::Plain {
                         value: SecretString::new("-----BEGIN EXAMPLE PRIVATE KEY-----\nFAKEKEYDATA\n-----END EXAMPLE PRIVATE KEY-----\n"),
                     },
@@ -1342,7 +1206,7 @@ mod tests {
                     auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs".to_string(),
                     universe_domain: "googleapis.com".to_string(),
                 },
-                key: KmsKeyConfig {
+                key: GoogleCloudKmsKeyFileConfig {
                     location: "global".to_string(),
                     key_id: "fake-key-id".to_string(),
                     key_ring_id: "fake-key-ring-id".to_string(),
@@ -1568,7 +1432,12 @@ mod tests {
         Config {
             signers: vec![SignerFileConfig {
                 id: "test-signer-1".to_string(),
-                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+                config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                    passphrase: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test"),
+                    },
+                }),
             }],
             relayers: vec![RelayerFileConfig {
                 id: "test-relayer-1".to_string(),
@@ -1581,9 +1450,9 @@ mod tests {
                 notification_id: None,
                 custom_rpc_urls: None,
             }],
-            notifications: vec![NotificationFileConfig {
+            notifications: vec![NotificationConfig {
                 id: "test-notification-1".to_string(),
-                r#type: crate::config::NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://hooks.slack.com/test1".to_string(),
                 signing_key: None,
             }],

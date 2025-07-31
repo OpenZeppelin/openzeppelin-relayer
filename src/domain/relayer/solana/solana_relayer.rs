@@ -11,7 +11,8 @@ use std::{str::FromStr, sync::Arc};
 
 use crate::{
     constants::{
-        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
+        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
+        SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{
         relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
@@ -163,13 +164,13 @@ where
                 .get_token_metadata_from_pubkey(&token.mint)
                 .await
                 .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
-            Ok::<SolanaAllowedTokensPolicy, RelayerError>(SolanaAllowedTokensPolicy::new(
-                token_metadata.mint,
-                Some(token_metadata.decimals),
-                Some(token_metadata.symbol.to_string()),
-                token.max_allowed_fee,
-                token.swap_config.clone(),
-            ))
+            Ok::<SolanaAllowedTokensPolicy, RelayerError>(SolanaAllowedTokensPolicy {
+                mint: token_metadata.mint,
+                decimals: Some(token_metadata.decimals as u8),
+                symbol: Some(token_metadata.symbol.to_string()),
+                max_allowed_fee: token.max_allowed_fee,
+                swap_config: token.swap_config.clone(),
+            })
         });
 
         let updated_allowed_tokens = try_join_all(token_metadata_futures).await?;
@@ -661,7 +662,7 @@ where
 
         let policy = self.relayer.policies.get_solana_policy();
 
-        if balance < policy.min_balance {
+        if balance < policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE) {
             return Err(RelayerError::InsufficientBalanceError(
                 "Insufficient balance".to_string(),
             ));
@@ -1675,7 +1676,7 @@ mod tests {
 
         let mut model = create_test_relayer();
         model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            min_balance: 50,
+            min_balance: Some(50),
             ..Default::default()
         });
 
@@ -1699,7 +1700,7 @@ mod tests {
 
         let mut model = create_test_relayer();
         model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            min_balance: 50,
+            min_balance: Some(50),
             ..Default::default()
         });
 

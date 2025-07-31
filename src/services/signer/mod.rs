@@ -44,8 +44,9 @@ use crate::{
         SignXdrTransactionResponseStellar,
     },
     models::{
-        Address, DecoratedSignature, NetworkTransactionData, NetworkType, SignerError,
-        SignerFactoryError, SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
+        Address, DecoratedSignature, NetworkTransactionData, NetworkType,
+        Signer as SignerDomainModel, SignerError, SignerFactoryError, SignerType, TransactionError,
+        TransactionRepoModel,
     },
 };
 
@@ -178,7 +179,7 @@ pub struct SignerFactory;
 impl SignerFactory {
     pub async fn create_signer(
         network_type: &NetworkType,
-        signer_model: &SignerRepoModel,
+        signer_model: &SignerDomainModel,
     ) -> Result<NetworkSigner, SignerFactoryError> {
         let signer = match network_type {
             NetworkType::Evm => {

@@ -148,7 +148,8 @@ where
         amount: u64,
     ) -> Result<(Transaction, (Hash, u64), u64, FeeQuote), SolanaRpcError> {
         let policies = self.relayer.policies.get_solana_policy();
-        let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
+        let user_pays_fee =
+            policies.fee_payment_strategy.unwrap_or_default() == SolanaFeePaymentStrategy::User;
         let token_transfer_instruction = self
             .handle_token_transfer(source, destination, token_mint, amount)
             .await?;
@@ -375,7 +376,7 @@ mod tests {
         Account::pack(token_account, &mut account_data).unwrap();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::User,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: test_token.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -600,7 +601,7 @@ mod tests {
         spl_token::state::Account::pack(source_token_account, &mut source_account_data).unwrap();
 
         ctx.relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: ctx.token.to_string(),
                 symbol: Some("USDC".to_string()),
@@ -753,9 +754,10 @@ mod tests {
             paused: false,
             network_type: NetworkType::Solana,
             policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-                fee_margin_percentage: Some(0.5),
-                allowed_accounts: None,
+                allowed_programs: None,
+                max_signatures: Some(10),
+                max_tx_data_size: Some(1000),
+                min_balance: Some(10000),
                 allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                     mint: test_token.to_string(),
                     symbol: Some("USDC".to_string()),
@@ -766,12 +768,11 @@ mod tests {
                         ..Default::default()
                     }),
                 }]),
-                min_balance: 10000,
-                allowed_programs: None,
-                max_signatures: Some(10),
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+                fee_margin_percentage: Some(0.5),
+                allowed_accounts: None,
                 disallowed_accounts: None,
                 max_allowed_fee_lamports: None,
-                max_tx_data_size: 1000,
                 swap_config: None,
             }),
             signer_id: "test".to_string(),

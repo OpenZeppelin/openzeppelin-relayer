@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use serde::{de, Deserialize, Deserializer};
+use serde::{de, Deserialize, Deserializer, Serializer};
 
 use super::deserialize_u64;
 
@@ -68,6 +68,65 @@ where
     Ok(helper.map(|Helper(value)| value))
 }
 
+// Serialize u128 as string
+pub fn serialize_u128<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_string())
+}
+
+// Serialize optional u128 as string
+pub fn serialize_optional_u128<S>(value: &Option<u128>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(v) => serializer.serialize_some(&v.to_string()),
+        None => serializer.serialize_none(),
+    }
+}
+
+pub fn serialize_optional_u128_as_number<S>(
+    value: &Option<u128>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(v) => serializer.serialize_some(&v),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Deserialize optional u128 from number
+pub fn deserialize_optional_u128_as_number<'de, D>(
+    deserializer: D,
+) -> Result<Option<u128>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<u128> = Option::deserialize(deserializer)?;
+    Ok(value)
+}
+
+/// Serialize u128 as number (non-optional)
+pub fn serialize_u128_as_number<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_u128(*value)
+}
+
+/// Deserialize u128 from number (non-optional)
+pub fn deserialize_u128_as_number<'de, D>(deserializer: D) -> Result<u128, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    u128::deserialize(deserializer)
+}
+
 // Deserialize optional u64
 pub fn deserialize_optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
@@ -86,6 +145,7 @@ mod tests {
     use serde::de::value::{
         Error as ValueError, I64Deserializer, StringDeserializer, U64Deserializer,
     };
+    use serde_json;
 
     #[test]
     fn test_deserialize_u128_from_string() {
@@ -177,5 +237,64 @@ mod tests {
         let json = r#"{"value": null}"#;
         let result: TestStructOptionalU64 = serde_json::from_str(json).unwrap();
         assert_eq!(result.value, None);
+    }
+
+    // Test serialization functions
+    #[test]
+    fn test_serialize_u128() {
+        let value: u128 = 340282366920938463463374607431768211455; // u128::MAX
+        let serialized = serde_json::to_string_pretty(&serde_json::json!({
+            "test": serde_json::to_value(value.to_string()).unwrap()
+        }))
+        .unwrap();
+
+        assert!(serialized.contains("340282366920938463463374607431768211455"));
+    }
+
+    // Test round-trip serialization/deserialization
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct TestSerializeStruct {
+        #[serde(
+            serialize_with = "serialize_optional_u128",
+            deserialize_with = "deserialize_optional_u128"
+        )]
+        value: Option<u128>,
+    }
+
+    #[test]
+    fn test_serialize_deserialize_roundtrip_large_value() {
+        let original = TestSerializeStruct {
+            value: Some(u128::MAX),
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: TestSerializeStruct = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original, deserialized);
+        assert!(json.contains("340282366920938463463374607431768211455"));
+    }
+
+    #[test]
+    fn test_serialize_deserialize_roundtrip_none() {
+        let original = TestSerializeStruct { value: None };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: TestSerializeStruct = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original, deserialized);
+        assert!(json.contains("null"));
+    }
+
+    #[test]
+    fn test_serialize_deserialize_roundtrip_small_value() {
+        let original = TestSerializeStruct { value: Some(12345) };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: TestSerializeStruct = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original, deserialized);
+        assert!(json.contains("12345"));
     }
 }

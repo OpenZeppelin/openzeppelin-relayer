@@ -29,6 +29,7 @@ async-trait = "0.1"
 actix-rt = "2.0.0"
 alloy = { version = "0.9", features = ["full"] }
 serde_json = "1"
+json-patch = "4.0"
 strum = { version = "0.27", default-features = false, features = ["derive"] }
 strum_macros = "0.27"
 serde = { version = "1.0", features = ["derive", "alloc"] }
@@ -75,6 +76,7 @@ secrets = { version = "1.2"}
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
+aes-gcm = "0.10"
 ed25519-dalek = "2.2"
 stellar-strkey = "0.0.13"
 soroban-rs = "0.2.5"
@@ -114,6 +116,10 @@ path = "helpers/create_key.rs"
 [[example]]
 name = "generate_uuid"
 path = "helpers/generate_uuid.rs"
+
+[[example]]
+name = "generate_encryption_key"
+path = "helpers/generate_encyption_key.rs"
 
 [[example]]
 name = "generate_openapi"

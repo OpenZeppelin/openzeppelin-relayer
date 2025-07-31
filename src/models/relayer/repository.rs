@@ -1,288 +1,36 @@
-use serde::{Deserialize, Serialize};
-use strum::Display;
-use utoipa::ToSchema;
-
-use crate::{
-    constants::{
-        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_EVM_MIN_BALANCE,
-        DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE, MAX_SOLANA_TX_DATA_SIZE,
-    },
-    models::RelayerError,
+use crate::models::{
+    Relayer, RelayerError, RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy,
 };
+use serde::{Deserialize, Serialize};
 
-use super::RpcConfig;
+use super::{RelayerNetworkPolicy, RelayerNetworkType, RpcConfig};
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, Display, Deserialize, Copy, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum NetworkType {
-    Evm,
-    Stellar,
-    Solana,
+// Use the domain model RelayerNetworkType directly
+pub type NetworkType = RelayerNetworkType;
+
+/// Helper for safely updating relayer repository models from domain models
+/// while preserving runtime fields like address and system_disabled
+pub struct RelayerRepoUpdater {
+    original: RelayerRepoModel,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum RelayerNetworkPolicy {
-    Evm(RelayerEvmPolicy),
-    Solana(RelayerSolanaPolicy),
-    Stellar(RelayerStellarPolicy),
-}
-
-impl RelayerNetworkPolicy {
-    pub fn get_evm_policy(&self) -> RelayerEvmPolicy {
-        match self {
-            Self::Evm(policy) => policy.clone(),
-            _ => RelayerEvmPolicy::default(),
-        }
+impl RelayerRepoUpdater {
+    /// Create an updater from an existing repository model
+    pub fn from_existing(existing: RelayerRepoModel) -> Self {
+        Self { original: existing }
     }
 
-    pub fn get_solana_policy(&self) -> RelayerSolanaPolicy {
-        match self {
-            Self::Solana(policy) => policy.clone(),
-            _ => RelayerSolanaPolicy::default(),
-        }
-    }
-
-    pub fn get_stellar_policy(&self) -> RelayerStellarPolicy {
-        match self {
-            Self::Stellar(policy) => policy.clone(),
-            _ => RelayerStellarPolicy::default(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RelayerEvmPolicy {
-    pub gas_price_cap: Option<u128>,
-    pub whitelist_receivers: Option<Vec<String>>,
-    pub eip1559_pricing: Option<bool>,
-    pub private_transactions: bool,
-    pub min_balance: u128,
-    pub gas_limit_estimation: Option<bool>,
-}
-
-impl Default for RelayerEvmPolicy {
-    fn default() -> Self {
-        Self {
-            gas_price_cap: None,
-            whitelist_receivers: None,
-            eip1559_pricing: None,
-            private_transactions: false,
-            min_balance: DEFAULT_EVM_MIN_BALANCE,
-            gas_limit_estimation: Some(true),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
-pub struct SolanaAllowedTokensSwapConfig {
-    #[schema(nullable = false)]
-    pub slippage_percentage: Option<f32>,
-    #[schema(nullable = false)]
-    pub min_amount: Option<u64>,
-    #[schema(nullable = false)]
-    pub max_amount: Option<u64>,
-    #[schema(nullable = false)]
-    pub retain_min_amount: Option<u64>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-pub struct SolanaAllowedTokensPolicy {
-    pub mint: String,
-    #[schema(nullable = false)]
-    pub decimals: Option<u8>,
-    #[schema(nullable = false)]
-    pub symbol: Option<String>,
-    #[schema(nullable = false)]
-    pub max_allowed_fee: Option<u64>,
-    #[schema(nullable = false)]
-    pub swap_config: Option<SolanaAllowedTokensSwapConfig>,
-}
-
-impl SolanaAllowedTokensPolicy {
-    pub fn new(
-        mint: String,
-        decimals: Option<u8>,
-        symbol: Option<String>,
-        max_allowed_fee: Option<u64>,
-        swap_config: Option<SolanaAllowedTokensSwapConfig>,
-    ) -> Self {
-        Self {
-            mint,
-            decimals,
-            symbol,
-            max_allowed_fee,
-            swap_config,
-        }
-    }
-
-    // Create a new SolanaAllowedTokensPolicy with only the mint field
-    // We are creating partial entry while processing config file and later
-    // we will fill the rest of the fields
-    pub fn new_partial(
-        mint: String,
-        max_allowed_fee: Option<u64>,
-        swap_config: Option<SolanaAllowedTokensSwapConfig>,
-    ) -> Self {
-        Self {
-            mint,
-            decimals: None,
-            symbol: None,
-            max_allowed_fee,
-            swap_config,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum SolanaFeePaymentStrategy {
-    User,
-    Relayer,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum SolanaSwapStrategy {
-    JupiterSwap,
-    JupiterUltra,
-    Noop,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct JupiterSwapOptions {
-    pub priority_fee_max_lamports: Option<u64>,
-    pub priority_level: Option<String>,
-    pub dynamic_compute_unit_limit: Option<bool>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RelayerSolanaSwapConfig {
-    #[schema(nullable = false)]
-    pub strategy: Option<SolanaSwapStrategy>,
-    #[schema(nullable = false)]
-    pub cron_schedule: Option<String>,
-    #[schema(nullable = false)]
-    pub min_balance_threshold: Option<u64>,
-    #[schema(nullable = false)]
-    pub jupiter_swap_options: Option<JupiterSwapOptions>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct RelayerSolanaPolicy {
-    pub fee_payment_strategy: SolanaFeePaymentStrategy,
-    pub fee_margin_percentage: Option<f32>,
-    pub min_balance: u64,
-    pub allowed_tokens: Option<Vec<SolanaAllowedTokensPolicy>>,
-    pub allowed_programs: Option<Vec<String>>,
-    pub allowed_accounts: Option<Vec<String>>,
-    pub disallowed_accounts: Option<Vec<String>>,
-    pub max_signatures: Option<u8>,
-    pub max_tx_data_size: u16,
-    pub max_allowed_fee_lamports: Option<u64>,
-    pub swap_config: Option<RelayerSolanaSwapConfig>,
-}
-
-impl RelayerSolanaPolicy {
-    pub fn get_allowed_tokens(&self) -> Vec<SolanaAllowedTokensPolicy> {
-        self.allowed_tokens.clone().unwrap_or_default()
-    }
-
-    pub fn get_allowed_token_entry(&self, mint: &str) -> Option<SolanaAllowedTokensPolicy> {
-        self.allowed_tokens
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .find(|entry| entry.mint == mint)
-    }
-
-    pub fn get_allowed_token_decimals(&self, mint: &str) -> Option<u8> {
-        self.get_allowed_token_entry(mint)
-            .and_then(|entry| entry.decimals)
-    }
-
-    pub fn get_swap_config(&self) -> Option<RelayerSolanaSwapConfig> {
-        self.swap_config.clone()
-    }
-
-    pub fn get_allowed_token_slippage(&self, mint: &str) -> f32 {
-        self.get_allowed_token_entry(mint)
-            .and_then(|entry| {
-                entry
-                    .swap_config
-                    .and_then(|config| config.slippage_percentage)
-            })
-            .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE)
-    }
-
-    pub fn get_allowed_programs(&self) -> Vec<String> {
-        self.allowed_programs.clone().unwrap_or_default()
-    }
-
-    pub fn get_allowed_accounts(&self) -> Vec<String> {
-        self.allowed_accounts.clone().unwrap_or_default()
-    }
-
-    pub fn get_disallowed_accounts(&self) -> Vec<String> {
-        self.disallowed_accounts.clone().unwrap_or_default()
-    }
-
-    pub fn get_max_signatures(&self) -> u8 {
-        self.max_signatures.unwrap_or(1)
-    }
-
-    pub fn get_max_allowed_fee_lamports(&self) -> u64 {
-        self.max_allowed_fee_lamports.unwrap_or(u64::MAX)
-    }
-
-    pub fn get_max_tx_data_size(&self) -> u16 {
-        self.max_tx_data_size
-    }
-
-    pub fn get_fee_margin_percentage(&self) -> f32 {
-        self.fee_margin_percentage.unwrap_or(0.0)
-    }
-
-    pub fn get_fee_payment_strategy(&self) -> SolanaFeePaymentStrategy {
-        self.fee_payment_strategy.clone()
-    }
-}
-
-impl Default for RelayerSolanaPolicy {
-    fn default() -> Self {
-        Self {
-            fee_payment_strategy: SolanaFeePaymentStrategy::User,
-            fee_margin_percentage: None,
-            min_balance: DEFAULT_SOLANA_MIN_BALANCE,
-            allowed_tokens: None,
-            allowed_programs: None,
-            allowed_accounts: None,
-            disallowed_accounts: None,
-            max_signatures: None,
-            max_tx_data_size: MAX_SOLANA_TX_DATA_SIZE,
-            max_allowed_fee_lamports: None,
-            swap_config: None,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct RelayerStellarPolicy {
-    pub max_fee: Option<u32>,
-    pub timeout_seconds: Option<u64>,
-    pub min_balance: u64,
-}
-
-impl Default for RelayerStellarPolicy {
-    fn default() -> Self {
-        Self {
-            max_fee: None,
-            timeout_seconds: None,
-            min_balance: DEFAULT_STELLAR_MIN_BALANCE,
-        }
+    /// Apply updates from a domain model while preserving runtime fields
+    ///
+    /// This method ensures that runtime fields (address, system_disabled) from the
+    /// original repository model are preserved when converting from domain model,
+    /// preventing data loss during updates.
+    pub fn apply_domain_update(self, domain: Relayer) -> RelayerRepoModel {
+        let mut updated = RelayerRepoModel::from(domain);
+        // Preserve runtime fields from original
+        updated.address = self.original.address;
+        updated.system_disabled = self.original.system_disabled;
+        updated
     }
 }
 
@@ -333,144 +81,60 @@ impl Default for RelayerRepoModel {
     }
 }
 
-impl TryFrom<crate::config::RelayerFileConfig> for RelayerRepoModel {
-    type Error = eyre::Report;
+impl From<RelayerRepoModel> for Relayer {
+    fn from(repo_model: RelayerRepoModel) -> Self {
+        Self {
+            id: repo_model.id,
+            name: repo_model.name,
+            network: repo_model.network,
+            paused: repo_model.paused,
+            network_type: repo_model.network_type,
+            policies: Some(repo_model.policies),
+            signer_id: repo_model.signer_id,
+            notification_id: repo_model.notification_id,
+            custom_rpc_urls: repo_model.custom_rpc_urls,
+        }
+    }
+}
 
-    fn try_from(config: crate::config::RelayerFileConfig) -> Result<Self, Self::Error> {
-        use crate::config::{ConfigFileNetworkType, ConfigFileRelayerNetworkPolicy};
-
-        // Convert network type
-        let network_type = match config.network_type {
-            ConfigFileNetworkType::Evm => NetworkType::Evm,
-            ConfigFileNetworkType::Solana => NetworkType::Solana,
-            ConfigFileNetworkType::Stellar => NetworkType::Stellar,
-        };
-
-        // Convert policies based on network type
-        let policies = match config.policies {
-            Some(ConfigFileRelayerNetworkPolicy::Evm(evm_policy)) => {
-                RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
-                    gas_price_cap: evm_policy.gas_price_cap,
-                    whitelist_receivers: evm_policy.whitelist_receivers,
-                    eip1559_pricing: evm_policy.eip1559_pricing,
-                    private_transactions: evm_policy.private_transactions.unwrap_or(false),
-                    min_balance: evm_policy.min_balance.unwrap_or(DEFAULT_EVM_MIN_BALANCE),
-                    gas_limit_estimation: evm_policy.gas_limit_estimation,
-                })
-            }
-            Some(ConfigFileRelayerNetworkPolicy::Solana(solana_policy)) => {
-                use crate::config::ConfigFileRelayerSolanaFeePaymentStrategy;
-
-                let allowed_tokens = solana_policy.allowed_tokens.map(|tokens| {
-                    tokens
-                        .into_iter()
-                        .map(|token| {
-                            SolanaAllowedTokensPolicy::new_partial(
-                                token.mint,
-                                token.max_allowed_fee,
-                                token.swap_config.map(|swap| SolanaAllowedTokensSwapConfig {
-                                    slippage_percentage: swap.slippage_percentage,
-                                    min_amount: swap.min_amount,
-                                    max_amount: swap.max_amount,
-                                    retain_min_amount: swap.retain_min_amount,
-                                }),
-                            )
-                        })
-                        .collect()
-                });
-
-                let swap_config = solana_policy.swap_config.map(|swap| {
-                    use crate::config::ConfigFileRelayerSolanaSwapStrategy;
-
-                    RelayerSolanaSwapConfig {
-                        strategy: Some(match swap.strategy {
-                            Some(ConfigFileRelayerSolanaSwapStrategy::JupiterSwap) => {
-                                SolanaSwapStrategy::JupiterSwap
-                            }
-                            Some(ConfigFileRelayerSolanaSwapStrategy::JupiterUltra) => {
-                                SolanaSwapStrategy::JupiterUltra
-                            }
-                            None => SolanaSwapStrategy::Noop,
-                        }),
-                        cron_schedule: swap.cron_schedule,
-                        min_balance_threshold: swap.min_balance_threshold,
-                        jupiter_swap_options: swap.jupiter_swap_options.map(|opts| {
-                            JupiterSwapOptions {
-                                priority_fee_max_lamports: opts.priority_fee_max_lamports,
-                                priority_level: opts.priority_level,
-                                dynamic_compute_unit_limit: opts.dynamic_compute_unit_limit,
-                            }
-                        }),
+impl From<Relayer> for RelayerRepoModel {
+    fn from(relayer: Relayer) -> Self {
+        Self {
+            id: relayer.id,
+            name: relayer.name,
+            network: relayer.network,
+            paused: relayer.paused,
+            network_type: relayer.network_type,
+            signer_id: relayer.signer_id,
+            policies: relayer.policies.unwrap_or_else(|| {
+                // Default policy based on network type
+                match relayer.network_type {
+                    RelayerNetworkType::Evm => {
+                        RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default())
                     }
-                });
-
-                RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-                    fee_payment_strategy: match solana_policy.fee_payment_strategy {
-                        Some(ConfigFileRelayerSolanaFeePaymentStrategy::User) => {
-                            SolanaFeePaymentStrategy::User
-                        }
-                        Some(ConfigFileRelayerSolanaFeePaymentStrategy::Relayer) => {
-                            SolanaFeePaymentStrategy::Relayer
-                        }
-                        None => SolanaFeePaymentStrategy::User,
-                    },
-                    fee_margin_percentage: solana_policy.fee_margin_percentage,
-                    min_balance: solana_policy
-                        .min_balance
-                        .unwrap_or(DEFAULT_SOLANA_MIN_BALANCE),
-                    allowed_tokens,
-                    allowed_programs: solana_policy.allowed_programs,
-                    allowed_accounts: solana_policy.allowed_accounts,
-                    disallowed_accounts: solana_policy.disallowed_accounts,
-                    max_signatures: solana_policy.max_signatures,
-                    max_tx_data_size: solana_policy
-                        .max_tx_data_size
-                        .unwrap_or(MAX_SOLANA_TX_DATA_SIZE),
-                    max_allowed_fee_lamports: solana_policy.max_allowed_fee_lamports,
-                    swap_config,
-                })
-            }
-            Some(ConfigFileRelayerNetworkPolicy::Stellar(stellar_policy)) => {
-                RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
-                    max_fee: stellar_policy.max_fee,
-                    timeout_seconds: stellar_policy.timeout_seconds,
-                    min_balance: stellar_policy
-                        .min_balance
-                        .unwrap_or(DEFAULT_STELLAR_MIN_BALANCE),
-                })
-            }
-            None => {
-                // Use default policy based on network type
-                match network_type {
-                    NetworkType::Evm => RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
-                    NetworkType::Solana => {
+                    RelayerNetworkType::Solana => {
                         RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default())
                     }
-                    NetworkType::Stellar => {
+                    RelayerNetworkType::Stellar => {
                         RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default())
                     }
                 }
-            }
-        };
-
-        Ok(Self {
-            id: config.id,
-            name: config.name,
-            network: config.network,
-            paused: config.paused,
-            network_type,
-            signer_id: config.signer_id,
-            policies,
+            }),
             address: "".to_string(), // Will be filled in later by process_relayers
-            notification_id: config.notification_id,
+            notification_id: relayer.notification_id,
             system_disabled: false,
-            custom_rpc_urls: config.custom_rpc_urls,
-        })
+            custom_rpc_urls: relayer.custom_rpc_urls,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{
+        RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy, SolanaAllowedTokensPolicy,
+        SolanaFeePaymentStrategy,
+    };
+
     use super::*;
 
     fn create_test_relayer(paused: bool, system_disabled: bool) -> RelayerRepoModel {
@@ -481,19 +145,77 @@ mod tests {
             system_disabled,
             network: "test_network".to_string(),
             network_type: NetworkType::Evm,
-            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
             signer_id: "test_signer".to_string(),
-            address: "0x".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0xtest".to_string(),
             notification_id: None,
-            custom_rpc_urls: Some(vec![RpcConfig::new(
-                "https://test-rpc.example.com".to_string(),
-            )]),
+            custom_rpc_urls: None,
+        }
+    }
+
+    fn create_test_relayer_solana(paused: bool, system_disabled: bool) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: "test_solana_relayer".to_string(),
+            name: "Test Solana Relayer".to_string(),
+            paused,
+            system_disabled,
+            network: "mainnet".to_string(),
+            network_type: NetworkType::Solana,
+            signer_id: "test_signer".to_string(),
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+                min_balance: Some(1000000),
+                max_signatures: Some(5),
+                allowed_tokens: None,
+                allowed_programs: None,
+                allowed_accounts: None,
+                disallowed_accounts: None,
+                max_tx_data_size: None,
+                max_allowed_fee_lamports: None,
+                swap_config: None,
+                fee_margin_percentage: None,
+            }),
+            address: "SolanaAddress123".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        }
+    }
+
+    fn create_test_relayer_stellar(paused: bool, system_disabled: bool) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: "test_stellar_relayer".to_string(),
+            name: "Test Stellar Relayer".to_string(),
+            paused,
+            system_disabled,
+            network: "mainnet".to_string(),
+            network_type: NetworkType::Stellar,
+            signer_id: "test_signer".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                min_balance: Some(20000000),
+                max_fee: Some(100000),
+                timeout_seconds: Some(30),
+            }),
+            address: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
         }
     }
 
     #[test]
-    fn test_validate_active_state_active() {
+    fn test_validate_active_state_success() {
         let relayer = create_test_relayer(false, false);
+        assert!(relayer.validate_active_state().is_ok());
+    }
+
+    #[test]
+    fn test_validate_active_state_success_solana() {
+        let relayer = create_test_relayer_solana(false, false);
+        assert!(relayer.validate_active_state().is_ok());
+    }
+
+    #[test]
+    fn test_validate_active_state_success_stellar() {
+        let relayer = create_test_relayer_stellar(false, false);
         assert!(relayer.validate_active_state().is_ok());
     }
 
@@ -501,20 +223,709 @@ mod tests {
     fn test_validate_active_state_paused() {
         let relayer = create_test_relayer(true, false);
         let result = relayer.validate_active_state();
-        assert!(matches!(result, Err(RelayerError::RelayerPaused)));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RelayerError::RelayerPaused));
+    }
+
+    #[test]
+    fn test_validate_active_state_paused_solana() {
+        let relayer = create_test_relayer_solana(true, false);
+        let result = relayer.validate_active_state();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RelayerError::RelayerPaused));
+    }
+
+    #[test]
+    fn test_validate_active_state_paused_stellar() {
+        let relayer = create_test_relayer_stellar(true, false);
+        let result = relayer.validate_active_state();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RelayerError::RelayerPaused));
     }
 
     #[test]
     fn test_validate_active_state_disabled() {
         let relayer = create_test_relayer(false, true);
         let result = relayer.validate_active_state();
-        assert!(matches!(result, Err(RelayerError::RelayerDisabled)));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RelayerError::RelayerDisabled));
     }
 
     #[test]
-    fn test_validate_active_state_paused_and_disabled() {
+    fn test_validate_active_state_disabled_solana() {
+        let relayer = create_test_relayer_solana(false, true);
+        let result = relayer.validate_active_state();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RelayerError::RelayerDisabled));
+    }
+
+    #[test]
+    fn test_validate_active_state_disabled_stellar() {
+        let relayer = create_test_relayer_stellar(false, true);
+        let result = relayer.validate_active_state();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RelayerError::RelayerDisabled));
+    }
+
+    #[test]
+    fn test_validate_active_state_both_paused_and_disabled() {
+        // When both are true, should return paused error (checked first)
         let relayer = create_test_relayer(true, true);
         let result = relayer.validate_active_state();
-        assert!(matches!(result, Err(RelayerError::RelayerPaused)));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RelayerError::RelayerPaused));
+    }
+
+    #[test]
+    fn test_conversion_from_repo_model_to_domain_evm() {
+        let repo_model = create_test_relayer(false, false);
+        let domain_relayer = Relayer::from(repo_model.clone());
+
+        assert_eq!(domain_relayer.id, repo_model.id);
+        assert_eq!(domain_relayer.name, repo_model.name);
+        assert_eq!(domain_relayer.network, repo_model.network);
+        assert_eq!(domain_relayer.paused, repo_model.paused);
+        assert_eq!(domain_relayer.network_type, repo_model.network_type);
+        assert_eq!(domain_relayer.signer_id, repo_model.signer_id);
+        assert_eq!(domain_relayer.notification_id, repo_model.notification_id);
+        assert_eq!(domain_relayer.custom_rpc_urls, repo_model.custom_rpc_urls);
+
+        // Policies should be converted correctly
+        assert!(domain_relayer.policies.is_some());
+        if let Some(RelayerNetworkPolicy::Evm(_)) = domain_relayer.policies {
+            // Success - correct policy type
+        } else {
+            panic!("Expected EVM policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_repo_model_to_domain_solana() {
+        let repo_model = create_test_relayer_solana(false, false);
+        let domain_relayer = Relayer::from(repo_model.clone());
+
+        assert_eq!(domain_relayer.id, repo_model.id);
+        assert_eq!(domain_relayer.network_type, RelayerNetworkType::Solana);
+
+        // Policies should be converted correctly
+        assert!(domain_relayer.policies.is_some());
+        if let Some(RelayerNetworkPolicy::Solana(solana_policy)) = domain_relayer.policies {
+            assert_eq!(solana_policy.min_balance, Some(1000000));
+            assert_eq!(solana_policy.max_signatures, Some(5));
+            assert_eq!(
+                solana_policy.fee_payment_strategy,
+                Some(SolanaFeePaymentStrategy::Relayer)
+            );
+        } else {
+            panic!("Expected Solana policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_repo_model_to_domain_stellar() {
+        let repo_model = create_test_relayer_stellar(false, false);
+        let domain_relayer = Relayer::from(repo_model.clone());
+
+        assert_eq!(domain_relayer.id, repo_model.id);
+        assert_eq!(domain_relayer.network_type, RelayerNetworkType::Stellar);
+
+        // Policies should be converted correctly
+        assert!(domain_relayer.policies.is_some());
+        if let Some(RelayerNetworkPolicy::Stellar(stellar_policy)) = domain_relayer.policies {
+            assert_eq!(stellar_policy.min_balance, Some(20000000));
+            assert_eq!(stellar_policy.max_fee, Some(100000));
+            assert_eq!(stellar_policy.timeout_seconds, Some(30));
+        } else {
+            panic!("Expected Stellar policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_domain_to_repo_model_evm() {
+        let domain_relayer = Relayer {
+            id: "test_evm_relayer".to_string(),
+            name: "Test EVM Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Evm,
+            policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                gas_price_cap: Some(100_000_000_000),
+                eip1559_pricing: Some(true),
+                min_balance: None,
+                gas_limit_estimation: None,
+                whitelist_receivers: None,
+                private_transactions: None,
+            })),
+            signer_id: "test_signer".to_string(),
+            notification_id: Some("notification_123".to_string()),
+            custom_rpc_urls: None,
+        };
+
+        let repo_model = RelayerRepoModel::from(domain_relayer.clone());
+
+        assert_eq!(repo_model.id, domain_relayer.id);
+        assert_eq!(repo_model.name, domain_relayer.name);
+        assert_eq!(repo_model.network, domain_relayer.network);
+        assert_eq!(repo_model.paused, domain_relayer.paused);
+        assert_eq!(repo_model.network_type, domain_relayer.network_type);
+        assert_eq!(repo_model.signer_id, domain_relayer.signer_id);
+        assert_eq!(repo_model.notification_id, domain_relayer.notification_id);
+        assert_eq!(repo_model.custom_rpc_urls, domain_relayer.custom_rpc_urls);
+
+        // Runtime fields should have default values
+        assert_eq!(repo_model.address, "");
+        assert!(!repo_model.system_disabled);
+
+        // Policies should be converted correctly
+        if let RelayerNetworkPolicy::Evm(evm_policy) = repo_model.policies {
+            assert_eq!(evm_policy.gas_price_cap, Some(100_000_000_000));
+            assert_eq!(evm_policy.eip1559_pricing, Some(true));
+        } else {
+            panic!("Expected EVM policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_domain_to_repo_model_solana() {
+        let domain_relayer = Relayer {
+            id: "test_solana_relayer".to_string(),
+            name: "Test Solana Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Solana,
+            policies: Some(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
+                min_balance: Some(5000000),
+                max_signatures: Some(8),
+                allowed_tokens: Some(vec![SolanaAllowedTokensPolicy::new(
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+                    Some(100000),
+                    None,
+                )]),
+                allowed_programs: None,
+                allowed_accounts: None,
+                disallowed_accounts: None,
+                max_tx_data_size: None,
+                max_allowed_fee_lamports: None,
+                swap_config: None,
+                fee_margin_percentage: None,
+            })),
+            signer_id: "test_signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        let repo_model = RelayerRepoModel::from(domain_relayer.clone());
+
+        assert_eq!(repo_model.network_type, RelayerNetworkType::Solana);
+
+        // Policies should be converted correctly
+        if let RelayerNetworkPolicy::Solana(solana_policy) = repo_model.policies {
+            assert_eq!(
+                solana_policy.fee_payment_strategy,
+                Some(SolanaFeePaymentStrategy::User)
+            );
+            assert_eq!(solana_policy.min_balance, Some(5000000));
+            assert_eq!(solana_policy.max_signatures, Some(8));
+            assert!(solana_policy.allowed_tokens.is_some());
+        } else {
+            panic!("Expected Solana policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_domain_to_repo_model_stellar() {
+        let domain_relayer = Relayer {
+            id: "test_stellar_relayer".to_string(),
+            name: "Test Stellar Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Stellar,
+            policies: Some(RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                min_balance: Some(30000000),
+                max_fee: Some(150000),
+                timeout_seconds: Some(60),
+            })),
+            signer_id: "test_signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        let repo_model = RelayerRepoModel::from(domain_relayer.clone());
+
+        assert_eq!(repo_model.network_type, RelayerNetworkType::Stellar);
+
+        // Policies should be converted correctly
+        if let RelayerNetworkPolicy::Stellar(stellar_policy) = repo_model.policies {
+            assert_eq!(stellar_policy.min_balance, Some(30000000));
+            assert_eq!(stellar_policy.max_fee, Some(150000));
+            assert_eq!(stellar_policy.timeout_seconds, Some(60));
+        } else {
+            panic!("Expected Stellar policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_domain_with_no_policies_evm() {
+        let domain_relayer = Relayer {
+            id: "test_evm_relayer".to_string(),
+            name: "Test EVM Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Evm,
+            policies: None, // No policies provided
+            signer_id: "test_signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        let repo_model = RelayerRepoModel::from(domain_relayer);
+
+        // Should create default EVM policy
+        if let RelayerNetworkPolicy::Evm(evm_policy) = repo_model.policies {
+            // Default EVM policy should have all None values
+            assert_eq!(evm_policy.gas_price_cap, None);
+            assert_eq!(evm_policy.eip1559_pricing, None);
+            assert_eq!(evm_policy.min_balance, None);
+            assert_eq!(evm_policy.gas_limit_estimation, None);
+            assert_eq!(evm_policy.whitelist_receivers, None);
+            assert_eq!(evm_policy.private_transactions, None);
+        } else {
+            panic!("Expected default EVM policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_domain_with_no_policies_solana() {
+        let domain_relayer = Relayer {
+            id: "test_solana_relayer".to_string(),
+            name: "Test Solana Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Solana,
+            policies: None, // No policies provided
+            signer_id: "test_signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        let repo_model = RelayerRepoModel::from(domain_relayer);
+
+        // Should create default Solana policy
+        if let RelayerNetworkPolicy::Solana(solana_policy) = repo_model.policies {
+            // Default Solana policy should have all None values
+            assert_eq!(solana_policy.fee_payment_strategy, None);
+            assert_eq!(solana_policy.min_balance, None);
+            assert_eq!(solana_policy.max_signatures, None);
+            assert_eq!(solana_policy.allowed_tokens, None);
+            assert_eq!(solana_policy.allowed_programs, None);
+            assert_eq!(solana_policy.allowed_accounts, None);
+            assert_eq!(solana_policy.disallowed_accounts, None);
+            assert_eq!(solana_policy.max_tx_data_size, None);
+            assert_eq!(solana_policy.max_allowed_fee_lamports, None);
+            assert_eq!(solana_policy.swap_config, None);
+            assert_eq!(solana_policy.fee_margin_percentage, None);
+        } else {
+            panic!("Expected default Solana policy");
+        }
+    }
+
+    #[test]
+    fn test_conversion_from_domain_with_no_policies_stellar() {
+        let domain_relayer = Relayer {
+            id: "test_stellar_relayer".to_string(),
+            name: "Test Stellar Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Stellar,
+            policies: None, // No policies provided
+            signer_id: "test_signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        let repo_model = RelayerRepoModel::from(domain_relayer);
+
+        // Should create default Stellar policy
+        if let RelayerNetworkPolicy::Stellar(stellar_policy) = repo_model.policies {
+            // Default Stellar policy should have all None values
+            assert_eq!(stellar_policy.min_balance, None);
+            assert_eq!(stellar_policy.max_fee, None);
+            assert_eq!(stellar_policy.timeout_seconds, None);
+        } else {
+            panic!("Expected default Stellar policy");
+        }
+    }
+
+    #[test]
+    fn test_relayer_repo_updater_preserves_runtime_fields() {
+        // Create an original relayer with runtime fields set
+        let original = RelayerRepoModel {
+            id: "test_relayer".to_string(),
+            name: "Original Name".to_string(),
+            address: "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E".to_string(), // Runtime field
+            system_disabled: true,                                             // Runtime field
+            paused: false,
+            network: "mainnet".to_string(),
+            network_type: NetworkType::Evm,
+            signer_id: "test_signer".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Create a domain model with different business fields
+        let domain_update = Relayer {
+            id: "test_relayer".to_string(),
+            name: "Updated Name".to_string(), // Changed
+            paused: true,                     // Changed
+            network: "mainnet".to_string(),
+            network_type: RelayerNetworkType::Evm,
+            signer_id: "test_signer".to_string(),
+            policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default())),
+            notification_id: Some("new_notification".to_string()), // Changed
+            custom_rpc_urls: None,
+        };
+
+        // Use updater to preserve runtime fields
+        let updated =
+            RelayerRepoUpdater::from_existing(original.clone()).apply_domain_update(domain_update);
+
+        // Verify business fields were updated
+        assert_eq!(updated.name, "Updated Name");
+        assert!(updated.paused);
+        assert_eq!(
+            updated.notification_id,
+            Some("new_notification".to_string())
+        );
+
+        // Verify runtime fields were preserved
+        assert_eq!(
+            updated.address,
+            "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E"
+        );
+        assert!(updated.system_disabled);
+    }
+
+    #[test]
+    fn test_relayer_repo_updater_preserves_runtime_fields_solana() {
+        // Create an original Solana relayer with runtime fields set
+        let original = RelayerRepoModel {
+            id: "test_solana_relayer".to_string(),
+            name: "Original Solana Name".to_string(),
+            address: "SolanaOriginalAddress123".to_string(), // Runtime field
+            system_disabled: true,                           // Runtime field
+            paused: false,
+            network: "mainnet".to_string(),
+            network_type: NetworkType::Solana,
+            signer_id: "test_signer".to_string(),
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy::default()),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        // Create a domain model with different business fields
+        let domain_update = Relayer {
+            id: "test_solana_relayer".to_string(),
+            name: "Updated Solana Name".to_string(), // Changed
+            paused: true,                            // Changed
+            network: "mainnet".to_string(),
+            network_type: RelayerNetworkType::Solana,
+            signer_id: "test_signer".to_string(),
+            policies: Some(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                min_balance: Some(2000000), // Changed
+                ..RelayerSolanaPolicy::default()
+            })),
+            notification_id: Some("solana_notification".to_string()), // Changed
+            custom_rpc_urls: None,
+        };
+
+        // Use updater to preserve runtime fields
+        let updated =
+            RelayerRepoUpdater::from_existing(original.clone()).apply_domain_update(domain_update);
+
+        // Verify business fields were updated
+        assert_eq!(updated.name, "Updated Solana Name");
+        assert!(updated.paused);
+        assert_eq!(
+            updated.notification_id,
+            Some("solana_notification".to_string())
+        );
+
+        // Verify runtime fields were preserved
+        assert_eq!(updated.address, "SolanaOriginalAddress123");
+        assert!(updated.system_disabled);
+
+        // Verify policies were updated
+        if let RelayerNetworkPolicy::Solana(solana_policy) = updated.policies {
+            assert_eq!(solana_policy.min_balance, Some(2000000));
+        } else {
+            panic!("Expected Solana policy");
+        }
+    }
+
+    #[test]
+    fn test_relayer_repo_updater_preserves_runtime_fields_stellar() {
+        // Create an original Stellar relayer with runtime fields set
+        let original = RelayerRepoModel {
+            id: "test_stellar_relayer".to_string(),
+            name: "Original Stellar Name".to_string(),
+            address: "GORIGINALXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(), // Runtime field
+            system_disabled: false, // Runtime field
+            paused: true,
+            network: "mainnet".to_string(),
+            network_type: NetworkType::Stellar,
+            signer_id: "test_signer".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default()),
+            notification_id: Some("original_notification".to_string()),
+            custom_rpc_urls: None,
+        };
+
+        // Create a domain model with different business fields
+        let domain_update = Relayer {
+            id: "test_stellar_relayer".to_string(),
+            name: "Updated Stellar Name".to_string(), // Changed
+            paused: false,                            // Changed
+            network: "mainnet".to_string(),
+            network_type: RelayerNetworkType::Stellar,
+            signer_id: "test_signer".to_string(),
+            policies: Some(RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                min_balance: Some(40000000), // Changed
+                max_fee: Some(200000),       // Changed
+                timeout_seconds: Some(120),  // Changed
+            })),
+            notification_id: None, // Changed
+            custom_rpc_urls: None,
+        };
+
+        // Use updater to preserve runtime fields
+        let updated =
+            RelayerRepoUpdater::from_existing(original.clone()).apply_domain_update(domain_update);
+
+        // Verify business fields were updated
+        assert_eq!(updated.name, "Updated Stellar Name");
+        assert!(!updated.paused);
+        assert_eq!(updated.notification_id, None);
+
+        // Verify runtime fields were preserved
+        assert_eq!(
+            updated.address,
+            "GORIGINALXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        );
+        assert!(!updated.system_disabled);
+
+        // Verify policies were updated
+        if let RelayerNetworkPolicy::Stellar(stellar_policy) = updated.policies {
+            assert_eq!(stellar_policy.min_balance, Some(40000000));
+            assert_eq!(stellar_policy.max_fee, Some(200000));
+            assert_eq!(stellar_policy.timeout_seconds, Some(120));
+        } else {
+            panic!("Expected Stellar policy");
+        }
+    }
+
+    #[test]
+    fn test_repo_model_serialization_deserialization_evm() {
+        let original = create_test_relayer(false, false);
+
+        // Serialize to JSON
+        let serialized = serde_json::to_string(&original).unwrap();
+        assert!(!serialized.is_empty());
+
+        // Deserialize back
+        let deserialized: RelayerRepoModel = serde_json::from_str(&serialized).unwrap();
+
+        // Verify all fields match
+        assert_eq!(original.id, deserialized.id);
+        assert_eq!(original.name, deserialized.name);
+        assert_eq!(original.network, deserialized.network);
+        assert_eq!(original.paused, deserialized.paused);
+        assert_eq!(original.network_type, deserialized.network_type);
+        assert_eq!(original.signer_id, deserialized.signer_id);
+        assert_eq!(original.address, deserialized.address);
+        assert_eq!(original.notification_id, deserialized.notification_id);
+        assert_eq!(original.system_disabled, deserialized.system_disabled);
+        assert_eq!(original.custom_rpc_urls, deserialized.custom_rpc_urls);
+
+        // Verify policies match
+        match (&original.policies, &deserialized.policies) {
+            (RelayerNetworkPolicy::Evm(_), RelayerNetworkPolicy::Evm(_)) => {
+                // Success - both are EVM policies
+            }
+            _ => panic!("Policy types don't match after serialization/deserialization"),
+        }
+    }
+
+    #[test]
+    fn test_repo_model_serialization_deserialization_solana() {
+        let original = create_test_relayer_solana(true, false);
+
+        // Serialize to JSON
+        let serialized = serde_json::to_string(&original).unwrap();
+        assert!(!serialized.is_empty());
+
+        // Deserialize back
+        let deserialized: RelayerRepoModel = serde_json::from_str(&serialized).unwrap();
+
+        // Verify key fields match
+        assert_eq!(original.id, deserialized.id);
+        assert_eq!(original.network_type, RelayerNetworkType::Solana);
+        assert_eq!(deserialized.network_type, RelayerNetworkType::Solana);
+        assert_eq!(original.paused, deserialized.paused);
+
+        // Verify policies match
+        match (&original.policies, &deserialized.policies) {
+            (RelayerNetworkPolicy::Solana(orig), RelayerNetworkPolicy::Solana(deser)) => {
+                assert_eq!(orig.fee_payment_strategy, deser.fee_payment_strategy);
+                assert_eq!(orig.min_balance, deser.min_balance);
+                assert_eq!(orig.max_signatures, deser.max_signatures);
+            }
+            _ => panic!("Policy types don't match after serialization/deserialization"),
+        }
+    }
+
+    #[test]
+    fn test_repo_model_serialization_deserialization_stellar() {
+        let original = create_test_relayer_stellar(false, true);
+
+        // Serialize to JSON
+        let serialized = serde_json::to_string(&original).unwrap();
+        assert!(!serialized.is_empty());
+
+        // Deserialize back
+        let deserialized: RelayerRepoModel = serde_json::from_str(&serialized).unwrap();
+
+        // Verify key fields match
+        assert_eq!(original.id, deserialized.id);
+        assert_eq!(original.network_type, RelayerNetworkType::Stellar);
+        assert_eq!(deserialized.network_type, RelayerNetworkType::Stellar);
+        assert_eq!(original.system_disabled, deserialized.system_disabled);
+
+        // Verify policies match
+        match (&original.policies, &deserialized.policies) {
+            (RelayerNetworkPolicy::Stellar(orig), RelayerNetworkPolicy::Stellar(deser)) => {
+                assert_eq!(orig.min_balance, deser.min_balance);
+                assert_eq!(orig.max_fee, deser.max_fee);
+                assert_eq!(orig.timeout_seconds, deser.timeout_seconds);
+            }
+            _ => panic!("Policy types don't match after serialization/deserialization"),
+        }
+    }
+
+    #[test]
+    fn test_repo_model_default() {
+        let default_model = RelayerRepoModel::default();
+
+        assert_eq!(default_model.id, "");
+        assert_eq!(default_model.name, "");
+        assert_eq!(default_model.network, "");
+        assert!(!default_model.paused);
+        assert_eq!(default_model.network_type, NetworkType::Evm);
+        assert_eq!(default_model.signer_id, "");
+        assert_eq!(default_model.address, "0x");
+        assert_eq!(default_model.notification_id, None);
+        assert!(!default_model.system_disabled);
+        assert_eq!(default_model.custom_rpc_urls, None);
+
+        // Default should have EVM policy
+        if let RelayerNetworkPolicy::Evm(_) = default_model.policies {
+            // Success
+        } else {
+            panic!("Default should have EVM policy");
+        }
+    }
+
+    #[test]
+    fn test_round_trip_conversion_all_network_types() {
+        // Test round-trip conversion: Domain -> Repo -> Domain for all network types
+
+        // EVM
+        let original_evm = Relayer {
+            id: "evm_relayer".to_string(),
+            name: "EVM Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Evm,
+            policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                gas_price_cap: Some(50_000_000_000),
+                eip1559_pricing: Some(true),
+                min_balance: None,
+                gas_limit_estimation: None,
+                whitelist_receivers: None,
+                private_transactions: None,
+            })),
+            signer_id: "evm_signer".to_string(),
+            notification_id: Some("evm_notification".to_string()),
+            custom_rpc_urls: None,
+        };
+
+        let repo_evm = RelayerRepoModel::from(original_evm.clone());
+        let recovered_evm = Relayer::from(repo_evm);
+
+        assert_eq!(original_evm.id, recovered_evm.id);
+        assert_eq!(original_evm.network_type, recovered_evm.network_type);
+        assert_eq!(original_evm.notification_id, recovered_evm.notification_id);
+
+        // Solana
+        let original_solana = Relayer {
+            id: "solana_relayer".to_string(),
+            name: "Solana Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: true,
+            network_type: RelayerNetworkType::Solana,
+            policies: Some(RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
+                min_balance: Some(3000000),
+                max_signatures: None,
+                allowed_tokens: None,
+                allowed_programs: None,
+                allowed_accounts: None,
+                disallowed_accounts: None,
+                max_tx_data_size: None,
+                max_allowed_fee_lamports: None,
+                swap_config: None,
+                fee_margin_percentage: None,
+            })),
+            signer_id: "solana_signer".to_string(),
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
+
+        let repo_solana = RelayerRepoModel::from(original_solana.clone());
+        let recovered_solana = Relayer::from(repo_solana);
+
+        assert_eq!(original_solana.id, recovered_solana.id);
+        assert_eq!(original_solana.network_type, recovered_solana.network_type);
+        assert_eq!(original_solana.paused, recovered_solana.paused);
+
+        // Stellar
+        let original_stellar = Relayer {
+            id: "stellar_relayer".to_string(),
+            name: "Stellar Relayer".to_string(),
+            network: "mainnet".to_string(),
+            paused: false,
+            network_type: RelayerNetworkType::Stellar,
+            policies: Some(RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
+                min_balance: Some(50000000),
+                max_fee: Some(250000),
+                timeout_seconds: Some(180),
+            })),
+            signer_id: "stellar_signer".to_string(),
+            notification_id: Some("stellar_notification".to_string()),
+            custom_rpc_urls: None,
+        };
+
+        let repo_stellar = RelayerRepoModel::from(original_stellar.clone());
+        let recovered_stellar = Relayer::from(repo_stellar);
+
+        assert_eq!(original_stellar.id, recovered_stellar.id);
+        assert_eq!(
+            original_stellar.network_type,
+            recovered_stellar.network_type
+        );
+        assert_eq!(
+            original_stellar.notification_id,
+            recovered_stellar.notification_id
+        );
     }
 }
