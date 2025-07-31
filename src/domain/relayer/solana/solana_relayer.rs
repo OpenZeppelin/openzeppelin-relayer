@@ -16,7 +16,7 @@ use crate::{
     },
     domain::{
         relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
-        SolanaRelayerTrait, SwapParams,
+        SolanaRelayerTrait, SolanaRpcHandlerType, SwapParams,
     },
     jobs::{JobProducerTrait, SolanaTokenSwapRequest},
     models::{
@@ -25,7 +25,7 @@ use crate::{
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
     },
-    repositories::{NetworkRepository, RelayerRepository, Repository},
+    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
         JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
         SolanaSigner,
@@ -37,10 +37,7 @@ use futures::future::try_join_all;
 use log::{error, info, warn};
 use solana_sdk::{account::Account, pubkey::Pubkey};
 
-use super::{
-    NetworkDex, SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl, SolanaTokenProgram,
-    SwapResult, TokenAccount,
-};
+use super::{NetworkDex, SolanaRpcError, SolanaTokenProgram, SwapResult, TokenAccount};
 
 #[allow(dead_code)]
 struct TokenSwapCandidate<'a> {
@@ -53,7 +50,7 @@ struct TokenSwapCandidate<'a> {
 pub struct SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
-    TR: Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
@@ -64,7 +61,7 @@ where
     signer: Arc<S>,
     network: SolanaNetwork,
     provider: Arc<SP>,
-    rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J>>>,
+    rpc_handler: SolanaRpcHandlerType<SP, S, JS, J, TR>,
     relayer_repository: Arc<RR>,
     transaction_repository: Arc<TR>,
     job_producer: Arc<J>,
@@ -78,7 +75,7 @@ pub type DefaultSolanaRelayer<J, TR, RR, NR> =
 impl<RR, TR, J, S, JS, SP, NR> SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
-    TR: Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
@@ -92,7 +89,7 @@ where
         relayer_repository: Arc<RR>,
         network_repository: Arc<NR>,
         provider: Arc<SP>,
-        rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J>>>,
+        rpc_handler: SolanaRpcHandlerType<SP, S, JS, J, TR>,
         transaction_repository: Arc<TR>,
         job_producer: Arc<J>,
         dex_service: Arc<NetworkDex<SP, S, JS>>,
@@ -310,7 +307,7 @@ where
 impl<RR, TR, J, S, JS, SP, NR> SolanaRelayerDexTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
-    TR: Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
@@ -509,7 +506,7 @@ where
 impl<RR, TR, J, S, JS, SP, NR> SolanaRelayerTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
-    TR: Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
@@ -740,7 +737,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{NetworkConfigCommon, SolanaNetworkConfig},
-        domain::create_network_dex_generic,
+        domain::{create_network_dex_generic, SolanaRpcHandler, SolanaRpcMethodsImpl},
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams,
@@ -754,6 +751,7 @@ mod tests {
             RoutePlan, SolanaProviderError, SwapEvents, SwapInfo, SwapResponse,
             UltraExecuteResponse, UltraOrderResponse,
         },
+        utils::mocks::mockutils::create_mock_solana_network,
     };
     use mockall::predicate::*;
     use solana_sdk::{hash::Hash, program_pack::Pack, signature::Signature};
@@ -772,15 +770,12 @@ mod tests {
         job_producer: Arc<MockJobProducerTrait>,
         tx_repo: Arc<MockTransactionRepository>,
         dex: Arc<NetworkDex<MockSolanaProviderTrait, MockSolanaSignTrait, MockJupiterServiceTrait>>,
-        rpc_handler: Arc<
-            SolanaRpcHandler<
-                SolanaRpcMethodsImpl<
-                    MockSolanaProviderTrait,
-                    MockSolanaSignTrait,
-                    MockJupiterServiceTrait,
-                    MockJobProducerTrait,
-                >,
-            >,
+        rpc_handler: SolanaRpcHandlerType<
+            MockSolanaProviderTrait,
+            MockSolanaSignTrait,
+            MockJupiterServiceTrait,
+            MockJobProducerTrait,
+            MockTransactionRepository,
         >,
     }
 
@@ -793,6 +788,7 @@ mod tests {
             let job = Arc::new(MockJobProducerTrait::new());
             let tx_repo = Arc::new(MockTransactionRepository::new());
             let mut network_repository = MockNetworkRepository::new();
+            let transaction_repository = Arc::new(MockTransactionRepository::new());
 
             let relayer_model = RelayerRepoModel {
                 id: "test-id".to_string(),
@@ -811,12 +807,16 @@ mod tests {
                 .unwrap(),
             );
 
+            let test_network = create_mock_solana_network();
+
             let rpc_handler = Arc::new(SolanaRpcHandler::new(SolanaRpcMethodsImpl::new_mock(
                 relayer_model.clone(),
+                test_network.clone(),
                 provider.clone(),
                 signer.clone(),
                 jupiter.clone(),
                 job.clone(),
+                transaction_repository.clone(),
             )));
 
             let test_network = NetworkRepoModel {

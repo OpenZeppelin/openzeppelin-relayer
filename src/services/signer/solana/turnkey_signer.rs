@@ -226,10 +226,8 @@ mod tests {
         let signer = TurnkeySigner::new_for_testing(mock_service);
 
         let tx_data = SolanaTransactionData {
-            recent_blockhash: Some("hash".to_string()),
-            fee_payer: "payer".to_string(),
-            instructions: vec![],
-            hash: None,
+            transaction: "transaction_123".to_string(),
+            signature: None,
         };
 
         let result = signer

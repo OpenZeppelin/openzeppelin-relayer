@@ -41,7 +41,7 @@ pub use util::*;
 
 // Explicit re-exports to avoid ambiguous glob re-exports
 pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
-pub use solana::SolanaRelayerTransaction;
+pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
 /// A trait that defines the operations for handling transactions across different networks.
@@ -169,7 +169,7 @@ pub trait Transaction {
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
-    Solana(SolanaRelayerTransaction),
+    Solana(DefaultSolanaTransaction),
     Stellar(DefaultStellarTransaction),
 }
 

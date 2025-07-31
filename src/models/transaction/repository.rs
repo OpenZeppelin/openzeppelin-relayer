@@ -373,10 +373,8 @@ impl EvmTransactionDataTrait for EvmTransactionData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolanaTransactionData {
-    pub recent_blockhash: Option<String>,
-    pub fee_payer: String,
-    pub instructions: Vec<String>,
-    pub hash: Option<String>,
+    pub transaction: String,
+    pub signature: Option<String>,
 }
 
 /// Represents different input types for Stellar transactions
@@ -782,10 +780,8 @@ impl
                 valid_until: None,
                 network_type: NetworkType::Solana,
                 network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                    recent_blockhash: None,
-                    fee_payer: solana_request.fee_payer.clone(),
-                    instructions: solana_request.instructions.clone(),
-                    hash: None,
+                    transaction: solana_request.transaction.clone().into_inner(),
+                    signature: None,
                 }),
                 priced_at: None,
                 hashes: Vec::new(),
@@ -1004,6 +1000,7 @@ mod tests {
                 RelayerEvmPolicy, RelayerNetworkPolicy, RelayerSolanaPolicy, RelayerStellarPolicy,
             },
             transaction::stellar::AssetSpec,
+            EncodedSerializedTransaction,
         },
     };
 
@@ -1320,10 +1317,8 @@ mod tests {
 
         // Should fail for non-EVM data
         let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            recent_blockhash: None,
-            fee_payer: "test".to_string(),
-            instructions: vec![],
-            hash: None,
+            transaction: "transaction_123".to_string(),
+            signature: None,
         });
         assert!(solana_data.get_evm_transaction_data().is_err());
     }
@@ -1331,17 +1326,15 @@ mod tests {
     #[test]
     fn test_network_tx_data_get_solana_transaction_data() {
         let solana_tx_data = SolanaTransactionData {
-            recent_blockhash: Some("hash123".to_string()),
-            fee_payer: "payer123".to_string(),
-            instructions: vec!["instruction1".to_string()],
-            hash: None,
+            transaction: "transaction_123".to_string(),
+            signature: None,
         };
         let network_data = NetworkTransactionData::Solana(solana_tx_data.clone());
 
         // Should succeed for Solana data
         let result = network_data.get_solana_transaction_data();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().fee_payer, solana_tx_data.fee_payer);
+        assert_eq!(result.unwrap().transaction, solana_tx_data.transaction);
 
         // Should fail for non-Solana data
         let evm_data = NetworkTransactionData::Evm(create_sample_evm_tx_data());
@@ -1405,10 +1398,8 @@ mod tests {
 
         // Should fail for non-EVM data
         let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            recent_blockhash: None,
-            fee_payer: "test".to_string(),
-            instructions: vec![],
-            hash: None,
+            transaction: "transaction_123".to_string(),
+            signature: None,
         });
         assert!(TxLegacy::try_from(solana_data).is_err());
     }
@@ -1653,8 +1644,7 @@ mod tests {
 
         let solana_request = NetworkTransactionRequest::Solana(
             crate::models::transaction::request::solana::SolanaTransactionRequest {
-                fee_payer: "fee_payer_address".to_string(),
-                instructions: vec!["instruction1".to_string(), "instruction2".to_string()],
+                transaction: EncodedSerializedTransaction::new("transaction_123".to_string()),
             },
         );
 
@@ -1700,12 +1690,8 @@ mod tests {
         assert_eq!(transaction.valid_until, None);
 
         if let NetworkTransactionData::Solana(solana_data) = transaction.network_data {
-            assert_eq!(solana_data.fee_payer, "fee_payer_address");
-            assert_eq!(solana_data.instructions.len(), 2);
-            assert_eq!(solana_data.instructions[0], "instruction1");
-            assert_eq!(solana_data.instructions[1], "instruction2");
-            assert_eq!(solana_data.recent_blockhash, None);
-            assert_eq!(solana_data.hash, None);
+            assert_eq!(solana_data.transaction, "transaction_123".to_string());
+            assert_eq!(solana_data.signature, None);
         } else {
             panic!("Expected Solana transaction data");
         }
@@ -1854,10 +1840,8 @@ mod tests {
 
         // Should fail for non-EVM data
         let solana_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            recent_blockhash: None,
-            fee_payer: "test".to_string(),
-            instructions: vec![],
-            hash: None,
+            transaction: "transaction_123".to_string(),
+            signature: None,
         });
         assert!(TxEip1559::try_from(solana_data).is_err());
     }

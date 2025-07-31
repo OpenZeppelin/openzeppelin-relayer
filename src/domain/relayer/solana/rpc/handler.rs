@@ -9,11 +9,18 @@
 //! invokes the respective methods of the underlying implementation.
 use super::{SolanaRpcError, SolanaRpcMethods};
 use crate::{
-    models::{JsonRpcRequest, JsonRpcResponse},
-    models::{NetworkRpcRequest, NetworkRpcResult, SolanaRpcRequest, SolanaRpcResult},
+    domain::SolanaRpcMethodsImpl,
+    models::{
+        JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, SolanaRpcRequest,
+        SolanaRpcResult,
+    },
 };
 use eyre::Result;
 use log::info;
+use std::sync::Arc;
+
+pub type SolanaRpcHandlerType<SP, S, JS, J, TR> =
+    Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J, TR>>>;
 
 pub struct SolanaRpcHandler<T> {
     rpc_methods: T,
@@ -272,6 +279,7 @@ mod tests {
                 Ok(SignAndSendTransactionResult {
                     transaction: EncodedSerializedTransaction::new(mock_transaction.clone()),
                     signature: mock_signature.to_string(),
+                    id: "123".to_string(),
                 })
             })
             .times(1);

@@ -32,7 +32,9 @@ use crate::{
     jobs::JobProducerTrait,
     models::{
         FeeEstimateRequestParams, FeeEstimateResult, RelayerRepoModel, SolanaFeePaymentStrategy,
+        TransactionRepoModel,
     },
+    repositories::{Repository, TransactionRepository},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
@@ -41,12 +43,13 @@ use super::{
     SolanaTransactionValidator,
 };
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     /// Estimates the fee for an arbitrary transaction using a specified fee token.
     ///
@@ -217,6 +220,7 @@ mod tests {
             RelayerNetworkPolicy, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
             SolanaAllowedTokensSwapConfig,
         },
+        repositories::MockTransactionRepository,
         services::{
             MockSolanaProviderTrait, QuoteResponse, RoutePlan, SolanaProviderError, SwapInfo,
         },
@@ -229,8 +233,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_with_allowed_token_relayer_fee_strategy() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
-            setup_test_context();
+        let (
+            mut relayer,
+            signer,
+            mut provider,
+            mut jupiter_service,
+            encoded_tx,
+            job_producer,
+            network,
+        ) = setup_test_context();
 
         // Set up policy with allowed token
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -298,10 +309,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = FeeEstimateRequestParams {
@@ -461,10 +474,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
+            ctx.network,
             Arc::new(ctx.provider),
             Arc::new(ctx.signer),
             Arc::new(ctx.jupiter_service),
             Arc::new(ctx.job_producer),
+            Arc::new(ctx.transaction_repository),
         );
 
         let token_test = &ctx.token;
@@ -487,8 +502,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_usdt_to_sol_conversion() {
-        let (mut relayer, signer, _provider, mut jupiter_service, encoded_tx, job_producer) =
-            setup_test_context();
+        let (
+            mut relayer,
+            signer,
+            _provider,
+            mut jupiter_service,
+            encoded_tx,
+            job_producer,
+            network,
+        ) = setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
@@ -556,10 +578,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = FeeEstimateRequestParams {
@@ -578,8 +602,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_uni_to_sol_dynamic_price() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, encoded_tx, job_producer) =
-            setup_test_context();
+        let (
+            mut relayer,
+            signer,
+            mut provider,
+            mut jupiter_service,
+            encoded_tx,
+            job_producer,
+            network,
+        ) = setup_test_context();
 
         // Set up policy with UNI token (decimals = 8)
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -646,10 +677,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = FeeEstimateRequestParams {
@@ -669,7 +702,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_estimate_wrapped_sol() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         // Set up policy with WSOL token
@@ -699,10 +732,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = FeeEstimateRequestParams {

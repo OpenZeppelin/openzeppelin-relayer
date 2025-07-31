@@ -12,3 +12,6 @@ pub use stellar::{
     AssetSpec, AuthSpec, ContractSource, DecoratedSignature, HostFunctionSpec, MemoSpec,
     OperationSpec, WasmSource,
 };
+
+pub mod solana;
+pub use solana::*;

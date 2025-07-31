@@ -26,19 +26,21 @@ use crate::{
     models::{
         produce_solana_rpc_webhook_payload, EncodedSerializedTransaction,
         SignTransactionRequestParams, SignTransactionResult, SolanaFeePaymentStrategy,
-        SolanaWebhookRpcPayload,
+        SolanaWebhookRpcPayload, TransactionRepoModel,
     },
+    repositories::{Repository, TransactionRepository},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     pub(crate) async fn sign_transaction_impl(
         &self,
@@ -172,7 +174,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_success_relayer_fee_strategy() {
-        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         let signature = Signature::new_unique();
@@ -211,10 +213,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -360,10 +364,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
+            ctx.network,
             Arc::new(ctx.provider),
             Arc::new(ctx.signer),
             Arc::new(ctx.jupiter_service),
             Arc::new(ctx.job_producer),
+            Arc::new(ctx.transaction_repository),
         );
 
         let params = SignTransactionRequestParams {
@@ -387,7 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_balance_failure_relayer_fee_strategy() {
-        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         let signature = Signature::new_unique();
@@ -427,10 +433,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -581,10 +589,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
+            ctx.network,
             Arc::new(ctx.provider),
             Arc::new(ctx.signer),
             Arc::new(ctx.jupiter_service),
             Arc::new(ctx.job_producer),
+            Arc::new(ctx.transaction_repository),
         );
 
         let params = SignTransactionRequestParams {
@@ -610,7 +620,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_validation_failure_blockhash_relayer_fee_strategy() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -625,10 +635,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -641,7 +653,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_exceeds_max_signatures_relayer_fee_strategy() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
         // Update policy with low max signatures
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -672,10 +684,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -701,7 +715,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_disallowed_program_relayer_fee_strategy() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         // Update policy with disallowed programs
@@ -727,10 +741,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -756,7 +772,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_exceeds_data_size_relayer_fee_strategy() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         // Update policy with small max data size
@@ -787,10 +803,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -815,7 +833,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_wrong_fee_payer() {
-        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         // Create transaction with different fee payer
@@ -834,10 +852,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
         let params = SignTransactionRequestParams {
             transaction: encoded_tx,
@@ -860,8 +880,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_disallowed_account() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
-            setup_test_context();
+        let (
+            mut relayer,
+            mut signer,
+            mut provider,
+            jupiter_service,
+            encoded_tx,
+            job_producer,
+            network,
+        ) = setup_test_context();
 
         // Update policy with disallowed accounts
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
@@ -905,10 +932,12 @@ mod tests {
         });
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -923,7 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_exceeds_max_lamports_fee() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         // Set max allowed transfer amount in policy
@@ -963,10 +992,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
@@ -992,8 +1023,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_with_webhook_success() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, mut job_producer) =
-            setup_test_context();
+        let (
+            mut relayer,
+            mut signer,
+            mut provider,
+            jupiter_service,
+            encoded_tx,
+            mut job_producer,
+            network,
+        ) = setup_test_context();
 
         relayer.notification_id = Some("test-webhook-id".to_string());
 
@@ -1039,10 +1077,12 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = SignTransactionRequestParams {
