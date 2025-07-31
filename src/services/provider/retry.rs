@@ -173,7 +173,7 @@ impl RetryConfig {
 /// # Type Parameters
 /// * `P` - The provider type
 /// * `T` - The result type of the operation
-/// * `E` - The error type that implements From<String>
+/// * `E` - The error type that implements `From<String>`
 /// * `F` - The function type that takes a provider and returns a future
 /// * `Fut` - The future type returned by the operation
 /// * `I` - The provider initializer function type

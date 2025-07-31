@@ -14,7 +14,6 @@ on:
     - cron: 15 11 * * *  # Sets Semgrep to scan every day at 11:15 UTC.
 permissions:
   contents: read
-
 jobs:
   semgrep:
     name: semgrep/ci
