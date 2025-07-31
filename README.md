@@ -53,11 +53,12 @@ The repository includes several ready-to-use examples to help you get started wi
 | Example                                                      | Description                               |
 | ------------------------------------------------------------ | ----------------------------------------- |
 | [`basic-example`](./examples/basic-example/)                 | Simple setup with Redis                   |
+| [`redis-storage`](./examples/redis-storage/)                 | Simple setup with Redis for storage       |
 | [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging     |
 | [`basic-example-metrics`](./examples/basic-example-metrics/) | Setup with Prometheus and Grafana metrics |
-| [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management |
-| [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing |
-| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/) | Using Turnkey Signer for EVM secure signing |
+| [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management      |
+| [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing      |
+| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/) | Using Turnkey Signer for EVM secure signing     |
 | [`solana-turnkey-signer`](./examples/solana-turnkey-signer/) | Using Turnkey Signer for Solana secure signing |
 | [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/) | Using Google Cloud KMS Signer for Solana secure signing |
 | [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file |
@@ -285,6 +286,8 @@ Create `.env` with correct values according to your needs from `.env.example` fi
 ```sh
 cp .env.example .env
 ```
+
+> **Note**: After the service is running, all configuration components (relayers, signers, notifications) can also be managed via REST API endpoints for runtime changes. See the [Configuration Guide](https://docs.openzeppelin.com/relayer/configuration) for details on API-based configuration management.
 
 ### Creating a Signer
 

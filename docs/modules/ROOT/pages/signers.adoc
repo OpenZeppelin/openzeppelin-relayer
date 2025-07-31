@@ -5,7 +5,7 @@
 
 Signers are responsible for cryptographically signing transactions before they are submitted to blockchain networks. OpenZeppelin Relayer supports multiple signer types to accommodate different security requirements and infrastructure setups.
 
-The `signers` array in your configuration must contain at least one valid signer configuration. Each signer is referenced by its `id` in relayer configurations.
+Each signer is referenced by its `id` in relayer configurations.
 
 == Configuration Structure
 
