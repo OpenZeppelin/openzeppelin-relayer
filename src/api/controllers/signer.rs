@@ -3,7 +3,7 @@
 //! Handles HTTP endpoints for signer operations including:
 //! - Listing signers
 //! - Getting signer details
-//! - Creating signers  
+//! - Creating signers
 //! - Updating signers
 //! - Deleting signers
 

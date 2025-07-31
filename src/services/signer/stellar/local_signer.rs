@@ -440,4 +440,198 @@ mod tests {
             _ => panic!("Expected Stellar signature response"),
         }
     }
+
+    #[tokio::test]
+    async fn test_sign_xdr_transaction_success() {
+        use soroban_rs::xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
+        use stellar_strkey::ed25519::PublicKey;
+
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+        let source_account = match signer.address().await.unwrap() {
+            Address::Stellar(addr) => addr,
+            _ => panic!("Expected Stellar address"),
+        };
+
+        // Create a simple unsigned transaction envelope
+        let source_pk = PublicKey::from_string(&source_account).unwrap();
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256(source_pk.0),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: vec![].try_into().unwrap(),
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(), // No signatures - unsigned
+        });
+
+        let unsigned_xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let network_passphrase = "Test SDF Network ; September 2015";
+
+        // Call sign_xdr_transaction
+        let result = signer
+            .sign_xdr_transaction(&unsigned_xdr, network_passphrase)
+            .await
+            .unwrap();
+
+        // Verify the response
+        assert!(!result.signed_xdr.is_empty());
+        assert_eq!(result.signature.hint.0.len(), 4);
+        assert_eq!(result.signature.signature.0.len(), 64);
+        assert!(result.signature.signature.0.iter().any(|&b| b != 0));
+
+        // Verify the signed XDR can be parsed back
+        let signed_envelope =
+            TransactionEnvelope::from_xdr_base64(&result.signed_xdr, Limits::none())
+                .expect("Should be able to parse signed XDR");
+
+        // Verify it now has a signature
+        match signed_envelope {
+            TransactionEnvelope::TxV0(v0_env) => {
+                assert_eq!(
+                    v0_env.signatures.len(),
+                    1,
+                    "Should have exactly one signature"
+                );
+                assert_eq!(
+                    v0_env.signatures[0], result.signature,
+                    "Signature should match"
+                );
+            }
+            _ => panic!("Expected V0 envelope"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_xdr_transaction_invalid_xdr() {
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+        let invalid_xdr = "INVALID_BASE64_XDR_DATA";
+        let network_passphrase = "Test SDF Network ; September 2015";
+
+        let result = signer
+            .sign_xdr_transaction(invalid_xdr, network_passphrase)
+            .await;
+
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        match err {
+            SignerError::SigningError(msg) => {
+                assert!(
+                    msg.contains("Invalid XDR"),
+                    "Error should mention invalid XDR"
+                );
+            }
+            _ => panic!("Expected SigningError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_xdr_transaction_different_networks() {
+        use soroban_rs::xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
+        use stellar_strkey::ed25519::PublicKey;
+
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+        let source_account = match signer.address().await.unwrap() {
+            Address::Stellar(addr) => addr,
+            _ => panic!("Expected Stellar address"),
+        };
+
+        // Create unsigned transaction
+        let source_pk = PublicKey::from_string(&source_account).unwrap();
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256(source_pk.0),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            time_bounds: None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: vec![].try_into().unwrap(),
+            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        };
+
+        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let unsigned_xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+
+        // Sign with different network passphrases
+        let result1 = signer
+            .sign_xdr_transaction(&unsigned_xdr, "Test SDF Network ; September 2015")
+            .await
+            .unwrap();
+
+        let result2 = signer
+            .sign_xdr_transaction(
+                &unsigned_xdr,
+                "Public Global Stellar Network ; September 2015",
+            )
+            .await
+            .unwrap();
+
+        // The signatures should be different because network passphrase affects the signing
+        assert_ne!(
+            result1.signature.signature.0, result2.signature.signature.0,
+            "Signatures should differ for different networks"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sign_xdr_transaction_with_v1_envelope() {
+        use soroban_rs::xdr::{
+            MuxedAccount, SequenceNumber, Transaction, TransactionV1Envelope, Uint256,
+        };
+        use stellar_strkey::ed25519::PublicKey;
+
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+        let source_account = match signer.address().await.unwrap() {
+            Address::Stellar(addr) => addr,
+            _ => panic!("Expected Stellar address"),
+        };
+
+        // Create V1 transaction
+        let source_pk = PublicKey::from_string(&source_account).unwrap();
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: soroban_rs::xdr::Memo::None,
+            operations: vec![].try_into().unwrap(),
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let unsigned_xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let network_passphrase = "Test SDF Network ; September 2015";
+
+        let result = signer
+            .sign_xdr_transaction(&unsigned_xdr, network_passphrase)
+            .await
+            .unwrap();
+
+        // Verify success
+        assert!(!result.signed_xdr.is_empty());
+
+        // Parse and verify it's still a V1 envelope
+        let signed_envelope =
+            TransactionEnvelope::from_xdr_base64(&result.signed_xdr, Limits::none())
+                .expect("Should parse signed XDR");
+
+        match signed_envelope {
+            TransactionEnvelope::Tx(v1_env) => {
+                assert_eq!(v1_env.signatures.len(), 1, "Should have one signature");
+                assert_eq!(v1_env.signatures[0], result.signature);
+            }
+            _ => panic!("Expected V1 envelope to remain V1"),
+        }
+    }
 }

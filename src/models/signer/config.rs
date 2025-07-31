@@ -159,7 +159,7 @@ pub struct SignerFileConfig {
     pub config: SignerFileConfigEnum,
 }
 
-/// Collection of signer configurations  
+/// Collection of signer configurations
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct SignersFileConfig {

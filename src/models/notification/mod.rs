@@ -4,7 +4,7 @@
 //! throughout the relayer system, including:
 //!
 //! - **Domain Model**: Core `Notification` struct with validation
-//! - **Business Logic**: Update operations and validation rules  
+//! - **Business Logic**: Update operations and validation rules
 //! - **Error Handling**: Comprehensive validation error types
 //! - **Interoperability**: Conversions between API, config, and repository representations
 //!

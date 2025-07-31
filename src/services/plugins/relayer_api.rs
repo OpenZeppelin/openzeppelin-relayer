@@ -694,4 +694,187 @@ mod tests {
         let error = response.error.unwrap();
         assert!(error.contains("Transaction with ID test not found"));
     }
+
+    #[tokio::test]
+    async fn test_handle_get_relayer_status_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetRelayerStatus,
+            payload: serde_json::json!({}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID test not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sign_transaction_evm_not_supported() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SignTransaction,
+            payload: serde_json::json!(SignTransactionRequest {
+                unsigned_xdr: "test_xdr".to_string(),
+            }),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("XDR signing only supported for Stellar relayers"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sign_transaction_invalid_payload() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SignTransaction,
+            payload: serde_json::json!({"invalid": "payload"}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Invalid payload"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sign_transaction_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SignTransaction,
+            payload: serde_json::json!(SignTransactionRequest {
+                unsigned_xdr: "test_xdr".to_string(),
+            }),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID test not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_relayer_info_success() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetRelayerInfo,
+            payload: serde_json::json!({}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+
+        let result = response.result.unwrap();
+        assert!(result.get("id").is_some());
+        assert!(result.get("name").is_some());
+        assert!(result.get("network").is_some());
+        assert!(result.get("address").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_relayer_info_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetRelayerInfo,
+            payload: serde_json::json!({}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID test not found"));
+    }
 }
