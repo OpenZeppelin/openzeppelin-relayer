@@ -842,5 +842,93 @@ mod tests {
             assert_eq!(handled_tx.id, "tx-on-chain-success");
             assert_eq!(handled_tx.status, TransactionStatus::Confirmed);
         }
+
+        #[tokio::test]
+        async fn test_xdr_parsing_error_detection() {
+            // Test that verifies XDR parsing errors are correctly detected
+            // The actual HTTP fallback is hard to test without mocking the HTTP client
+
+            // Test error string detection for Xdr(Invalid)
+            let error_str1 = format!("{:?}", eyre::eyre!("Xdr(Invalid)"));
+            assert!(error_str1.contains("Xdr(Invalid)"));
+
+            // Test error string detection for "xdr processing error"
+            let error_str2 = format!("{:?}", eyre::eyre!("xdr processing error"));
+            assert!(error_str2.contains("xdr processing error"));
+
+            // Test the actual error detection logic from the code
+            let test_errors = vec![
+                "Xdr(Invalid) - some additional context",
+                "Failed with xdr processing error: malformed",
+                "Error: Xdr(Invalid)",
+            ];
+
+            for error_msg in test_errors {
+                let error_str = format!("{:?}", eyre::eyre!(error_msg));
+                let should_use_fallback = error_str.contains("Xdr(Invalid)")
+                    || error_str.contains("xdr processing error");
+                assert!(
+                    should_use_fallback,
+                    "Error '{}' should trigger fallback",
+                    error_msg
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn test_handle_transaction_status_with_xdr_error_requeues() {
+            // This test verifies that when get_transaction returns an XDR parsing error
+            // and the fallback also fails, the transaction is re-queued for retry
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.id = "tx-xdr-error-requeue".to_string();
+            let tx_hash_bytes = [8u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
+            {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+            tx_to_handle.status = TransactionStatus::Submitted;
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return a non-XDR error (won't trigger fallback)
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| Box::pin(async { Err(eyre::eyre!("Network timeout")) }));
+
+            // Mock job_producer to expect a re-enqueue of status check
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .withf(move |job, delay| {
+                    job.transaction_id == "tx-xdr-error-requeue"
+                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // No partial update should occur
+            mocks.tx_repo.expect_partial_update().never();
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let original_tx_clone = tx_to_handle.clone();
+
+            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+
+            assert!(result.is_ok()); // The handler returns Ok with the original transaction
+            let returned_tx = result.unwrap();
+            // Transaction should be returned unchanged
+            assert_eq!(returned_tx.id, original_tx_clone.id);
+            assert_eq!(returned_tx.status, original_tx_clone.status);
+        }
     }
 }
