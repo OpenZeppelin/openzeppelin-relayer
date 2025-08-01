@@ -173,7 +173,7 @@ jobs:
           fi
       - name: Commit cargo update
         if: ${{ steps.lock-file-commit.outputs.cargo_changed == 'true' || steps.update-antora.outputs.antora_changed == 'true' }}
-        uses: iarekylew00t/verified-bot-commit@2a9d9e983e611793b54516a18e48361bbac691d9  # v1.4.1
+        uses: iarekylew00t/verified-bot-commit@cc09d455be3e20eb6b1c3d1c30a5221f9475aa10  # v1.5.1
         with:
           message: 'chore: Updating lock file and bumping version in antora file'
           token: ${{ steps.gh-app-token.outputs.token }}
