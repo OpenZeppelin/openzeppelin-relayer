@@ -27,10 +27,11 @@
  * runPlugin(main);
  */
 
+import { NetworkTransactionRequest, TransactionResponse, TransactionStatus } from "@openzeppelin/relayer-sdk";
+
+import { LogInterceptor } from "./logger";
 import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
-import { LogInterceptor } from "./logger";
-import { NetworkTransactionRequest, TransactionResponse, TransactionStatus } from "@openzeppelin/relayer-sdk";
 
 type TransactionWaitOptions = {
   interval?: number;
@@ -176,6 +177,54 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
 }
 
 /**
+ * Helper function that loads and executes a user plugin script
+ * @param userScriptPath - Path to the user's plugin script
+ * @param api - Plugin API instance
+ * @param params - Plugin parameters
+ */
+export async function loadAndExecutePlugin<T, R>(
+  userScriptPath: string, 
+  api: PluginAPI, 
+  params: T
+): Promise<R> {
+  try {
+      // IMPORTANT: Path normalization required because wrapper is in plugins/lib/
+      // but user scripts are in plugins/ (and config paths are relative to plugins/)
+      // 
+      // Examples:
+      // - Config: "examples/example.ts" → Rust: "plugins/examples/example.ts" → Wrapper: "../examples/example.ts"
+      // - Config: "my-plugin.ts" → Rust: "plugins/my-plugin.ts" → Wrapper: "../my-plugin.ts"
+      let normalizedPath = userScriptPath;
+      if (userScriptPath.startsWith('plugins/')) {
+          // Remove 'plugins/' prefix and add '../' to go back from lib/ to plugins/
+          normalizedPath = '../' + userScriptPath.substring('plugins/'.length);
+      } else {
+          // If path doesn't start with 'plugins/', assume it's relative to plugins/
+          normalizedPath = '../' + userScriptPath;
+      }
+      
+      // Load user's script module
+      const userModule = require(normalizedPath);
+      
+      // Look for the 'handler' named export only
+      const handler = userModule.handler;
+      
+      if (!handler || typeof handler !== 'function') {
+          throw new Error(`Plugin at ${userScriptPath} must export a function named 'handler'`);
+      }
+      
+      // Call user's handler with API and params
+      const result = await handler(api, params);
+      return result;
+      
+  } catch (error) {
+      throw new Error(`Failed to execute user plugin ${userScriptPath}: ${(error as Error).message}`);
+  }
+}
+
+
+
+/**
  * The plugin API.
  *
  * @property useRelayer - Creates a relayer API for the given relayer ID.
@@ -293,5 +342,64 @@ export class PluginAPI {
 
   closeErrored(error: any) {
     this.socket.destroy(error);
+  }
+}
+
+/**
+ * Main entry point for plugin execution via wrapper script
+ * 
+ * This function is called by the wrapper script to execute user plugins.
+ * It handles the entire plugin lifecycle: loading, execution, and cleanup.
+ * 
+ * Usage: Called from wrapper.ts with args [socketPath, paramsJson, userScriptPath]
+ */
+export async function runUserPlugin<T = any, R = any>(): Promise<void> {
+  const logInterceptor = new LogInterceptor();
+  
+  try {
+    // Get arguments: [node, wrapper.ts, socketPath, params, userScriptPath]
+    const socketPath = process.argv[2];
+    const paramsJson = process.argv[3];
+    const userScriptPath = process.argv[4];
+    
+    if (!socketPath) {
+      throw new Error("Socket path is required");
+    }
+    
+    if (!userScriptPath) {
+      throw new Error("User script path is required");
+    }
+    
+    if (!paramsJson) {
+      throw new Error("Plugin parameters are required");
+    }
+    
+    // Create plugin API instance
+    const plugin = new PluginAPI(socketPath);
+    
+    // Start intercepting logs
+    logInterceptor.start();
+    
+    // Parse plugin parameters
+    let pluginParams: T;
+    try {
+      pluginParams = JSON.parse(paramsJson) as T;
+    } catch (e) {
+      throw new Error(`Failed to parse plugin parameters: ${e}`);
+    }
+    
+    // Use helper function to load and execute the plugin
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, pluginParams);
+    
+    // Handle result
+    logInterceptor.addResult(JSON.stringify(result));
+    plugin.close();
+    
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
+  } finally {
+    logInterceptor.stop();
+    process.exit(0);
   }
 }

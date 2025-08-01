@@ -54,10 +54,14 @@ impl ScriptExecutor {
             ));
         }
 
+        // Use the centralized wrapper script instead of executing user script directly
+        let wrapper_path = "plugins/lib/wrapper.ts";
+        
         let output = Command::new("ts-node")
-            .arg(script_path)
-            .arg(socket_path)
-            .arg(script_params)
+            .arg(wrapper_path)        // Execute wrapper script
+            .arg(socket_path)         // Socket path (argv[2])
+            .arg(script_params)       // Plugin parameters (argv[3])  
+            .arg(script_path)         // User script path (argv[4])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
