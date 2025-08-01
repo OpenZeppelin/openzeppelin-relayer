@@ -303,7 +303,7 @@ jobs:
           file: Dockerfile.development
           platforms: linux/amd64
       - name: Scan image
-        uses: anchore/scan-action@2c901ab7378897c01b8efaa2d0c9bf519cc64b9e  # v6.2.0
+        uses: anchore/scan-action@df395807f4554463d4455b8047cf58e37b6acaae  # v6.5.0
         with:
           image: openzeppelin-relayer-dev:${{ github.sha }}
           fail-build: true
