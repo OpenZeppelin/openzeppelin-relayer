@@ -4,7 +4,7 @@
 //! including:
 //!
 //! - **Response Models**: Structures returned by API endpoints
-//! - **Status Models**: Relayer status and runtime information  
+//! - **Status Models**: Relayer status and runtime information
 //! - **Conversions**: Mapping from domain and repository models to API responses
 //! - **API Compatibility**: Maintaining backward compatibility with existing API contracts
 //!
@@ -352,7 +352,7 @@ fn default_stellar_min_balance() -> u64 {
 fn default_solana_max_tx_data_size() -> u16 {
     DEFAULT_SOLANA_MAX_TX_DATA_SIZE
 }
-/// EVM policy response model for OpenAPI documentation  
+/// EVM policy response model for OpenAPI documentation
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvmPolicyResponse {

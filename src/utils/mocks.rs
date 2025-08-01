@@ -38,7 +38,7 @@ pub mod mockutils {
                 gas_limit_estimation: Some(false),
             }),
             signer_id: "test".to_string(),
-            address: "0x".to_string(),
+            address: "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E".to_string(),
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,

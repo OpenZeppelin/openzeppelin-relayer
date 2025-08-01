@@ -15,7 +15,7 @@ use crate::{
         SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
     services::{
-        signer::{SignerError, SignerFactoryError},
+        signer::{SignXdrTransactionResponseStellar, SignerError, SignerFactoryError},
         Signer, VaultConfig, VaultService,
     },
 };
@@ -43,6 +43,23 @@ impl Signer for StellarSigner {
         match self {
             Self::Local(s) => s.sign_transaction(tx).await,
             Self::Vault(s) => s.sign_transaction(tx).await,
+        }
+    }
+
+    async fn sign_xdr_transaction(
+        &self,
+        unsigned_xdr: &str,
+        network_passphrase: &str,
+    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
+        match self {
+            Self::Local(s) => {
+                s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
+                    .await
+            }
+            Self::Vault(s) => {
+                s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
+                    .await
+            }
         }
     }
 }

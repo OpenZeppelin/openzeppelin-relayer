@@ -180,7 +180,7 @@ pub struct UpdateRelayerRequest {
 /// ## Merge Patch Semantics for Policies
 /// The policies field uses JSON Merge Patch (RFC 7396) semantics:
 /// - Field not provided: no change to existing value
-/// - Field with null value: remove/clear the field  
+/// - Field with null value: remove/clear the field
 /// - Field with value: update the field
 /// - Empty object {}: no changes to any policy fields
 ///

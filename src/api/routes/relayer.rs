@@ -3,7 +3,7 @@
 //! The routes are integrated with the Actix-web framework and interact with the relayer controller.
 use crate::{
     api::controllers::relayer,
-    domain::{SignDataRequest, SignTypedDataRequest},
+    domain::{SignDataRequest, SignTransactionRequest, SignTypedDataRequest},
     models::{CreateRelayerRequest, DefaultAppState, PaginationQuery},
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
@@ -170,6 +170,16 @@ async fn sign_typed_data(
     relayer::sign_typed_data(relayer_id.into_inner(), req.into_inner(), data).await
 }
 
+/// Signs a transaction using the specified relayer (Stellar only).
+#[post("/relayers/{relayer_id}/sign-transaction")]
+async fn sign_transaction(
+    relayer_id: web::Path<String>,
+    req: web::Json<SignTransactionRequest>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    relayer::sign_transaction(relayer_id.into_inner(), req.into_inner(), data).await
+}
+
 /// Performs a JSON-RPC call using the specified relayer.
 #[post("/relayers/{relayer_id}/rpc")]
 async fn rpc(
@@ -196,6 +206,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(get_relayer_balance); // /relayers/{id}/balance
     cfg.service(sign); // /relayers/{id}/sign
     cfg.service(sign_typed_data); // /relayers/{id}/sign-typed-data
+    cfg.service(sign_transaction); // /relayers/{id}/sign-transaction
     cfg.service(rpc); // /relayers/{id}/rpc
     cfg.service(get_relayer); // /relayers/{id}
     cfg.service(create_relayer); // /relayers

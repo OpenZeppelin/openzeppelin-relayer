@@ -253,6 +253,10 @@ mod tests {
         ) -> Result<soroban_rs::stellar_rpc_client::GetEventsResponse, eyre::Error> {
             unimplemented!()
         }
+
+        fn rpc_url(&self) -> &str {
+            unimplemented!()
+        }
     }
 
     struct MockSigner {

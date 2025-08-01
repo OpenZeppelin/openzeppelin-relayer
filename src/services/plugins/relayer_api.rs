@@ -31,6 +31,12 @@ pub enum PluginMethod {
     SendTransaction,
     #[serde(rename = "getTransaction")]
     GetTransaction,
+    #[serde(rename = "getRelayerStatus")]
+    GetRelayerStatus,
+    #[serde(rename = "signTransaction")]
+    SignTransaction,
+    #[serde(rename = "getRelayerInfo")]
+    GetRelayerInfo,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -46,6 +52,19 @@ pub struct Request {
 #[serde(rename_all = "camelCase")]
 pub struct GetTransactionRequest {
     pub transaction_id: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SignTransactionRequest {
+    pub unsigned_xdr: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SignTransactionResponse {
+    pub signed_xdr: String,
+    pub signature: crate::models::DecoratedSignature,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -88,6 +107,23 @@ where
     ) -> Result<Response, PluginError>;
 
     async fn handle_get_transaction(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    ) -> Result<Response, PluginError>;
+
+    async fn handle_get_relayer_status(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    ) -> Result<Response, PluginError>;
+
+    async fn handle_sign_transaction(
+        &self,
+        request: Request,
+        state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+    ) -> Result<Response, PluginError>;
+    async fn handle_get_relayer_info(
         &self,
         request: Request,
         state: &web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
@@ -149,6 +185,9 @@ impl RelayerApi {
         match request.method {
             PluginMethod::SendTransaction => self.handle_send_transaction(request, state).await,
             PluginMethod::GetTransaction => self.handle_get_transaction(request, state).await,
+            PluginMethod::GetRelayerStatus => self.handle_get_relayer_status(request, state).await,
+            PluginMethod::SignTransaction => self.handle_sign_transaction(request, state).await,
+            PluginMethod::GetRelayerInfo => self.handle_get_relayer_info(request, state).await,
         }
     }
 
@@ -252,6 +291,132 @@ impl RelayerApi {
             error: None,
         })
     }
+
+    async fn handle_get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, PR>(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    ) -> Result<Response, PluginError>
+    where
+        J: JobProducerTrait + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    {
+        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let status = network_relayer
+            .get_status()
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let result =
+            serde_json::to_value(status).map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
+    }
+
+    async fn handle_sign_transaction<J, RR, TR, NR, NFR, SR, TCR, PR>(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    ) -> Result<Response, PluginError>
+    where
+        J: JobProducerTrait + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    {
+        use crate::models::NetworkType;
+
+        let sign_request: SignTransactionRequest = serde_json::from_value(request.payload)
+            .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
+
+        // Get the relayer model
+        let relayer_model = get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        // Only support Stellar for now
+        if relayer_model.network_type != NetworkType::Stellar {
+            return Err(PluginError::RelayerError(
+                "XDR signing only supported for Stellar relayers".to_string(),
+            ));
+        }
+
+        // Get the network relayer and use its sign_transaction method
+        let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let response = network_relayer
+            .sign_transaction(&sign_request.unsigned_xdr)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        let result =
+            serde_json::to_value(response).map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
+    }
+
+    async fn handle_get_relayer_info<J, RR, TR, NR, NFR, SR, TCR, PR>(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    ) -> Result<Response, PluginError>
+    where
+        J: JobProducerTrait + 'static,
+        TR: TransactionRepository
+            + Repository<TransactionRepoModel, String>
+            + Send
+            + Sync
+            + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    {
+        let relayer = get_relayer_by_id(request.relayer_id.clone(), state)
+            .await
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        let relayer_response: crate::models::RelayerResponse = relayer.into();
+        let result = serde_json::to_value(relayer_response)
+            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        Ok(Response {
+            request_id: request.request_id,
+            result: Some(result),
+            error: None,
+        })
+    }
 }
 
 #[async_trait]
@@ -297,6 +462,30 @@ where
         state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
     ) -> Result<Response, PluginError> {
         self.handle_get_transaction(request, state).await
+    }
+
+    async fn handle_get_relayer_status(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    ) -> Result<Response, PluginError> {
+        self.handle_get_relayer_status(request, state).await
+    }
+
+    async fn handle_sign_transaction(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    ) -> Result<Response, PluginError> {
+        self.handle_sign_transaction(request, state).await
+    }
+
+    async fn handle_get_relayer_info(
+        &self,
+        request: Request,
+        state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    ) -> Result<Response, PluginError> {
+        self.handle_get_relayer_info(request, state).await
     }
 }
 
@@ -504,5 +693,188 @@ mod tests {
         assert!(response.error.is_some());
         let error = response.error.unwrap();
         assert!(error.contains("Transaction with ID test not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_relayer_status_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetRelayerStatus,
+            payload: serde_json::json!({}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID test not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sign_transaction_evm_not_supported() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SignTransaction,
+            payload: serde_json::json!(SignTransactionRequest {
+                unsigned_xdr: "test_xdr".to_string(),
+            }),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("XDR signing only supported for Stellar relayers"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sign_transaction_invalid_payload() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SignTransaction,
+            payload: serde_json::json!({"invalid": "payload"}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Invalid payload"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sign_transaction_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SignTransaction,
+            payload: serde_json::json!(SignTransactionRequest {
+                unsigned_xdr: "test_xdr".to_string(),
+            }),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID test not found"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_relayer_info_success() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetRelayerInfo,
+            payload: serde_json::json!({}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_none());
+        assert!(response.result.is_some());
+
+        let result = response.result.unwrap();
+        assert!(result.get("id").is_some());
+        assert!(result.get("name").is_some());
+        assert!(result.get("network").is_some());
+        assert!(result.get("address").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_relayer_info_relayer_not_found() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        let request = Request {
+            request_id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::GetRelayerInfo,
+            payload: serde_json::json!({}),
+        };
+
+        let relayer_api = RelayerApi;
+        let response = relayer_api
+            .handle_request(request.clone(), &web::ThinData(state))
+            .await;
+
+        assert!(response.error.is_some());
+        let error = response.error.unwrap();
+        assert!(error.contains("Relayer with ID test not found"));
     }
 }

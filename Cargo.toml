@@ -119,7 +119,7 @@ path = "helpers/generate_uuid.rs"
 
 [[example]]
 name = "generate_encryption_key"
-path = "helpers/generate_encyption_key.rs"
+path = "helpers/generate_encryption_key.rs"
 
 [[example]]
 name = "generate_openapi"

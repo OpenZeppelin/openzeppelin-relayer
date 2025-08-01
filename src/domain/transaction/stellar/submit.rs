@@ -82,7 +82,7 @@ where
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                None,
+                Some(5),
             )
             .await?;
 

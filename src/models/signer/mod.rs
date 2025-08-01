@@ -4,7 +4,7 @@
 //! throughout the relayer system, including:
 //!
 //! - **Domain Model**: Core `Signer` struct with validation and configuration
-//! - **Business Logic**: Update operations and validation rules  
+//! - **Business Logic**: Update operations and validation rules
 //! - **Error Handling**: Comprehensive validation error types
 //! - **Interoperability**: Conversions between API, config, and repository representations
 //!

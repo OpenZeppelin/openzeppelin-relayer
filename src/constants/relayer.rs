@@ -11,7 +11,7 @@ pub const DEFAULT_SOLANA_MIN_BALANCE: u64 = 10_000_000; // 0.01 SOL in lamports
 pub const DEFAULT_EVM_GAS_PRICE_CAP: u128 = 100_000_000_000;
 /// Default EIP-1559 pricing enabled
 pub const DEFAULT_EVM_EIP1559_ENABLED: bool = true;
-/// Default gas limit estimation enabled  
+/// Default gas limit estimation enabled
 pub const DEFAULT_EVM_GAS_LIMIT_ESTIMATION: bool = true;
 
 // === Solana Policy Defaults ===
