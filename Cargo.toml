@@ -64,7 +64,7 @@ solana-client = { version = "2.2" }
 spl-token = { version = "8" }
 spl-token-2022 = { version = "8" }
 mpl-token-metadata = { version = "5.1" }
-sysinfo = "0.35"
+sysinfo = "0.36"
 bincode = { version = "1.3" }
 bs58 = "0.5"
 spl-associated-token-account = "6.0.0"
