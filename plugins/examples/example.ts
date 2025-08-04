@@ -1,5 +1,6 @@
-import { Speed } from "@openzeppelin/relayer-sdk";
 import { PluginAPI, runPlugin } from "../lib/plugin";
+
+import { Speed } from "@openzeppelin/relayer-sdk";
 
 type Params = {
     destinationAddress: string;

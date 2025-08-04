@@ -26,7 +26,7 @@ services:
     volumes:
       - ./config:/app/config/
       - ../../config/networks:/app/config/networks
-      - ./test-plugin:/app/plugins  # Mount plugins directory
+      - ./test-plugin:/app/plugins/test-plugin  # Mount your specific plugin
     depends_on:
       - redis
     restart: on-failure:5

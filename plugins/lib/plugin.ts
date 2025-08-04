@@ -109,6 +109,26 @@ type Relayer = {
   getTransaction: (payload: GetTransactionRequest) => Promise<TransactionResponse>;
 }
 
+/**
+ * Public interface for plugin API - only exposes methods that plugins should use
+ */
+export interface PluginAPI {
+  /**
+   * Creates a relayer API for the given relayer ID.
+   * @param relayerId - The relayer ID.
+   * @returns The relayer API.
+   */
+  useRelayer(relayerId: string): Relayer;
+
+  /**
+   * Waits for a transaction to be mined on chain.
+   * @param transaction - The transaction result from sendTransaction
+   * @param options - Polling interval and timeout options
+   * @returns The transaction response once mined/confirmed
+   */
+  transactionWait(transaction: SendTransactionResult, options?: TransactionWaitOptions): Promise<TransactionResponse>;
+}
+
 type Plugin<T, R> = (plugin: PluginAPI, pluginParams: T) => Promise<R>;
 
 function getPluginParams<T>(): T {
@@ -144,7 +164,7 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
     }
 
     // creates plugin instance
-    let plugin = new PluginAPI(socketPath);
+    let plugin = new DefaultPluginAPI(socketPath);
 
     // Start intercepting logs
     logInterceptor.start();
@@ -231,7 +251,7 @@ export async function loadAndExecutePlugin<T, R>(
  * @property sendTransaction - Sends a transaction to the relayer.
  * @property getTransaction - Gets a transaction by id.
  */
-export class PluginAPI {
+export class DefaultPluginAPI implements PluginAPI {
   socket: net.Socket;
   pending: Map<string, { resolve: (value: any) => void, reject: (reason: any) => void }>;
   private _connectionPromise: Promise<void> | null = null;
@@ -375,7 +395,7 @@ export async function runUserPlugin<T = any, R = any>(): Promise<void> {
     }
     
     // Create plugin API instance
-    const plugin = new PluginAPI(socketPath);
+    const plugin = new DefaultPluginAPI(socketPath);
     
     // Start intercepting logs
     logInterceptor.start();
