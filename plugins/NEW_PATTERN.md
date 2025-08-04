@@ -4,9 +4,9 @@ This document describes the new simplified plugin pattern that eliminates the ne
 
 ## How It Works
 
-The relayer now uses a centralized wrapper system:
+The relayer now uses a centralized executor system:
 
-1. **Wrapper Script**: `plugins/lib/wrapper.ts` - A single script that loads user plugins
+1. **Executor Script**: `plugins/lib/executor.ts` - A single script that loads user plugins
 2. **Centralized Runner**: `runUserPlugin()` function that handles plugin execution
 3. **User Script Convention**: Export a function named `handler`
 
@@ -112,24 +112,24 @@ console.log(result);
 
 ## Implementation Details
 
-- **Wrapper Execution**: `ts-node plugins/lib/wrapper.ts <socket> <params> <user_script>`
+- **Executor Execution**: `ts-node plugins/lib/executor.ts <socket> <params> <user_script>`
 - **Script Loading**: Uses `require()` to dynamically load user scripts
-- **Path Resolution**: Automatically normalizes paths (wrapper is in `plugins/lib/`, scripts in `plugins/`)
+- **Path Resolution**: Automatically normalizes paths (executor is in `plugins/lib/`, scripts in `plugins/`)
 - **Convention**: Must export `handler` function
 - **Error Handling**: Clear error messages for missing or invalid handlers
 - **Entry Point**: `runUserPlugin()` function handles the complete plugin lifecycle
 
 ### Path Resolution Examples
 
-The wrapper automatically handles path normalization:
+The executor automatically handles path normalization:
 
-| Config Path | Rust Resolves To | Wrapper Uses |
-|-------------|------------------|--------------|
+| Config Path | Rust Resolves To | Executor Uses |
+|-------------|------------------|---------------|
 | `"examples/example.ts"` | `"plugins/examples/example.ts"` | `"../examples/example.ts"` |
 | `"my-plugin.ts"` | `"plugins/my-plugin.ts"` | `"../my-plugin.ts"` |
 | `"sub/dir/plugin.ts"` | `"plugins/sub/dir/plugin.ts"` | `"../sub/dir/plugin.ts"` |
 
-This ensures plugin scripts are loaded correctly regardless of the wrapper's location.
+This ensures plugin scripts are loaded correctly regardless of the executor's location.
 
 ## Architecture
 
@@ -138,7 +138,7 @@ Relayer (Rust)
     ↓
 ScriptExecutor 
     ↓ 
-ts-node wrapper.ts <socket> <params> <user_script>
+ts-node executor.ts <socket> <params> <user_script>
     ↓
 runUserPlugin() loads user script
     ↓
@@ -148,7 +148,7 @@ Returns result to relayer
 ```
 
 The architecture is now simplified to just:
-1. **`wrapper.ts`** - Static entry point
+1. **`executor.ts`** - Static entry point
 2. **`runUserPlugin()`** - Main execution function  
 3. **`loadAndExecutePlugin()`** - Helper to load user scripts
 4. **`runPlugin()`** - Legacy function (backward compatibility)

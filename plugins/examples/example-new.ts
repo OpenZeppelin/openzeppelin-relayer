@@ -46,5 +46,3 @@ export async function handler(api: PluginAPI, params: Params): Promise<string> {
     console.info("Transaction confirmed!");
     return `Transaction ${result.id} completed successfully!`;
 }
-
-// That's it! No runPlugin() call needed - much cleaner! 🎉

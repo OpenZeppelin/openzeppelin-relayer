@@ -281,7 +281,7 @@ volumes:
   - ./test-plugin:/app/plugins/test-plugin  # Your specific plugin
 ```
 
-The plugins infrastructure (`lib/wrapper.ts`, `lib/plugin.ts`) is already included in the Docker image, so only your specific plugin needs to be mounted.
+The plugins infrastructure (`lib/executor.ts`, `lib/plugin.ts`) is already included in the Docker image, so only your specific plugin needs to be mounted.
 
 ## See Also
 
