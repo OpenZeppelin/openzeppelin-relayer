@@ -89,9 +89,9 @@ export async function handler(api: PluginAPI, params: MyPluginParams): Promise<M
 }
 ----
 
-==== Legacy Pattern (Deprecated)
+==== Legacy Pattern (Deprecated, but supported)
 
-NOTE: The `runPlugin()` pattern is deprecated. Please use the handler export pattern above.
+WARNING: The `runPlugin()` pattern is deprecated and will be removed in a future version. Please migrate to the handler export pattern above. Legacy plugins will continue to work but will show deprecation warnings.
 
 [source,typescript]
 ----
@@ -102,7 +102,36 @@ async function myPlugin(api: PluginAPI, params: any) {
     return "result";
 }
 
-runPlugin(myPlugin); // ❌ Deprecated - use handler export instead
+runPlugin(myPlugin); // ⚠️ Deprecated - shows warning but still works
+----
+
+**Example legacy plugin** (`plugins/examples/example-deprecated.ts`):
+[source,typescript]
+----
+import { PluginAPI, runPlugin } from "../lib/plugin";
+import { Speed } from "@openzeppelin/relayer-sdk";
+
+type Params = {
+    destinationAddress: string;
+};
+
+async function example(api: PluginAPI, params: Params): Promise<string> {
+    console.info("Plugin started...");
+    
+    const relayer = api.useRelayer("sepolia-example");
+    const result = await relayer.sendTransaction({
+        to: params.destinationAddress,
+        value: 1,
+        data: "0x",
+        gas_limit: 21000,
+        speed: Speed.FAST,
+    });
+    
+    await result.wait();
+    return "done!";
+}
+
+runPlugin(example);
 ----
 
 === Declaring in config file
@@ -357,9 +386,18 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 
 == Migration from Legacy Pattern
 
+=== Current Status
+
+- ✅ **Legacy plugins still work** - No immediate action required
+- ⚠️ **Deprecation warnings** - Legacy plugins will show console warnings
+- 📅 **Future removal** - The `runPlugin` pattern will be removed in a future major version
+- 🎯 **Recommended action** - Migrate to handler pattern for new plugins
+
+=== Migration Steps
+
 If you have existing plugins using `runPlugin()`, migration is simple:
 
-**Before (Deprecated)**:
+**Before (Legacy - still works)**:
 [source,typescript]
 ----
 import { runPlugin, PluginAPI } from "./lib/plugin";
@@ -369,13 +407,14 @@ async function myPlugin(api: PluginAPI, params: any): Promise<any> {
     return result;
 }
 
-runPlugin(myPlugin);
+runPlugin(myPlugin); // ⚠️ Shows deprecation warning
 ----
 
-**After (Modern)**:
+**After (Modern - recommended)**:
 [source,typescript]
 ----
-import { PluginAPI } from "./lib/plugin";
+import { PluginAPI } from "@openzeppelin/relayer-sdk";
+
 
 export async function handler(api: PluginAPI, params: any): Promise<any> {
     // Same plugin logic - just export as handler!
@@ -383,8 +422,21 @@ export async function handler(api: PluginAPI, params: any): Promise<any> {
 }
 ----
 
-The migration steps:
-1. Remove the `runPlugin()` call
-2. Rename your function to `handler` (or create a new handler export)
-3. Export the `handler` function
-4. Add proper TypeScript types for better development experience
+=== Step-by-Step Migration
+
+1. **Remove the `runPlugin()` call** at the bottom of your file
+2. **Rename your function to `handler`** (or create a new handler export) 
+3. **Export the `handler` function** using `export async function handler`
+4. **Add proper TypeScript types** for better development experience
+5. **Test your plugin** to ensure it works with the new pattern
+6. **Update your documentation** to reflect the new pattern
+
+=== Backwards Compatibility
+
+The relayer will automatically detect which pattern your plugin uses:
+
+- If it finds a `handler` export → uses modern pattern
+- If no `handler` but `runPlugin()` was called → uses legacy pattern with warning
+- If neither → shows clear error message
+
+This ensures a smooth transition period where both patterns work simultaneously.

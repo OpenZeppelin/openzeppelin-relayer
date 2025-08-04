@@ -131,6 +131,9 @@ export interface PluginAPI {
 
 type Plugin<T, R> = (plugin: PluginAPI, pluginParams: T) => Promise<R>;
 
+// Global variable to capture legacy plugin function
+let _legacyPluginFunction: Plugin<any, any> | null = null;
+
 function getPluginParams<T>(): T {
   const pluginParams = process.argv[3];
 
@@ -147,13 +150,19 @@ function getPluginParams<T>(): T {
 }
 
 /**
- * Entry point for plugin execution.
- *
- * @param main - The main function to run.
- *  - `plugin` - The plugin API for interacting with the relayer.
- *  - `pluginParams` - The plugin parameters passed as the request body of the call.
+ * Legacy runPlugin function - captures the plugin function for later execution
+ * This provides backward compatibility while the new handler pattern is adopted
  */
 export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
+  // In the new architecture, we just capture the function for later execution
+  // instead of running it immediately
+  if (typeof main === 'function') {
+    _legacyPluginFunction = main as Plugin<any, any>;
+    return;
+  }
+  
+  // If we reach here, it means this is being called in the old direct execution mode
+  // (not through the executor), so we fall back to the original behavior
   const logInterceptor = new LogInterceptor();
 
   try {
@@ -172,21 +181,11 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
     const pluginParams = getPluginParams<T>();
 
     // runs main function
-    await main(plugin, pluginParams)
-      .then((result) => {
-        // adds return value to the stdout
-        logInterceptor.addResult(JSON.stringify(result));
-        plugin.close();
-      })
-      .catch((error) => {
-        console.error(error);
-        // closes socket signaling error
-        plugin.closeErrored(error);
-        })
-      .finally(() => {
-        plugin.close();
-        process.exit(0);
-      });
+    const result = await (main as (api: PluginAPI, params: T) => Promise<R>)(plugin, pluginParams);
+    
+    // adds return value to the stdout
+    logInterceptor.addResult(JSON.stringify(result));
+    plugin.close();
 
     // Stop intercepting logs
     logInterceptor.stop();
@@ -223,19 +222,31 @@ export async function loadAndExecutePlugin<T, R>(
           normalizedPath = '../' + userScriptPath;
       }
       
+      // Clear any previous legacy plugin function
+      _legacyPluginFunction = null;
+      
       // Load user's script module
       const userModule = require(normalizedPath);
       
-      // Look for the 'handler' named export only
+      // Try modern pattern first: look for 'handler' named export
       const handler = userModule.handler;
       
-      if (!handler || typeof handler !== 'function') {
-          throw new Error(`Plugin at ${userScriptPath} must export a function named 'handler'`);
+      if (handler && typeof handler === 'function') {
+          // Modern pattern: call the exported handler
+          const result = await handler(api, params);
+          return result;
       }
       
-      // Call user's handler with API and params
-      const result = await handler(api, params);
-      return result;
+      // Try legacy pattern: check if runPlugin was called during module loading
+      if (_legacyPluginFunction && typeof _legacyPluginFunction === 'function') {
+          console.warn(`[DEPRECATED] Plugin at ${userScriptPath} uses the deprecated runPlugin pattern. Please migrate to the handler export pattern.`);
+          // Legacy pattern: call the captured plugin function
+          const result = await (_legacyPluginFunction as (api: PluginAPI, params: T) => Promise<R>)(api, params);
+          return result;
+      }
+      
+      // Neither pattern found
+      throw new Error(`Plugin at ${userScriptPath} must export a function named 'handler' or use the legacy runPlugin() pattern`);
       
   } catch (error) {
       throw new Error(`Failed to execute user plugin ${userScriptPath}: ${(error as Error).message}`);
