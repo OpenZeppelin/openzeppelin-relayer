@@ -26,7 +26,7 @@ export async function handler(api: PluginAPI, params: Params): Promise<string> {
      * Sends an arbitrary transaction through the relayer.
      */
     const result = await relayer.sendTransaction({
-        to: params.destinationAddress || "0x5e87fD270D40C47266B7E3c822f4a9d21043012D",
+        to: params.destinationAddress,
         value: params.amount || 1,
         data: "0x",
         gas_limit: 21000,
