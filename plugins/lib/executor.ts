@@ -23,7 +23,9 @@
  * - user_script_path: Path to the user's plugin file to execute
  */
 
-import { runUserPlugin } from './plugin';
+import { runUserPlugin, serializeResult } from './plugin';
+
+import { LogInterceptor } from './logger';
 
 /**
  * Extract and validate CLI arguments passed from Rust script_executor.rs
@@ -65,7 +67,13 @@ function parsePluginParameters<T = any>(paramsJson: string): T {
  * Main executor logic
  */
 async function main(): Promise<void> {
+  const logInterceptor = new LogInterceptor();
+  
   try {
+    // Start intercepting all console output at the executor level
+    // This provides better backward compatibility with existing scripts
+    logInterceptor.start();
+    
     // Extract and validate CLI arguments
     const { socketPath, paramsJson, userScriptPath } = extractCliArguments();
     
@@ -73,10 +81,16 @@ async function main(): Promise<void> {
     const pluginParams = parsePluginParameters(paramsJson);
     
     // Execute plugin with validated parameters
-    await runUserPlugin(socketPath, pluginParams, userScriptPath);
+    const result = await runUserPlugin(socketPath, pluginParams, userScriptPath);
+    
+    // Add the result to LogInterceptor output
+    logInterceptor.addResult(serializeResult(result));
   } catch (error) {
-    console.error("Plugin executor failed:", error instanceof Error ? error.message : error);
+    process.stderr.write(`Plugin executor failed: ${error instanceof Error ? error.message : error}\n`);
     process.exit(1);
+  } finally {
+    logInterceptor.stop();
+    process.exit(0);
   }
 }
 

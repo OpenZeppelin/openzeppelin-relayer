@@ -33,6 +33,28 @@ import { LogInterceptor } from "./logger";
 import net from "node:net";
 import { v4 as uuidv4 } from "uuid";
 
+/**
+ * Smart serialization for plugin return values
+ * - Objects/Arrays: JSON.stringify (need serialization)
+ * - Primitives: String conversion (clean, no extra quotes)
+ * - null/undefined: String representation
+ */
+export function serializeResult(result: any): string {
+  if (result === null) {
+    return 'null';
+  }
+  
+  if (result === undefined) {
+    return 'undefined';
+  }
+  
+  if (typeof result === 'object' || Array.isArray(result)) {
+    return JSON.stringify(result); // Objects need JSON serialization
+  }
+  
+  return String(result); // Primitives as clean strings
+}
+
 type TransactionWaitOptions = {
   interval?: number;
   timeout?: number;
@@ -89,6 +111,7 @@ type GetTransactionRequest = {
 
 /**
  * The relayer API.
+ * We are defining this interface here and in SDK. When changes are made to the interface, we need to update both places.
  *
  * @property sendTransaction - Sends a transaction to the relayer.
  * @property getTransaction - Gets a transaction from the relayer.
@@ -110,7 +133,8 @@ type Relayer = {
 }
 
 /**
- * Public interface for plugin API - only exposes methods that plugins should use
+ * Public interface for plugin API - only exposes methods that plugins should use.
+ * We are defining this interface here and in SDK. When changes are made to the interface, we need to update both places.
  */
 export interface PluginAPI {
   /**
@@ -184,7 +208,7 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
     const result = await (main as (api: PluginAPI, params: T) => Promise<R>)(plugin, pluginParams);
     
     // adds return value to the stdout
-    logInterceptor.addResult(JSON.stringify(result));
+    logInterceptor.addResult(serializeResult(result));
     plugin.close();
 
     // Stop intercepting logs
@@ -214,7 +238,14 @@ export async function loadAndExecutePlugin<T, R>(
       // - Config: "examples/example.ts" → Rust: "plugins/examples/example.ts" → Executor: "../examples/example.ts"
       // - Config: "my-plugin.ts" → Rust: "plugins/my-plugin.ts" → Executor: "../my-plugin.ts"
       let normalizedPath = userScriptPath;
-      if (userScriptPath.startsWith('plugins/')) {
+      
+      // Check if it's an absolute path (starts with / on Unix-like systems or C:\ on Windows)
+      const isAbsolute = userScriptPath.startsWith('/') || /^[A-Za-z]:\\/.test(userScriptPath);
+      
+      if (isAbsolute) {
+          // For absolute paths, use as-is (e.g., temporary test files)
+          normalizedPath = userScriptPath;
+      } else if (userScriptPath.startsWith('plugins/')) {
           // Remove 'plugins/' prefix and add '../' to go back from lib/ to plugins/
           normalizedPath = '../' + userScriptPath.substring('plugins/'.length);
       } else {
@@ -245,8 +276,11 @@ export async function loadAndExecutePlugin<T, R>(
           return result;
       }
       
-      // Neither pattern found
-      throw new Error(`Plugin at ${userScriptPath} must export a function named 'handler' or use the legacy runPlugin() pattern`);
+      // If neither modern nor legacy pattern is found, assume it's a direct execution script
+      // This handles simple scripts that just execute immediately (like test scripts)
+      // For direct execution scripts, we don't call any function - the script already executed
+      // when it was required. We just return an empty result.
+      return undefined as any;
       
   } catch (error) {
       throw new Error(`Failed to execute user plugin ${userScriptPath}: ${(error as Error).message}`);
@@ -390,28 +424,19 @@ export async function runUserPlugin<T = any, R = any>(
   socketPath: string,
   pluginParams: T,
   userScriptPath: string
-): Promise<void> {
-  const logInterceptor = new LogInterceptor();
-  
+): Promise<R> {
   try {
     // Create plugin API instance
     const plugin = new DefaultPluginAPI(socketPath);
     
-    // Start intercepting logs
-    logInterceptor.start();
-    
     // Use helper function to load and execute the plugin
     const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, pluginParams);
     
-    // Handle result
-    logInterceptor.addResult(JSON.stringify(result));
     plugin.close();
+    return result;
     
   } catch (error) {
     console.error(error);
     process.exit(1);
-  } finally {
-    logInterceptor.stop();
-    process.exit(0);
   }
 }
