@@ -76,12 +76,20 @@ async function main(): Promise<void> {
     
     // Extract and validate CLI arguments
     const { socketPath, paramsJson, userScriptPath } = extractCliArguments();
+
+    console.error("SOCKET PATH", socketPath);
+    console.error("PARAMS JSON", paramsJson);
+    console.error("USER SCRIPT PATH", userScriptPath);
     
     // Parse plugin parameters
     const pluginParams = parsePluginParameters(paramsJson);
+
+    console.error("PLUGIN PARAMS", pluginParams);
     
     // Execute plugin with validated parameters
     const result = await runUserPlugin(socketPath, pluginParams, userScriptPath);
+
+    console.error("PLUGIN RESULT", result);
     
     // Add the result to LogInterceptor output
     logInterceptor.addResult(serializeResult(result));
