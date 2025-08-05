@@ -70,18 +70,6 @@ pub trait Signer: Send + Sync {
         &self,
         transaction: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError>;
-
-    /// Signs a Stellar XDR transaction and returns both signed XDR and signature
-    /// This is specifically for external signing use cases like plugins
-    async fn sign_xdr_transaction(
-        &self,
-        _unsigned_xdr: &str,
-        _network_passphrase: &str,
-    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
-        Err(SignerError::NotImplemented(
-            "XDR signing not supported for this signer type".to_string(),
-        ))
-    }
 }
 
 #[allow(dead_code)]
@@ -110,26 +98,6 @@ impl Signer for NetworkSigner {
             Self::Evm(signer) => signer.sign_transaction(transaction).await,
             Self::Solana(signer) => signer.sign_transaction(transaction).await,
             Self::Stellar(signer) => signer.sign_transaction(transaction).await,
-        }
-    }
-
-    async fn sign_xdr_transaction(
-        &self,
-        unsigned_xdr: &str,
-        network_passphrase: &str,
-    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
-        match self {
-            Self::Evm(_) => Err(SignerError::NotImplemented(
-                "XDR signing not supported for EVM".to_string(),
-            )),
-            Self::Solana(_) => Err(SignerError::NotImplemented(
-                "XDR signing not supported for Solana".to_string(),
-            )),
-            Self::Stellar(signer) => {
-                signer
-                    .sign_xdr_transaction(unsigned_xdr, network_passphrase)
-                    .await
-            }
         }
     }
 }

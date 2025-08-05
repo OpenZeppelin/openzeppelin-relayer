@@ -35,8 +35,8 @@ pub enum PluginMethod {
     GetRelayerStatus,
     #[serde(rename = "signTransaction")]
     SignTransaction,
-    #[serde(rename = "getRelayerInfo")]
-    GetRelayerInfo,
+    #[serde(rename = "getRelayer")]
+    GetRelayer,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -187,7 +187,7 @@ impl RelayerApi {
             PluginMethod::GetTransaction => self.handle_get_transaction(request, state).await,
             PluginMethod::GetRelayerStatus => self.handle_get_relayer_status(request, state).await,
             PluginMethod::SignTransaction => self.handle_sign_transaction(request, state).await,
-            PluginMethod::GetRelayerInfo => self.handle_get_relayer_info(request, state).await,
+            PluginMethod::GetRelayer => self.handle_get_relayer_info(request, state).await,
         }
     }
 
@@ -830,7 +830,7 @@ mod tests {
         let request = Request {
             request_id: "test".to_string(),
             relayer_id: "test".to_string(),
-            method: PluginMethod::GetRelayerInfo,
+            method: PluginMethod::GetRelayer,
             payload: serde_json::json!({}),
         };
 
@@ -864,7 +864,7 @@ mod tests {
         let request = Request {
             request_id: "test".to_string(),
             relayer_id: "test".to_string(),
-            method: PluginMethod::GetRelayerInfo,
+            method: PluginMethod::GetRelayer,
             payload: serde_json::json!({}),
         };
 

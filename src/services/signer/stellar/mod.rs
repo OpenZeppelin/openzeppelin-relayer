@@ -22,6 +22,33 @@ use crate::{
 
 use super::DataSignerTrait;
 
+#[cfg(test)]
+use mockall::automock;
+
+#[cfg_attr(test, automock)]
+/// Trait defining Stellar-specific signing operations
+///
+/// This trait extends the basic signing functionality with methods specific
+/// to the Stellar blockchain, following the same pattern as SolanaSignTrait.
+#[async_trait]
+pub trait StellarSignTrait: Sync + Send {
+    /// Signs a Stellar transaction in XDR format
+    ///
+    /// # Arguments
+    ///
+    /// * `unsigned_xdr` - The unsigned transaction in XDR format
+    /// * `network_passphrase` - The network passphrase for the Stellar network
+    ///
+    /// # Returns
+    ///
+    /// A signed transaction response containing the signed XDR and signature
+    async fn sign_xdr_transaction(
+        &self,
+        unsigned_xdr: &str,
+        network_passphrase: &str,
+    ) -> Result<SignXdrTransactionResponseStellar, SignerError>;
+}
+
 pub enum StellarSigner {
     Local(Box<LocalSigner>),
     Vault(VaultSigner<VaultService>),
@@ -45,7 +72,10 @@ impl Signer for StellarSigner {
             Self::Vault(s) => s.sign_transaction(tx).await,
         }
     }
+}
 
+#[async_trait]
+impl StellarSignTrait for StellarSigner {
     async fn sign_xdr_transaction(
         &self,
         unsigned_xdr: &str,

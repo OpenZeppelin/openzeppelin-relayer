@@ -35,8 +35,8 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        Signer, StellarProvider, StellarProviderTrait, StellarSigner, TransactionCounterService,
-        TransactionCounterServiceTrait,
+        StellarProvider, StellarProviderTrait, StellarSignTrait, StellarSigner,
+        TransactionCounterService, TransactionCounterServiceTrait,
     },
 };
 use async_trait::async_trait;
@@ -109,7 +109,7 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
-    S: Signer + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
     signer: S,
@@ -133,7 +133,7 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
-    S: Signer + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
 {
     /// Creates a new `StellarRelayer` instance.
     ///
@@ -235,7 +235,7 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
-    S: Signer + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
 {
     async fn process_transaction_request(
         &self,
@@ -427,7 +427,9 @@ mod tests {
         repositories::{
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
-        services::{MockSigner, MockStellarProviderTrait, MockTransactionCounterServiceTrait},
+        services::{
+            MockStellarProviderTrait, MockStellarSignTrait, MockTransactionCounterServiceTrait,
+        },
     };
     use eyre::eyre;
     use mockall::predicate::*;
@@ -526,7 +528,7 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
-        let signer = MockSigner::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
@@ -561,7 +563,7 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
-        let signer = MockSigner::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
@@ -601,7 +603,7 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let tx_repo = MockTransactionRepository::new();
         let counter = MockTransactionCounterServiceTrait::new();
-        let signer = MockSigner::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
@@ -674,7 +676,7 @@ mod tests {
                 Ok(vec![confirmed_tx.clone()]) as Result<Vec<TransactionRepoModel>, RepositoryError>
             })
             .once();
-        let signer = MockSigner::new();
+        let signer = MockStellarSignTrait::new();
 
         let stellar_relayer = StellarRelayer::new(
             relayer_model.clone(),
@@ -731,7 +733,7 @@ mod tests {
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
             .returning(|_| Box::pin(async { Err(eyre!("Stellar provider down")) }));
-        let signer = MockSigner::new();
+        let signer = MockStellarSignTrait::new();
 
         let stellar_relayer = StellarRelayer::new(
             relayer_model.clone(),
@@ -790,7 +792,7 @@ mod tests {
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
-        let signer = MockSigner::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model,
@@ -830,7 +832,7 @@ mod tests {
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
-        let signer = MockSigner::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model,
@@ -863,7 +865,7 @@ mod tests {
         ctx.setup_network().await;
         let relayer_model = ctx.relayer_model.clone();
         let provider = MockStellarProviderTrait::new();
-        let mut signer = MockSigner::new();
+        let mut signer = MockStellarSignTrait::new();
 
         let unsigned_xdr = "AAAAAgAAAAD///8AAAAAAAAAAQAAAAAAAAACAAAAAQAAAAAAAAAB";
         let expected_signed_xdr =
@@ -878,11 +880,10 @@ mod tests {
             .expect_sign_xdr_transaction()
             .with(eq(unsigned_xdr), eq("Test SDF Network ; September 2015"))
             .returning(move |_, _| {
-                let response = SignXdrTransactionResponseStellar {
+                Ok(SignXdrTransactionResponseStellar {
                     signed_xdr: expected_signed_xdr.to_string(),
                     signature: expected_signature_for_closure.clone(),
-                };
-                Box::pin(async move { Ok(response) })
+                })
             });
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());
@@ -922,18 +923,14 @@ mod tests {
         ctx.setup_network().await;
         let relayer_model = ctx.relayer_model.clone();
         let provider = MockStellarProviderTrait::new();
-        let mut signer = MockSigner::new();
+        let mut signer = MockStellarSignTrait::new();
 
         let unsigned_xdr = "INVALID_XDR";
 
         signer
             .expect_sign_xdr_transaction()
             .with(eq(unsigned_xdr), eq("Test SDF Network ; September 2015"))
-            .returning(|_, _| {
-                Box::pin(
-                    async move { Err(SignerError::SigningError("Invalid XDR format".to_string())) },
-                )
-            });
+            .returning(|_, _| Err(SignerError::SigningError("Invalid XDR format".to_string())));
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let tx_repo = Arc::new(MockTransactionRepository::new());
@@ -996,7 +993,7 @@ mod tests {
         relayer_model.network = "mainnet".to_string();
 
         let provider = MockStellarProviderTrait::new();
-        let mut signer = MockSigner::new();
+        let mut signer = MockStellarSignTrait::new();
 
         let unsigned_xdr = "AAAAAgAAAAD///8AAAAAAAAAAQAAAAAAAAACAAAAAQAAAAAAAAAB";
         let expected_signature = DecoratedSignature {
@@ -1012,11 +1009,10 @@ mod tests {
                 eq("Public Global Stellar Network ; September 2015"),
             )
             .returning(move |_, _| {
-                let response = SignXdrTransactionResponseStellar {
+                Ok(SignXdrTransactionResponseStellar {
                     signed_xdr: "mainnet_signed_xdr".to_string(),
                     signature: expected_signature_for_closure.clone(),
-                };
-                Box::pin(async move { Ok(response) })
+                })
             });
 
         let relayer_repo = Arc::new(MockRelayerRepository::new());

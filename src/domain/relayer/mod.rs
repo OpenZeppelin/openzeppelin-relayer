@@ -530,6 +530,7 @@ pub struct SignTransactionResponseStellar {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SignXdrTransactionResponseStellar {
     pub signed_xdr: String,
     pub signature: DecoratedSignature,
@@ -543,6 +544,7 @@ pub enum SignTransactionResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum SignTransactionExternalResponse {
     Stellar(SignXdrTransactionResponseStellar),
 }

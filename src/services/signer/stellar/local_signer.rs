@@ -12,16 +12,19 @@
 //!
 //! This implementation stores private keys in memory and should primarily be used
 //! for development and testing purposes, not production.
+use super::StellarSignTrait;
 use crate::{
     domain::{
-        SignDataRequest, SignDataResponse, SignTransactionResponse, SignTransactionResponseStellar,
-        SignTypedDataRequest, SignXdrTransactionResponseStellar,
+        attach_signatures_to_envelope, parse_transaction_xdr, SignDataRequest, SignDataResponse,
+        SignTransactionResponse, SignTransactionResponseStellar, SignTypedDataRequest,
+        SignXdrTransactionResponseStellar,
     },
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError, TransactionInput,
     },
     services::Signer,
 };
+
 use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;
 use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
@@ -33,6 +36,7 @@ use soroban_rs::xdr::{
     TransactionEnvelope, TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
     Uint256, VecM, WriteXdr,
 };
+
 use soroban_rs::Signer as SorobanSigner;
 use std::{convert::TryInto, sync::Arc};
 
@@ -145,39 +149,6 @@ impl Signer for LocalSigner {
         Ok(Address::Stellar(account_id.to_string()))
     }
 
-    async fn sign_xdr_transaction(
-        &self,
-        unsigned_xdr: &str,
-        network_passphrase: &str,
-    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
-        use crate::domain::{attach_signatures_to_envelope, parse_transaction_xdr};
-
-        // Parse the unsigned XDR
-        let mut envelope = parse_transaction_xdr(unsigned_xdr, false)
-            .map_err(|e| SignerError::SigningError(format!("Invalid XDR: {}", e)))?;
-
-        // Create network ID from passphrase
-        let hash_bytes: [u8; 32] = sha2::Sha256::digest(network_passphrase.as_bytes()).into();
-        let network_id = Hash(hash_bytes);
-
-        // Sign the envelope
-        let signature = self.sign_envelope(&envelope, &network_id)?;
-
-        // Attach the signature to the envelope
-        attach_signatures_to_envelope(&mut envelope, vec![signature.clone()])
-            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {}", e)))?;
-
-        // Serialize the signed envelope
-        let signed_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
-            SignerError::SigningError(format!("Failed to serialize signed XDR: {}", e))
-        })?;
-
-        Ok(SignXdrTransactionResponseStellar {
-            signed_xdr,
-            signature,
-        })
-    }
-
     async fn sign_transaction(
         &self,
         tx: NetworkTransactionData,
@@ -216,6 +187,40 @@ impl Signer for LocalSigner {
         Ok(SignTransactionResponse::Stellar(
             SignTransactionResponseStellar { signature },
         ))
+    }
+}
+
+#[async_trait]
+impl StellarSignTrait for LocalSigner {
+    async fn sign_xdr_transaction(
+        &self,
+        unsigned_xdr: &str,
+        network_passphrase: &str,
+    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
+        // Parse the unsigned XDR
+        let mut envelope = parse_transaction_xdr(unsigned_xdr, false)
+            .map_err(|e| SignerError::SigningError(format!("Invalid XDR: {}", e)))?;
+
+        // Create network ID from passphrase
+        let hash_bytes: [u8; 32] = sha2::Sha256::digest(network_passphrase.as_bytes()).into();
+        let network_id = Hash(hash_bytes);
+
+        // Sign the envelope
+        let signature = self.sign_envelope(&envelope, &network_id)?;
+
+        // Attach the signature to the envelope
+        attach_signatures_to_envelope(&mut envelope, vec![signature.clone()])
+            .map_err(|e| SignerError::SigningError(format!("Failed to attach signature: {}", e)))?;
+
+        // Serialize the signed envelope
+        let signed_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+            SignerError::SigningError(format!("Failed to serialize signed XDR: {}", e))
+        })?;
+
+        Ok(SignXdrTransactionResponseStellar {
+            signed_xdr,
+            signature,
+        })
     }
 }
 

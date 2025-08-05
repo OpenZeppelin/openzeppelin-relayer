@@ -4,6 +4,7 @@
 //! for secure key management. The private key is fetched once during signer creation and cached
 //! in memory for optimal performance.
 
+use super::StellarSignTrait;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use secrets::SecretVec;
@@ -15,7 +16,10 @@ use zeroize::Zeroizing;
 
 use crate::models::{LocalSignerConfig, SignerConfig};
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
+    domain::{
+        SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest,
+        SignXdrTransactionResponseStellar,
+    },
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
         VaultSignerConfig,
@@ -214,6 +218,20 @@ impl<T: VaultServiceTrait + Clone> Signer for VaultSigner<T> {
     ) -> Result<SignTransactionResponse, SignerError> {
         let signer = self.get_local_signer().await?;
         signer.sign_transaction(transaction).await
+    }
+}
+
+#[async_trait]
+impl<T: VaultServiceTrait + Clone> StellarSignTrait for VaultSigner<T> {
+    async fn sign_xdr_transaction(
+        &self,
+        unsigned_xdr: &str,
+        network_passphrase: &str,
+    ) -> Result<SignXdrTransactionResponseStellar, SignerError> {
+        let signer = self.get_local_signer().await?;
+        signer
+            .sign_xdr_transaction(unsigned_xdr, network_passphrase)
+            .await
     }
 }
 

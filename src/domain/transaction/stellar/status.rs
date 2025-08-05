@@ -4,6 +4,7 @@
 
 use chrono::Utc;
 use log::{info, warn};
+use serde_json::{json, Value};
 use soroban_rs::xdr::{Error, Hash};
 
 use super::StellarRelayerTransaction;
@@ -75,6 +76,8 @@ where
                     );
 
                     // Fallback: Get transaction status via raw RPC request
+                    // TODO: This is a temporary solution to handle XDR parsing errors.
+                    // We should remove this once we upgrade to next stable rpc client version.
                     match self.get_transaction_status_raw(&stellar_hash).await {
                         Ok(status) => {
                             // Return a minimal response with just the status
@@ -264,8 +267,6 @@ where
         &self,
         tx_hash: &soroban_rs::xdr::Hash,
     ) -> Result<String, TransactionError> {
-        use serde_json::{json, Value};
-
         // Convert hash to hex string (manual implementation to avoid hex dependency)
         let hash_hex: String = tx_hash
             .0
