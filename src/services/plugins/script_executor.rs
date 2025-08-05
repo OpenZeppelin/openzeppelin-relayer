@@ -191,6 +191,8 @@ mod tests {
         )
         .await;
 
+        println!("test_execute_typescript_with_result {:?}", result);
+
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.logs[0].level, LogLevel::Log);
@@ -221,9 +223,13 @@ mod tests {
         )
         .await;
 
+
         assert!(result.is_ok());
 
+
         let result = result.unwrap();
+        assert_eq!(result.error, "");
+
         assert!(!result.logs.is_empty());
         assert_eq!(result.logs[0].level, LogLevel::Error);
         assert!(result.logs[0].message.contains("logger"));
