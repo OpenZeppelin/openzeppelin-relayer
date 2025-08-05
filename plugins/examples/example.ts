@@ -2,8 +2,7 @@
  * Example plugin using 'handler' export pattern
  */
 
-import { PluginAPI } from "../lib/plugin";
-import { Speed } from "@openzeppelin/relayer-sdk";
+import { PluginAPI, Speed } from "@openzeppelin/relayer-sdk";
 
 type Params = {
     destinationAddress: string;

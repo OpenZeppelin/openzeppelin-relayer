@@ -12,7 +12,7 @@
  * - Error handling
  */
 
-import { Speed } from "@openzeppelin/relayer-sdk";
+import { PluginAPI, Speed } from "@openzeppelin/relayer-sdk";
 
 /**
  * Plugin parameters interface
@@ -45,7 +45,7 @@ type HandlerResult = {
  * @param params - Plugin parameters from the API call
  * @returns Promise with the plugin result
  */
-export async function handler(api: any, params: HandlerParams): Promise<HandlerResult> {
+export async function handler(api: PluginAPI, params: HandlerParams): Promise<HandlerResult> {
     console.info("🚀 Starting example handler plugin...");
     console.info(`📋 Parameters:`, JSON.stringify(params, null, 2));
     
