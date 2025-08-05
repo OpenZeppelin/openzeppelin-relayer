@@ -55,7 +55,10 @@ impl ScriptExecutor {
         }
 
         // Use the centralized executor script instead of executing user script directly
-        let executor_path = "plugins/lib/executor.ts";
+        // Use absolute path to avoid working directory issues in CI
+        let executor_path = std::env::current_dir()
+            .map(|cwd| cwd.join("plugins/lib/executor.ts").display().to_string())
+            .unwrap_or_else(|_| "plugins/lib/executor.ts".to_string());
 
         let output = Command::new("ts-node")
             .arg(executor_path)       // Execute executor script

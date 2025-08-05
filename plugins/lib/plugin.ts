@@ -256,6 +256,12 @@ export async function loadAndExecutePlugin<T, R>(
       // Clear any previous legacy plugin function
       _legacyPluginFunction = null;
       
+      // Debug path resolution for CI issues (bypass LogInterceptor)
+      process.stderr.write(`DEBUG: Loading script - isAbsolute: ${isAbsolute}\n`);
+      process.stderr.write(`DEBUG: Original path: ${userScriptPath}\n`);
+      process.stderr.write(`DEBUG: Normalized path: ${normalizedPath}\n`);
+      process.stderr.write(`DEBUG: File exists: ${require('fs').existsSync(normalizedPath)}\n`);
+      
       // Load user's script module
       const userModule = require(normalizedPath);
       
