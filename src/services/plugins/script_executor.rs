@@ -223,9 +223,7 @@ mod tests {
         )
         .await;
 
-
         assert!(result.is_ok());
-
 
         let result = result.unwrap();
         assert_eq!(result.error, "");
