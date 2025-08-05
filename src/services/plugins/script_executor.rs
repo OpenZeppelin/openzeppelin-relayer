@@ -191,8 +191,6 @@ mod tests {
         )
         .await;
 
-        println!("test_execute_typescript_with_result {:?}", result);
-
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.logs[0].level, LogLevel::Log);
