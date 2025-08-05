@@ -167,7 +167,7 @@ The timeout is optional, and if not provided, the default is 300 seconds (5 minu
 
 === TypeScript Best Practices
 
-- **Define Parameter Types**: Always create interfaces for your plugin parameters
+- **Define Parameter Types**: Always create interfaces or types for your plugin parameters
 - **Define Return Types**: Specify what your plugin returns for better developer experience
 - **Handle Errors Gracefully**: Use try-catch blocks and return structured error responses
 - **Validate Input**: Check required parameters and provide meaningful error messages
