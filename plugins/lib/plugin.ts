@@ -28,9 +28,11 @@
  */
 
 import {
-  ApiResponseRelayerResponseData,
-  ApiResponseRelayerStatusData,
+  ApiResponseRelayerResponse,
+  ApiResponseRelayerStatus,
   NetworkTransactionRequest,
+  SignTransactionRequest,
+  SignTransactionResponse,
   TransactionResponse,
   TransactionStatus,
 } from '@openzeppelin/relayer-sdk';
@@ -116,21 +118,6 @@ type GetTransactionRequest = {
 };
 
 /**
- * Sign transaction request for Stellar.
- */
-export type SignTransactionRequest = {
-  unsignedXdr: string;
-};
-
-/**
- * Sign transaction response for Stellar.
- */
-export type SignTransactionResponse = {
-  signedXdr: string;
-  signature: any; // Stellar DecoratedSignature
-};
-
-/**
  * The relayer API.
  * We are defining this interface here and in SDK. When changes are made to the interface, we need to update both places.
  *
@@ -159,12 +146,12 @@ export type Relayer = {
    * Gets the relayer status (balance, nonce/sequence number, etc).
    * @returns The relayer status information.
    */
-  getRelayerStatus: () => Promise<ApiResponseRelayerStatusData>;
+  getRelayerStatus: () => Promise<ApiResponseRelayerStatus>;
   /**
    * Gets the relayer info including address.
    * @returns The relayer information.
    */
-  getRelayer: () => Promise<ApiResponseRelayerResponseData>;
+  getRelayer: () => Promise<ApiResponseRelayerResponse>;
 
   /**
    * Signs a transaction with the relayer's key (Stellar specific).
@@ -389,10 +376,10 @@ export class DefaultPluginAPI implements PluginAPI {
       },
       getTransaction: (payload: GetTransactionRequest) =>
         this._send<TransactionResponse>(relayerId, 'getTransaction', payload),
-      getRelayerStatus: () => this._send<ApiResponseRelayerStatusData>(relayerId, 'getRelayerStatus', {}),
+      getRelayerStatus: () => this._send<ApiResponseRelayerStatus>(relayerId, 'getRelayerStatus', {}),
       signTransaction: (payload: SignTransactionRequest) =>
         this._send<SignTransactionResponse>(relayerId, 'signTransaction', payload),
-      getRelayer: () => this._send<ApiResponseRelayerResponseData>(relayerId, 'getRelayer', {}),
+      getRelayer: () => this._send<ApiResponseRelayerResponse>(relayerId, 'getRelayer', {}),
     };
   }
 
