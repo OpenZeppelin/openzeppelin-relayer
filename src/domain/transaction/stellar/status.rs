@@ -877,6 +877,224 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_get_transaction_status_raw() {
+            use mockito::Server;
+            use serde_json::json;
+
+            // Start a mock server
+            let mut server = Server::new_async().await;
+            let url = server.url();
+
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Set up the provider to return the mock server URL
+            mocks.provider.expect_rpc_url().return_const(url.clone());
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+            // Test case 1: Successful response with SUCCESS status
+            let tx_hash = soroban_rs::xdr::Hash([1u8; 32]);
+
+            let mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "status": "SUCCESS"
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_ok());
+            assert_eq!(status.unwrap(), "SUCCESS");
+            mock.assert_async().await;
+
+            // Test case 2: Successful response with FAILED status
+            let mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "status": "FAILED"
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_ok());
+            assert_eq!(status.unwrap(), "FAILED");
+            mock.assert_async().await;
+
+            // Test case 3: Transaction not found (RPC error code -32602)
+            let mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params"
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_ok());
+            assert_eq!(status.unwrap(), "NOT_FOUND");
+            mock.assert_async().await;
+
+            // Test case 4: Transaction not found (RPC error code -32600)
+            let mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "error": {
+                            "code": -32600,
+                            "message": "Invalid request"
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_ok());
+            assert_eq!(status.unwrap(), "NOT_FOUND");
+            mock.assert_async().await;
+
+            // Test case 5: Other RPC error
+            let mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "error": {
+                            "code": -32000,
+                            "message": "Server error"
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_err());
+            match status.unwrap_err() {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("RPC error"));
+                }
+                _ => panic!("Expected UnexpectedError"),
+            }
+            mock.assert_async().await;
+
+            // Test case 6: Missing status in response
+            let mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "other_field": "value"
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_err());
+            match status.unwrap_err() {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("Missing status in response"));
+                }
+                _ => panic!("Expected UnexpectedError"),
+            }
+            mock.assert_async().await;
+
+            // Test case 7: Network error (connection refused)
+            let mut mocks = default_test_mocks();
+            mocks
+                .provider
+                .expect_rpc_url()
+                .return_const("http://localhost:1".to_string()); // Invalid port
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_err());
+            match status.unwrap_err() {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("Raw RPC request failed"));
+                }
+                _ => panic!("Expected UnexpectedError"),
+            }
+
+            // Test case 8: Invalid JSON response
+            let mock = server
+                .mock("POST", "/")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body("not valid json")
+                .expect(1)
+                .create_async()
+                .await;
+
+            let mut mocks = default_test_mocks();
+            mocks.provider.expect_rpc_url().return_const(url.clone());
+
+            let handler = make_stellar_tx_handler(relayer, mocks);
+            let status = handler.get_transaction_status_raw(&tx_hash).await;
+            assert!(status.is_err());
+            match status.unwrap_err() {
+                TransactionError::UnexpectedError(msg) => {
+                    assert!(msg.contains("Failed to parse JSON response"));
+                }
+                _ => panic!("Expected UnexpectedError"),
+            }
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
         async fn test_handle_transaction_status_with_xdr_error_requeues() {
             // This test verifies that when get_transaction returns an XDR parsing error
             // and the fallback also fails, the transaction is re-queued for retry
