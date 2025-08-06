@@ -51,7 +51,7 @@ Redis storage persists all configuration and transaction data in a Redis databas
 
 ==== Use Cases
 - **Production deployments**
-- **Multi-instance deployments** 
+- **Multi-instance deployments**
 - **When data persistence is required**
 - **Scalable environments**
 - **When API-based configuration changes should persist**

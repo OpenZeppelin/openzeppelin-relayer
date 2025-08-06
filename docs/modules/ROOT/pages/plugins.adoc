@@ -56,15 +56,15 @@ type MyPluginResult = {
 /// Export a handler function - that's it!
 export async function handler(api: PluginAPI, params: MyPluginParams): Promise<MyPluginResult> {
     console.info("🚀 Plugin started...");
-    
+
     // Validate parameters
     if (!params.destinationAddress) {
         throw new Error("destinationAddress is required");
     }
-    
+
     // Use the relayer API
     const relayer = api.useRelayer(params.relayerId || "my-relayer");
-    
+
     const result = await relayer.sendTransaction({
         to: params.destinationAddress,
         value: params.amount || 1,
@@ -72,15 +72,15 @@ export async function handler(api: PluginAPI, params: MyPluginParams): Promise<M
         gas_limit: 21000,
         speed: Speed.FAST,
     });
-    
+
     console.info(`Transaction submitted: ${result.id}`);
-    
+
     // Wait for confirmation
     await result.wait({
         interval: 5000,  // Check every 5 seconds
         timeout: 120000  // Timeout after 2 minutes
     });
-    
+
     return {
         success: true,
         transactionId: result.id,
@@ -117,7 +117,7 @@ type Params = {
 
 async function example(api: PluginAPI, params: Params): Promise<string> {
     console.info("Plugin started...");
-    
+
     const relayer = api.useRelayer("sepolia-example");
     const result = await relayer.sendTransaction({
         to: params.destinationAddress,
@@ -126,7 +126,7 @@ async function example(api: PluginAPI, params: Params): Promise<string> {
         gas_limit: 21000,
         speed: Speed.FAST,
     });
-    
+
     await result.wait();
     return "done!";
 }
@@ -246,18 +246,18 @@ type ExampleResult = {
 export async function handler(api: PluginAPI, params: ExampleParams): Promise<ExampleResult> {
     console.info("🚀 Example plugin started");
     console.info(`📋 Parameters:`, JSON.stringify(params, null, 2));
-    
+
     try {
         // Validate parameters
         if (!params.destinationAddress) {
             throw new Error("destinationAddress is required");
         }
-        
+
         const amount = params.amount || 1;
         const message = params.message || "Hello from OpenZeppelin Relayer!";
-        
+
         console.info(`💰 Sending ${amount} wei to ${params.destinationAddress}`);
-        
+
         // Get relayer and send transaction
         const relayer = api.useRelayer("my-relayer");
         const result = await relayer.sendTransaction({
@@ -267,17 +267,17 @@ export async function handler(api: PluginAPI, params: ExampleParams): Promise<Ex
             gas_limit: 21000,
             speed: Speed.FAST,
         });
-        
+
         console.info(`✅ Transaction submitted: ${result.id}`);
-        
+
         // Wait for confirmation
         const confirmation = await result.wait({
             interval: 5000,
             timeout: 120000
         });
-        
+
         console.info(`🎉 Transaction confirmed: ${confirmation.hash}`);
-        
+
         return {
             success: true,
             transactionId: result.id,
@@ -285,7 +285,7 @@ export async function handler(api: PluginAPI, params: ExampleParams): Promise<Ex
             message: `Successfully sent ${amount} wei to ${params.destinationAddress}. ${message}`,
             timestamp: new Date().toISOString()
         };
-        
+
     } catch (error) {
         console.error("❌ Plugin execution failed:", error);
         return {
@@ -341,7 +341,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
       "message": "🚀 Example plugin started"
     },
     {
-      "level": "info", 
+      "level": "info",
       "message": "💰 Sending 1000000000000000 wei to 0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A"
     },
     {
@@ -425,7 +425,7 @@ export async function handler(api: PluginAPI, params: any): Promise<any> {
 === Step-by-Step Migration
 
 1. **Remove the `runPlugin()` call** at the bottom of your file
-2. **Rename your function to `handler`** (or create a new handler export) 
+2. **Rename your function to `handler`** (or create a new handler export)
 3. **Export the `handler` function** using `export async function handler`
 4. **Add proper TypeScript types** for better development experience
 5. **Test your plugin** to ensure it works with the new pattern

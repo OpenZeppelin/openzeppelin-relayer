@@ -63,7 +63,7 @@ impl ScriptExecutor {
         let output = Command::new("ts-node")
             .arg(executor_path)       // Execute executor script
             .arg(socket_path)         // Socket path (argv[2])
-            .arg(script_params)       // Plugin parameters (argv[3])  
+            .arg(script_params)       // Plugin parameters (argv[3])
             .arg(script_path)         // User script path (argv[4])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

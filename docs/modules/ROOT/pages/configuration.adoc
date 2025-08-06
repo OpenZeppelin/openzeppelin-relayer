@@ -743,7 +743,7 @@ The OpenZeppelin Relayer supports two complementary approaches for configuration
 - Requires container restart for changes to take effect
 - Suitable for infrastructure-as-code workflows
 
-=== API-based Configuration  
+=== API-based Configuration
 - Enables runtime configuration changes
 - No service restarts required
 - Perfect for dynamic environments

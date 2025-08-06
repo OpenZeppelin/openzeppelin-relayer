@@ -15,7 +15,7 @@ type Params = {
  */
 export async function handler(api: PluginAPI, params: Params): Promise<string> {
     console.info("Plugin started with new handler pattern...");
-    
+
     /**
      * Instance the relayer with the given id.
      */

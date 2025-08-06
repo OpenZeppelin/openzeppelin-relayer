@@ -107,7 +107,7 @@ type HandlerParams = {
 export async function handler(api: PluginAPI, params: HandlerParams): Promise<any> {
     // Your plugin logic here
     const relayer = api.useRelayer(params.relayerId || "sepolia-example");
-    
+
     const result = await relayer.sendTransaction({
         to: params.destinationAddress,
         value: params.amount || 1,
@@ -115,7 +115,7 @@ export async function handler(api: PluginAPI, params: HandlerParams): Promise<an
         gas_limit: 21000,
         speed: Speed.FAST,
     });
-    
+
     await result.wait();
     return { success: true, transactionId: result.id };
 }
@@ -235,10 +235,10 @@ export async function handler(api: PluginAPI, params: MyParams): Promise<MyResul
         return { success: true, transactionId: result.id, message: "Success" };
     } catch (error) {
         console.error("Plugin execution failed:", error);
-        return { 
-            success: false, 
-            transactionId: "", 
-            message: `Failed: ${error.message}` 
+        return {
+            success: false,
+            transactionId: "",
+            message: `Failed: ${error.message}`
         };
     }
 }
