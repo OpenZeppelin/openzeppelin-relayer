@@ -24,7 +24,8 @@ use crate::{
     constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
         transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
-        SignDataResponse, SignTransactionExternalResponse, SignTypedDataRequest,
+        SignDataResponse, SignTransactionExternalResponse, SignTransactionExternalResponseStellar,
+        SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -399,16 +400,35 @@ where
 
     async fn sign_transaction(
         &self,
-        unsigned_xdr: &str,
+        request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        let stellar_req = match request {
+            SignTransactionRequest::Stellar(req) => req,
+            _ => {
+                return Err(RelayerError::NotSupported(
+                    "Invalid request type for Stellar relayer".to_string(),
+                ))
+            }
+        };
+
         // Use the signer's sign_xdr_transaction method
         let response = self
             .signer
-            .sign_xdr_transaction(unsigned_xdr, &self.network.passphrase)
+            .sign_xdr_transaction(&stellar_req.unsigned_xdr, &self.network.passphrase)
             .await
             .map_err(RelayerError::SignerError)?;
 
-        Ok(SignTransactionExternalResponse::Stellar(response))
+        // Convert DecoratedSignature to base64 string
+        let signature_bytes = &response.signature.signature.0;
+        let signature_string =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signature_bytes);
+
+        Ok(SignTransactionExternalResponse::Stellar(
+            SignTransactionExternalResponseStellar {
+                signed_xdr: response.signed_xdr,
+                signature: signature_string,
+            },
+        ))
     }
 }
 
@@ -418,7 +438,7 @@ mod tests {
     use crate::{
         config::{NetworkConfigCommon, StellarNetworkConfig},
         constants::STELLAR_SMALLEST_UNIT_NAME,
-        domain::SignXdrTransactionResponseStellar,
+        domain::{SignTransactionRequestStellar, SignXdrTransactionResponseStellar},
         jobs::MockJobProducerTrait,
         models::{
             NetworkConfigData, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
@@ -906,14 +926,23 @@ mod tests {
         .await
         .unwrap();
 
-        let result = relayer.sign_transaction(unsigned_xdr).await;
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: unsigned_xdr.to_string(),
+        });
+        let result = relayer.sign_transaction(&request).await;
         assert!(result.is_ok());
 
         match result.unwrap() {
             SignTransactionExternalResponse::Stellar(response) => {
                 assert_eq!(response.signed_xdr, expected_signed_xdr);
-                assert_eq!(response.signature, expected_signature);
+                // Compare the base64 encoded signature
+                let expected_signature_base64 = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &expected_signature.signature.0,
+                );
+                assert_eq!(response.signature, expected_signature_base64);
             }
+            _ => panic!("Expected Stellar response"),
         }
     }
 
@@ -952,7 +981,10 @@ mod tests {
         .await
         .unwrap();
 
-        let result = relayer.sign_transaction(unsigned_xdr).await;
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: unsigned_xdr.to_string(),
+        });
+        let result = relayer.sign_transaction(&request).await;
         assert!(result.is_err());
 
         match result.err().unwrap() {
@@ -1035,14 +1067,23 @@ mod tests {
         .await
         .unwrap();
 
-        let result = relayer.sign_transaction(unsigned_xdr).await;
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: unsigned_xdr.to_string(),
+        });
+        let result = relayer.sign_transaction(&request).await;
         assert!(result.is_ok());
 
         match result.unwrap() {
             SignTransactionExternalResponse::Stellar(response) => {
                 assert_eq!(response.signed_xdr, "mainnet_signed_xdr");
-                assert_eq!(response.signature, expected_signature);
+                // Convert expected signature to base64 for comparison (just the signature bytes, not the whole struct)
+                let expected_signature_string = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &expected_signature.signature.0,
+                );
+                assert_eq!(response.signature, expected_signature_string);
             }
+            _ => panic!("Expected Stellar response"),
         }
     }
 }

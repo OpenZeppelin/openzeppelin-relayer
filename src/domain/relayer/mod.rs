@@ -162,7 +162,7 @@ pub trait Relayer {
     /// `RelayerError` on failure.
     async fn sign_transaction(
         &self,
-        unsigned_xdr: &str,
+        request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError>;
 }
 
@@ -331,7 +331,7 @@ impl<
 
     async fn sign_transaction(
         &self,
-        unsigned_xdr: &str,
+        request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError> {
         match self {
             NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
@@ -340,7 +340,7 @@ impl<
             NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
                 "sign_transaction not supported for Solana".to_string(),
             )),
-            NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(unsigned_xdr).await,
+            NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(request).await,
         }
     }
 }
@@ -512,9 +512,17 @@ pub struct SignTypedDataRequest {
     pub hash_struct_message: String,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct SignTransactionRequest {
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SignTransactionRequestStellar {
     pub unsigned_xdr: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum SignTransactionRequest {
+    Stellar(SignTransactionRequestStellar),
+    Evm(Vec<u8>),
+    Solana(Vec<u8>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -543,10 +551,21 @@ pub enum SignTransactionResponse {
     Stellar(SignTransactionResponseStellar),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = SignTransactionResponseStellar)]
+pub struct SignTransactionExternalResponseStellar {
+    pub signed_xdr: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
+#[schema(as = SignTransactionResponse)]
 pub enum SignTransactionExternalResponse {
-    Stellar(SignXdrTransactionResponseStellar),
+    Stellar(SignTransactionExternalResponseStellar),
+    Evm(Vec<u8>),
+    Solana(Vec<u8>),
 }
 
 impl SignTransactionResponse {

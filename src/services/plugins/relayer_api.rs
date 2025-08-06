@@ -5,7 +5,9 @@
 //! Supported methods:
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
-use crate::domain::{get_network_relayer, get_relayer_by_id, get_transaction_by_id, Relayer};
+use crate::domain::{
+    get_network_relayer, get_relayer_by_id, get_transaction_by_id, Relayer, SignTransactionRequest,
+};
 use crate::jobs::JobProducerTrait;
 use crate::models::{
     AppState, NetworkRepoModel, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
@@ -52,19 +54,6 @@ pub struct Request {
 #[serde(rename_all = "camelCase")]
 pub struct GetTransactionRequest {
     pub transaction_id: String,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct SignTransactionRequest {
-    pub unsigned_xdr: String,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct SignTransactionResponse {
-    pub signed_xdr: String,
-    pub signature: crate::models::DecoratedSignature,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -349,30 +338,15 @@ impl RelayerApi {
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
     {
-        use crate::models::NetworkType;
-
         let sign_request: SignTransactionRequest = serde_json::from_value(request.payload)
             .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
-        // Get the relayer model
-        let relayer_model = get_relayer_by_id(request.relayer_id.clone(), state)
-            .await
-            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
-
-        // Only support Stellar for now
-        if relayer_model.network_type != NetworkType::Stellar {
-            return Err(PluginError::RelayerError(
-                "XDR signing only supported for Stellar relayers".to_string(),
-            ));
-        }
-
-        // Get the network relayer and use its sign_transaction method
         let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
         let response = network_relayer
-            .sign_transaction(&sign_request.unsigned_xdr)
+            .sign_transaction(&sign_request)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
@@ -740,8 +714,8 @@ mod tests {
             request_id: "test".to_string(),
             relayer_id: "test".to_string(),
             method: PluginMethod::SignTransaction,
-            payload: serde_json::json!(SignTransactionRequest {
-                unsigned_xdr: "test_xdr".to_string(),
+            payload: serde_json::json!({
+                "unsigned_xdr": "test_xdr"
             }),
         };
 
@@ -752,7 +726,7 @@ mod tests {
 
         assert!(response.error.is_some());
         let error = response.error.unwrap();
-        assert!(error.contains("XDR signing only supported for Stellar relayers"));
+        assert!(error.contains("sign_transaction not supported for EVM"));
     }
 
     #[tokio::test]
@@ -800,8 +774,8 @@ mod tests {
             request_id: "test".to_string(),
             relayer_id: "test".to_string(),
             method: PluginMethod::SignTransaction,
-            payload: serde_json::json!(SignTransactionRequest {
-                unsigned_xdr: "test_xdr".to_string(),
+            payload: serde_json::json!({
+                "unsigned_xdr": "test_xdr"
             }),
         };
 

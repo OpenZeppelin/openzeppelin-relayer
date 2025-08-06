@@ -31,7 +31,7 @@ use crate::{
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
-        SignTypedDataRequest,
+        SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -559,10 +559,10 @@ where
 
     async fn sign_transaction(
         &self,
-        _unsigned_xdr: &str,
+        _request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError> {
         Err(RelayerError::NotSupported(
-            "XDR signing not supported for EVM".to_string(),
+            "Transaction signing not supported for EVM".to_string(),
         ))
     }
 }

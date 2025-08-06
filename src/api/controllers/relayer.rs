@@ -808,9 +808,7 @@ where
 
     // Get the network relayer and use its sign_transaction method
     let network_relayer = get_network_relayer_by_model(relayer, &state).await?;
-    let result = network_relayer
-        .sign_transaction(&request.unsigned_xdr)
-        .await?;
+    let result = network_relayer.sign_transaction(&request).await?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
@@ -819,6 +817,7 @@ where
 mod tests {
     use super::*;
     use crate::{
+        domain::SignTransactionRequestStellar,
         models::{
             ApiResponse, CreateRelayerPolicyRequest, CreateRelayerRequest, RelayerEvmPolicy,
             RelayerNetworkPolicyResponse, RelayerNetworkType, RelayerResponse, RelayerSolanaPolicy,
@@ -2023,9 +2022,9 @@ mod tests {
         )
         .await;
 
-        let request = SignTransactionRequest {
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
             unsigned_xdr: "test-unsigned-xdr".to_string(),
-        };
+        });
 
         let result = sign_transaction(
             "test-relayer".to_string(),
@@ -2044,9 +2043,9 @@ mod tests {
     async fn test_sign_transaction_relayer_not_found() {
         let app_state = create_mock_app_state(None, None, None, None, None).await;
 
-        let request = SignTransactionRequest {
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
             unsigned_xdr: "test-unsigned-xdr".to_string(),
-        };
+        });
 
         let result = sign_transaction(
             "nonexistent-relayer".to_string(),
@@ -2069,9 +2068,9 @@ mod tests {
         relayer.paused = true;
         let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
 
-        let request = SignTransactionRequest {
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
             unsigned_xdr: "test-unsigned-xdr".to_string(),
-        };
+        });
 
         let result = sign_transaction(
             "disabled-relayer".to_string(),
@@ -2094,9 +2093,9 @@ mod tests {
         relayer.system_disabled = true;
         let app_state = create_mock_app_state(Some(vec![relayer]), None, None, None, None).await;
 
-        let request = SignTransactionRequest {
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
             unsigned_xdr: "test-unsigned-xdr".to_string(),
-        };
+        });
 
         let result = sign_transaction(
             "system-disabled-relayer".to_string(),

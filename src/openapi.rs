@@ -60,6 +60,7 @@ impl Modify for SecurityAddon {
         relayer_docs::doc_get_relayer_status,
         relayer_docs::doc_sign_typed_data,
         relayer_docs::doc_sign,
+        relayer_docs::doc_sign_transaction,
         relayer_docs::doc_cancel_transaction,
         relayer_docs::doc_delete_pending_transactions,
         relayer_docs::doc_rpc,
@@ -91,6 +92,8 @@ impl Modify for SecurityAddon {
         models::UpdateRelayerRequest,
         domain::SignDataRequest,
         domain::SignTypedDataRequest,
+        domain::SignTransactionRequest,
+        domain::SignTransactionExternalResponse,
         models::PluginCallRequest,
         plugins::PluginCallResponse
     ))

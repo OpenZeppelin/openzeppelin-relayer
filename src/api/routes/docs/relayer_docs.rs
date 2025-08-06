@@ -11,7 +11,10 @@
 //! - `DELETE /api/v1/relayers/{id}`: Delete a relayer
 
 use crate::{
-    domain::{BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest},
+    domain::{
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionRequest, SignTypedDataRequest,
+    },
     models::{
         ApiResponse, CreateRelayerRequest, DeletePendingTransactionsResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
@@ -1122,6 +1125,76 @@ fn doc_sign() {}
 )]
 #[allow(dead_code)]
 fn doc_sign_typed_data() {}
+
+/// Signs a transaction using the specified relayer (Stellar only).
+#[utoipa::path(
+    post,
+    path = "/api/v1/relayers/{relayer_id}/sign-transaction",
+    tag = "Relayers",
+    operation_id = "signTransaction",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
+    ),
+    request_body = SignTransactionRequest,
+    responses(
+        (status = 200, description = "Transaction signed successfully", body = ApiResponse<SignTransactionExternalResponse>),
+        (
+            status = 400,
+            description = "BadRequest",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Bad Request",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Not Found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Relayer with ID relayer_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 429,
+            description = "Too Many Requests",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Too Many Requests",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            })
+        ),
+    )
+)]
+#[allow(dead_code)]
+fn doc_sign_transaction() {}
 
 /// Performs a JSON-RPC call using the specified relayer.
 #[utoipa::path(
