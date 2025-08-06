@@ -130,7 +130,7 @@ impl AwsKmsK256 for AwsKmsClient {
         // Try cache first with minimal lock time
         let cached = {
             let cache_read = KMS_DER_PK_CACHE.read().await;
-            cache_read.get(key_id).map(|v| v.clone())
+            cache_read.get(key_id).cloned()
         };
         if let Some(cached) = cached {
             return Ok(cached);
