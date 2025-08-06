@@ -27,16 +27,33 @@
  * runPlugin(main);
  */
 
+import { NetworkTransactionRequest, TransactionResponse, TransactionStatus } from '@openzeppelin/relayer-sdk';
+
+import { LogInterceptor } from './logger';
 import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
-import { LogInterceptor } from './logger';
-import {
-  NetworkTransactionRequest,
-  TransactionResponse,
-  TransactionStatus,
-  ApiResponseRelayerStatus,
-  ApiResponseRelayerResponse,
-} from '@openzeppelin/relayer-sdk';
+
+/**
+ * Smart serialization for plugin return values
+ * - Objects/Arrays: JSON.stringify (need serialization)
+ * - Primitives: String conversion (clean, no extra quotes)
+ * - null/undefined: String representation
+ */
+export function serializeResult(result: any): string {
+  if (result === null) {
+    return 'null';
+  }
+
+  if (result === undefined) {
+    return 'undefined';
+  }
+
+  if (typeof result === 'object' || Array.isArray(result)) {
+    return JSON.stringify(result); // Objects need JSON serialization
+  }
+
+  return String(result); // Primitives as clean strings
+}
 
 type TransactionWaitOptions = {
   interval?: number;
@@ -109,6 +126,7 @@ export type SignTransactionResponse = {
 
 /**
  * The relayer API.
+ * We are defining this interface here and in SDK. When changes are made to the interface, we need to update both places.
  *
  * @property sendTransaction - Sends a transaction to the relayer.
  * @property getTransaction - Gets a transaction from the relayer.
@@ -150,7 +168,31 @@ export type Relayer = {
   signTransaction: (payload: SignTransactionRequest) => Promise<SignTransactionResponse>;
 };
 
+/**
+ * Public interface for plugin API - only exposes methods that plugins should use.
+ * We are defining this interface here and in SDK. When changes are made to the interface, we need to update both places.
+ */
+export interface PluginAPI {
+  /**
+   * Creates a relayer API for the given relayer ID.
+   * @param relayerId - The relayer ID.
+   * @returns The relayer API.
+   */
+  useRelayer(relayerId: string): Relayer;
+
+  /**
+   * Waits for a transaction to be mined on chain.
+   * @param transaction - The transaction result from sendTransaction
+   * @param options - Polling interval and timeout options
+   * @returns The transaction response once mined/confirmed
+   */
+  transactionWait(transaction: SendTransactionResult, options?: TransactionWaitOptions): Promise<TransactionResponse>;
+}
+
 type Plugin<T, R> = (plugin: PluginAPI, pluginParams: T) => Promise<R>;
+
+// Global variable to capture legacy plugin function
+let _legacyPluginFunction: Plugin<any, any> | null = null;
 
 function getPluginParams<T>(): T {
   const pluginParams = process.argv[3];
@@ -168,13 +210,19 @@ function getPluginParams<T>(): T {
 }
 
 /**
- * Entry point for plugin execution.
- *
- * @param main - The main function to run.
- *  - `plugin` - The plugin API for interacting with the relayer.
- *  - `pluginParams` - The plugin parameters passed as the request body of the call.
+ * Legacy runPlugin function - captures the plugin function for later execution
+ * This provides backward compatibility while the new handler pattern is adopted
  */
 export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
+  // In the new architecture, we just capture the function for later execution
+  // instead of running it immediately
+  if (typeof main === 'function') {
+    _legacyPluginFunction = main as Plugin<any, any>;
+    return;
+  }
+
+  // If we reach here, it means this is being called in the old direct execution mode
+  // (not through the executor), so we fall back to the original behavior
   const logInterceptor = new LogInterceptor();
 
   try {
@@ -185,7 +233,7 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
     }
 
     // creates plugin instance
-    let plugin = new PluginAPI(socketPath);
+    let plugin = new DefaultPluginAPI(socketPath);
 
     // Start intercepting logs
     logInterceptor.start();
@@ -193,21 +241,11 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
     const pluginParams = getPluginParams<T>();
 
     // runs main function
-    await main(plugin, pluginParams)
-      .then((result) => {
-        // adds return value to the stdout
-        logInterceptor.addResult(JSON.stringify(result));
-        plugin.close();
-      })
-      .catch((error) => {
-        console.error(error);
-        // closes socket signaling error
-        plugin.closeErrored(error);
-      })
-      .finally(() => {
-        plugin.close();
-        process.exit(0);
-      });
+    const result = await (main as (api: PluginAPI, params: T) => Promise<R>)(plugin, pluginParams);
+
+    // adds return value to the stdout
+    logInterceptor.addResult(serializeResult(result));
+    plugin.close();
 
     // Stop intercepting logs
     logInterceptor.stop();
@@ -218,13 +256,78 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
 }
 
 /**
+ * Helper function that loads and executes a user plugin script
+ * @param userScriptPath - Path to the user's plugin script
+ * @param api - Plugin API instance
+ * @param params - Plugin parameters
+ */
+export async function loadAndExecutePlugin<T, R>(userScriptPath: string, api: PluginAPI, params: T): Promise<R> {
+  try {
+    // IMPORTANT: Path normalization required because executor is in plugins/lib/
+    // but user scripts are in plugins/ (and config paths are relative to plugins/)
+    //
+    // Examples:
+    // - Config: "examples/example.ts" → Rust: "plugins/examples/example.ts" → Executor: "../examples/example.ts"
+    // - Config: "my-plugin.ts" → Rust: "plugins/my-plugin.ts" → Executor: "../my-plugin.ts"
+    let normalizedPath = userScriptPath;
+
+    // Check if it's an absolute path (starts with / on Unix-like systems or C:\ on Windows)
+    const isAbsolute = userScriptPath.startsWith('/') || /^[A-Za-z]:\\/.test(userScriptPath);
+
+    if (isAbsolute) {
+      // For absolute paths, use as-is (e.g., temporary test files)
+      normalizedPath = userScriptPath;
+    } else if (userScriptPath.startsWith('plugins/')) {
+      // Remove 'plugins/' prefix and add '../' to go back from lib/ to plugins/
+      normalizedPath = '../' + userScriptPath.substring('plugins/'.length);
+    } else {
+      // If path doesn't start with 'plugins/', assume it's relative to plugins/
+      normalizedPath = '../' + userScriptPath;
+    }
+
+    // Clear any previous legacy plugin function
+    _legacyPluginFunction = null;
+
+    // Load user's script module
+    const userModule = require(normalizedPath);
+
+    // Try modern pattern first: look for 'handler' named export
+    const handler = userModule.handler;
+
+    if (handler && typeof handler === 'function') {
+      // Modern pattern: call the exported handler
+      const result = await handler(api, params);
+      return result;
+    }
+
+    // Try legacy pattern: check if runPlugin was called during module loading
+    if (_legacyPluginFunction && typeof _legacyPluginFunction === 'function') {
+      console.warn(
+        `[DEPRECATED] Plugin at ${userScriptPath} uses the deprecated runPlugin pattern. Please migrate to the handler export pattern.`
+      );
+      // Legacy pattern: call the captured plugin function
+      const result = await (_legacyPluginFunction as (api: PluginAPI, params: T) => Promise<R>)(api, params);
+      return result;
+    }
+
+    // If neither modern nor legacy pattern is found, assume it's a direct execution script
+    // This handles simple scripts that just execute immediately (like test scripts)
+    // For direct execution scripts, we don't call any function - the script already executed
+    // when it was required. We just return an empty result.
+    return undefined as any;
+  } catch (error) {
+    throw new Error(`Failed to execute user plugin ${userScriptPath}: ${(error as Error).message}`);
+  }
+}
+
+/**
  * The plugin API.
  *
  * @property useRelayer - Creates a relayer API for the given relayer ID.
  * @property sendTransaction - Sends a transaction to the relayer.
  * @property getTransaction - Gets a transaction by id.
  */
-export class PluginAPI {
+export class DefaultPluginAPI implements PluginAPI {
   socket: net.Socket;
   pending: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }>;
   private _connectionPromise: Promise<void> | null = null;
@@ -349,5 +452,35 @@ export class PluginAPI {
 
   closeErrored(error: any) {
     this.socket.destroy(error);
+  }
+}
+
+/**
+ * Main entry point for plugin execution
+ *
+ * This function handles the entire plugin lifecycle: loading, execution, and cleanup.
+ * It receives validated parameters from the wrapper script and focuses purely on plugin execution logic.
+ *
+ * @param socketPath - Unix socket path for communication with relayer
+ * @param pluginParams - Parsed plugin parameters object
+ * @param userScriptPath - Path to the user's plugin file to execute
+ */
+export async function runUserPlugin<T = any, R = any>(
+  socketPath: string,
+  pluginParams: T,
+  userScriptPath: string
+): Promise<R> {
+  try {
+    // Create plugin API instance
+    const plugin = new DefaultPluginAPI(socketPath);
+
+    // Use helper function to load and execute the plugin
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, pluginParams);
+
+    plugin.close();
+    return result;
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
   }
 }

@@ -3,6 +3,7 @@
 * xref:configuration.adoc[Configuration]
 ** xref:signers.adoc[Signers]
 ** xref:network_configuration.adoc[Network Configuration]
+** xref:storage.adoc[Storage Configuration]
 * xref:evm.adoc[EVM Integration]
 * xref:solana.adoc[Solana Integration]
 * xref:stellar.adoc[Stellar Integration]

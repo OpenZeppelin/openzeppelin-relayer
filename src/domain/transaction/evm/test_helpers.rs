@@ -80,6 +80,7 @@ pub mod test_utils {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         }
     }
 

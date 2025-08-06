@@ -41,8 +41,9 @@ impl Queue {
     }
 
     pub async fn setup() -> Result<Self> {
-        let redis_url = ServerConfig::from_env().redis_url.clone();
-        let redis_connection_timeout_ms = ServerConfig::from_env().redis_connection_timeout_ms;
+        let config = ServerConfig::from_env();
+        let redis_url = config.redis_url.clone();
+        let redis_connection_timeout_ms = config.redis_connection_timeout_ms;
         let conn = match timeout(Duration::from_millis(redis_connection_timeout_ms), apalis_redis::connect(redis_url.clone())).await {
             Ok(result) => result.map_err(|e| {
                 error!("Failed to connect to Redis at {}: {}", redis_url, e);

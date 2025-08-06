@@ -200,9 +200,11 @@ mod tests {
         let socket_path = temp_dir.path().join("test_run.sock");
 
         let content = r#"
-            console.log(JSON.stringify({ level: 'log', message: 'test' }));
-            console.log(JSON.stringify({ level: 'error', message: 'test-error' }));
-            console.log(JSON.stringify({ level: 'result', message: 'test-result' }));
+            export async function handler(api: any, params: any) {
+                console.log('test');
+                console.error('test-error');
+                return 'test-result';
+            }
         "#;
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
