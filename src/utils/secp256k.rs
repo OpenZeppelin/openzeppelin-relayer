@@ -13,7 +13,7 @@ pub fn recover_public_key(pk: &[u8], sig: &Signature, bytes: &[u8]) -> Result<u8
     let mut hasher = Keccak256::new();
     hasher.update(bytes);
     for v in 0..2 {
-let rec_id = match RecoveryId::try_from(v) {
+        let rec_id = match RecoveryId::try_from(v) {
             Ok(id) => id,
             Err(_) => continue,
         };
