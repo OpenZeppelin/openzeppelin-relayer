@@ -27,7 +27,13 @@
  * runPlugin(main);
  */
 
-import { NetworkTransactionRequest, TransactionResponse, TransactionStatus } from '@openzeppelin/relayer-sdk';
+import {
+  ApiResponseRelayerResponseData,
+  ApiResponseRelayerStatusData,
+  NetworkTransactionRequest,
+  TransactionResponse,
+  TransactionStatus,
+} from '@openzeppelin/relayer-sdk';
 
 import { LogInterceptor } from './logger';
 import net from 'node:net';
@@ -153,12 +159,12 @@ export type Relayer = {
    * Gets the relayer status (balance, nonce/sequence number, etc).
    * @returns The relayer status information.
    */
-  getRelayerStatus: () => Promise<ApiResponseRelayerStatus>;
+  getRelayerStatus: () => Promise<ApiResponseRelayerStatusData>;
   /**
    * Gets the relayer info including address.
    * @returns The relayer information.
    */
-  getRelayer: () => Promise<ApiResponseRelayerResponse>;
+  getRelayer: () => Promise<ApiResponseRelayerResponseData>;
 
   /**
    * Signs a transaction with the relayer's key (Stellar specific).
@@ -383,10 +389,10 @@ export class DefaultPluginAPI implements PluginAPI {
       },
       getTransaction: (payload: GetTransactionRequest) =>
         this._send<TransactionResponse>(relayerId, 'getTransaction', payload),
-      getRelayerStatus: () => this._send<ApiResponseRelayerStatus>(relayerId, 'getRelayerStatus', {}),
+      getRelayerStatus: () => this._send<ApiResponseRelayerStatusData>(relayerId, 'getRelayerStatus', {}),
       signTransaction: (payload: SignTransactionRequest) =>
         this._send<SignTransactionResponse>(relayerId, 'signTransaction', payload),
-      getRelayer: () => this._send<ApiResponseRelayerResponse>(relayerId, 'getRelayer', {}),
+      getRelayer: () => this._send<ApiResponseRelayerResponseData>(relayerId, 'getRelayer', {}),
     };
   }
 
