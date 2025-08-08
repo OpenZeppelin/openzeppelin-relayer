@@ -38,8 +38,8 @@ Install and build the LaunchTube plugin:
 ```bash
 # From this directory (examples/launchtube-plugin-example)
 cd launchtube
-npm install
-npm run build
+pnpm install
+pnpm run build
 cd ..
 ```
 
