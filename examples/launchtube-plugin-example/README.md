@@ -1,290 +1,274 @@
-# OpenZeppelin Relayer - Basic Plugin Example
+# OpenZeppelin Relayer — LaunchTube Plugin Example
 
-This example demonstrates how to create, configure, and run custom plugins with OpenZeppelin Relayer. It showcases the modern plugin pattern using the `handler` export convention for clean, testable plugin development.
+Run the LaunchTube plugin with OpenZeppelin Relayer to simplify Stellar Soroban transactions. LaunchTube handles fees, sequence numbers, simulation, and retries automatically.
 
-## Key Features Demonstrated
+## Quick Start
 
-- **Modern Plugin Pattern**: Uses the new `handler` export convention (no manual `runPlugin()` calls required)
-- **Plugin API Usage**: Shows how to interact with relayers through the plugin API
-- **Transaction Management**: Demonstrates sending transactions and waiting for confirmation
-- **Docker Integration**: Complete Docker setup for plugin development and testing
-- **TypeScript Support**: Full TypeScript support with proper type definitions
-- **Error Handling**: Comprehensive error handling and logging patterns
+```bash
+# Clone and navigate to this example:
+git clone https://github.com/OpenZeppelin/openzeppelin-relayer
+cd openzeppelin-relayer/examples/launchtube-plugin-example
 
-## Plugin Functionality
-
-The example plugin (`launchtube/index.ts`) performs the following operations:
-
-1. **Parameter Validation**: Validates required parameters like destination address
-2. **Transaction Submission**: Sends an ETH transfer transaction through the relayer
-3. **Status Monitoring**: Waits for transaction confirmation with configurable timeout
-4. **Result Reporting**: Returns structured results with transaction details and status
+# Then follow the Setup steps below
+```
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
-- Rust (for key generation tools)
-- Node.js and pnpm (for plugin development)
+- Docker and Docker Compose
+- Rust (for generating keys and IDs)
+- Node.js >= 18 and pnpm >= 10
 
-## Getting Started
+## Setup
 
-### Step 1: Clone the Repository
+You only need to:
+
+1. Install and build the LaunchTube plugin
+2. Create the keys for LaunchTube accounts
+3. Set up environment variables
+4. Start Docker to get account addresses
+5. Fund accounts on testnet
+6. Restart the service
+
+All configurations are pre-set for testnet use.
+
+### 1. Install Dependencies
+
+Install and build the LaunchTube plugin:
 
 ```bash
-git clone https://github.com/OpenZeppelin/openzeppelin-relayer
-cd openzeppelin-relayer
+# From this directory (examples/launchtube-plugin-example)
+cd launchtube
+npm install
+npm run build
+cd ..
 ```
 
-### Step 2: Create a Signer
+### 2. Create Keys and Configuration
 
-Create a new signer keystore for the relayer:
+LaunchTube requires two types of keys:
+
+- **Fund account**: Pays transaction fees
+- **Sequence accounts**: Manage sequence numbers (at least 2 recommended)
+
+From this directory (`examples/launchtube-plugin-example`), run these commands:
+
+#### Create LaunchTube accounts
 
 ```bash
+# Replace YOUR_PASSWORD with a strong password
+# Password must contain at least one uppercase letter, one lowercase letter,
+# one number, and one special character (e.g., MyPass123!)
+
+# Create fund account (pays fees)
 cargo run --example create_key -- \
-  --password <DEFINE_YOUR_PASSWORD> \
-  --output-dir examples/launchtube-plugin-example/config/keys \
-  --filename local-signer.json
+  --password YOUR_PASSWORD \
+  --output-dir config/keys \
+  --filename launchtube-fund.json
+
+# Create first sequence account
+cargo run --example create_key -- \
+  --password YOUR_PASSWORD \
+  --output-dir config/keys \
+  --filename launchtube-seq-001.json
+
+# Create second sequence account (recommended for better throughput)
+cargo run --example create_key -- \
+  --password YOUR_PASSWORD \
+  --output-dir config/keys \
+  --filename launchtube-seq-002.json
 ```
 
-**Note**: Replace `<DEFINE_YOUR_PASSWORD>` with a strong password for the keystore.
-
-### Step 3: Environment Configuration
-
-Create the environment file:
+#### Generate API credentials
 
 ```bash
-cp examples/launchtube-plugin-example/.env.example examples/launchtube-plugin-example/.env
-```
-
-Generate required security keys:
-
-```bash
-# Generate API key
+# Generate API key (save this output)
 cargo run --example generate_uuid
 
-# Generate webhook signing key
+# Generate webhook signing key (save this output)
 cargo run --example generate_uuid
 ```
 
-Update the `.env` file with your configuration:
+#### Create environment file
+
+Create `.env` in this directory:
 
 ```env
 REDIS_URL=redis://redis:6379
-KEYSTORE_PASSPHRASE=<DEFINE_YOUR_PASSWORD>
-WEBHOOK_SIGNING_KEY=<generated_webhook_key>
-API_KEY=<generated_api_key>
+KEYSTORE_PASSPHRASE=YOUR_PASSWORD
+WEBHOOK_SIGNING_KEY=<webhook_key_from_above>
+API_KEY=<api_key_from_above>
 ```
 
-### Step 4: Configure Webhook URL
+### 3. Verify Configuration
 
-Update the `url` field in the notifications section of `config/config.json`. For testing, you can use [Webhook.site](https://webhook.site) to get a test URL:
+The LaunchTube plugin and relayer configurations are already set up for testnet. The configurations include:
+
+**`launchtube/config.json`** (pre-configured):
+
+```json
+{
+  "fundRelayerId": "launchtube-fund",
+  "sequenceRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"],
+  "maxFee": 1000000,
+  "network": "testnet",
+  "rpcUrl": "https://soroban-testnet.stellar.org"
+}
+```
+
+**`config/config.json`** (pre-configured):
+
+- Three relayers defined: `launchtube-fund`, `launchtube-seq-001`, `launchtube-seq-002`
+- Corresponding signers pointing to the key files you'll create
+- Plugin registered as `launchtube-plugin`
+
+> **Note**: If you need mainnet, update `network` in both config files and use mainnet RPC URL
+
+### 4. (Optional) Configure Webhooks
+
+For transaction notifications, edit `config/config.json`:
 
 ```json
 {
   "notifications": [
     {
-      "url": "https://webhook.site/your-unique-id"
+      "url": "https://webhook.site/your-unique-id" // Get a test URL from webhook.site
     }
   ]
 }
 ```
 
-### Step 5: Plugin Development
-
-The example plugin is located in `launchtube/index.ts`. You can modify it or create new plugins following the same pattern:
-
-```typescript
-import { Speed, PluginAPI } from "@openzeppelin/relayer-sdk";
-
-type HandlerParams = {
-    destinationAddress: string;
-    amount?: number;
-    message?: string;
-    relayerId?: string;
-};
-
-export async function handler(api: PluginAPI, params: HandlerParams): Promise<any> {
-    // Your plugin logic here
-    const relayer = api.useRelayer(params.relayerId || "sepolia-example");
-
-    const result = await relayer.sendTransaction({
-        to: params.destinationAddress,
-        value: params.amount || 1,
-        data: "0x",
-        gas_limit: 21000,
-        speed: Speed.FAST,
-    });
-
-    await result.wait();
-    return { success: true, transactionId: result.id };
-}
-```
-
-### Step 6: Run the Service
-
-Start the service with Docker Compose:
+### 5. Start the Service and Get Account Addresses
 
 ```bash
-docker compose -f examples/launchtube-plugin-example/docker-compose.yaml up
+docker compose up
 ```
 
-The service will be available at `http://localhost:8080/api/v1`
+The relayer will start and display the public addresses for your accounts in the logs:
 
-## Testing the Plugin
+```
+relayer-1  | Syncing sequence for relayer: launchtube-fund (GCP7KWGZCDDVBFKANDJTA74H2HSORV34SMSQIPGZ3PK7V6OHKCFGRTF6)
+relayer-1  | Syncing sequence for relayer: launchtube-seq-001 (GCWFXU6HZNHLTXMHWZRPXYBZFOODJYRDZXFOPMUQN4S2JJGEZA2ZHA4B)
+relayer-1  | Syncing sequence for relayer: launchtube-seq-002 (GA7IXWK3VKF25JOXJZZ7XMFB3A3IPM5A66MW5DJ6FPOIWME4F66UK4HL)
+```
 
-### Step 1: Check Available Plugins
+### 6. Fund Your Accounts on Testnet
+
+In a new terminal, copy the addresses from the logs above and fund them:
+
+```bash
+# Replace with your actual addresses from the logs
+curl "https://friendbot.stellar.org?addr=YOUR_FUND_ADDRESS"     # fund account
+curl "https://friendbot.stellar.org?addr=YOUR_SEQ_001_ADDRESS"  # seq-001
+curl "https://friendbot.stellar.org?addr=YOUR_SEQ_002_ADDRESS"  # seq-002
+```
+
+After funding, restart the service for it to recognize the funded accounts:
+
+```bash
+# Stop the service with Ctrl+C, then restart
+docker compose up
+```
+
+The relayer is now ready at `http://localhost:8080/api/v1` 🚀
+
+## Usage
+
+### Test Connection
 
 ```bash
 curl -X GET http://localhost:8080/api/v1/plugins \
-  -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
-### Step 2: Call the Plugin
+### Submit Transactions
+
+#### Option 1: Complete Transaction XDR
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/plugins/launchtube/call \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
   -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
   -d '{
-    "destinationAddress": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
-    "amount": 1000000000000000,
-    "message": "Hello from OpenZeppelin Relayer Plugin!"
+    "params": {
+      "xdr": "AAAAAgAAAAA...",
+      "sim": false
+    }
   }'
 ```
 
-### Step 3: Monitor Transaction
-
-The plugin will return a transaction ID. You can monitor its status:
+#### Option 2: Soroban Function + Auth
 
 ```bash
-curl -X GET http://localhost:8080/api/v1/relayers/sepolia-example/transactions/TRANSACTION_ID \
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY"
+  -d '{
+    "params": {
+      "func": "AAAABAAAAAEAAAAGc3ltYm9s...",
+      "auth": ["AAAACAAAAAEAAAA..."],
+      "sim": true
+    }
+  }'
 ```
 
-## Plugin Configuration
+**Parameters:**
 
-The plugin is configured in `config/config.json`:
+- `xdr`: Complete transaction envelope XDR
+- `func`: Soroban host function XDR
+- `auth`: Array of authorization entry XDRs
+- `sim`: Simulate before submission (true/false)
+
+> Use either `xdr` OR `func`+`auth`, not both
+
+**Response:**
 
 ```json
 {
-  "plugins": [
-    {
-      "id": "launchtube",
-      "path": "launchtube/index.ts",
-      "timeout": 30
-    }
-  ]
+  "transactionId": "tx_123456",
+  "status": "submitted",
+  "hash": "1234567890abcdef..."
 }
 ```
 
-### Configuration Options
+## How It Works
 
-- **id**: Unique identifier for the plugin (used in API calls)
-- **path**: Path to the plugin file relative to the plugins directory
-- **timeout**: Maximum execution time in seconds (optional, defaults to 300)
-
-## Plugin Development Guidelines
-
-### Modern Plugin Pattern
-
-Use the new `handler` export pattern:
-
-```typescript
-// ✅ Recommended: New pattern
-export async function handler(api: PluginAPI, params: any): Promise<any> {
-    // Plugin logic
-}
-
-// ❌ Deprecated: Old pattern
-import { runPlugin } from "../lib/plugin";
-runPlugin(myFunction);
-```
-
-### TypeScript Support
-
-Define proper types for your parameters and return values:
-
-```typescript
-type MyParams = {
-    destinationAddress: string;
-    amount?: number;
-};
-
-type MyResult = {
-    success: boolean;
-    transactionId: string;
-    message: string;
-};
-
-export async function handler(api: PluginAPI, params: MyParams): Promise<MyResult> {
-    // Implementation
-}
-```
-
-### Error Handling
-
-Implement comprehensive error handling:
-
-```typescript
-export async function handler(api: PluginAPI, params: MyParams): Promise<MyResult> {
-    try {
-        // Plugin logic
-        return { success: true, transactionId: result.id, message: "Success" };
-    } catch (error) {
-        console.error("Plugin execution failed:", error);
-        return {
-            success: false,
-            transactionId: "",
-            message: `Failed: ${error.message}`
-        };
-    }
-}
-```
+1. **Request Validation**: Validates input parameters and extracts Soroban data
+2. **Sequence Account Pool**: Acquires an available sequence account
+3. **Auth Checking**: Validates authorization entries
+4. **Simulation** (if enabled): Simulates transaction and rebuilds with proper resources
+5. **Fee Bumping**: Fund account wraps transaction with fee bump
+6. **Submission**: Sends to Stellar network
 
 ## Troubleshooting
 
-### Common Issues
+### Common issues
 
-1. **Plugin Not Found**: Verify the plugin path in `config.json` is correct
-2. **Permission Errors**: Ensure Docker has access to mount the plugin directory
-3. **TypeScript Errors**: Check that all dependencies are installed in the plugin directory
-4. **API Authentication**: Verify your API key is correct and properly formatted
+- **Plugin not found**: Verify the plugin `id` and `path` in `examples/launchtube-plugin-example/config/config.json`.
+- **Missing LaunchTube config**: Ensure `examples/launchtube-plugin-example/launchtube/config.json` exists and is correctly filled.
+- **API authentication**: Ensure the `Authorization` header is present and the `API_KEY` is set in `.env`.
+- **Webhook not received**: Ensure the `notifications[0].url` is set to a reachable URL.
 
-### Debug Mode
-
-Enable debug logging by checking the Docker logs:
+### View logs
 
 ```bash
 docker compose -f examples/launchtube-plugin-example/docker-compose.yaml logs -f relayer
 ```
 
-### Plugin Testing
+## Docker notes
 
-Test your plugin locally before deployment:
-
-```bash
-cd examples/launchtube-plugin-example/launchtube
-pnpm install
-pnpm test
-```
-
-## Docker Configuration
-
-The example includes optimized Docker volume mounting:
+This compose file mounts:
 
 ```yaml
 volumes:
-  - ./config:/app/config/                    # Configuration files
-  - ./launchtube:/app/plugins/launchtube  # Your specific plugin
+  - ./config:/app/config/
+  - ../../config/networks:/app/config/networks
+  - ./launchtube:/app/plugins/launchtube
 ```
 
-The plugins infrastructure (`lib/executor.ts`, `lib/plugin.ts`) is already included in the Docker image, so only your specific plugin needs to be mounted.
+The container image already includes the relayer and plugin runtime. You only need to mount your config and the LaunchTube plugin wrapper.
 
-## See Also
+## Learn more
 
-- [Basic Example](../basic-example/README.md) - Simple relayer setup without plugins
-- [Network Configuration Examples](../network-configuration-config-file/README.md) - Advanced network configuration
-- [Signer Examples](../evm-aws-kms-signer/README.md) - Different signing methods
+- LaunchTube plugin GitHub: `https://github.com/OpenZeppelin/relayer-plugin-launchtube`
+- LaunchTube on npm: `https://www.npmjs.com/package/@openzeppelin/relayer-plugin-launchtube`
+- OpenZeppelin Relayer docs: `https://docs.openzeppelin.com/relayer`

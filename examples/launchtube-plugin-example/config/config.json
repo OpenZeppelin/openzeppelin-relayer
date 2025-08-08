@@ -1,16 +1,28 @@
 {
   "relayers": [
     {
-      "id": "sepolia-example",
-      "name": "Sepolia Example",
-      "network": "sepolia",
+      "id": "launchtube-fund",
+      "name": "LaunchTube Fund Account",
+      "network": "testnet",
       "paused": false,
-      "notification_id": "notification-example",
-      "signer_id": "local-signer",
-      "network_type": "evm",
-      "policies": {
-        "min_balance": 0
-      }
+      "network_type": "stellar",
+      "signer_id": "launchtube-fund-signer"
+    },
+    {
+      "id": "launchtube-seq-001",
+      "name": "LaunchTube Sequence 001",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "launchtube-seq-001-signer"
+    },
+    {
+      "id": "launchtube-seq-002",
+      "name": "LaunchTube Sequence 002",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "launchtube-seq-002-signer"
     }
   ],
   "notifications": [
@@ -26,10 +38,32 @@
   ],
   "signers": [
     {
-      "id": "local-signer",
+      "id": "launchtube-fund-signer",
       "type": "local",
       "config": {
-        "path": "config/keys/local-signer.json",
+        "path": "config/keys/launchtube-fund.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    },
+    {
+      "id": "launchtube-seq-001-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/launchtube-seq-001.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    },
+    {
+      "id": "launchtube-seq-002-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/launchtube-seq-002.json",
         "passphrase": {
           "type": "env",
           "value": "KEYSTORE_PASSPHRASE"

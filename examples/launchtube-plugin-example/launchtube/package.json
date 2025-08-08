@@ -1,7 +1,7 @@
 {
   "name": "launchtube-plugin-example",
   "version": "1.0.0",
-  "description": "",
+  "description": "Example for LaunchTube plugin",
   "main": "index.js",
   "scripts": {
     "test": "jest",
@@ -13,9 +13,9 @@
   "author": "",
   "license": "",
   "dependencies": {
+    "@openzeppelin/relayer-plugin-launchtube": "0.2.0",
     "@openzeppelin/relayer-sdk": "^1.2.1",
-    "@types/node": "^24.0.3",
-    "launchtube-plugin": "git+https://github.com/OpenZeppelin/relayer-plugin-launchtube"
+    "@types/node": "^24.0.3"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

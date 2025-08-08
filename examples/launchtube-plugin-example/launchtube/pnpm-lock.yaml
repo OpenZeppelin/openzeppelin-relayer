@@ -8,15 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@openzeppelin/relayer-plugin-launchtube':
+        specifier: 0.2.0
+        version: 0.2.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.2)(utf-8-validate@5.0.10)
       '@openzeppelin/relayer-sdk':
         specifier: ^1.2.1
         version: 1.2.1(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.2)(utf-8-validate@5.0.10)
       '@types/node':
         specifier: ^24.0.3
         version: 24.2.0
-      launchtube-plugin:
-        specifier: git+https://github.com/OpenZeppelin/relayer-plugin-launchtube
-        version: '@openzeppelin/relayer-plugin-launchtube@git+https://git@github.com:OpenZeppelin/relayer-plugin-launchtube.git#66d7e706e736fc1c17674729d0a9fe936467392d(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.2)(utf-8-validate@5.0.10)'
     devDependencies:
       '@types/jest':
         specifier: ^29.5.12
@@ -313,9 +313,9 @@ packages:
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@openzeppelin/relayer-plugin-launchtube@git+https://git@github.com:OpenZeppelin/relayer-plugin-launchtube.git#66d7e706e736fc1c17674729d0a9fe936467392d':
-    resolution: {commit: 66d7e706e736fc1c17674729d0a9fe936467392d, repo: git@github.com:OpenZeppelin/relayer-plugin-launchtube.git, type: git}
-    version: 0.1.0
+  '@openzeppelin/relayer-plugin-launchtube@0.2.0':
+    resolution: {integrity: sha512-nhD5ZHDngjeoqdBArzKR1nzbK1R4Gv49fY+cuF3l+QrZ1IVX6PciBqUFenC5kCaKnyBqvMMJx+XDIBFqY7/bgg==}
+    engines: {node: '>=22.18.0', npm: use pnpm, pnpm: '>=9', yarn: use pnpm}
 
   '@openzeppelin/relayer-sdk@1.2.1':
     resolution: {integrity: sha512-Qbz+/Gspln4hAJ/ANOukqDgOQ7tkD52PBYr/L3AsNFvt0fQh9jjTg7ncQxHDe7sglz9VVhlKOgAMDQ8qjlBSEQ==}
@@ -2102,8 +2102,9 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
-  '@openzeppelin/relayer-plugin-launchtube@git+https://git@github.com:OpenZeppelin/relayer-plugin-launchtube.git#66d7e706e736fc1c17674729d0a9fe936467392d(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.2)(utf-8-validate@5.0.10)':
+  '@openzeppelin/relayer-plugin-launchtube@0.2.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.2)(utf-8-validate@5.0.10)':
     dependencies:
+      '@actions/exec': 1.1.1
       '@openzeppelin/relayer-sdk': 1.4.0(bufferutil@4.0.9)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.2)(utf-8-validate@5.0.10)
       '@stellar/stellar-sdk': 11.3.0
     transitivePeerDependencies:

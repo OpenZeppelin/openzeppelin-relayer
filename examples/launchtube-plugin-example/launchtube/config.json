@@ -1,0 +1,7 @@
+{
+  "fundRelayerId": "launchtube-fund",
+  "sequenceRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"],
+  "maxFee": 1000000,
+  "network": "testnet",
+  "rpcUrl": "https://soroban-testnet.stellar.org"
+}
