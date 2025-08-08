@@ -1,0 +1,28 @@
+{
+  "name": "launchtube-plugin-example",
+  "version": "1.0.0",
+  "description": "Example for LaunchTube plugin",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "@openzeppelin/relayer-plugin-launchtube": "0.2.0",
+    "@openzeppelin/relayer-sdk": "^1.2.1",
+    "@types/node": "^24.0.3"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/uuid": "^10.0.0",
+    "husky": "^9.1.7",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.3.3"
+  }
+}
