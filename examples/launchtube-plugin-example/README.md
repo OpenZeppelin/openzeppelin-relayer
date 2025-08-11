@@ -55,7 +55,8 @@ From this directory (`examples/launchtube-plugin-example`), run these commands:
 #### Create LaunchTube accounts
 
 ```bash
-# Replace YOUR_PASSWORD with a strong password
+# Replace each YOUR_PASSWORD with a unique strong password for each key
+# You will need to add these passwords to your .env file
 # Password must contain at least one uppercase letter, one lowercase letter,
 # one number, and one special character (e.g., MyPass123!)
 
@@ -94,7 +95,9 @@ Create `.env` in this directory:
 
 ```env
 REDIS_URL=redis://redis:6379
-KEYSTORE_PASSPHRASE=YOUR_PASSWORD
+KEYSTORE_PASSPHRASE_FUND=YOUR_PASSWORD
+KEYSTORE_PASSPHRASE_SEQ_001=YOUR_PASSWORD
+KEYSTORE_PASSPHRASE_SEQ_002=YOUR_PASSWORD
 WEBHOOK_SIGNING_KEY=<webhook_key_from_above>
 API_KEY=<api_key_from_above>
 ```
