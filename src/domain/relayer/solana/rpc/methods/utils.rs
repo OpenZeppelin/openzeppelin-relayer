@@ -2701,6 +2701,7 @@ mod tests {
             network_type: crate::models::NetworkType::Solana,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         // Set up expectation on job producer
