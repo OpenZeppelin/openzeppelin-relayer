@@ -233,6 +233,48 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
 }
 ```
 
+### Generating XDR for the Relayer
+
+Use [@stellar/stellar-sdk](https://stellar.github.io/js-stellar-sdk/TransactionBuilder.html) to export either a full transaction envelope XDR, or Soroban `func` + `auth` XDRs.
+
+#### Full transaction envelope XDR
+
+```ts
+import { Networks, TransactionBuilder, rpc } from '@stellar/stellar-sdk';
+
+// ...build your tx with TransactionBuilder and Contract.call(...)
+const tx = new TransactionBuilder(account, {
+  fee: '100',
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(/* Operation.invokeHostFunction from Contract.call(...) */)
+  .setTimeout(30)
+  .build();
+
+// Optional: pre-simulate to set resources/fees before signing
+const sim = await rpcServer.simulateTransaction(tx);
+const prepared = rpc.assembleTransaction(tx, sim).build();
+prepared.sign(keypair);
+
+// Export base64 envelope XDR
+const envelopeXdr = prepared.toXDR();
+```
+
+#### Soroban `func` + `auth` XDR
+
+```ts
+// Build and simulate first to obtain auth
+const baseTx = /* TransactionBuilder(...).addOperation(...).build() */;
+const sim = await rpcServer.simulateTransaction(baseTx);
+
+// Apply simulation, then extract from the single InvokeHostFunction op
+const assembled = rpc.assembleTransaction(baseTx, sim).build();
+const op = assembled.operations[0]; // Operation.InvokeHostFunction
+
+const funcXdr = op.func.toXDR("base64");
+const authXdrs = (op.auth ?? []).map(a => a.toXDR("base64"));
+```
+
 ## How It Works
 
 1. **Request Validation**: Validates input parameters and extracts Soroban data
