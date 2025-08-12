@@ -152,7 +152,10 @@ The relayer supports three ways to submit transactions:
 2. **Transaction XDR (unsigned)**: Submit a pre-built unsigned transaction using `transaction_xdr` field (advanced use case)
 3. **Transaction XDR (signed) with fee bump**: Submit a signed transaction using `transaction_xdr` with `fee_bump: true` to wrap it in a fee bump transaction
 
-Example: Send Transaction
+==== Example: Send Transaction (Operations-based)
+
+This is the recommended approach for most use cases. The relayer builds and signs the transaction from the operations you provide:
+
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
@@ -171,6 +174,64 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
   "memo": {"type": "text", "value": "Payment for services"}
 }'
 ----
+
+==== Example: Send Unsigned Transaction XDR
+
+For advanced use cases where you build the transaction externally but want the relayer to sign it:
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "network": "testnet",
+  "transaction_xdr": "AAAAAgAAAADtbDyg4MbSV7VWYXDLM4mwNSfR/NuYBXtgyGxY5W2DYgAAAGQAAw+QAAAAAwAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAD/98LjByupXek5CPI9A0c0tX5k0Uoc1BLeceDHWb5jSAAAAAAAAAAAAJiWgAAAAAAAAAAA"
+}'
+----
+
+The `transaction_xdr` field should contain a base64-encoded unsigned transaction envelope. The relayer will:
+1. Decode the XDR transaction
+2. Sign it with the configured signer
+3. Submit it to the network
+
+==== Example: Send Signed Transaction with Fee Bump
+
+For scenarios where you have a pre-signed transaction and want the relayer to wrap it in a fee bump transaction:
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "network": "testnet",
+  "transaction_xdr": "AAAAAgAAAADtbDyg4MbSV7VWYXDLM4mwNSfR/NuYBXtgyGxY5W2DYgAAAGQAAw+QAAAAAwAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAD/98LjByupXek5CPI9A0c0tX5k0Uoc1BLeceDHWb5jSAAAAAAAAAAAAJiWgAAAAAAAAAAB5W2DYgAAAEBKAvyIlCwa8fq9TjBV7zBwXXhDr8jxhUqRnfRk3K2RKMCwMHT0PcGGEkNaT7OyJQZpYaRiQoHlw8x0KbqWvj8P",
+  "fee_bump": true,
+  "max_fee": 2000000
+}'
+----
+
+In this case:
+- `transaction_xdr` contains a base64-encoded **signed** transaction envelope
+- `fee_bump: true` tells the relayer to wrap this in a fee bump transaction
+- `max_fee` (optional) sets the maximum fee for the fee bump transaction in stroops (defaults to 1,000,000 = 0.1 XLM)
+
+The relayer will:
+1. Decode the signed transaction
+2. Create a fee bump transaction wrapper
+3. Sign the fee bump transaction with the relayer's key
+4. Submit it to the network
+
+This is useful when:
+- You have a transaction signed by another party that needs higher fees to be processed
+- You want to sponsor transaction fees for other accounts
+- You need to adjust fees for already-signed transactions
+
+[NOTE]
+====
+Fee bump transactions require the original transaction to be already signed. The relayer only signs the fee bump wrapper, not the inner transaction.
+====
 
 See link:https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^] for full details and examples.
 
