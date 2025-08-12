@@ -17,6 +17,7 @@ use utoipa::ToSchema;
 use mockall::automock;
 
 use crate::{
+    // config::RelayerFileConfig,
     jobs::JobProducerTrait,
     models::{
         AppState, DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
@@ -29,7 +30,10 @@ use crate::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
         TransactionCounterTrait, TransactionRepository,
     },
-    services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
+    services::{
+        gas::manager::GasPriceManagerTrait, get_network_provider, EvmSignerFactory,
+        TransactionCounterService,
+    },
 };
 
 use async_trait::async_trait;
@@ -323,12 +327,13 @@ pub trait RelayerFactoryTrait<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 >
 {
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>,
     ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, RelayerError>;
 }
 
@@ -344,12 +349,13 @@ impl<
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
-    > RelayerFactoryTrait<J, RR, TR, NR, NFR, SR, TCR, PR> for RelayerFactory
+        GPM: GasPriceManagerTrait + Send + Sync + 'static,
+    > RelayerFactoryTrait<J, RR, TR, NR, NFR, SR, TCR, PR, GPM> for RelayerFactory
 {
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>,
     ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR>, RelayerError> {
         match relayer.network_type {
             NetworkType::Evm => {

@@ -82,6 +82,7 @@ pub mod mockutils {
                 features: None,
                 symbol: Some("testETH".to_string()),
                 chain_id: Some(1),
+                gas_price_cache: None,
             }),
         }
     }
@@ -120,6 +121,7 @@ pub mod mockutils {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
+        crate::services::gas::manager::MockGasPriceManagerTrait,
     > {
         let relayer_repository = Arc::new(RelayerRepositoryStorage::new_in_memory());
         if let Some(relayers) = relayers {
@@ -189,6 +191,9 @@ pub mod mockutils {
             ),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
+            gas_price_manager: Arc::new(
+                crate::services::gas::manager::MockGasPriceManagerTrait::new(),
+            ),
         }
     }
 

@@ -31,9 +31,9 @@ use super::{NetworkTransaction, RelayerTransactionFactory};
 ///
 /// A `Result` containing a `TransactionRepoModel` if successful, or an `ApiError` if an error
 /// occurs.
-pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
     transaction_id: String,
-    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
 ) -> Result<TransactionRepoModel, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -44,6 +44,7 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
+    GPM: crate::services::gas::manager::GasPriceManagerTrait + Send + Sync + 'static,
 {
     state
         .transaction_repository
@@ -80,6 +81,7 @@ pub async fn get_relayer_transaction(
         state.transaction_repository(),
         state.transaction_counter_store(),
         state.job_producer(),
+        state.gas_price_manager.clone(),
     )
     .await
     .map_err(|e| e.into())
@@ -112,6 +114,7 @@ pub async fn get_relayer_transaction_by_model(
         state.transaction_repository(),
         state.transaction_counter_store(),
         state.job_producer(),
+        state.gas_price_manager.clone(),
     )
     .await
     .map_err(|e| e.into())

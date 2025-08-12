@@ -3,17 +3,18 @@
 //! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
     models::{evm::Speed, EvmNetwork, EvmTransactionData, TransactionError},
-    services::EvmProviderTrait,
+    services::{
+        gas::manager::{GasPriceManager, GasPriceManagerTrait},
+        EvmProviderTrait,
+    },
 };
-use alloy::rpc::types::BlockNumberOrTag;
+use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use eyre::Result;
 use futures::try_join;
 use log::info;
 
 use async_trait::async_trait;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[cfg(test)]
 use mockall::automock;
@@ -64,6 +65,14 @@ impl std::hash::Hash for Speed {
     }
 }
 
+const SPEED_PERCENTILES: &[(Speed, f64); 4] = &[
+    (Speed::SafeLow, 30.0),
+    (Speed::Average, 50.0),
+    (Speed::Fast, 85.0),
+    (Speed::Fastest, 99.0),
+];
+
+// Gwei in floating form for original-style percentile math
 const GWEI: f64 = 1e9;
 
 // calculate the multiplier for the gas estimation
@@ -146,20 +155,128 @@ pub trait EvmGasPriceServiceTrait {
 pub struct EvmGasPriceService<P: EvmProviderTrait> {
     provider: P,
     network: EvmNetwork,
+    gas_price_manager: Option<std::sync::Arc<GasPriceManager>>,
 }
 
 impl<P: EvmProviderTrait> EvmGasPriceService<P> {
     pub fn new(provider: P, network: EvmNetwork) -> Self {
-        Self { provider, network }
+        Self {
+            provider,
+            network,
+            gas_price_manager: None,
+        }
+    }
+
+    pub fn new_with_manager(
+        provider: P,
+        network: EvmNetwork,
+        gas_price_manager: Option<std::sync::Arc<GasPriceManager>>,
+    ) -> Self {
+        Self {
+            provider,
+            network,
+            gas_price_manager,
+        }
     }
 
     pub fn network(&self) -> &EvmNetwork {
         &self.network
     }
+
+    fn build_legacy_prices_from_base(base_gas_price: u128) -> SpeedPrices {
+        let legacy_price_pairs: Vec<(Speed, u128)> = Speed::multiplier()
+            .into_iter()
+            .map(|(speed, multiplier)| {
+                let price_for_speed = (base_gas_price * multiplier) / 100;
+                (speed, price_for_speed)
+            })
+            .collect();
+
+        SpeedPrices {
+            safe_low: legacy_price_pairs
+                .iter()
+                .find(|(s, _)| *s == Speed::SafeLow)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            average: legacy_price_pairs
+                .iter()
+                .find(|(s, _)| *s == Speed::Average)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            fast: legacy_price_pairs
+                .iter()
+                .find(|(s, _)| *s == Speed::Fast)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+            fastest: legacy_price_pairs
+                .iter()
+                .find(|(s, _)| *s == Speed::Fastest)
+                .map(|(_, p)| *p)
+                .unwrap_or(0),
+        }
+    }
+
+    #[inline]
+    fn percentile_index_for_speed(speed: Speed) -> (usize, f64) {
+        SPEED_PERCENTILES
+            .iter()
+            .enumerate()
+            .find(|(_, (s, _))| *s == speed)
+            .map(|(idx, (_, p))| (idx, *p))
+            .unwrap_or((0, 30.0))
+    }
+
+    fn reward_percentiles_ordered() -> Vec<f64> {
+        SPEED_PERCENTILES.iter().map(|(_, p)| *p).collect()
+    }
+
+    fn compute_max_priority_fees_from_history(fee_history: &FeeHistory) -> SpeedPrices {
+        fn avg_priority_fee_wei(fee_history: &FeeHistory, idx: usize, percentile: f64) -> u128 {
+            let rewards_gwei: Vec<f64> = fee_history
+                .reward
+                .as_ref()
+                .map(|reward_rows| {
+                    reward_rows
+                        .iter()
+                        .filter_map(|block_rewards| {
+                            let reward = block_rewards[idx];
+                            if reward > 0 {
+                                Some(reward as f64 / GWEI)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let avg_gwei = if rewards_gwei.is_empty() {
+                (1.0 * percentile) / 100.0
+            } else {
+                rewards_gwei.iter().sum::<f64>() / rewards_gwei.len() as f64
+            };
+
+            (avg_gwei * GWEI) as u128
+        }
+
+        let (i0, p0) = Self::percentile_index_for_speed(Speed::SafeLow);
+        let (i1, p1) = Self::percentile_index_for_speed(Speed::Average);
+        let (i2, p2) = Self::percentile_index_for_speed(Speed::Fast);
+        let (i3, p3) = Self::percentile_index_for_speed(Speed::Fastest);
+
+        SpeedPrices {
+            safe_low: avg_priority_fee_wei(fee_history, i0, p0),
+            average: avg_priority_fee_wei(fee_history, i1, p1),
+            fast: avg_priority_fee_wei(fee_history, i2, p2),
+            fastest: avg_priority_fee_wei(fee_history, i3, p3),
+        }
+    }
 }
 
 #[async_trait]
-impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
+impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
+    for EvmGasPriceService<P>
+{
     type Provider = P;
 
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError> {
@@ -206,29 +323,36 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
     }
 
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
+        if let Some(manager) = &self.gas_price_manager {
+            if let Some((_, base_fee, _)) =
+                manager.get_cached_components(self.network.chain_id).await
+            {
+                return Ok(base_fee);
+            }
+        }
         let block = self.provider.get_block_by_number().await?;
         let base_fee = block.header.base_fee_per_gas.unwrap_or(0);
         Ok(base_fee.into())
     }
 
     async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError> {
+        if let Some(manager) = &self.gas_price_manager {
+            if let Some((gas_price, base_fee, fee_history)) =
+                manager.get_cached_components(self.network.chain_id).await
+            {
+                let legacy_prices = Self::build_legacy_prices_from_base(gas_price);
+                let max_priority_fees = Self::compute_max_priority_fees_from_history(&fee_history);
+
+                return Ok(GasPrices {
+                    legacy_prices,
+                    max_priority_fee_per_gas: max_priority_fees,
+                    base_fee_per_gas: base_fee,
+                });
+            }
+        }
         const HISTORICAL_BLOCKS: u64 = 4;
 
-        // Define speed percentiles
-        let speed_percentiles: HashMap<Speed, (usize, f64)> = [
-            (Speed::SafeLow, (0, 30.0)),
-            (Speed::Average, (1, 50.0)),
-            (Speed::Fast, (2, 85.0)),
-            (Speed::Fastest, (3, 99.0)),
-        ]
-        .into();
-
-        // Create array of reward percentiles
-        let reward_percentiles: Vec<f64> = speed_percentiles
-            .values()
-            .sorted_by_key(|&(idx, _)| idx)
-            .map(|(_, percentile)| *percentile)
-            .collect();
+        let reward_percentiles: Vec<f64> = Self::reward_percentiles_ordered();
 
         // Get prices in parallel
         let (legacy_prices, base_fee, fee_history) = try_join!(
@@ -251,56 +375,29 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
             }
         )?;
 
-        // Calculate maxPriorityFeePerGas for each speed
-        let max_priority_fees: HashMap<Speed, f64> = Speed::multiplier()
-            .into_iter()
-            .filter_map(|(speed, _)| {
-                let (idx, percentile) = speed_percentiles.get(&speed)?;
+        let max_priority_fees = Self::compute_max_priority_fees_from_history(&fee_history);
 
-                // Get rewards for this speed's percentile
-                let rewards: Vec<f64> = fee_history
-                    .reward
-                    .as_ref()
-                    .map(|rewards| {
-                        rewards
-                            .iter()
-                            .filter_map(|block_rewards| {
-                                let reward = block_rewards[*idx];
-                                if reward > 0 {
-                                    Some(reward as f64 / GWEI)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                // Calculate mean of non-zero rewards, or use fallback
-                let priority_fee = if rewards.is_empty() {
-                    // Fallback: 1 gwei * percentile / 100
-                    (1.0 * percentile) / 100.0
-                } else {
-                    rewards.iter().sum::<f64>() / rewards.len() as f64
-                };
-
-                Some((speed, priority_fee))
-            })
-            .collect();
-
-        // Convert max_priority_fees to SpeedPrices
-        let max_priority_fees = SpeedPrices {
-            safe_low: (max_priority_fees.get(&Speed::SafeLow).unwrap_or(&0.0) * GWEI) as u128,
-            average: (max_priority_fees.get(&Speed::Average).unwrap_or(&0.0) * GWEI) as u128,
-            fast: (max_priority_fees.get(&Speed::Fast).unwrap_or(&0.0) * GWEI) as u128,
-            fastest: (max_priority_fees.get(&Speed::Fastest).unwrap_or(&0.0) * GWEI) as u128,
-        };
-
-        Ok(GasPrices {
+        let prices = GasPrices {
             legacy_prices,
             max_priority_fee_per_gas: max_priority_fees,
             base_fee_per_gas: base_fee,
-        })
+        };
+
+        // Optionally seed the cache manager for faster subsequent reads
+        if let Some(manager) = &self.gas_price_manager {
+            let fee_history_clone: FeeHistory = fee_history.clone();
+            let gas_price = self.provider.get_gas_price().await.unwrap_or(0);
+            manager
+                .update_from_components(
+                    self.network.chain_id,
+                    gas_price,
+                    prices.base_fee_per_gas,
+                    fee_history_clone,
+                )
+                .await;
+        }
+
+        Ok(prices)
     }
 
     fn network(&self) -> &EvmNetwork {
@@ -329,6 +426,7 @@ mod tests {
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 

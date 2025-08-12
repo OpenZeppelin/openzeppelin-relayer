@@ -13,6 +13,34 @@ use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 
+/// Configuration for gas price caching
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct GasPriceCacheConfig {
+    /// Enable gas price caching for this network
+    pub enabled: bool,
+
+    /// How often to refresh prices (milliseconds)
+    pub refresh_interval_ms: u64,
+
+    /// When data becomes stale (milliseconds)
+    pub stale_after_ms: u64,
+
+    /// When to expire and force refresh (milliseconds)
+    pub expire_after_ms: u64,
+}
+
+impl Default for GasPriceCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            refresh_interval_ms: 5_000, // 5 seconds
+            stale_after_ms: 20_000,     // 20 seconds
+            expire_after_ms: 45_000,    // 45 seconds
+        }
+    }
+}
+
 /// Configuration specific to EVM-compatible networks.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +57,8 @@ pub struct EvmNetworkConfig {
     pub features: Option<Vec<String>>,
     /// The symbol of the network's native currency (e.g., "ETH", "MATIC").
     pub symbol: Option<String>,
+    /// Gas price cache configuration
+    pub gas_price_cache: Option<GasPriceCacheConfig>,
 }
 
 impl EvmNetworkConfig {
@@ -74,6 +104,10 @@ impl EvmNetworkConfig {
                 .or(parent.required_confirmations),
             features: merge_optional_string_vecs(&self.features, &parent.features),
             symbol: self.symbol.clone().or_else(|| parent.symbol.clone()),
+            gas_price_cache: self
+                .gas_price_cache
+                .clone()
+                .or_else(|| parent.gas_price_cache.clone()),
         }
     }
 }
@@ -213,7 +247,7 @@ mod tests {
         let parent = EvmNetworkConfig {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
-                from: None,
+                from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
                 explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
@@ -224,6 +258,12 @@ mod tests {
             required_confirmations: Some(6),
             features: Some(vec!["legacy".to_string()]),
             symbol: Some("PETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -240,6 +280,12 @@ mod tests {
             required_confirmations: Some(1),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("CETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: false,
+                refresh_interval_ms: 20_000,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            }),
         };
 
         let result = child.merge_with_parent(&parent);
@@ -268,6 +314,15 @@ mod tests {
             Some(vec!["legacy".to_string(), "eip1559".to_string()])
         );
         assert_eq!(result.symbol, Some("CETH".to_string()));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: false,
+                refresh_interval_ms: 20_000,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            })
+        );
     }
 
     #[test]
@@ -286,6 +341,12 @@ mod tests {
             required_confirmations: Some(6),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = create_evm_network_for_inheritance_test("ethereum-testnet", "ethereum-mainnet");
@@ -310,6 +371,15 @@ mod tests {
         assert_eq!(result.required_confirmations, Some(6));
         assert_eq!(result.features, Some(vec!["eip1559".to_string()]));
         assert_eq!(result.symbol, Some("ETH".to_string()));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -328,6 +398,12 @@ mod tests {
             required_confirmations: Some(6),
             features: Some(vec!["eip155".to_string(), "eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -344,6 +420,12 @@ mod tests {
             required_confirmations: None,                // Inherit
             features: Some(vec!["eip2930".to_string()]), // Merge
             symbol: None,                                // Inherit
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: false,
+                refresh_interval_ms: 20_000,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            }),
         };
 
         let result = child.merge_with_parent(&parent);
@@ -378,6 +460,15 @@ mod tests {
             ])
         ); // Merged
         assert_eq!(result.symbol, Some("ETH".to_string())); // Inherited
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: false,
+                refresh_interval_ms: 20_000,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            })
+        );
     }
 
     #[test]
@@ -396,6 +487,7 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -412,6 +504,7 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -426,6 +519,7 @@ mod tests {
         assert_eq!(result.required_confirmations, None);
         assert_eq!(result.features, None);
         assert_eq!(result.symbol, None);
+        assert_eq!(result.gas_price_cache, None);
     }
 
     #[test]
@@ -448,6 +542,12 @@ mod tests {
                 "shared".to_string(),
             ]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -468,6 +568,7 @@ mod tests {
                 "custom".to_string(),
             ]),
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -481,6 +582,15 @@ mod tests {
             "custom".to_string(),
         ];
         assert_eq!(result.features, Some(expected_features));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -512,6 +622,12 @@ mod tests {
             required_confirmations: Some(6),
             features: None,
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -528,12 +644,22 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
 
         // Child's 'from' field should be preserved, not inherited from parent
         assert_eq!(result.common.from, Some("parent".to_string()));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -570,6 +696,12 @@ mod tests {
             required_confirmations: Some(12),
             features: Some(vec![]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -586,12 +718,22 @@ mod tests {
             required_confirmations: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
 
         // Should merge empty parent features with child features
         assert_eq!(result.features, Some(vec!["eip1559".to_string()]));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                refresh_interval_ms: 10_000,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -614,6 +756,7 @@ mod tests {
         assert_eq!(result.required_confirmations, config.required_confirmations);
         assert_eq!(result.features, config.features);
         assert_eq!(result.symbol, config.symbol);
+        assert_eq!(result.gas_price_cache, config.gas_price_cache);
     }
 
     #[test]

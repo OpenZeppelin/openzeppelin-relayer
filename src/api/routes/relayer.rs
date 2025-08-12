@@ -210,6 +210,7 @@ mod tests {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
+        crate::services::gas::manager::MockGasPriceManagerTrait,
     > {
         let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
         let transaction_repo = Arc::new(TransactionRepositoryStorage::new_in_memory());
@@ -237,6 +238,7 @@ mod tests {
                 required_confirmations: Some(12),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             }),
         };
         network_repo.create(test_network).await.unwrap();
@@ -315,6 +317,9 @@ mod tests {
             ),
             job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
+            gas_price_manager: Arc::new(
+                crate::services::gas::manager::MockGasPriceManagerTrait::new(),
+            ),
         }
     }
 

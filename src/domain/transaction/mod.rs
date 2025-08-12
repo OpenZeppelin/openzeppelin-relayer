@@ -22,8 +22,11 @@ use crate::{
         TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
     services::{
-        get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
-        EvmSignerFactory, StellarSignerFactory,
+        gas::{
+            evm_gas_price::EvmGasPriceService, manager::GasPriceManager,
+            network_extra_fee::NetworkExtraFeeCalculatorService,
+        },
+        get_network_provider, EvmSignerFactory, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -392,6 +395,7 @@ impl RelayerTransactionFactory {
         transaction_repository: Arc<TransactionRepositoryStorage>,
         transaction_counter_store: Arc<TransactionCounterRepositoryStorage>,
         job_producer: Arc<JobProducer>,
+        gas_price_manager: Arc<GasPriceManager>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
             NetworkType::Evm => {
@@ -413,10 +417,17 @@ impl RelayerTransactionFactory {
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
                 let network_extra_fee_calculator =
-                    get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
+                    NetworkExtraFeeCalculatorService::new(network.clone(), evm_provider.clone());
+
+                let gas_price_service = EvmGasPriceService::new_with_manager(
+                    evm_provider.clone(),
+                    network.clone(),
+                    Some(gas_price_manager.clone()),
+                );
+
                 let price_calculator = evm::PriceCalculator::new(
-                    EvmGasPriceService::new(evm_provider.clone(), network),
-                    network_extra_fee_calculator,
+                    gas_price_service,
+                    Some(network_extra_fee_calculator),
                 );
 
                 Ok(NetworkTransaction::Evm(Box::new(

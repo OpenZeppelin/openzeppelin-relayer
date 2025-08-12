@@ -310,6 +310,7 @@ mod tests {
             required_confirmations: 1,
             features: vec![],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 

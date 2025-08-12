@@ -57,6 +57,7 @@ use crate::repositories::{
     NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
     TransactionCounterTrait, TransactionRepository,
 };
+use crate::services::gas::manager::GasPriceManagerTrait;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -107,14 +108,14 @@ impl SocketService {
     ///
     /// A vector of traces.
     #[allow(clippy::type_complexity)]
-    pub async fn listen<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(
+    pub async fn listen<RA, J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError>
     where
-        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR, GPM> + 'static + Send + Sync,
         J: JobProducerTrait + Send + Sync + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         TR: TransactionRepository
@@ -127,6 +128,7 @@ impl SocketService {
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
+        GPM: GasPriceManagerTrait + Send + Sync + 'static,
     {
         let mut shutdown = shutdown_rx;
 
@@ -137,7 +139,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(stream, state, relayer_api))
+                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(stream, state, relayer_api))
                         .await
                         .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
@@ -168,13 +170,13 @@ impl SocketService {
     ///
     /// A vector of traces.
     #[allow(clippy::type_complexity)]
-    async fn handle_connection<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(
+    async fn handle_connection<RA, J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
         stream: UnixStream,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>,
         relayer_api: Arc<RA>,
     ) -> Result<Vec<serde_json::Value>, PluginError>
     where
-        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR> + 'static + Send + Sync,
+        RA: RelayerApiTrait<J, RR, TR, NR, NFR, SR, TCR, PR, GPM> + 'static + Send + Sync,
         J: JobProducerTrait + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         TR: TransactionRepository
@@ -187,6 +189,7 @@ impl SocketService {
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
+        GPM: GasPriceManagerTrait + Send + Sync + 'static,
     {
         let (r, mut w) = stream.into_split();
         let mut reader = BufReader::new(r).lines();
@@ -212,7 +215,6 @@ impl SocketService {
         Ok(traces)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use crate::{

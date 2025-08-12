@@ -1598,6 +1598,7 @@ mod tests {
                 required_confirmations: Some(12),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             }),
         };
 

@@ -595,6 +595,7 @@ mod tests {
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 
@@ -617,6 +618,7 @@ mod tests {
             required_confirmations: Some(1),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
 
         NetworkRepoModel::new_evm(config)

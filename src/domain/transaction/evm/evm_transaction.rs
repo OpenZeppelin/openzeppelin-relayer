@@ -31,7 +31,9 @@ use crate::{
         Repository, TransactionCounterRepositoryStorage, TransactionCounterTrait,
         TransactionRepository, TransactionRepositoryStorage,
     },
-    services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
+    services::{
+        gas::evm_gas_price::EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
+    },
     utils::get_evm_default_gas_limit_for_tx,
 };
 
@@ -1234,6 +1236,7 @@ mod tests {
                         required_confirmations: Some(12),
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
+                        gas_price_cache: None,
                     };
                     Ok(Some(NetworkRepoModel {
                         id: "evm:mainnet".to_string(),
@@ -1414,6 +1417,7 @@ mod tests {
                         required_confirmations: Some(12),
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
+                        gas_price_cache: None,
                     };
                     Ok(Some(NetworkRepoModel {
                         id: "evm:mainnet".to_string(),

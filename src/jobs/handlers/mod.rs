@@ -19,6 +19,9 @@ pub use transaction_status_handler::*;
 mod solana_swap_request_handler;
 pub use solana_swap_request_handler::*;
 
+mod gas_price_update_handler;
+pub use gas_price_update_handler::*;
+
 pub fn handle_result(
     result: Result<(), Report>,
     attempt: Attempt,

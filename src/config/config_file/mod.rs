@@ -42,8 +42,8 @@ pub use plugin::*;
 
 pub mod network;
 pub use network::{
-    EvmNetworkConfig, NetworkConfigCommon, NetworkFileConfig, NetworksFileConfig,
-    SolanaNetworkConfig, StellarNetworkConfig,
+    EvmNetworkConfig, GasPriceCacheConfig, NetworkConfigCommon, NetworkFileConfig,
+    NetworksFileConfig, SolanaNetworkConfig, StellarNetworkConfig,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -279,6 +279,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .expect("Failed to create NetworksFileConfig for test"),
             plugins: Some(vec![PluginFileConfig {
@@ -315,6 +316,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -345,6 +347,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -457,6 +460,7 @@ mod tests {
             required_confirmations: Some(12),
             features: None,
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         });
 
         let mut networks = config.networks.networks;
@@ -491,6 +495,7 @@ mod tests {
             required_confirmations: Some(1),
             features: None,
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         });
 
         let mut networks = config.networks.networks;
@@ -1099,6 +1104,7 @@ mod tests {
             required_confirmations: Some(1),
             features: None,
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         })];
 
         let config = NetworksFileConfig::new(networks).unwrap();
@@ -1462,6 +1468,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -1502,6 +1509,7 @@ mod tests {
                 required_confirmations: Some(1),
                 features: None,
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),

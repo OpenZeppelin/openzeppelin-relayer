@@ -35,7 +35,7 @@ use super::ProviderError;
 /// Provider implementation for EVM-compatible blockchain networks.
 ///
 /// Wraps an HTTP RPC provider to interact with EVM chains like Ethereum, Polygon, etc.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EvmProvider {
     /// RPC selector for managing and selecting providers
     selector: RpcSelector,
