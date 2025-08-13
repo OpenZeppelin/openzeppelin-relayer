@@ -145,6 +145,7 @@ pub struct ConfigFileRelayerStellarPolicy {
     pub max_fee: Option<u32>,
     pub timeout_seconds: Option<u64>,
     pub min_balance: Option<u64>,
+    pub concurrent_transactions: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -411,6 +412,7 @@ fn convert_config_policies_to_domain(
                 min_balance: stellar_policy.min_balance,
                 max_fee: stellar_policy.max_fee,
                 timeout_seconds: stellar_policy.timeout_seconds,
+                concurrent_transactions: stellar_policy.concurrent_transactions,
             }))
         }
     }
@@ -873,6 +875,7 @@ mod tests {
                 min_balance: Some(25000000),
                 max_fee: Some(150000),
                 timeout_seconds: Some(60),
+                concurrent_transactions: None,
             });
 
         let domain_policy = convert_config_policies_to_domain(config_policy).unwrap();
@@ -998,6 +1001,7 @@ mod tests {
                     min_balance: Some(35000000),
                     max_fee: Some(200000),
                     timeout_seconds: Some(90),
+                    concurrent_transactions: None,
                 },
             )),
             signer_id: "test-signer".to_string(),
@@ -1220,6 +1224,7 @@ mod tests {
             min_balance: Some(45000000),
             max_fee: Some(250000),
             timeout_seconds: Some(120),
+            concurrent_transactions: None,
         };
 
         let serialized = serde_json::to_string(&stellar_policy).unwrap();

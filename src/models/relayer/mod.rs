@@ -283,6 +283,8 @@ pub struct RelayerStellarPolicy {
     pub max_fee: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrent_transactions: Option<bool>,
 }
 
 /// Network-specific policy for relayers
@@ -1041,6 +1043,7 @@ mod tests {
             min_balance: Some(20000000),
             max_fee: Some(100000),
             timeout_seconds: Some(30),
+            concurrent_transactions: None,
         };
 
         let network_policy = RelayerNetworkPolicy::Stellar(stellar_policy.clone());

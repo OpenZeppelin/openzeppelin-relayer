@@ -86,7 +86,53 @@ For more configuration examples, visit the link:https://github.com/OpenZeppelin/
 
 === Relayer Policies
 
-Stellar relayers support standard relayer configuration options. Check all options in xref:index.adoc#3_relayers[User Documentation - Relayers].
+Stellar relayers support standard relayer configuration options along with Stellar-specific policies:
+
+[cols="1,1,1,2"]
+|===
+|Policy |Type |Default |Description
+
+|`min_balance`
+|integer
+|None
+|Minimum balance in stroops (1 XLM = 10,000,000 stroops) required for the relayer account
+
+|`max_fee`
+|integer
+|None
+|Maximum transaction fee in stroops the relayer is willing to pay
+
+|`timeout_seconds`
+|integer
+|None
+|Transaction timeout in seconds
+
+|`concurrent_transactions`
+|boolean
+|false
+|Enable concurrent transaction processing. When enabled, bypasses the lane gating mechanism that normally ensures sequential processing for each relayer. Only enable this when your relayer manages transactions from multiple accounts with independent sequence number pools.
+|===
+
+Example configuration with policies:
+[source,json]
+----
+{
+  "id": "stellar-example",
+  "name": "Stellar Example",
+  "network": "testnet",
+  "paused": false,
+  "network_type": "stellar",
+  "signer_id": "local-signer",
+  "policies": {
+    "min_balance": 10000000,
+    "max_fee": 1000000,
+    "timeout_seconds": 30,
+    "concurrent_transactions": false
+  }
+}
+----
+
+For general relayer configuration options, check xref:index.adoc#3_relayers[User Documentation - Relayers].
 
 == API Reference
 

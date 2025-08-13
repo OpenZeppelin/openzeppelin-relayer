@@ -1135,6 +1135,7 @@ mod tests {
             min_balance: Some(10000000),
             max_fee: Some(100),
             timeout_seconds: Some(30),
+            concurrent_transactions: None,
         }));
 
         let result = create_relayer(request, actix_web::web::ThinData(app_state)).await;

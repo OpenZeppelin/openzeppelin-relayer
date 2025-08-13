@@ -39,7 +39,8 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        if !lane_gate::claim(&self.relayer().id, &tx.id) {
+        if !self.concurrent_transactions_enabled() && !lane_gate::claim(&self.relayer().id, &tx.id)
+        {
             info!(
                 "Relayer {} already has a transaction in flight – {} must wait.",
                 self.relayer().id,
@@ -195,14 +196,17 @@ where
             }
         };
 
-        // Step 3: Attempt to enqueue next pending transaction or release lane
-        if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
-            warn!(
-                "Failed to enqueue next pending transaction after {} failure: {}. Releasing lane directly.",
-                tx_id, enqueue_error
-            );
-            // Fallback: release lane directly if we can't hand it over
-            lane_gate::free(&self.relayer().id, &tx_id);
+        // Step 3: Handle lane cleanup (only needed in sequential mode)
+        if !self.concurrent_transactions_enabled() {
+            // In sequential mode, attempt to hand off to next transaction or release lane
+            if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
+                warn!(
+                    "Failed to enqueue next pending transaction after {} failure: {}. Releasing lane directly.",
+                    tx_id, enqueue_error
+                );
+                // Fallback: release lane directly if we can't hand it over
+                lane_gate::free(&self.relayer().id, &tx_id);
+            }
         }
 
         // Step 4: Log failure for monitoring (prepare_fail_total metric would go here)

@@ -6,7 +6,10 @@
       "network": "testnet",
       "paused": false,
       "network_type": "stellar",
-      "signer_id": "launchtube-fund-signer"
+      "signer_id": "launchtube-fund-signer",
+      "policies": {
+        "concurrent_transactions": true
+      }
     },
     {
       "id": "launchtube-seq-001",
