@@ -271,6 +271,30 @@ impl<P: EvmProviderTrait> EvmGasPriceService<P> {
             fastest: avg_priority_fee_wei(fee_history, i3, p3),
         }
     }
+
+    #[inline]
+    fn schedule_stale_refresh(manager: &std::sync::Arc<GasPriceManager>, network: &EvmNetwork) {
+        let network = network.clone();
+        let manager = manager.clone();
+        let reward_percentiles = Self::reward_percentiles_ordered();
+        tokio::spawn(async move {
+            let refresh = async {
+                let provider = crate::services::get_network_provider(&network, None).ok()?;
+                let fresh_gas_price = provider.get_gas_price().await.ok()?;
+                let block = provider.get_block_by_number().await.ok()?;
+                let fresh_base_fee: u128 = block.header.base_fee_per_gas.unwrap_or(0).into();
+                let fee_hist = provider
+                    .get_fee_history(4, BlockNumberOrTag::Latest, reward_percentiles)
+                    .await
+                    .ok()?;
+                manager
+                    .set_snapshot(network.chain_id, fresh_gas_price, fresh_base_fee, fee_hist)
+                    .await;
+                Some(())
+            };
+            let _ = refresh.await;
+        });
+    }
 }
 
 #[async_trait]
@@ -289,7 +313,18 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
     }
 
     async fn get_legacy_prices_from_json_rpc(&self) -> Result<SpeedPrices, TransactionError> {
-        let base = self.provider.get_gas_price().await?;
+        let base = if let Some(manager) = &self.gas_price_manager {
+            if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
+                if snapshot.is_stale {
+                    Self::schedule_stale_refresh(manager, &self.network);
+                }
+                snapshot.gas_price
+            } else {
+                self.provider.get_gas_price().await?
+            }
+        } else {
+            self.provider.get_gas_price().await?
+        };
         let prices: Vec<(Speed, u128)> = Speed::multiplier()
             .into_iter()
             .map(|(speed, multiplier)| {
@@ -324,10 +359,11 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
 
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
         if let Some(manager) = &self.gas_price_manager {
-            if let Some((_, base_fee, _)) =
-                manager.get_cached_components(self.network.chain_id).await
-            {
-                return Ok(base_fee);
+            if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
+                if snapshot.is_stale {
+                    Self::schedule_stale_refresh(manager, &self.network);
+                }
+                return Ok(snapshot.base_fee_per_gas);
             }
         }
         let block = self.provider.get_block_by_number().await?;
@@ -337,11 +373,18 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
 
     async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError> {
         if let Some(manager) = &self.gas_price_manager {
-            if let Some((gas_price, base_fee, fee_history)) =
-                manager.get_cached_components(self.network.chain_id).await
-            {
+            if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
+                let gas_price = snapshot.gas_price;
+                let base_fee = snapshot.base_fee_per_gas;
+                let fee_history = snapshot.fee_history.clone();
+                let is_stale = snapshot.is_stale;
                 let legacy_prices = Self::build_legacy_prices_from_base(gas_price);
                 let max_priority_fees = Self::compute_max_priority_fees_from_history(&fee_history);
+
+                // If stale, serve cached immediately and refresh in background
+                if is_stale {
+                    Self::schedule_stale_refresh(manager, &self.network);
+                }
 
                 return Ok(GasPrices {
                     legacy_prices,
@@ -388,7 +431,7 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
             let fee_history_clone: FeeHistory = fee_history.clone();
             let gas_price = self.provider.get_gas_price().await.unwrap_or(0);
             manager
-                .update_from_components(
+                .set_snapshot(
                     self.network.chain_id,
                     gas_price,
                     prices.base_fee_per_gas,

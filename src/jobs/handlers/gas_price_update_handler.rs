@@ -85,7 +85,7 @@ async fn handle_tick(chain_id: u64, context: Data<ThinData<DefaultAppState>>) ->
     // Update cache from components
     context
         .gas_price_manager
-        .update_from_components(chain_id, gas_price, base_fee, fee_history)
+        .set_snapshot(chain_id, gas_price, base_fee, fee_history)
         .await;
 
     Ok(())

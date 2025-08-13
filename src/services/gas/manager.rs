@@ -15,18 +15,26 @@ use std::{sync::Arc, time::Duration};
 #[cfg(test)]
 use mockall::automock;
 
+#[derive(Debug, Clone)]
+pub struct GasPriceSnapshot {
+    pub gas_price: u128,
+    pub base_fee_per_gas: u128,
+    pub fee_history: FeeHistory,
+    pub is_stale: bool,
+}
+
 #[cfg_attr(test, automock)]
 #[async_trait::async_trait]
 pub trait GasPriceManagerTrait: Send + Sync {
     /// Configures caching for a specific network
     fn configure_network(&self, chain_id: u64, config: GasPriceCacheConfig);
 
-    /// Returns cached components (jsonrpc gas price, base fee, fee history) if present and not expired.
-    /// Stale entries are also returned.
-    async fn get_cached_components(&self, chain_id: u64) -> Option<(u128, u128, FeeHistory)>;
+    /// Returns a snapshot of cached gas pricing components if present and not expired.
+    /// Includes stale flag for stale-while-revalidate strategies.
+    async fn get_snapshot(&self, chain_id: u64) -> Option<GasPriceSnapshot>;
 
-    /// Upserts a cache entry from externally-fetched components
-    async fn update_from_components(
+    /// Sets/updates a snapshot from externally fetched components
+    async fn set_snapshot(
         &self,
         chain_id: u64,
         gas_price: u128,
@@ -48,27 +56,26 @@ impl GasPriceManagerTrait for GasPriceManager {
         self.network_configs.insert(chain_id, config);
     }
 
-    async fn get_cached_components(&self, chain_id: u64) -> Option<(u128, u128, FeeHistory)> {
-        // Check if caching is enabled for this network
+    async fn get_snapshot(&self, chain_id: u64) -> Option<GasPriceSnapshot> {
         let config = self.network_configs.get(&chain_id)?;
         if !config.enabled {
             return None;
         }
 
-        // Try to get from cache
         if let Some(entry) = self.cache.get(chain_id).await {
             if entry.is_fresh() || entry.is_stale() {
-                return Some((
-                    entry.gas_price,
-                    entry.base_fee_per_gas,
-                    entry.fee_history.clone(),
-                ));
+                return Some(GasPriceSnapshot {
+                    gas_price: entry.gas_price,
+                    base_fee_per_gas: entry.base_fee_per_gas,
+                    fee_history: entry.fee_history.clone(),
+                    is_stale: entry.is_stale(),
+                });
             }
         }
         None
     }
 
-    async fn update_from_components(
+    async fn set_snapshot(
         &self,
         chain_id: u64,
         gas_price: u128,
@@ -93,11 +100,11 @@ impl GasPriceManagerTrait for GasPriceManager {
         );
 
         self.cache.set(chain_id, entry).await;
-        info!("Updated gas price cache for chain_id {}", chain_id);
+        info!("Updated gas price snapshot for chain_id {}", chain_id);
     }
 
     fn clear_cache(&self) {
-        self.clear_cache();
+        GasPriceManager::clear_cache(self);
     }
 
     #[cfg(test)]
@@ -148,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn test_gas_price_manager_cache_disabled() {
         let manager = GasPriceManager::new();
-        assert!(manager.get_cached_components(1).await.is_none());
+        assert!(manager.get_snapshot(1).await.is_none());
 
         let gas_price = 20_000_000_000u128;
         let base_fee = 10_000_000_000u128;
@@ -168,8 +175,8 @@ mod tests {
 
         manager.configure_network(1, GasPriceCacheConfig::default());
         manager
-            .update_from_components(1, gas_price, base_fee, fee_history)
+            .set_snapshot(1, gas_price, base_fee, fee_history)
             .await;
-        assert!(manager.get_cached_components(1).await.is_some());
+        assert!(manager.get_snapshot(1).await.is_some());
     }
 }
