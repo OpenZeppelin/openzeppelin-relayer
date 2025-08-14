@@ -137,7 +137,7 @@ impl SocketService {
             let relayer_api = Arc::clone(&relayer_api);
             tokio::select! {
                 Ok((stream, _)) = self.listener.accept() => {
-            let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(stream, state, relayer_api))
+                    let result = tokio::spawn(Self::handle_connection::<RA, J, RR, TR, NR, NFR, SR, TCR, PR>(stream, state, relayer_api))
                         .await
                         .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
@@ -212,6 +212,7 @@ impl SocketService {
         Ok(traces)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use crate::{
