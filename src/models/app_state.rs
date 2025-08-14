@@ -20,10 +20,6 @@ use crate::{
     },
 };
 
-/// type alias for the app state wrapped in a ThinData to avoid clippy warnings
-pub type ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR> =
-    ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>;
-
 /// Represents the application state, holding various repositories and services
 /// required for the application's operation.
 #[derive(Clone, Debug)]
@@ -56,6 +52,9 @@ pub struct AppState<
 }
 
 /// type alias for the app state wrapped in a ThinData to avoid clippy warnings
+pub type ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR> =
+    ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>;
+
 pub type DefaultAppState = AppState<
     JobProducer,
     RelayerRepositoryStorage,
