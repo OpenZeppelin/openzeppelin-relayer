@@ -17,7 +17,6 @@ use utoipa::ToSchema;
 use mockall::automock;
 
 use crate::{
-    // config::RelayerFileConfig,
     jobs::JobProducerTrait,
     models::{
         AppState, DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
