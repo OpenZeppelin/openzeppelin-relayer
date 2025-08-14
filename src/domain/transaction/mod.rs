@@ -23,8 +23,7 @@ use crate::{
     },
     services::{
         gas::{
-            evm_gas_price::EvmGasPriceService, manager::GasPriceManager,
-            network_extra_fee::NetworkExtraFeeCalculatorService,
+            evm_gas_price::EvmGasPriceService, network_extra_fee::NetworkExtraFeeCalculatorService,
         },
         get_network_provider, EvmSignerFactory, StellarSignerFactory,
     },
@@ -395,7 +394,6 @@ impl RelayerTransactionFactory {
         transaction_repository: Arc<TransactionRepositoryStorage>,
         transaction_counter_store: Arc<TransactionCounterRepositoryStorage>,
         job_producer: Arc<JobProducer>,
-        gas_price_manager: Arc<GasPriceManager>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
             NetworkType::Evm => {
@@ -419,11 +417,8 @@ impl RelayerTransactionFactory {
                 let network_extra_fee_calculator =
                     NetworkExtraFeeCalculatorService::new(network.clone(), evm_provider.clone());
 
-                let gas_price_service = EvmGasPriceService::new_with_manager(
-                    evm_provider.clone(),
-                    network.clone(),
-                    Some(gas_price_manager.clone()),
-                );
+                let gas_price_service =
+                    EvmGasPriceService::new(evm_provider.clone(), network.clone());
 
                 let price_calculator = evm::PriceCalculator::new(
                     gas_price_service,

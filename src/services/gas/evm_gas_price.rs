@@ -313,7 +313,8 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
     }
 
     async fn get_legacy_prices_from_json_rpc(&self) -> Result<SpeedPrices, TransactionError> {
-        let base = if let Some(manager) = &self.gas_price_manager {
+        let maybe_manager = self.gas_price_manager.as_ref().cloned();
+        let base = if let Some(manager) = &maybe_manager {
             if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
                 if snapshot.is_stale {
                     Self::schedule_stale_refresh(manager, &self.network);
@@ -358,7 +359,8 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
     }
 
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
-        if let Some(manager) = &self.gas_price_manager {
+        let maybe_manager = self.gas_price_manager.as_ref().cloned();
+        if let Some(manager) = &maybe_manager {
             if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
                 if snapshot.is_stale {
                     Self::schedule_stale_refresh(manager, &self.network);
@@ -372,7 +374,8 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
     }
 
     async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError> {
-        if let Some(manager) = &self.gas_price_manager {
+        let maybe_manager = self.gas_price_manager.as_ref().cloned();
+        if let Some(manager) = &maybe_manager {
             if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
                 let gas_price = snapshot.gas_price;
                 let base_fee = snapshot.base_fee_per_gas;

@@ -11,7 +11,6 @@ use crate::{
         RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
         TransactionRepositoryStorage,
     },
-    services::gas::manager::GasPriceManager,
     utils::initialize_redis_connection,
 };
 use actix_web::web;
@@ -105,7 +104,6 @@ pub async fn initialize_app_state(
 
     let queue = Queue::setup().await?;
     let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
-    let gas_price_manager = Arc::new(GasPriceManager::new());
 
     let app_state = web::ThinData(AppState {
         relayer_repository: repositories.relayer,
@@ -116,7 +114,6 @@ pub async fn initialize_app_state(
         transaction_counter_store: repositories.transaction_counter,
         job_producer,
         plugin_repository: repositories.plugin,
-        gas_price_manager,
     });
 
     Ok(app_state)

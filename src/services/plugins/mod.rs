@@ -12,7 +12,6 @@ use crate::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
         TransactionCounterTrait, TransactionRepository,
     },
-    services::gas::manager::GasPriceManagerTrait,
 };
 use actix_web::web;
 use async_trait::async_trait;
@@ -88,11 +87,11 @@ impl<R: PluginRunnerTrait> PluginService<R> {
     }
 
     #[allow(clippy::type_complexity)]
-    async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+    async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR>(
         &self,
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<PluginCallResponse, PluginError>
     where
         J: JobProducerTrait + Send + Sync + 'static,
@@ -107,22 +106,20 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
-        GPM: GasPriceManagerTrait + Send + Sync + 'static,
     {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
         let script_path = Self::resolve_plugin_path(&plugin.path);
         let script_params = plugin_call_request.params.to_string();
 
-        let result = self
-            .runner
-            .run(
-                &socket_path,
-                script_path,
-                plugin.timeout,
-                script_params,
-                state,
-            )
-            .await;
+        let result = runner::PluginRunnerTrait::run::<J, RR, TR, NR, NFR, SR, TCR, PR>(
+            &self.runner,
+            &socket_path,
+            script_path,
+            plugin.timeout,
+            script_params,
+            state,
+        )
+        .await;
 
         match result {
             Ok(script_result) => Ok(PluginCallResponse {
@@ -140,7 +137,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR, GPM>: Send + Sync
+pub trait PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>: Send + Sync
 where
     J: JobProducerTrait + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -150,19 +147,18 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     fn new(runner: PluginRunner) -> Self;
     async fn call_plugin(
         &self,
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError>;
 }
 
 #[async_trait]
-impl<J, TR, RR, NR, NFR, SR, TCR, PR, GPM> PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR, GPM>
+impl<J, TR, RR, NR, NFR, SR, TCR, PR> PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>
     for PluginService<PluginRunner>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -173,7 +169,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     fn new(runner: PluginRunner) -> Self {
         Self::new(runner)
@@ -183,7 +178,7 @@ where
         &self,
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         self.call_plugin(plugin, plugin_call_request, state).await
     }
@@ -241,13 +236,12 @@ mod tests {
             SignerRepositoryStorage,
             TransactionCounterRepositoryStorage,
             PluginRepositoryStorage,
-            crate::services::gas::manager::MockGasPriceManagerTrait,
         > = create_mock_app_state(None, None, None, Some(vec![plugin.clone()]), None).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, crate::services::gas::manager::MockGasPriceManagerTrait>()
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>()
             .returning(|_, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {

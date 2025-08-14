@@ -18,12 +18,11 @@ use crate::{
         TransactionCounterRepositoryStorage, TransactionCounterTrait, TransactionRepository,
         TransactionRepositoryStorage,
     },
-    services::gas::manager::{GasPriceManager, GasPriceManagerTrait},
 };
 
 /// type alias for the app state wrapped in a ThinData to avoid clippy warnings
-pub type ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM> =
-    ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>>;
+pub type ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR> =
+    ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>;
 
 /// Represents the application state, holding various repositories and services
 /// required for the application's operation.
@@ -37,7 +36,6 @@ pub struct AppState<
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 > {
     /// Repository for managing relayer data.
     pub relayer_repository: Arc<RR>,
@@ -55,8 +53,6 @@ pub struct AppState<
     pub job_producer: Arc<J>,
     /// Repository for managing plugins.
     pub plugin_repository: Arc<PR>,
-    /// Manager for gas price caching.
-    pub gas_price_manager: Arc<GPM>,
 }
 
 /// type alias for the app state wrapped in a ThinData to avoid clippy warnings
@@ -69,7 +65,6 @@ pub type DefaultAppState = AppState<
     SignerRepositoryStorage,
     TransactionCounterRepositoryStorage,
     PluginRepositoryStorage,
-    GasPriceManager,
 >;
 
 impl<
@@ -81,8 +76,7 @@ impl<
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
-        GPM: GasPriceManagerTrait + Send + Sync + 'static,
-    > AppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>
+    > AppState<J, RR, TR, NR, NFR, SR, TCR, PR>
 {
     /// Returns a clone of the relayer repository.
     ///
@@ -159,10 +153,7 @@ impl<
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        jobs::MockJobProducerTrait, repositories::TransactionRepositoryStorage,
-        services::gas::manager::MockGasPriceManagerTrait,
-    };
+    use crate::{jobs::MockJobProducerTrait, repositories::TransactionRepositoryStorage};
 
     use super::*;
     use std::sync::Arc;
@@ -176,7 +167,6 @@ mod tests {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
-        MockGasPriceManagerTrait,
     > {
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -209,7 +199,6 @@ mod tests {
             ),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
-            gas_price_manager: Arc::new(MockGasPriceManagerTrait::new()),
         }
     }
 

@@ -2,23 +2,21 @@
 //!
 //! This module contains functions for initializing background workers,
 //! including job processors and other long-running tasks.
-use crate::services::gas::manager::GasPriceManagerTrait;
 use crate::{
     jobs::{
-        gas_price_update_handler, notification_handler, solana_token_swap_cron_handler,
-        solana_token_swap_request_handler, transaction_request_handler, transaction_status_handler,
-        transaction_submission_handler, BackoffRetryPolicy,
+        notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
+        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
+        BackoffRetryPolicy,
     },
-    models::{DefaultAppState, NetworkType},
-    repositories::{NetworkRepository, RelayerRepository, Repository},
+    models::DefaultAppState,
+    repositories::RelayerRepository,
 };
 use actix_web::web::ThinData;
 use apalis::{layers::ErrorHandlingLayer, prelude::*};
 use apalis_cron::CronStream;
-use apalis_cron::Schedule;
 use eyre::Result;
 use log::{error, info};
-use std::{collections::HashSet, str::FromStr, time::Duration};
+use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
 
 // Review and fine tune configuration for the workers
@@ -31,10 +29,9 @@ const TRANSACTION_SENDER: &str = "transaction_sender";
 const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
 const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
-const GAS_PRICE_UPDATE_PREFIX: &str = "gas-price-update-";
 
 pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
-    info!("Initializing workers -----------------------");
+    info!("Initializing workers");
     let queue = app_state.job_producer.get_queue().await?;
 
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
@@ -99,84 +96,6 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .register(transaction_status_queue_worker)
         .register(notification_queue_worker)
         .register(solana_token_swap_request_queue_worker);
-
-    info!("Monitor registered workers -----------------------");
-
-    // Add gas price workers for active EVM networks with caching enabled
-    let active_evm_networks: HashSet<String> = app_state
-        .relayer_repository
-        .list_all()
-        .await?
-        .into_iter()
-        .filter(|r| r.network_type == NetworkType::Evm)
-        .map(|r| r.network)
-        .collect();
-
-    let mut gas_workers = Vec::new();
-
-    info!("Active EVM networks: {:?}", active_evm_networks.clone());
-
-    for network_name in active_evm_networks {
-        info!("Checking network: {}", network_name);
-        let maybe_network = app_state
-            .network_repository
-            .get_by_name(NetworkType::Evm, &network_name)
-            .await?;
-
-        let Some(network_repo) = maybe_network else {
-            error!("Network {} not found in repository", network_name);
-            continue;
-        };
-        info!("Network found: {:?}", network_name.clone());
-
-        let Ok(evm_network) = crate::models::EvmNetwork::try_from(network_repo) else {
-            continue;
-        };
-        info!("Network found 2: {:?}", network_name.clone());
-
-        let Some(cache_config) = &evm_network.gas_price_cache else {
-            continue;
-        };
-
-        info!("Cache config: {:?}", cache_config);
-        if !cache_config.enabled {
-            continue;
-        }
-        info!("Cache config enabled: {:?}", network_name.clone());
-
-        info!(
-            "Starting gas price worker for network {} (chain_id: {})",
-            evm_network.network, evm_network.chain_id
-        );
-
-        app_state
-            .gas_price_manager
-            .configure_network(evm_network.chain_id, cache_config.clone());
-
-        // Cron schedule from refresh_interval_ms (rounded up to seconds)
-        let seconds = std::cmp::max(1u64, cache_config.refresh_interval_ms.div_ceil(1000));
-        let schedule = Schedule::from_str(&format!("*/{} * * * * *", seconds))
-            .unwrap_or_else(|_| Schedule::from_str("*/15 * * * * *").unwrap());
-
-        let worker = WorkerBuilder::new(format!(
-            "{}{}",
-            GAS_PRICE_UPDATE_PREFIX, evm_network.chain_id
-        ))
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .concurrency(1)
-        .data(evm_network.chain_id)
-        .data(app_state.clone())
-        .backend(CronStream::new(schedule))
-        .build_fn(gas_price_update_handler);
-
-        gas_workers.push(worker);
-    }
-
-    for worker in gas_workers {
-        monitor = monitor.register(worker);
-    }
 
     monitor = monitor
         .on_event(monitor_handle_event)

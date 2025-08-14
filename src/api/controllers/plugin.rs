@@ -13,10 +13,7 @@ use crate::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
         TransactionCounterTrait, TransactionRepository,
     },
-    services::{
-        gas::manager::GasPriceManagerTrait,
-        plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
-    },
+    services::plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
 };
 use actix_web::HttpResponse;
 use eyre::Result;
@@ -33,10 +30,10 @@ use std::sync::Arc;
 /// # Returns
 ///
 /// The result of the plugin call.
-pub async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+pub async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR>(
     plugin_id: String,
     plugin_call_request: PluginCallRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -47,7 +44,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     let plugin = state
         .plugin_repository
@@ -79,9 +75,9 @@ where
 /// # Returns
 ///
 /// The result of the plugin list.
-pub async fn list_plugins<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+pub async fn list_plugins<J, RR, TR, NR, NFR, SR, TCR, PR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -92,7 +88,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     let plugins = state.plugin_repository.list_paginated(query).await?;
 

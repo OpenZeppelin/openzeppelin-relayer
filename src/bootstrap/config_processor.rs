@@ -15,10 +15,7 @@ use crate::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
         TransactionCounterTrait, TransactionRepository,
     },
-    services::{
-        gas::manager::GasPriceManagerTrait, Signer, SignerFactory, VaultConfig, VaultService,
-        VaultServiceTrait,
-    },
+    services::{Signer, SignerFactory, VaultConfig, VaultService, VaultServiceTrait},
     utils::unsafe_generate_random_private_key,
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
@@ -30,9 +27,9 @@ use secrets::SecretVec;
 use zeroize::Zeroizing;
 
 /// Process all plugins from the config file and store them in the repository.
-async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -43,7 +40,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     if let Some(plugins) = &config_file.plugins {
         let plugin_futures = plugins.iter().map(|plugin| async {
@@ -247,9 +243,9 @@ async fn process_signer(signer: &SignerFileConfig) -> Result<SignerRepoModel> {
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes signers in parallel using futures.
-async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+async fn process_signers<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -260,7 +256,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     let signer_futures = config_file.signers.iter().map(|signer| async {
         let signer_repo_model = process_signer(signer).await?;
@@ -286,9 +281,9 @@ where
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes notifications in parallel using futures.
-async fn process_notifications<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+async fn process_notifications<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -299,7 +294,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     let notification_futures = config_file.notifications.iter().map(|notification| async {
         let notification_repo_model = NotificationRepoModel::try_from(notification.clone())
@@ -326,9 +320,9 @@ where
 /// 2. Store the resulting model in the repository
 ///
 /// This function processes networks in parallel using futures.
-async fn process_networks<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+async fn process_networks<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -339,7 +333,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     let network_futures = config_file.networks.iter().map(|network| async move {
         let network_repo_model = NetworkRepoModel::try_from(network.clone())?;
@@ -368,9 +361,9 @@ where
 /// 5. Store the resulting model in the repository
 ///
 /// This function processes relayers in parallel using futures.
-async fn process_relayers<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+async fn process_relayers<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: &Config,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -381,7 +374,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     let signers = app_state.signer_repository.list_all().await?;
 
@@ -418,8 +410,8 @@ where
 ///
 /// This function checks if any of the main repository list keys exist in Redis.
 /// If they exist, it means Redis already contains data from a previous configuration load.
-async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<bool>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -430,7 +422,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     if app_state.relayer_repository.has_entries().await? {
         return Ok(true);
@@ -466,10 +457,10 @@ where
 /// 2. Process notifications
 /// 3. Process networks
 /// 4. Process relayers
-pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>(
+pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, GPM>,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -480,7 +471,6 @@ where
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
-    GPM: GasPriceManagerTrait + Send + Sync + 'static,
 {
     let should_process_config_file = match server_config.repository_storage_type {
         RepositoryStorageType::InMemory => true,
@@ -535,7 +525,6 @@ mod tests {
             RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
             TransactionRepositoryStorage,
         },
-        services::gas::manager::MockGasPriceManagerTrait,
         utils::mocks::mockutils::{
             create_mock_network, create_mock_notification, create_mock_relayer, create_mock_signer,
             create_test_server_config,
@@ -556,7 +545,6 @@ mod tests {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
-        crate::services::gas::manager::MockGasPriceManagerTrait,
     > {
         // Create a mock job producer
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -589,9 +577,6 @@ mod tests {
             ),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
-            gas_price_manager: Arc::new(
-                crate::services::gas::manager::MockGasPriceManagerTrait::new(),
-            ),
         }
     }
 
@@ -1304,7 +1289,6 @@ mod tests {
             transaction_counter_store: transaction_counter.clone(),
             job_producer: job_producer.clone(),
             plugin_repository: plugin_repo.clone(),
-            gas_price_manager: Arc::new(MockGasPriceManagerTrait::new()),
         });
 
         // Process the entire config file

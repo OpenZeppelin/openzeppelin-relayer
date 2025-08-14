@@ -210,7 +210,6 @@ mod tests {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
-        crate::services::gas::manager::MockGasPriceManagerTrait,
     > {
         let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
         let transaction_repo = Arc::new(TransactionRepositoryStorage::new_in_memory());
@@ -317,9 +316,6 @@ mod tests {
             ),
             job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
-            gas_price_manager: Arc::new(
-                crate::services::gas::manager::MockGasPriceManagerTrait::new(),
-            ),
         }
     }
 
