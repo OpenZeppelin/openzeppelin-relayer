@@ -5,7 +5,7 @@
 //! Supported methods:
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
-use crate::domain::Relayer; // bring trait into scope for process_transaction_request
+use crate::domain::Relayer;
 use crate::{
     domain::{get_network_relayer, get_relayer_by_id, get_transaction_by_id},
     jobs::JobProducerTrait,

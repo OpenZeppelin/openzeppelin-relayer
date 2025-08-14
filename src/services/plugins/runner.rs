@@ -89,13 +89,7 @@ impl PluginRunner {
 
         let server_handle = tokio::spawn(async move {
             let relayer_api = Arc::new(RelayerApi);
-            socket_service
-                .listen::<RelayerApi, J, RR, TR, NR, NFR, SR, TCR, PR>(
-                    shutdown_rx,
-                    state,
-                    relayer_api,
-                )
-                .await
+            socket_service.listen(shutdown_rx, state, relayer_api).await
         });
 
         let mut script_result = match timeout(

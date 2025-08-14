@@ -111,15 +111,16 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         let script_path = Self::resolve_plugin_path(&plugin.path);
         let script_params = plugin_call_request.params.to_string();
 
-        let result = runner::PluginRunnerTrait::run::<J, RR, TR, NR, NFR, SR, TCR, PR>(
-            &self.runner,
-            &socket_path,
-            script_path,
-            plugin.timeout,
-            script_params,
-            state,
-        )
-        .await;
+        let result = self
+            .runner
+            .run(
+                &socket_path,
+                script_path,
+                plugin.timeout,
+                script_params,
+                state,
+            )
+            .await;
 
         match result {
             Ok(script_result) => Ok(PluginCallResponse {
@@ -139,7 +140,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 #[cfg_attr(test, automock)]
 pub trait PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>: Send + Sync
 where
-    J: JobProducerTrait + Send + Sync + 'static,
+    J: JobProducerTrait + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
@@ -161,7 +162,7 @@ where
 impl<J, TR, RR, NR, NFR, SR, TCR, PR> PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>
     for PluginService<PluginRunner>
 where
-    J: JobProducerTrait + Send + Sync + 'static,
+    J: JobProducerTrait + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
