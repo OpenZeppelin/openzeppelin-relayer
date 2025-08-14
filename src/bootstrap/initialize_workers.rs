@@ -31,7 +31,6 @@ const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
 
 pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
-    info!("Initializing workers");
     let queue = app_state.job_producer.get_queue().await?;
 
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
@@ -89,15 +88,12 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .backend(queue.solana_token_swap_request_queue.clone())
         .build_fn(solana_token_swap_request_handler);
 
-    let mut monitor = Monitor::new();
-    monitor = monitor
+    let monitor = Monitor::new()
         .register(transaction_request_queue_worker)
         .register(transaction_submission_queue_worker)
         .register(transaction_status_queue_worker)
         .register(notification_queue_worker)
-        .register(solana_token_swap_request_queue_worker);
-
-    monitor = monitor
+        .register(solana_token_swap_request_queue_worker)
         .on_event(monitor_handle_event)
         .shutdown_timeout(Duration::from_millis(5000));
 
