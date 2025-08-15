@@ -4,6 +4,7 @@
 /// managing notifications for transactions. The module leverages various
 /// services and repositories to perform these operations asynchronously.
 use crate::{
+    constants::DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS,
     domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
@@ -115,9 +116,11 @@ where
 
     pub fn concurrent_transactions_enabled(&self) -> bool {
         if let RelayerNetworkPolicy::Stellar(policy) = &self.relayer().policies {
-            policy.concurrent_transactions.unwrap_or(false)
+            policy
+                .concurrent_transactions
+                .unwrap_or(DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS)
         } else {
-            false
+            DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS
         }
     }
 
