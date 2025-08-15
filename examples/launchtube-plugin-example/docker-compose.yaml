@@ -9,14 +9,18 @@ services:
     secrets:
       - api_key
       - webhook_signing_key
-      - keystore_passphrase
+      - keystore_fund_passphrase
+      - keystore_seq_001_passphrase
+      - keystore_seq_002_passphrase
     environment:
       REDIS_URL: redis://redis:6379
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 50
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
-      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      KEYSTORE_PASSPHRASE_FUND: ${KEYSTORE_PASSPHRASE_FUND}
+      KEYSTORE_PASSPHRASE_SEQ_001: ${KEYSTORE_PASSPHRASE_SEQ_001}
+      KEYSTORE_PASSPHRASE_SEQ_002: ${KEYSTORE_PASSPHRASE_SEQ_002}
     security_opt:
       - no-new-privileges
     networks:
@@ -61,5 +65,9 @@ secrets:
     environment: API_KEY
   webhook_signing_key:
     environment: WEBHOOK_SIGNING_KEY
-  keystore_passphrase:
-    environment: KEYSTORE_PASSPHRASE
+  keystore_fund_passphrase:
+    environment: KEYSTORE_PASSPHRASE_FUND
+  keystore_seq_001_passphrase:
+    environment: KEYSTORE_PASSPHRASE_SEQ_001
+  keystore_seq_002_passphrase:
+    environment: KEYSTORE_PASSPHRASE_SEQ_002
