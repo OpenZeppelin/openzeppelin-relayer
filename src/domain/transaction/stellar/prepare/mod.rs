@@ -39,7 +39,8 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        if !lane_gate::claim(&self.relayer().id, &tx.id) {
+        if !self.concurrent_transactions_enabled() && !lane_gate::claim(&self.relayer().id, &tx.id)
+        {
             info!(
                 "Relayer {} already has a transaction in flight – {} must wait.",
                 self.relayer().id,
@@ -195,14 +196,17 @@ where
             }
         };
 
-        // Step 3: Attempt to enqueue next pending transaction or release lane
-        if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
-            warn!(
-                "Failed to enqueue next pending transaction after {} failure: {}. Releasing lane directly.",
-                tx_id, enqueue_error
-            );
-            // Fallback: release lane directly if we can't hand it over
-            lane_gate::free(&self.relayer().id, &tx_id);
+        // Step 3: Handle lane cleanup (only needed in sequential mode)
+        if !self.concurrent_transactions_enabled() {
+            // In sequential mode, attempt to hand off to next transaction or release lane
+            if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
+                warn!(
+                    "Failed to enqueue next pending transaction after {} failure: {}. Releasing lane directly.",
+                    tx_id, enqueue_error
+                );
+                // Fallback: release lane directly if we can't hand it over
+                lane_gate::free(&self.relayer().id, &tx_id);
+            }
         }
 
         // Step 4: Log failure for monitoring (prepare_fail_total metric would go here)
@@ -876,10 +880,142 @@ mod prepare_transaction_tests {
 mod refactoring_tests {
     use crate::domain::transaction::stellar::prepare::common::update_and_notify_transaction;
     use crate::domain::transaction::stellar::test_helpers::*;
+    use crate::domain::{stellar::lane_gate, SignTransactionResponse};
     use crate::models::{
         NetworkTransactionData, RepositoryError, StellarTransactionData, TransactionInput,
         TransactionStatus,
     };
+    use std::future::ready;
+
+    #[tokio::test]
+    async fn test_prepare_with_concurrent_mode_no_lane_claiming() {
+        // With concurrent transactions enabled, prepare should NOT claim lanes
+        let mut relayer = create_test_relayer();
+        if let crate::models::RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(true);
+        }
+        let mut mocks = default_test_mocks();
+
+        // Setup mocks for successful prepare
+        mocks
+            .counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(1))));
+
+        mocks.signer.expect_sign_transaction().returning(|_| {
+            Box::pin(async {
+                Ok(SignTransactionResponse::Stellar(
+                    crate::domain::SignTransactionResponseStellar {
+                        signature: dummy_signature(),
+                    },
+                ))
+            })
+        });
+
+        mocks.tx_repo.expect_partial_update().returning(|id, upd| {
+            let mut tx = create_test_transaction("relayer-1");
+            tx.id = id;
+            tx.status = upd.status.unwrap();
+            tx.network_data = upd.network_data.unwrap();
+            Ok::<_, RepositoryError>(tx)
+        });
+
+        mocks
+            .job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+        let tx = create_test_transaction(&relayer.id);
+
+        // In concurrent mode, another transaction should be able to claim the lane
+        // even while this one is being processed
+        let other_tx_id = "concurrent-tx";
+        assert!(lane_gate::claim(&relayer.id, other_tx_id));
+
+        // Prepare should succeed without claiming the lane
+        let result = handler.prepare_transaction_impl(tx).await;
+        assert!(result.is_ok());
+
+        // Cleanup
+        lane_gate::free(&relayer.id, other_tx_id);
+    }
+
+    #[tokio::test]
+    async fn test_prepare_failure_with_concurrent_mode_no_lane_cleanup() {
+        // With concurrent transactions enabled, prepare failure should NOT manage lanes
+        let mut relayer = create_test_relayer();
+        if let crate::models::RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(true);
+        }
+        let mut mocks = default_test_mocks();
+
+        // Mock sequence counter to fail
+        mocks.counter.expect_get_and_increment().returning(|_, _| {
+            Box::pin(ready(Err(RepositoryError::Unknown(
+                "Counter error".to_string(),
+            ))))
+        });
+
+        // Mock sync_sequence_from_chain for error recovery
+        mocks.provider.expect_get_account().returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(0),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        mocks
+            .counter
+            .expect_set()
+            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+
+        // Mock finalize_transaction_state for failure
+        mocks.tx_repo.expect_partial_update().returning(|id, upd| {
+            let mut tx = create_test_transaction("relayer-1");
+            tx.id = id;
+            tx.status = upd.status.unwrap();
+            Ok::<_, RepositoryError>(tx)
+        });
+
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        // In concurrent mode, should NOT look for pending transactions
+        mocks.tx_repo.expect_find_by_status().times(0); // Should not be called
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+        let tx = create_test_transaction(&relayer.id);
+
+        let result = handler.prepare_transaction_impl(tx).await;
+        assert!(result.is_err());
+    }
 
     #[tokio::test]
     async fn test_update_and_notify_transaction_consistency() {

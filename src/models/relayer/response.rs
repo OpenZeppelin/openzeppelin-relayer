@@ -437,6 +437,9 @@ pub struct StellarPolicyResponse {
     #[serde(default = "default_stellar_min_balance")]
     #[schema(nullable = false)]
     pub min_balance: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub concurrent_transactions: Option<bool>,
 }
 
 impl From<RelayerEvmPolicy> for EvmPolicyResponse {
@@ -480,6 +483,7 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
             min_balance: policy.min_balance.unwrap_or(DEFAULT_STELLAR_MIN_BALANCE),
             max_fee: policy.max_fee,
             timeout_seconds: policy.timeout_seconds,
+            concurrent_transactions: policy.concurrent_transactions,
         }
     }
 }
@@ -597,6 +601,7 @@ mod tests {
                 min_balance: Some(20000000),
                 max_fee: Some(100000),
                 timeout_seconds: Some(30),
+                concurrent_transactions: None,
             })),
             "test-signer".to_string(),
             None,
@@ -709,6 +714,7 @@ mod tests {
                     max_fee: Some(5000),
                     timeout_seconds: None,
                     min_balance: 20000000,
+                    concurrent_transactions: None,
                 },
             )),
             signer_id: "test-signer".to_string(),
@@ -831,6 +837,7 @@ mod tests {
                     min_balance: 20000000,
                     max_fee: Some(100000),
                     timeout_seconds: Some(30),
+                    concurrent_transactions: None,
                 },
             )),
             signer_id: "test-signer".to_string(),
@@ -1055,6 +1062,7 @@ mod tests {
                 max_fee: Some(100000),
                 timeout_seconds: Some(30),
                 min_balance: None, // Some fields can still be None
+                concurrent_transactions: None,
             }),
             signer_id: "test-signer".to_string(),
             notification_id: None,

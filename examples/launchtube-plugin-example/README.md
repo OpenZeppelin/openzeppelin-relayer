@@ -121,6 +121,7 @@ The LaunchTube plugin and relayer configurations are already set up for testnet.
 **`config/config.json`** (pre-configured):
 
 - Three relayers defined: `launchtube-fund`, `launchtube-seq-001`, `launchtube-seq-002`
+- The Fund relayer has `concurrent_transactions: true` enabled in policies to allow parallel processing
 - Corresponding signers pointing to the key files you'll create
 - Plugin registered as `launchtube-plugin`
 
@@ -283,6 +284,13 @@ const authXdrs = (op.auth ?? []).map(a => a.toXDR("base64"));
 4. **Simulation** (if enabled): Simulates transaction and rebuilds with proper resources
 5. **Fee Bumping**: Fund account wraps transaction with fee bump
 6. **Submission**: Sends to Stellar network
+
+### Concurrent Transaction Processing
+
+This example uses multiple Stellar accounts (fund account + sequence accounts) with `concurrent_transactions: true` enabled in the fund account relayer policy. This configuration:
+
+- **Allows parallel processing**: Fund account leverages the sequence accounts sequence number, so transactions can be processed concurrently without blocking each other
+- **Improves throughput**: Multiple transactions can be in-flight simultaneously
 
 ## Troubleshooting
 

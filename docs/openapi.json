@@ -3788,77 +3788,23 @@
           "data": {
             "oneOf": [
               {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/SignTransactionResponseStellar"
-                  },
-                  {
-                    "type": "object",
-                    "required": [
-                      "network"
-                    ],
-                    "properties": {
-                      "network": {
-                        "type": "string",
-                        "enum": [
-                          "stellar"
-                        ]
-                      }
-                    }
-                  }
-                ]
+                "$ref": "#/components/schemas/SignTransactionResponseStellar"
               },
               {
-                "allOf": [
-                  {
-                    "type": "array",
-                    "items": {
-                      "type": "integer",
-                      "format": "int32",
-                      "minimum": 0
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "required": [
-                      "network"
-                    ],
-                    "properties": {
-                      "network": {
-                        "type": "string",
-                        "enum": [
-                          "evm"
-                        ]
-                      }
-                    }
-                  }
-                ]
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
               },
               {
-                "allOf": [
-                  {
-                    "type": "array",
-                    "items": {
-                      "type": "integer",
-                      "format": "int32",
-                      "minimum": 0
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "required": [
-                      "network"
-                    ],
-                    "properties": {
-                      "network": {
-                        "type": "string",
-                        "enum": [
-                          "solana"
-                        ]
-                      }
-                    }
-                  }
-                ]
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
               }
             ]
           },
@@ -6063,6 +6009,13 @@
         "type": "object",
         "description": "Stellar-specific relayer policy configuration",
         "properties": {
+          "concurrent_transactions": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Allow concurrent transactions (essential for channel accounts using different accounts' sequence numbers)"
+          },
           "max_fee": {
             "type": [
               "integer",
@@ -6125,9 +6078,13 @@
         "type": "object",
         "required": [
           "transaction",
-          "signature"
+          "signature",
+          "id"
         ],
         "properties": {
+          "id": {
+            "type": "string"
+          },
           "signature": {
             "type": "string"
           },
@@ -6246,77 +6203,23 @@
       "SignTransactionResponse": {
         "oneOf": [
           {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SignTransactionResponseStellar"
-              },
-              {
-                "type": "object",
-                "required": [
-                  "network"
-                ],
-                "properties": {
-                  "network": {
-                    "type": "string",
-                    "enum": [
-                      "stellar"
-                    ]
-                  }
-                }
-              }
-            ]
+            "$ref": "#/components/schemas/SignTransactionResponseStellar"
           },
           {
-            "allOf": [
-              {
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "int32",
-                  "minimum": 0
-                }
-              },
-              {
-                "type": "object",
-                "required": [
-                  "network"
-                ],
-                "properties": {
-                  "network": {
-                    "type": "string",
-                    "enum": [
-                      "evm"
-                    ]
-                  }
-                }
-              }
-            ]
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
           },
           {
-            "allOf": [
-              {
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "int32",
-                  "minimum": 0
-                }
-              },
-              {
-                "type": "object",
-                "required": [
-                  "network"
-                ],
-                "properties": {
-                  "network": {
-                    "type": "string",
-                    "enum": [
-                      "solana"
-                    ]
-                  }
-                }
-              }
-            ]
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ]
       },
@@ -6885,18 +6788,11 @@
       "SolanaTransactionRequest": {
         "type": "object",
         "required": [
-          "fee_payer",
-          "instructions"
+          "transaction"
         ],
         "properties": {
-          "fee_payer": {
-            "type": "string"
-          },
-          "instructions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+          "transaction": {
+            "$ref": "#/components/schemas/EncodedSerializedTransaction"
           }
         }
       },
@@ -6906,8 +6802,7 @@
           "id",
           "status",
           "created_at",
-          "recent_blockhash",
-          "fee_payer"
+          "transaction"
         ],
         "properties": {
           "confirmed_at": {
@@ -6916,19 +6811,13 @@
           "created_at": {
             "type": "string"
           },
-          "fee_payer": {
-            "type": "string"
-          },
-          "hash": {
-            "type": "string"
-          },
           "id": {
             "type": "string"
           },
-          "recent_blockhash": {
+          "sent_at": {
             "type": "string"
           },
-          "sent_at": {
+          "signature": {
             "type": "string"
           },
           "status": {
@@ -6939,6 +6828,9 @@
               "string",
               "null"
             ]
+          },
+          "transaction": {
+            "type": "string"
           }
         }
       },
@@ -6955,6 +6847,9 @@
         "type": "object",
         "description": "Stellar policy response model for OpenAPI documentation",
         "properties": {
+          "concurrent_transactions": {
+            "type": "boolean"
+          },
           "max_fee": {
             "type": "integer",
             "format": "int32",

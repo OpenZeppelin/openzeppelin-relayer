@@ -194,6 +194,7 @@ mod tests {
                 min_balance: Some(20000000),
                 max_fee: Some(100000),
                 timeout_seconds: Some(30),
+                concurrent_transactions: None,
             }),
             address: "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
             notification_id: None,
@@ -445,6 +446,7 @@ mod tests {
                 min_balance: Some(30000000),
                 max_fee: Some(150000),
                 timeout_seconds: Some(60),
+                concurrent_transactions: None,
             })),
             signer_id: "test_signer".to_string(),
             notification_id: None,
@@ -693,6 +695,7 @@ mod tests {
                 min_balance: Some(40000000), // Changed
                 max_fee: Some(200000),       // Changed
                 timeout_seconds: Some(120),  // Changed
+                concurrent_transactions: None,
             })),
             notification_id: None, // Changed
             custom_rpc_urls: None,
@@ -909,6 +912,7 @@ mod tests {
                 min_balance: Some(50000000),
                 max_fee: Some(250000),
                 timeout_seconds: Some(180),
+                concurrent_transactions: None,
             })),
             signer_id: "stellar_signer".to_string(),
             notification_id: Some("stellar_notification".to_string()),

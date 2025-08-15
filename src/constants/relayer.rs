@@ -14,6 +14,10 @@ pub const DEFAULT_EVM_EIP1559_ENABLED: bool = true;
 /// Default gas limit estimation enabled
 pub const DEFAULT_EVM_GAS_LIMIT_ESTIMATION: bool = true;
 
+// === Stellar Policy Defaults ===
+/// Default concurrent transactions enabled setting for Stellar
+pub const DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS: bool = false;
+
 // === Solana Policy Defaults ===
 /// Default maximum transaction data size for Solana
 pub const DEFAULT_SOLANA_MAX_TX_DATA_SIZE: u16 = 1232;
