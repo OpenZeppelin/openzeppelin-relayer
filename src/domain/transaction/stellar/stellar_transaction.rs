@@ -667,6 +667,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_concurrent_transactions_enabled() {
+        // Test with concurrent transactions explicitly enabled
+        let mut relayer = create_test_relayer();
+        if let RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(true);
+        }
+        let mocks = default_test_mocks();
+        let handler = make_stellar_tx_handler(relayer, mocks);
+        assert!(handler.concurrent_transactions_enabled());
+
+        // Test with concurrent transactions explicitly disabled
+        let mut relayer = create_test_relayer();
+        if let RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(false);
+        }
+        let mocks = default_test_mocks();
+        let handler = make_stellar_tx_handler(relayer, mocks);
+        assert!(!handler.concurrent_transactions_enabled());
+
+        // Test with default (None) - should use DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS
+        let relayer = create_test_relayer();
+        let mocks = default_test_mocks();
+        let handler = make_stellar_tx_handler(relayer, mocks);
+        assert_eq!(
+            handler.concurrent_transactions_enabled(),
+            DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_next_pending_transaction_with_concurrency_enabled() {
+        // With concurrent transactions enabled, lane management should be skipped
+        let mut relayer = create_test_relayer();
+        if let RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(true);
+        }
+        let mut mocks = default_test_mocks();
+
+        // Should NOT look for pending transactions when concurrency is enabled
+        mocks.tx_repo.expect_find_by_status().times(0); // Expect zero calls
+
+        // Should NOT produce any job when concurrency is enabled
+        mocks
+            .job_producer
+            .expect_produce_transaction_request_job()
+            .times(0); // Expect zero calls
+
+        let handler = make_stellar_tx_handler(relayer, mocks);
+
+        let result = handler
+            .enqueue_next_pending_transaction("finished-tx")
+            .await;
+        assert!(result.is_ok());
+    }
+
     #[tokio::test]
     async fn test_reset_transaction_for_retry() {
         let relayer = create_test_relayer();
