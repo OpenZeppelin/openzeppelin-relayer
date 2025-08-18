@@ -804,7 +804,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"), None);
 
         let tx_data = EvmTransactionData {
             gas_price: Some(20000000000),
@@ -836,7 +836,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"), None);
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -872,7 +872,8 @@ mod tests {
             .returning(|| async { Ok(20000000000) }.boxed());
 
         let relayer = create_mock_relayer();
-        let gas_price_service = EvmGasPriceService::new(provider, create_mock_evm_network("celo"));
+        let gas_price_service =
+            EvmGasPriceService::new(provider, create_mock_evm_network("celo"), None);
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -908,7 +909,7 @@ mod tests {
 
         let relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"), None);
 
         let tx_data = EvmTransactionData {
             gas_price: None,
@@ -939,7 +940,7 @@ mod tests {
 
         let mut relayer = create_mock_relayer();
         let gas_price_service =
-            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"));
+            EvmGasPriceService::new(provider, create_mock_evm_network("mainnet"), None);
 
         // Update policies with new EVM policy
         let evm_policy = RelayerEvmPolicy {

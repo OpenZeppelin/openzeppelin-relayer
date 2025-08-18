@@ -23,7 +23,8 @@ use crate::{
     },
     services::{
         gas::{
-            evm_gas_price::EvmGasPriceService, network_extra_fee::NetworkExtraFeeCalculatorService,
+            cache::GasPriceCache, evm_gas_price::EvmGasPriceService,
+            network_extra_fee::NetworkExtraFeeCalculatorService,
         },
         get_network_provider, EvmSignerFactory, StellarSignerFactory,
     },
@@ -417,8 +418,21 @@ impl RelayerTransactionFactory {
                 let network_extra_fee_calculator =
                     NetworkExtraFeeCalculatorService::new(network.clone(), evm_provider.clone());
 
+                let evm_gas_cache = GasPriceCache::global();
+
+                // Use the global cache if gas price caching is enabled
+                let cache = if let Some(cfg) = &network.gas_price_cache {
+                    evm_gas_cache.configure_network(network.chain_id, cfg.clone());
+                    Some(evm_gas_cache.clone())
+                } else {
+                    if evm_gas_cache.has_configuration_for_network(network.chain_id) {
+                        evm_gas_cache.remove_network(network.chain_id);
+                    }
+                    None
+                };
+
                 let gas_price_service =
-                    EvmGasPriceService::new(evm_provider.clone(), network.clone());
+                    EvmGasPriceService::new(evm_provider.clone(), network.clone(), cache);
 
                 let price_calculator = evm::PriceCalculator::new(
                     gas_price_service,

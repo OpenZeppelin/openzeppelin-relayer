@@ -2,11 +2,9 @@
 //! It includes traits and implementations for calculating gas price multipliers based on
 //! transaction speed and fetching gas prices using JSON-RPC.
 use crate::{
+    constants::HISTORICAL_BLOCKS,
     models::{evm::Speed, EvmNetwork, EvmTransactionData, TransactionError},
-    services::{
-        gas::manager::{GasPriceManager, GasPriceManagerTrait},
-        EvmProviderTrait,
-    },
+    services::{gas::cache::GasPriceCache, EvmProviderTrait},
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use eyre::Result;
@@ -155,27 +153,19 @@ pub trait EvmGasPriceServiceTrait {
 pub struct EvmGasPriceService<P: EvmProviderTrait> {
     provider: P,
     network: EvmNetwork,
-    gas_price_manager: Option<std::sync::Arc<GasPriceManager>>,
+    cache: Option<std::sync::Arc<GasPriceCache>>,
 }
 
 impl<P: EvmProviderTrait> EvmGasPriceService<P> {
-    pub fn new(provider: P, network: EvmNetwork) -> Self {
-        Self {
-            provider,
-            network,
-            gas_price_manager: None,
-        }
-    }
-
-    pub fn new_with_manager(
+    pub fn new(
         provider: P,
         network: EvmNetwork,
-        gas_price_manager: Option<std::sync::Arc<GasPriceManager>>,
+        cache: Option<std::sync::Arc<GasPriceCache>>,
     ) -> Self {
         Self {
             provider,
             network,
-            gas_price_manager,
+            cache,
         }
     }
 
@@ -216,7 +206,6 @@ impl<P: EvmProviderTrait> EvmGasPriceService<P> {
         }
     }
 
-    #[inline]
     fn percentile_index_for_speed(speed: Speed) -> (usize, f64) {
         SPEED_PERCENTILES
             .iter()
@@ -271,30 +260,6 @@ impl<P: EvmProviderTrait> EvmGasPriceService<P> {
             fastest: avg_priority_fee_wei(fee_history, i3, p3),
         }
     }
-
-    #[inline]
-    fn schedule_stale_refresh(manager: &std::sync::Arc<GasPriceManager>, network: &EvmNetwork) {
-        let network = network.clone();
-        let manager = manager.clone();
-        let reward_percentiles = Self::reward_percentiles_ordered();
-        tokio::spawn(async move {
-            let refresh = async {
-                let provider = crate::services::get_network_provider(&network, None).ok()?;
-                let fresh_gas_price = provider.get_gas_price().await.ok()?;
-                let block = provider.get_block_by_number().await.ok()?;
-                let fresh_base_fee: u128 = block.header.base_fee_per_gas.unwrap_or(0).into();
-                let fee_hist = provider
-                    .get_fee_history(4, BlockNumberOrTag::Latest, reward_percentiles)
-                    .await
-                    .ok()?;
-                manager
-                    .set_snapshot(network.chain_id, fresh_gas_price, fresh_base_fee, fee_hist)
-                    .await;
-                Some(())
-            };
-            let _ = refresh.await;
-        });
-    }
 }
 
 #[async_trait]
@@ -313,70 +278,56 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
     }
 
     async fn get_legacy_prices_from_json_rpc(&self) -> Result<SpeedPrices, TransactionError> {
-        let maybe_manager = self.gas_price_manager.as_ref().cloned();
-        let base = if let Some(manager) = &maybe_manager {
-            if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
+        let base = if let Some(cache) = &self.cache {
+            if let Some(snapshot) = cache.get_snapshot(self.network.chain_id).await {
                 if snapshot.is_stale {
-                    Self::schedule_stale_refresh(manager, &self.network);
+                    cache.refresh_network_in_background(
+                        &self.network,
+                        Self::reward_percentiles_ordered(),
+                    );
                 }
                 snapshot.gas_price
             } else {
+                cache.refresh_network_in_background(
+                    &self.network,
+                    Self::reward_percentiles_ordered(),
+                );
                 self.provider.get_gas_price().await?
             }
         } else {
             self.provider.get_gas_price().await?
         };
-        let prices: Vec<(Speed, u128)> = Speed::multiplier()
-            .into_iter()
-            .map(|(speed, multiplier)| {
-                let final_gas = (base * multiplier) / 100;
-                (speed, final_gas)
-            })
-            .collect();
 
-        Ok(SpeedPrices {
-            safe_low: prices
-                .iter()
-                .find(|(s, _)| *s == Speed::SafeLow)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
-            average: prices
-                .iter()
-                .find(|(s, _)| *s == Speed::Average)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
-            fast: prices
-                .iter()
-                .find(|(s, _)| *s == Speed::Fast)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
-            fastest: prices
-                .iter()
-                .find(|(s, _)| *s == Speed::Fastest)
-                .map(|(_, p)| *p)
-                .unwrap_or(0),
-        })
+        Ok(Self::build_legacy_prices_from_base(base))
     }
 
     async fn get_current_base_fee(&self) -> Result<u128, TransactionError> {
-        let maybe_manager = self.gas_price_manager.as_ref().cloned();
-        if let Some(manager) = &maybe_manager {
-            if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
+        if let Some(cache) = &self.cache {
+            if let Some(snapshot) = cache.get_snapshot(self.network.chain_id).await {
                 if snapshot.is_stale {
-                    Self::schedule_stale_refresh(manager, &self.network);
+                    cache.refresh_network_in_background(
+                        &self.network,
+                        Self::reward_percentiles_ordered(),
+                    );
                 }
+
                 return Ok(snapshot.base_fee_per_gas);
+            } else {
+                cache.refresh_network_in_background(
+                    &self.network,
+                    Self::reward_percentiles_ordered(),
+                );
             }
         }
+
         let block = self.provider.get_block_by_number().await?;
         let base_fee = block.header.base_fee_per_gas.unwrap_or(0);
         Ok(base_fee.into())
     }
 
     async fn get_prices_from_json_rpc(&self) -> Result<GasPrices, TransactionError> {
-        let maybe_manager = self.gas_price_manager.as_ref().cloned();
-        if let Some(manager) = &maybe_manager {
-            if let Some(snapshot) = manager.get_snapshot(self.network.chain_id).await {
+        if let Some(cache) = &self.cache {
+            if let Some(snapshot) = cache.get_snapshot(self.network.chain_id).await {
                 let gas_price = snapshot.gas_price;
                 let base_fee = snapshot.base_fee_per_gas;
                 let fee_history = snapshot.fee_history.clone();
@@ -386,7 +337,10 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
 
                 // If stale, serve cached immediately and refresh in background
                 if is_stale {
-                    Self::schedule_stale_refresh(manager, &self.network);
+                    cache.refresh_network_in_background(
+                        &self.network,
+                        Self::reward_percentiles_ordered(),
+                    );
                 }
 
                 return Ok(GasPrices {
@@ -394,9 +348,13 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
                     max_priority_fee_per_gas: max_priority_fees,
                     base_fee_per_gas: base_fee,
                 });
+            } else {
+                cache.refresh_network_in_background(
+                    &self.network,
+                    Self::reward_percentiles_ordered(),
+                );
             }
         }
-        const HISTORICAL_BLOCKS: u64 = 4;
 
         let reward_percentiles: Vec<f64> = Self::reward_percentiles_ordered();
 
@@ -423,27 +381,11 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
 
         let max_priority_fees = Self::compute_max_priority_fees_from_history(&fee_history);
 
-        let prices = GasPrices {
+        Ok(GasPrices {
             legacy_prices,
             max_priority_fee_per_gas: max_priority_fees,
             base_fee_per_gas: base_fee,
-        };
-
-        // Optionally seed the cache manager for faster subsequent reads
-        if let Some(manager) = &self.gas_price_manager {
-            let fee_history_clone: FeeHistory = fee_history.clone();
-            let gas_price = self.provider.get_gas_price().await.unwrap_or(0);
-            manager
-                .set_snapshot(
-                    self.network.chain_id,
-                    gas_price,
-                    prices.base_fee_per_gas,
-                    fee_history_clone,
-                )
-                .await;
-        }
-
-        Ok(prices)
+        })
     }
 
     fn network(&self) -> &EvmNetwork {
@@ -541,7 +483,7 @@ mod tests {
             .returning(move || Box::pin(async move { Ok(base_gas_price) }));
 
         // Create the actual service with mocked provider
-        let service = EvmGasPriceService::new(mock_provider, create_test_evm_network());
+        let service = EvmGasPriceService::new(mock_provider, create_test_evm_network(), None);
 
         // Test the actual implementation
         let prices = service.get_legacy_prices_from_json_rpc().await.unwrap();
@@ -595,7 +537,7 @@ mod tests {
                 })
             });
 
-        let service = EvmGasPriceService::new(mock_provider, create_test_evm_network());
+        let service = EvmGasPriceService::new(mock_provider, create_test_evm_network(), None);
         let result = service.get_current_base_fee().await.unwrap();
         assert_eq!(result, expected_base_fee);
     }
@@ -653,7 +595,7 @@ mod tests {
                 })
             });
 
-        let service = EvmGasPriceService::new(mock_provider, create_test_evm_network());
+        let service = EvmGasPriceService::new(mock_provider, create_test_evm_network(), None);
         let prices = service.get_prices_from_json_rpc().await.unwrap();
 
         // Test legacy prices

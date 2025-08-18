@@ -20,9 +20,6 @@ pub struct GasPriceCacheConfig {
     /// Enable gas price caching for this network
     pub enabled: bool,
 
-    /// How often to refresh prices (milliseconds)
-    pub refresh_interval_ms: u64,
-
     /// When data becomes stale (milliseconds)
     pub stale_after_ms: u64,
 
@@ -34,9 +31,8 @@ impl Default for GasPriceCacheConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            refresh_interval_ms: 5_000, // 5 seconds
-            stale_after_ms: 20_000,     // 20 seconds
-            expire_after_ms: 45_000,    // 45 seconds
+            stale_after_ms: 20_000,  // 20 seconds
+            expire_after_ms: 45_000, // 45 seconds
         }
     }
 }
@@ -260,7 +256,6 @@ mod tests {
             symbol: Some("PETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
@@ -282,7 +277,6 @@ mod tests {
             symbol: Some("CETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: false,
-                refresh_interval_ms: 20_000,
                 stale_after_ms: 40_000,
                 expire_after_ms: 200_000,
             }),
@@ -318,7 +312,6 @@ mod tests {
             result.gas_price_cache,
             Some(GasPriceCacheConfig {
                 enabled: false,
-                refresh_interval_ms: 20_000,
                 stale_after_ms: 40_000,
                 expire_after_ms: 200_000,
             })
@@ -343,7 +336,6 @@ mod tests {
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
@@ -375,7 +367,6 @@ mod tests {
             result.gas_price_cache,
             Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             })
@@ -400,7 +391,6 @@ mod tests {
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
@@ -422,7 +412,6 @@ mod tests {
             symbol: None,                                // Inherit
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: false,
-                refresh_interval_ms: 20_000,
                 stale_after_ms: 40_000,
                 expire_after_ms: 200_000,
             }),
@@ -464,7 +453,6 @@ mod tests {
             result.gas_price_cache,
             Some(GasPriceCacheConfig {
                 enabled: false,
-                refresh_interval_ms: 20_000,
                 stale_after_ms: 40_000,
                 expire_after_ms: 200_000,
             })
@@ -544,7 +532,6 @@ mod tests {
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
@@ -586,7 +573,6 @@ mod tests {
             result.gas_price_cache,
             Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             })
@@ -624,7 +610,6 @@ mod tests {
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
@@ -655,7 +640,6 @@ mod tests {
             result.gas_price_cache,
             Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             })
@@ -698,7 +682,6 @@ mod tests {
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
@@ -729,7 +712,6 @@ mod tests {
             result.gas_price_cache,
             Some(GasPriceCacheConfig {
                 enabled: true,
-                refresh_interval_ms: 10_000,
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             })
