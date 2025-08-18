@@ -9,7 +9,7 @@
 //! implementation is useful for testing and development purposes.
 use crate::models::PaginationQuery;
 use crate::{
-    domain::RelayerUpdateRequest,
+    models::UpdateRelayerRequest,
     models::{RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
 };
 use async_trait::async_trait;
@@ -68,10 +68,41 @@ impl RelayerRepository for InMemoryRelayerRepository {
         Ok(active_relayers)
     }
 
+    async fn list_by_signer_id(
+        &self,
+        signer_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        let relayers_with_signer: Vec<RelayerRepoModel> = store
+            .values()
+            .filter(|&relayer| relayer.signer_id == signer_id)
+            .cloned()
+            .collect();
+        Ok(relayers_with_signer)
+    }
+
+    async fn list_by_notification_id(
+        &self,
+        notification_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        let relayers_with_notification: Vec<RelayerRepoModel> = store
+            .values()
+            .filter(|&relayer| {
+                relayer
+                    .notification_id
+                    .as_ref()
+                    .is_some_and(|id| id == notification_id)
+            })
+            .cloned()
+            .collect();
+        Ok(relayers_with_notification)
+    }
+
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
         if let Some(relayer) = store.get_mut(&id) {
@@ -251,8 +282,8 @@ mod tests {
                 gas_price_cap: None,
                 whitelist_receivers: None,
                 eip1559_pricing: Some(false),
-                private_transactions: false,
-                min_balance: 0,
+                private_transactions: Some(false),
+                min_balance: Some(0),
                 gas_limit_estimation: Some(true),
             }),
             signer_id: "test".to_string(),
@@ -355,7 +386,13 @@ mod tests {
         repo.create(initial_relayer.clone()).await.unwrap();
 
         // Perform a partial update on the relayer
-        let update_req = RelayerUpdateRequest { paused: Some(true) };
+        let update_req = UpdateRelayerRequest {
+            name: None,
+            paused: Some(true),
+            policies: None,
+            notification_id: None,
+            custom_rpc_urls: None,
+        };
 
         let updated_relayer = repo
             .partial_update(relayer_id.clone(), update_req)
@@ -414,8 +451,8 @@ mod tests {
             gas_price_cap: Some(50000000000),
             whitelist_receivers: Some(vec!["0x1234".to_string()]),
             eip1559_pricing: Some(true),
-            private_transactions: true,
-            min_balance: 1000000,
+            private_transactions: Some(true),
+            min_balance: Some(1000000),
             gas_limit_estimation: Some(true),
         });
 
@@ -431,8 +468,8 @@ mod tests {
                 assert_eq!(policy.gas_price_cap, Some(50000000000));
                 assert_eq!(policy.whitelist_receivers, Some(vec!["0x1234".to_string()]));
                 assert_eq!(policy.eip1559_pricing, Some(true));
-                assert!(policy.private_transactions);
-                assert_eq!(policy.min_balance, 1000000);
+                assert!(policy.private_transactions.unwrap_or(false));
+                assert_eq!(policy.min_balance, Some(1000000));
             }
             _ => panic!("Unexpected policy type"),
         }
@@ -461,5 +498,304 @@ mod tests {
 
         repo.drop_all_entries().await.unwrap();
         assert!(!repo.has_entries().await.unwrap());
+    }
+
+    #[actix_web::test]
+    async fn test_list_by_signer_id() {
+        let repo = InMemoryRelayerRepository::new();
+
+        // Create test relayers with different signers
+        let relayer1 = RelayerRepoModel {
+            id: "relayer-1".to_string(),
+            name: "Relayer 1".to_string(),
+            network: "ethereum".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            signer_id: "signer-alpha".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x1111".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer2 = RelayerRepoModel {
+            id: "relayer-2".to_string(),
+            name: "Relayer 2".to_string(),
+            network: "polygon".to_string(),
+            paused: true,
+            network_type: NetworkType::Evm,
+            signer_id: "signer-alpha".to_string(), // Same signer as relayer1
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x2222".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer3 = RelayerRepoModel {
+            id: "relayer-3".to_string(),
+            name: "Relayer 3".to_string(),
+            network: "solana".to_string(),
+            paused: false,
+            network_type: NetworkType::Solana,
+            signer_id: "signer-beta".to_string(), // Different signer
+            policies: RelayerNetworkPolicy::Solana(crate::models::RelayerSolanaPolicy::default()),
+            address: "solana-addr".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer4 = RelayerRepoModel {
+            id: "relayer-4".to_string(),
+            name: "Relayer 4".to_string(),
+            network: "stellar".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "signer-alpha".to_string(), // Same signer as relayer1 and relayer2
+            policies: RelayerNetworkPolicy::Stellar(crate::models::RelayerStellarPolicy::default()),
+            address: "stellar-addr".to_string(),
+            notification_id: Some("notification-1".to_string()),
+            system_disabled: true,
+            custom_rpc_urls: None,
+        };
+
+        // Add all relayers to the repository
+        repo.create(relayer1).await.unwrap();
+        repo.create(relayer2).await.unwrap();
+        repo.create(relayer3).await.unwrap();
+        repo.create(relayer4).await.unwrap();
+
+        // Test: Find relayers with signer-alpha (should return 3: relayer-1, relayer-2, relayer-4)
+        let relayers_with_alpha = repo.list_by_signer_id("signer-alpha").await.unwrap();
+        assert_eq!(relayers_with_alpha.len(), 3);
+
+        let alpha_ids: Vec<String> = relayers_with_alpha.iter().map(|r| r.id.clone()).collect();
+        assert!(alpha_ids.contains(&"relayer-1".to_string()));
+        assert!(alpha_ids.contains(&"relayer-2".to_string()));
+        assert!(alpha_ids.contains(&"relayer-4".to_string()));
+        assert!(!alpha_ids.contains(&"relayer-3".to_string()));
+
+        // Verify the relayers have different states (paused, system_disabled)
+        let relayer2_found = relayers_with_alpha
+            .iter()
+            .find(|r| r.id == "relayer-2")
+            .unwrap();
+        let relayer4_found = relayers_with_alpha
+            .iter()
+            .find(|r| r.id == "relayer-4")
+            .unwrap();
+        assert!(relayer2_found.paused); // Should be paused
+        assert!(relayer4_found.system_disabled); // Should be disabled
+
+        // Test: Find relayers with signer-beta (should return 1: relayer-3)
+        let relayers_with_beta = repo.list_by_signer_id("signer-beta").await.unwrap();
+        assert_eq!(relayers_with_beta.len(), 1);
+        assert_eq!(relayers_with_beta[0].id, "relayer-3");
+        assert_eq!(relayers_with_beta[0].network_type, NetworkType::Solana);
+
+        // Test: Find relayers with non-existent signer (should return empty)
+        let relayers_with_gamma = repo.list_by_signer_id("signer-gamma").await.unwrap();
+        assert_eq!(relayers_with_gamma.len(), 0);
+
+        // Test: Find relayers with empty signer ID (should return empty)
+        let relayers_with_empty = repo.list_by_signer_id("").await.unwrap();
+        assert_eq!(relayers_with_empty.len(), 0);
+
+        // Test: Verify total count hasn't changed
+        assert_eq!(repo.count().await.unwrap(), 4);
+
+        // Test: Remove one relayer and verify list_by_signer_id updates correctly
+        repo.delete_by_id("relayer-2".to_string()).await.unwrap();
+
+        let relayers_with_alpha_after_delete =
+            repo.list_by_signer_id("signer-alpha").await.unwrap();
+        assert_eq!(relayers_with_alpha_after_delete.len(), 2); // Should now be 2 instead of 3
+
+        let alpha_ids_after: Vec<String> = relayers_with_alpha_after_delete
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
+        assert!(alpha_ids_after.contains(&"relayer-1".to_string()));
+        assert!(!alpha_ids_after.contains(&"relayer-2".to_string())); // Deleted
+        assert!(alpha_ids_after.contains(&"relayer-4".to_string()));
+    }
+
+    #[actix_web::test]
+    async fn test_list_by_notification_id() {
+        let repo = InMemoryRelayerRepository::new();
+
+        // Create test relayers with different notifications
+        let relayer1 = RelayerRepoModel {
+            id: "relayer-1".to_string(),
+            name: "Relayer 1".to_string(),
+            network: "ethereum".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x1111".to_string(),
+            notification_id: Some("notification-alpha".to_string()),
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer2 = RelayerRepoModel {
+            id: "relayer-2".to_string(),
+            name: "Relayer 2".to_string(),
+            network: "polygon".to_string(),
+            paused: true,
+            network_type: NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x2222".to_string(),
+            notification_id: Some("notification-alpha".to_string()), // Same notification as relayer1
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer3 = RelayerRepoModel {
+            id: "relayer-3".to_string(),
+            name: "Relayer 3".to_string(),
+            network: "solana".to_string(),
+            paused: false,
+            network_type: NetworkType::Solana,
+            signer_id: "test-signer".to_string(),
+            policies: RelayerNetworkPolicy::Solana(crate::models::RelayerSolanaPolicy::default()),
+            address: "solana-addr".to_string(),
+            notification_id: Some("notification-beta".to_string()), // Different notification
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        let relayer4 = RelayerRepoModel {
+            id: "relayer-4".to_string(),
+            name: "Relayer 4".to_string(),
+            network: "stellar".to_string(),
+            paused: false,
+            network_type: NetworkType::Stellar,
+            signer_id: "test-signer".to_string(),
+            policies: RelayerNetworkPolicy::Stellar(crate::models::RelayerStellarPolicy::default()),
+            address: "stellar-addr".to_string(),
+            notification_id: None, // No notification
+            system_disabled: true,
+            custom_rpc_urls: None,
+        };
+
+        let relayer5 = RelayerRepoModel {
+            id: "relayer-5".to_string(),
+            name: "Relayer 5".to_string(),
+            network: "bsc".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x5555".to_string(),
+            notification_id: Some("notification-alpha".to_string()), // Same notification as relayer1 and relayer2
+            system_disabled: false,
+            custom_rpc_urls: None,
+        };
+
+        // Add all relayers to the repository
+        repo.create(relayer1).await.unwrap();
+        repo.create(relayer2).await.unwrap();
+        repo.create(relayer3).await.unwrap();
+        repo.create(relayer4).await.unwrap();
+        repo.create(relayer5).await.unwrap();
+
+        // Test: Find relayers with notification-alpha (should return 3: relayer-1, relayer-2, relayer-5)
+        let relayers_with_alpha = repo
+            .list_by_notification_id("notification-alpha")
+            .await
+            .unwrap();
+        assert_eq!(relayers_with_alpha.len(), 3);
+
+        let alpha_ids: Vec<String> = relayers_with_alpha.iter().map(|r| r.id.clone()).collect();
+        assert!(alpha_ids.contains(&"relayer-1".to_string()));
+        assert!(alpha_ids.contains(&"relayer-2".to_string()));
+        assert!(alpha_ids.contains(&"relayer-5".to_string()));
+        assert!(!alpha_ids.contains(&"relayer-3".to_string()));
+        assert!(!alpha_ids.contains(&"relayer-4".to_string()));
+
+        // Verify the relayers have different states (paused, different networks)
+        let relayer2_found = relayers_with_alpha
+            .iter()
+            .find(|r| r.id == "relayer-2")
+            .unwrap();
+        let relayer5_found = relayers_with_alpha
+            .iter()
+            .find(|r| r.id == "relayer-5")
+            .unwrap();
+        assert!(relayer2_found.paused); // Should be paused
+        assert_eq!(relayer5_found.network, "bsc"); // Should be on BSC network
+
+        // Test: Find relayers with notification-beta (should return 1: relayer-3)
+        let relayers_with_beta = repo
+            .list_by_notification_id("notification-beta")
+            .await
+            .unwrap();
+        assert_eq!(relayers_with_beta.len(), 1);
+        assert_eq!(relayers_with_beta[0].id, "relayer-3");
+        assert_eq!(relayers_with_beta[0].network_type, NetworkType::Solana);
+
+        // Test: Find relayers with non-existent notification (should return empty)
+        let relayers_with_gamma = repo
+            .list_by_notification_id("notification-gamma")
+            .await
+            .unwrap();
+        assert_eq!(relayers_with_gamma.len(), 0);
+
+        // Test: Find relayers with empty string notification (should return empty)
+        let relayers_with_empty = repo.list_by_notification_id("").await.unwrap();
+        assert_eq!(relayers_with_empty.len(), 0);
+
+        // Test: Verify total count hasn't changed
+        assert_eq!(repo.count().await.unwrap(), 5);
+
+        // Test: Remove one relayer and verify list_by_notification_id updates correctly
+        repo.delete_by_id("relayer-2".to_string()).await.unwrap();
+
+        let relayers_with_alpha_after_delete = repo
+            .list_by_notification_id("notification-alpha")
+            .await
+            .unwrap();
+        assert_eq!(relayers_with_alpha_after_delete.len(), 2); // Should now be 2 instead of 3
+
+        let alpha_ids_after: Vec<String> = relayers_with_alpha_after_delete
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
+        assert!(alpha_ids_after.contains(&"relayer-1".to_string()));
+        assert!(!alpha_ids_after.contains(&"relayer-2".to_string())); // Deleted
+        assert!(alpha_ids_after.contains(&"relayer-5".to_string()));
+
+        // Test: Update a relayer's notification and verify the lists update correctly
+        let mut updated_relayer = repo.get_by_id("relayer-5".to_string()).await.unwrap();
+        updated_relayer.notification_id = Some("notification-beta".to_string());
+        repo.update("relayer-5".to_string(), updated_relayer)
+            .await
+            .unwrap();
+
+        // Check notification-alpha list again (should now have only relayer-1)
+        let relayers_with_alpha_final = repo
+            .list_by_notification_id("notification-alpha")
+            .await
+            .unwrap();
+        assert_eq!(relayers_with_alpha_final.len(), 1);
+        assert_eq!(relayers_with_alpha_final[0].id, "relayer-1");
+
+        // Check notification-beta list (should now have relayer-3 and relayer-5)
+        let relayers_with_beta_final = repo
+            .list_by_notification_id("notification-beta")
+            .await
+            .unwrap();
+        assert_eq!(relayers_with_beta_final.len(), 2);
+        let beta_ids_final: Vec<String> = relayers_with_beta_final
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
+        assert!(beta_ids_final.contains(&"relayer-3".to_string()));
+        assert!(beta_ids_final.contains(&"relayer-5".to_string()));
     }
 }

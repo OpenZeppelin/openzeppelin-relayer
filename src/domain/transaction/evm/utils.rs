@@ -421,6 +421,7 @@ mod tests {
             hashes: vec![], // Start with no attempts
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         // Test with no attempts
@@ -467,6 +468,7 @@ mod tests {
             hashes: vec![],
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         // Test with no NOOP attempts
@@ -644,6 +646,7 @@ mod tests {
             hashes: vec![],
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let age_result = get_age_of_sent_at(&tx);
@@ -685,6 +688,7 @@ mod tests {
             hashes: vec![],
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let result = get_age_of_sent_at(&tx);
@@ -729,6 +733,7 @@ mod tests {
             hashes: vec![],
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let result = get_age_of_sent_at(&tx);

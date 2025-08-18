@@ -47,6 +47,7 @@ use crate::{
         DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, NATIVE_SOL, SOLANA_DECIMALS, WRAPPED_SOL_MINT,
     },
     domain::{SolanaTokenProgram, TokenInstruction},
+    jobs::TransactionStatusCheck,
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
@@ -68,12 +69,13 @@ impl Default for FeeQuote {
     }
 }
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     /// Signs a transaction with the relayer's keypair and returns both the signed transaction and
     /// signature.
@@ -879,6 +881,24 @@ where
         }
         Ok(payments)
     }
+
+    pub(crate) async fn schedule_status_check_job(
+        &self,
+        tx: &TransactionRepoModel,
+        delay: Option<i64>,
+    ) -> Result<(), SolanaRpcError> {
+        self.job_producer
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
+                delay,
+            )
+            .await
+            .map_err(|e| {
+                error!("Failed to schedule status check: {}", e);
+                SolanaRpcError::Internal(e.to_string())
+            })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -906,7 +926,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_relayer_sign_transaction() {
-        let (relayer, mut signer, provider, jupiter_service, _, job_producer) =
+        let (relayer, mut signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
         let relayer_pubkey = Pubkey::from_str(&relayer.address).unwrap();
         let recipient = Pubkey::new_unique();
@@ -921,10 +941,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let result = rpc.relayer_sign_transaction(transaction).await;
@@ -940,7 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_fee_token_quote_sol() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         // Setup policy with SOL
@@ -960,10 +982,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let result = rpc.get_fee_token_quote(NATIVE_SOL, 1_000_000).await;
@@ -978,7 +1002,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_fee_token_quote_spl_token() {
-        let (mut relayer, signer, provider, mut jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, mut jupiter_service, _, job_producer, network) =
             setup_test_context();
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
 
@@ -1031,10 +1055,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let result = rpc.get_fee_token_quote(test_token, 1_000_000_000).await;
@@ -1048,7 +1074,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_no_ata_creation() {
-        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         // Setup provider mock
@@ -1058,10 +1084,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         // Create simple transfer transaction
@@ -1083,7 +1111,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_single_ata_creation() {
-        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         // Setup provider expectations
@@ -1097,10 +1125,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let payer = Keypair::new();
@@ -1126,7 +1156,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_multiple_ata_creations() {
-        let (relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         provider
@@ -1139,10 +1169,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let payer = Keypair::new();
@@ -1170,13 +1202,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_no_lamport_outflow() {
-        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let payer = Keypair::new();
@@ -1194,7 +1229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_single_lamport_transfer() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         // Set relayer address
@@ -1203,10 +1238,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let recipient = Pubkey::new_unique();
@@ -1227,7 +1264,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_multiple_lamport_transfers() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -1235,10 +1272,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let recipient1 = Pubkey::new_unique();
@@ -1266,7 +1305,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_ignore_non_relayer_transfers() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -1275,10 +1314,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let recipient = Pubkey::new_unique();
@@ -1305,7 +1346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_non_system_program_instructions() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -1313,10 +1354,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         // Create non-system program instruction
@@ -1345,7 +1388,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_sign_transaction_success() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -1367,10 +1410,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let instructions = vec![instruction::transfer(
@@ -1395,7 +1440,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_sign_transaction_multiple_instructions() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -1411,10 +1456,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let recipient1 = Pubkey::new_unique();
@@ -1434,7 +1481,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_margin_no_margin() {
-        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer, network) =
             setup_test_context();
 
         provider
@@ -1443,10 +1490,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let transaction = Transaction::try_from(tx).unwrap();
@@ -1463,7 +1512,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_margin_zero_margin() {
-        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer, network) =
             setup_test_context();
 
         provider
@@ -1472,10 +1521,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let transaction = Transaction::try_from(tx).unwrap();
@@ -1492,7 +1543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_margin_ten_percent() {
-        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer, network) =
             setup_test_context();
 
         provider
@@ -1501,10 +1552,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let transaction = Transaction::try_from(tx).unwrap();
@@ -1517,7 +1570,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_fee_with_margin_large_percentage() {
-        let (relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, tx, job_producer, network) =
             setup_test_context();
 
         provider
@@ -1526,10 +1579,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let transaction = Transaction::try_from(tx).unwrap();
@@ -1542,7 +1597,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_and_convert_fee_sol_with_no_margin() {
-        let (mut relayer, signer, mut provider, jupiter_service, tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, tx, job_producer, network) =
             setup_test_context();
 
         // Setup policy with SOL
@@ -1566,10 +1621,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let transaction = Transaction::try_from(tx).unwrap();
@@ -1602,7 +1659,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_estimate_and_convert_fee_token_with_margin() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, tx, job_producer) =
+        let (mut relayer, signer, mut provider, mut jupiter_service, tx, job_producer, network) =
             setup_test_context();
         // USDC token mint
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
@@ -1659,10 +1716,12 @@ mod tests {
             });
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let transaction = Transaction::try_from(tx).unwrap();
@@ -1696,14 +1755,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_convert_compiled_instruction_basic() {
-        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         // Create sample account keys
@@ -1766,14 +1828,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_convert_compiled_instruction_transfer_example() {
-        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let payer = Keypair::new();
@@ -1843,14 +1908,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_convert_compiled_instruction_spl_token_transfer() {
-        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let payer = Keypair::new();
@@ -1922,7 +1990,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_transaction_with_user_fee_payment_token() {
-        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
         // USDC token mint
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
@@ -1991,10 +2059,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
         let recipient = Pubkey::new_unique();
         let ix = instruction::transfer(&user_pubkey, &recipient, 1000);
@@ -2095,7 +2165,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_transaction_with_user_fee_payment_relayer_is_source() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -2103,10 +2173,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let recipient = Pubkey::new_unique();
@@ -2139,7 +2211,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_transaction_with_user_fee_payment_insufficient_balance() {
-        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
         // USDC token mint
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
@@ -2208,10 +2280,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
         // Create a simple transaction from user
         let recipient = Pubkey::new_unique();
@@ -2243,7 +2317,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_confirm_user_fee_payment_sol_sufficient() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -2251,10 +2325,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let payer = Keypair::new();
@@ -2276,7 +2352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_confirm_user_fee_payment_sol_insufficient() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -2284,10 +2360,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         // Create transaction with SOL payment to relayer (but insufficient)
@@ -2320,7 +2398,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_confirm_user_fee_payment_token_sufficient() {
-        let (mut relayer, signer, mut provider, mut jupiter_service, _, job_producer) =
+        let (mut relayer, signer, mut provider, mut jupiter_service, _, job_producer, network) =
             setup_test_context();
         // USDC token mint
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
@@ -2417,10 +2495,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let token_payment = 1_000_000; // Amount in token units
@@ -2448,7 +2528,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_confirm_user_fee_payment_no_payment() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         let relayer_keypair = Keypair::new();
@@ -2456,10 +2536,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         // Create transaction WITHOUT payment to relayer
@@ -2486,7 +2568,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_find_token_payments_to_relayer() {
-        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
         // USDC mint address
         let test_token = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // noboost
@@ -2555,10 +2637,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
         let token_payment = 1_000_000; // 1 USDC
 
@@ -2587,5 +2671,64 @@ mod tests {
         assert_eq!(payments.len(), 1, "Should find one token payment");
         assert_eq!(payments[0].0, token_mint, "Token mint should match");
         assert_eq!(payments[0].1, token_payment, "Payment amount should match");
+    }
+
+    #[tokio::test]
+    async fn test_schedule_status_check_job() {
+        use crate::models::TransactionRepoModel;
+
+        let (relayer, _signer, provider, jupiter_service, _, mut job_producer, network) =
+            setup_test_context();
+
+        // Create a mock transaction
+        let tx = TransactionRepoModel {
+            id: "test-tx-id".to_string(),
+            relayer_id: "test-relayer-id".to_string(),
+            status: crate::models::TransactionStatus::Submitted,
+            status_reason: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_data: crate::models::NetworkTransactionData::Solana(
+                crate::models::SolanaTransactionData {
+                    transaction: "test-transaction".to_string(),
+                    signature: Some("test-signature".to_string()),
+                },
+            ),
+            priced_at: None,
+            hashes: vec![],
+            network_type: crate::models::NetworkType::Solana,
+            noop_count: None,
+            is_canceled: Some(false),
+            delete_at: None,
+        };
+
+        // Set up expectation on job producer
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .withf(|status_check, delay| {
+                status_check.transaction_id == "test-tx-id"
+                    && status_check.relayer_id == "test-relayer-id"
+                    && delay.is_none()
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let rpc = SolanaRpcMethodsImpl::new_mock(
+            relayer,
+            network,
+            Arc::new(provider),
+            Arc::new(_signer),
+            Arc::new(jupiter_service),
+            Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
+        );
+
+        // Call the method
+        let result = rpc.schedule_status_check_job(&tx, None).await;
+
+        // Assert success
+        assert!(result.is_ok(), "Schedule status check should succeed");
     }
 }

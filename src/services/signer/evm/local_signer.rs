@@ -34,7 +34,8 @@ use crate::{
     },
     models::{
         Address, EvmTransactionData, EvmTransactionDataSignature, EvmTransactionDataTrait,
-        NetworkTransactionData, SignerError, SignerRepoModel, SignerType, TransactionRepoModel,
+        NetworkTransactionData, Signer as SignerDomainModel, SignerError, SignerRepoModel,
+        SignerType, TransactionRepoModel,
     },
     services::Signer,
 };
@@ -43,12 +44,13 @@ use super::DataSignerTrait;
 
 use alloy::rpc::types::TransactionRequest;
 
+#[derive(Clone)]
 pub struct LocalSigner {
     local_signer_client: AlloyLocalSignerClient<SigningKey>,
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: &SignerRepoModel) -> Result<Self, SignerError> {
+    pub fn new(signer_model: &SignerDomainModel) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_local()
@@ -181,10 +183,10 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    fn create_test_signer_model() -> SignerRepoModel {
+    fn create_test_signer_model() -> SignerDomainModel {
         let seed = vec![1u8; 32];
         let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
-        SignerRepoModel {
+        SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         }

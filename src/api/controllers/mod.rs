@@ -6,6 +6,10 @@
 //!
 //! * `relayer` - Transaction and relayer management endpoints
 //! * `plugin` - Plugin endpoints
+//! * `notifications` - Notification management endpoints
+//! * `signers` - Signer management endpoints
 
+pub mod notification;
 pub mod plugin;
 pub mod relayer;
+pub mod signer;

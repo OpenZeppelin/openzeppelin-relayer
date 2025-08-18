@@ -47,19 +47,21 @@ pub async fn create_solana_relayer<
             RelayerError::NetworkConfiguration(format!("Network {} not found", relayer.network))
         })?;
 
-    let network = SolanaNetwork::try_from(network_repo)?;
+    let network = SolanaNetwork::try_from(network_repo.clone())?;
     let provider = Arc::new(get_network_provider(
         &network,
         relayer.custom_rpc_urls.clone(),
     )?);
-    let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer)?);
+    let signer_service = Arc::new(SolanaSignerFactory::create_solana_signer(&signer.into())?);
     let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
     let rpc_methods = SolanaRpcMethodsImpl::new(
         relayer.clone(),
+        network_repo.clone(),
         provider.clone(),
         signer_service.clone(),
         jupiter_service.clone(),
         job_producer.clone(),
+        transaction_repository.clone(),
     );
     let rpc_handler = Arc::new(SolanaRpcHandler::new(rpc_methods));
     let dex_service = create_network_dex_generic(

@@ -1,14 +1,27 @@
+//! # Relayer Documentation
+//!
+//! This module contains the OpenAPI documentation for the relayer API endpoints.
+//!
+//! ## Endpoints
+//!
+//! - `GET /api/v1/relayers`: List all relayers
+//! - `GET /api/v1/relayers/{id}`: Get a relayer by ID
+//! - `POST /api/v1/relayers`: Create a new relayer
+//! - `PATCH /api/v1/relayers/{id}`: Update a relayer
+//! - `DELETE /api/v1/relayers/{id}`: Delete a relayer
+
 use crate::{
     domain::{
-        BalanceResponse, RelayerUpdateRequest, SignDataRequest, SignDataResponse,
-        SignTypedDataRequest,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionRequest, SignTypedDataRequest,
     },
     models::{
-        ApiResponse, DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse,
-        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerResponse,
-        RelayerStatus, TransactionResponse,
+        ApiResponse, CreateRelayerRequest, DeletePendingTransactionsResponse, JsonRpcRequest,
+        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        RelayerResponse, RelayerStatus, TransactionResponse, UpdateRelayerRequest,
     },
 };
+
 /// Relayer routes implementation
 ///
 /// Note: OpenAPI documentation for these endpoints can be found in the `openapi.rs` file
@@ -150,6 +163,67 @@ fn doc_list_relayers() {}
 #[allow(dead_code)]
 fn doc_get_relayer() {}
 
+/// Creates a new relayer.
+#[utoipa::path(
+    post,
+    path = "/api/v1/relayers",
+    tag = "Relayers",
+    operation_id = "createRelayer",
+    security(
+        ("bearer_auth" = [])
+    ),
+    request_body = CreateRelayerRequest,
+    responses(
+        (
+            status = 201,
+            description = "Relayer created successfully",
+            body = ApiResponse<RelayerResponse>
+        ),
+        (
+            status = 400,
+            description = "Bad Request",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Bad Request",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 409,
+            description = "Relayer with this ID already exists",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Relayer with this ID already exists",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal Server Error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            })
+        )
+    )
+)]
+#[allow(dead_code)]
+fn doc_create_relayer() {}
+
 /// Updates a relayer's information based on the provided update request.
 #[utoipa::path(
     patch,
@@ -162,7 +236,7 @@ fn doc_get_relayer() {}
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
     ),
-    request_body = RelayerUpdateRequest,
+    request_body = UpdateRelayerRequest,
     responses(
         (status = 200, description = "Relayer updated successfully", body = ApiResponse<RelayerResponse>),
         (
@@ -219,6 +293,69 @@ fn doc_get_relayer() {}
 )]
 #[allow(dead_code)]
 fn doc_update_relayer() {}
+
+/// Deletes a relayer by ID.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/relayers/{relayer_id}",
+    tag = "Relayers",
+    operation_id = "deleteRelayer",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Relayer deleted successfully",
+            body = ApiResponse<String>
+        ),
+        (
+            status = 400,
+            description = "Bad Request - Cannot delete relayer with active transactions",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Cannot delete relayer 'relayer_id' because it has N transaction(s). Please wait for all transactions to complete or cancel them before deleting the relayer.",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Not Found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Relayer with ID relayer_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal Server Error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            })
+        )
+    )
+)]
+#[allow(dead_code)]
+fn doc_delete_relayer() {}
 
 /// Fetches the current status of a specific relayer.
 #[utoipa::path(
@@ -988,6 +1125,76 @@ fn doc_sign() {}
 )]
 #[allow(dead_code)]
 fn doc_sign_typed_data() {}
+
+/// Signs a transaction using the specified relayer (Stellar only).
+#[utoipa::path(
+    post,
+    path = "/api/v1/relayers/{relayer_id}/sign-transaction",
+    tag = "Relayers",
+    operation_id = "signTransaction",
+    security(
+        ("bearer_auth" = [])
+    ),
+    params(
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
+    ),
+    request_body = SignTransactionRequest,
+    responses(
+        (status = 200, description = "Transaction signed successfully", body = ApiResponse<SignTransactionExternalResponse>),
+        (
+            status = 400,
+            description = "BadRequest",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Bad Request",
+                "data": null
+            })
+        ),
+        (
+            status = 401,
+            description = "Unauthorized",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Unauthorized",
+                "data": null
+            })
+        ),
+        (
+            status = 404,
+            description = "Not Found",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Relayer with ID relayer_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 429,
+            description = "Too Many Requests",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Too Many Requests",
+                "data": null
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            })
+        ),
+    )
+)]
+#[allow(dead_code)]
+fn doc_sign_transaction() {}
 
 /// Performs a JSON-RPC call using the specified relayer.
 #[utoipa::path(

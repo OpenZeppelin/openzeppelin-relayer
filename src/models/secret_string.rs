@@ -11,6 +11,7 @@ use std::{fmt, sync::Mutex};
 
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
 pub struct SecretString(Mutex<SecretVec<u8>>);
@@ -131,6 +132,28 @@ impl PartialEq for SecretString {
 impl fmt::Debug for SecretString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "SecretString(REDACTED)")
+    }
+}
+
+impl ToSchema for SecretString {
+    fn name() -> std::borrow::Cow<'static, str> {
+        "SecretString".into()
+    }
+}
+
+impl utoipa::PartialSchema for SecretString {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::Schema> {
+        use utoipa::openapi::*;
+
+        RefOr::T(Schema::Object(
+            ObjectBuilder::new()
+                .schema_type(schema::Type::String)
+                .format(Some(schema::SchemaFormat::KnownFormat(
+                    schema::KnownFormat::Password,
+                )))
+                .description(Some("A secret string value (content is protected)"))
+                .build(),
+        ))
     }
 }
 

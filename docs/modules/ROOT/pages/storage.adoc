@@ -1,0 +1,181 @@
+= Storage Configuration
+:description: Storage configuration guide for OpenZeppelin Relayer.
+
+== Overview
+
+OpenZeppelin Relayer supports two storage backends for persisting configuration data and transaction state. The choice of storage backend affects how configuration is managed, data persistence, and performance characteristics.
+
+[IMPORTANT]
+====
+Storage type determines how your configuration changes persist and how file-based and API-based configuration interact. Choose the right storage type for your deployment needs.
+====
+
+[NOTE]
+====
+**Community Contributions Welcome**: Additional storage backends (such as PostgreSQL, MongoDB, or other databases) are welcomed as contributions from the open source community. The storage system is designed to be extensible, making it straightforward to add new storage implementations.
+====
+
+== Storage Types
+
+=== In-Memory Storage
+
+In-memory storage keeps all configuration and transaction data in the application's memory.
+
+==== Use Cases
+- **Development and testing environments**
+- **Temporary deployments**
+- **Single-instance deployments**
+- **When data persistence across restarts is not required**
+
+==== Characteristics
+- **Fast Performance**: No network overhead for data access
+- **No External Dependencies**: Does not require Redis or other external services
+- **No Persistence**: All data is lost when the container restarts
+- **Single Instance**: Cannot be shared across multiple relayer instances
+
+==== Configuration Sync Behavior
+- Configuration from `config.json` is loaded on every startup
+- API changes are **not** synchronized back to `config.json` file
+- All API-based configuration changes are lost on restart
+- File-based configuration always takes precedence on startup
+
+[source,bash]
+----
+# Enable in-memory storage
+REPOSITORY_STORAGE_TYPE=in-memory
+----
+
+=== Redis Storage
+
+Redis storage persists all configuration and transaction data in a Redis database.
+
+==== Use Cases
+- **Production deployments**
+- **Multi-instance deployments**
+- **When data persistence is required**
+- **Scalable environments**
+- **When API-based configuration changes should persist**
+
+==== Characteristics
+- **Persistent**: Data survives container restarts
+- **Network Dependency**: Requires Redis connection
+- **Encryption**: Supports encryption at rest for sensitive data
+
+==== Configuration Sync Behavior
+- Configuration from `config.json` is loaded into Redis **only once** during the first startup
+- Subsequent startups use the configuration stored in Redis
+- API changes are persisted and survive restarts
+- File-based configuration can override Redis by setting `RESET_STORAGE_ON_START=true`
+
+[source,bash]
+----
+# Enable Redis storage
+REPOSITORY_STORAGE_TYPE=redis
+REDIS_URL=redis://localhost:6379
+STORAGE_ENCRYPTION_KEY=your-encryption-key-here
+----
+
+== Configuration Reference
+
+=== Core Storage Settings
+
+[cols="1,1,2,3", options="header"]
+|===
+| Environment Variable | Default Value | Accepted Values | Description
+
+| `REPOSITORY_STORAGE_TYPE`
+| `in-memory`
+| `in-memory, redis`
+| Type of storage backend used for storing configuration and transaction data.
+
+| `RESET_STORAGE_ON_START`
+| `false`
+| `true, false`
+| When `true`, clears all data from storage on startup and reloads from config files. Useful for forcing file-based configuration to override stored data.
+
+| `TRANSACTION_EXPIRATION_HOURS`
+| `4`
+| `number`
+| Number of hours after which transactions in a final state are automatically removed from storage to prevent storage bloat.
+|===
+
+=== Redis-Specific Settings
+
+[cols="1,1,2,3", options="header"]
+|===
+| Environment Variable | Default Value | Accepted Values | Description
+
+| `REDIS_URL`
+| `redis://localhost:6379`
+| Redis connection string
+| Full connection URL for the Redis instance. Supports Redis, Redis Sentinel, and Redis Cluster configurations.
+
+| `REDIS_CONNECTION_TIMEOUT_MS`
+| `10000`
+| `number` (milliseconds)
+| Maximum time to wait when connecting to Redis before timing out.
+
+| `REDIS_KEY_PREFIX`
+| `oz-relayer`
+| `string`
+| Prefix added to all Redis keys. Useful for namespacing when sharing Redis with other applications.
+
+| `STORAGE_ENCRYPTION_KEY`
+| ``
+| `string` (base64)
+| Encryption key used to encrypt sensitive data at rest in Redis. Generate using `cargo run --example generate_encryption_key`.
+|===
+
+== Security Considerations
+
+=== Redis Security
+
+[IMPORTANT]
+====
+When using Redis storage in production:
+
+* **Use encryption at rest**: Always set `STORAGE_ENCRYPTION_KEY`
+* **Secure Redis access**: Use Redis AUTH, TLS, and network security
+* **Network isolation**: Deploy Redis in a private network
+* **Regular backups**: Implement Redis backup strategy
+* **Monitor access**: Log and monitor Redis access patterns
+====
+
+=== Encryption at Rest
+
+Sensitive configuration data is encrypted before being stored in Redis when `STORAGE_ENCRYPTION_KEY` is provided.
+
+**Encrypted Data Includes:**
+- Signer private keys and passphrases
+- Webhook signing keys
+- API keys (when stored in configuration)
+- Other sensitive configuration values
+
+**Generate Encryption Key:**
+[source,bash]
+----
+# Generate a secure encryption key
+cargo run --example generate_encryption_key
+
+# Alternative using OpenSSL
+openssl rand -base64 32
+----
+
+== Transaction Storage Management
+
+=== Automatic Cleanup
+
+Transactions are automatically removed from storage after reaching their final state to prevent storage bloat:
+
+[source,bash]
+----
+# Configure transaction retention (default: 4 hours)
+TRANSACTION_EXPIRATION_HOURS=8
+----
+
+**Final Transaction States:**
+
+- `confirmed` - Transaction confirmed on blockchain
+- `failed` - Transaction failed and will not be retried
+- `cancelled` - Transaction was cancelled by user
+- `expired`: - Transaction was expired

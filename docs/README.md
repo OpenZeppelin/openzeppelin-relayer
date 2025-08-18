@@ -15,3 +15,9 @@
     ```
 
 - You can view the site `localhost:8080` or other port if it's in use.
+
+- To update openapi documentation, run:
+
+  ```sh
+  cargo generate_openapi
+  ```

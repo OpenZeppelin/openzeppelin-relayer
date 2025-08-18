@@ -29,7 +29,9 @@ use crate::{
         NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
         TransactionCounterTrait, TransactionRepository,
     },
-    services::{get_network_provider, EvmSignerFactory, TransactionCounterService},
+    services::{
+        get_network_provider, EvmSignerFactory, StellarSignerFactory, TransactionCounterService,
+    },
 };
 
 use async_trait::async_trait;
@@ -147,6 +149,21 @@ pub trait Relayer {
     ///
     /// A `Result` indicating success, or a `RelayerError` on failure.
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
+
+    /// Signs a transaction using the relayer's credentials.
+    ///
+    /// # Arguments
+    ///
+    /// * `unsigned_xdr` - The unsigned transaction XDR string to be signed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `SignTransactionExternalResponse` on success, or a
+    /// `RelayerError` on failure.
+    async fn sign_transaction(
+        &self,
+        request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError>;
 }
 
 /// Solana Relayer Dex Trait
@@ -311,6 +328,21 @@ impl<
             NetworkRelayer::Stellar(relayer) => relayer.initialize_relayer().await,
         }
     }
+
+    async fn sign_transaction(
+        &self,
+        request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                "sign_transaction not supported for EVM".to_string(),
+            )),
+            NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
+                "sign_transaction not supported for Solana".to_string(),
+            )),
+            NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(request).await,
+        }
+    }
 }
 
 #[async_trait]
@@ -369,7 +401,7 @@ impl<
                 let network = EvmNetwork::try_from(network_repo)?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
-                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer.into()).await?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
@@ -421,6 +453,8 @@ impl<
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
                         .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
 
+                let signer_service = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
@@ -429,6 +463,7 @@ impl<
 
                 let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
                     relayer,
+                    signer_service,
                     stellar_provider,
                     stellar::StellarRelayerDependencies::new(
                         state.relayer_repository(),
@@ -477,6 +512,19 @@ pub struct SignTypedDataRequest {
     pub hash_struct_message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SignTransactionRequestStellar {
+    pub unsigned_xdr: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum SignTransactionRequest {
+    Stellar(SignTransactionRequestStellar),
+    Evm(Vec<u8>),
+    Solana(Vec<u8>),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignTransactionResponseEvm {
     pub hash: String,
@@ -490,10 +538,34 @@ pub struct SignTransactionResponseStellar {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignXdrTransactionResponseStellar {
+    pub signed_xdr: String,
+    pub signature: DecoratedSignature,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
     Solana(Vec<u8>),
     Stellar(SignTransactionResponseStellar),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = SignTransactionResponseStellar)]
+pub struct SignTransactionExternalResponseStellar {
+    pub signed_xdr: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+#[schema(as = SignTransactionResponse)]
+pub enum SignTransactionExternalResponse {
+    Stellar(SignTransactionExternalResponseStellar),
+    Evm(Vec<u8>),
+    Solana(Vec<u8>),
 }
 
 impl SignTransactionResponse {
@@ -512,10 +584,4 @@ pub struct BalanceResponse {
     pub balance: u128,
     #[schema(example = "wei")]
     pub unit: String,
-}
-
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct RelayerUpdateRequest {
-    #[schema(nullable = false)]
-    pub paused: Option<bool>,
 }

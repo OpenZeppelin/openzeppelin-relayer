@@ -311,7 +311,7 @@ impl RpcSelector {
     /// Gets a client for the selected RPC endpoint.
     ///
     /// # Arguments
-    /// * `initializer` - A function that takes a URL string and returns a Result<T>
+    /// * `initializer` - A function that takes a URL string and returns a `Result<T>`
     ///
     /// # Returns
     /// * `Result<T>` - The client instance or an error

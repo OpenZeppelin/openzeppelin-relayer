@@ -26,7 +26,7 @@ pub use relayer_in_memory::*;
 pub use relayer_redis::*;
 
 use crate::{
-    domain::RelayerUpdateRequest,
+    models::UpdateRelayerRequest,
     models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError},
     repositories::{PaginatedResult, Repository},
 };
@@ -37,10 +37,18 @@ use std::sync::Arc;
 #[async_trait]
 pub trait RelayerRepository: Repository<RelayerRepoModel, String> + Send + Sync {
     async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+    async fn list_by_signer_id(
+        &self,
+        signer_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+    async fn list_by_notification_id(
+        &self,
+        notification_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError>;
     async fn enable_relayer(&self, relayer_id: String)
         -> Result<RelayerRepoModel, RepositoryError>;
@@ -166,10 +174,34 @@ impl RelayerRepository for RelayerRepositoryStorage {
         }
     }
 
+    async fn list_by_signer_id(
+        &self,
+        signer_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => repo.list_by_signer_id(signer_id).await,
+            RelayerRepositoryStorage::Redis(repo) => repo.list_by_signer_id(signer_id).await,
+        }
+    }
+
+    async fn list_by_notification_id(
+        &self,
+        notification_id: &str,
+    ) -> Result<Vec<RelayerRepoModel>, RepositoryError> {
+        match self {
+            RelayerRepositoryStorage::InMemory(repo) => {
+                repo.list_by_notification_id(notification_id).await
+            }
+            RelayerRepositoryStorage::Redis(repo) => {
+                repo.list_by_notification_id(notification_id).await
+            }
+        }
+    }
+
     async fn partial_update(
         &self,
         id: String,
-        update: RelayerUpdateRequest,
+        update: UpdateRelayerRequest,
     ) -> Result<RelayerRepoModel, RepositoryError> {
         match self {
             RelayerRepositoryStorage::InMemory(repo) => repo.partial_update(id, update).await,
@@ -222,12 +254,12 @@ mod tests {
             paused: false,
             network_type: NetworkType::Evm,
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                min_balance: Some(0),
+                gas_limit_estimation: Some(true),
                 gas_price_cap: None,
                 whitelist_receivers: None,
                 eip1559_pricing: Some(false),
-                private_transactions: false,
-                min_balance: 0,
-                gas_limit_estimation: Some(true),
+                private_transactions: Some(false),
             }),
             signer_id: "test".to_string(),
             address: "0x".to_string(),
@@ -289,7 +321,10 @@ mod tests {
         assert!(!active_relayers.is_empty());
 
         // Test partial_update
-        let update = RelayerUpdateRequest { paused: Some(true) };
+        let update = UpdateRelayerRequest {
+            paused: Some(true),
+            ..Default::default()
+        };
         let updated = impl_repo
             .partial_update(relayer.id.clone(), update)
             .await
@@ -305,12 +340,12 @@ mod tests {
 
         // Test update_policy
         let new_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            min_balance: Some(1000000000000000000),
+            gas_limit_estimation: Some(true),
             gas_price_cap: Some(50_000_000_000),
             whitelist_receivers: None,
             eip1559_pricing: Some(true),
-            private_transactions: false,
-            min_balance: 1000000000000000000,
-            gas_limit_estimation: Some(true),
+            private_transactions: Some(false),
         });
         let policy_updated = impl_repo
             .update_policy(relayer.id.clone(), new_policy)
@@ -426,7 +461,9 @@ mockall::mock! {
     #[async_trait]
     impl RelayerRepository for RelayerRepository {
         async fn list_active(&self) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
-        async fn partial_update(&self, id: String, update: RelayerUpdateRequest) -> Result<RelayerRepoModel, RepositoryError>;
+        async fn list_by_signer_id(&self, signer_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn list_by_notification_id(&self, notification_id: &str) -> Result<Vec<RelayerRepoModel>, RepositoryError>;
+        async fn partial_update(&self, id: String, update: UpdateRelayerRequest) -> Result<RelayerRepoModel, RepositoryError>;
         async fn enable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
         async fn disable_relayer(&self, relayer_id: String) -> Result<RelayerRepoModel, RepositoryError>;
         async fn update_policy(&self, id: String, policy: RelayerNetworkPolicy) -> Result<RelayerRepoModel, RepositoryError>;
