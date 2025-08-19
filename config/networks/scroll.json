@@ -24,24 +24,19 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 3000,
+      "from": "scroll",
+      "type": "evm",
+      "network": "scroll-sepolia",
       "chain_id": 534351,
       "explorer_urls": [
         "https://api-sepolia.scrollscan.com/api",
         "https://sepolia.scrollscan.com"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": true,
-      "network": "scroll-sepolia",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://sepolia-rpc.scroll.io"
       ],
-      "symbol": "ETH",
-      "tags": [],
-      "type": "evm"
+      "tags": []
     }
   ]
 }
