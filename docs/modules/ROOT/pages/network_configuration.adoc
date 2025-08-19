@@ -170,7 +170,7 @@ Some tags have special meaning and affect relayer behavior:
 |`rollup`
 |Identifies Layer 2 rollup networks (e.g., Arbitrum, Optimism, Base)
 
-|`optimism`
+|`optimism-based`
 |Identifies Optimism-based networks using the OP Stack (e.g., Optimism, Base, World Chain)
 
 |`arbitrum-based`
@@ -323,7 +323,7 @@ Here's an example showing a Stellar network configuration with passphrase:
     "https://optimism.drpc.org"
   ],
   "features": ["eip1559"],
-  "tags": ["rollup", "optimism"],
+  "tags": ["rollup", "optimism-based"],
   "average_blocktime_ms": 2000,
   "is_testnet": false
 }
