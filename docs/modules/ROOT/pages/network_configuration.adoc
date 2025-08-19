@@ -177,7 +177,7 @@ Some tags have special meaning and affect relayer behavior:
 |Identifies Arbitrum-based networks using the Arbitrum Stack
 
 |`no-mempool`
-|Indicates networks that lack a traditional mempool (e.g., Arbitrum)
+|Indicates networks that lack a traditional mempool (e.g., Arbitrum). Note: The relayer also treats networks tagged as `arbitrum-based` or `optimism-based` as lacking a mempool, even if `no-mempool` is not present.
 
 |`deprecated`
 |Marks networks that are deprecated and may be removed in future versions

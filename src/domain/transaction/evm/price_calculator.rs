@@ -698,6 +698,7 @@ fn calculate_max_fee_per_gas(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::ARBITRUM_BASED_TAG;
     use crate::models::{
         evm::Speed, EvmNetwork, EvmTransactionData, NetworkType, RelayerEvmPolicy,
         RelayerNetworkPolicy, RelayerRepoModel, U256,
@@ -1915,7 +1916,7 @@ mod tests {
             explorer_urls: None,
             average_blocktime_ms: 1000, // 1 second for arbitrum
             is_testnet: false,
-            tags: vec!["arbitrum-based".to_string()], // This makes is_arbitrum() return true
+            tags: vec![ARBITRUM_BASED_TAG.to_string()], // This makes is_arbitrum() return true
             chain_id: 42161,
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],

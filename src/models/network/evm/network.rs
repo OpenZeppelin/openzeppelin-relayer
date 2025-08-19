@@ -1,4 +1,4 @@
-use crate::constants::{ARBITRUM_BASED_TAG, NO_MEMPOOL_TAG, OPTIMISM_BASED_TAG, ROLLUP_TAG};
+use crate::constants::{ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, ROLLUP_TAG};
 use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
 use std::time::Duration;
 
@@ -94,24 +94,27 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
 
 impl EvmNetwork {
     pub fn is_optimism(&self) -> bool {
-        self.tags.contains(&OPTIMISM_BASED_TAG.to_string())
+        self.tags.iter().any(|t| t == OPTIMISM_BASED_TAG)
     }
 
     pub fn is_rollup(&self) -> bool {
-        self.tags.contains(&ROLLUP_TAG.to_string())
+        self.tags.iter().any(|t| t == ROLLUP_TAG)
     }
 
-    /// Returns whether this network lacks mempool support.
+    ///  Returns whether this network lacks mempool-like behavior (no public/pending pool).
     ///
-    /// Returns true if the network has no mempool or if it has the "no-mempool" tag.
+    /// Returns true if any of these tags are present:
+    /// - "no-mempool"
+    /// - "arbitrum-based"
+    /// - "optimism-based"
     pub fn lacks_mempool(&self) -> bool {
-        self.tags.iter().any(|tag| {
-            tag == NO_MEMPOOL_TAG || tag == ARBITRUM_BASED_TAG || tag == OPTIMISM_BASED_TAG
-        })
+        self.tags
+            .iter()
+            .any(|t| LACKS_MEMPOOL_TAGS.contains(&t.as_str()))
     }
 
     pub fn is_arbitrum(&self) -> bool {
-        self.tags.contains(&ARBITRUM_BASED_TAG.to_string())
+        self.tags.iter().any(|t| t == ARBITRUM_BASED_TAG)
     }
 
     pub fn is_testnet(&self) -> bool {
@@ -152,6 +155,7 @@ impl EvmNetwork {
 mod tests {
     use super::*;
     use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+    use crate::constants::NO_MEMPOOL_TAG;
     use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
 
     fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
@@ -209,6 +213,7 @@ mod tests {
     fn test_arbitrum_like_network() {
         let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, NO_MEMPOOL_TAG]);
         assert!(network.is_rollup());
+        assert!(network.is_arbitrum());
         assert!(network.lacks_mempool());
         assert!(!network.is_optimism());
     }
