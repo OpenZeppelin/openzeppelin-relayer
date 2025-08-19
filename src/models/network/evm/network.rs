@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_arbitrum_like_network() {
-        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, NO_MEMPOOL_TAG]);
+        let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, ARBITRUM_BASED_TAG]);
         assert!(network.is_rollup());
         assert!(network.is_arbitrum());
         assert!(network.lacks_mempool());
