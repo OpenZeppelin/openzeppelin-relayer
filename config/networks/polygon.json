@@ -72,8 +72,7 @@
       "is_testnet": true,
       "rpc_urls": [
         "https://rpc.cardona.zkevm-rpc.com",
-        "https://polygon-zkevm-cardona.drpc.org",
-        "https://testnet-zkevm.polygonscan.com"
+        "https://polygon-zkevm-cardona.drpc.org"
       ],
       "tags": [
         "deprecated"
