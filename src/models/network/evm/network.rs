@@ -93,7 +93,7 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
 
 impl EvmNetwork {
     pub fn is_optimism(&self) -> bool {
-        self.tags.contains(&"optimism".to_string())
+        self.tags.contains(&"optimism-based".to_string())
     }
 
     pub fn is_rollup(&self) -> bool {
