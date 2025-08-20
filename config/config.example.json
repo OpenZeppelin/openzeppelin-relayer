@@ -87,7 +87,7 @@
       "signer_id": "local-signer",
       "network_type": "midnight",
       "policies": {
-        "min_balance": "0"
+        "min_balance": 0
       }
     }
   ],
