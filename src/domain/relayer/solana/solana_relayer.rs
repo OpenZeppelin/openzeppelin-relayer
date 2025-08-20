@@ -11,23 +11,21 @@ use std::{str::FromStr, sync::Arc};
 
 use crate::{
     constants::{
-        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
+        DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE, DEFAULT_SOLANA_MIN_BALANCE,
+        SOLANA_SMALLEST_UNIT_NAME, WRAPPED_SOL_MINT,
     },
     domain::{
         relayer::RelayerError, BalanceResponse, DexStrategy, SolanaRelayerDexTrait,
-        SolanaRelayerTrait, SwapParams,
+        SolanaRelayerTrait, SolanaRpcHandlerType, SwapParams,
     },
     jobs::{JobProducerTrait, SolanaTokenSwapRequest},
     models::{
         produce_relayer_disabled_payload, produce_solana_dex_webhook_payload, JsonRpcRequest,
-        JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkType, RelayerNetworkPolicy,
-        RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaDexPayload,
-        SolanaNetwork, TransactionRepoModel,
+        JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult, NetworkType,
+        RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+        SolanaDexPayload, SolanaNetwork, TransactionRepoModel,
     },
-    repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionRepository,
-        RelayerRepository, RelayerRepositoryStorage, Repository,
-    },
+    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
         JupiterService, JupiterServiceTrait, SolanaProvider, SolanaProviderTrait, SolanaSignTrait,
         SolanaSigner,
@@ -39,10 +37,7 @@ use futures::future::try_join_all;
 use log::{error, info, warn};
 use solana_sdk::{account::Account, pubkey::Pubkey};
 
-use super::{
-    NetworkDex, SolanaRpcError, SolanaRpcHandler, SolanaRpcMethodsImpl, SolanaTokenProgram,
-    SwapResult, TokenAccount,
-};
+use super::{NetworkDex, SolanaRpcError, SolanaTokenProgram, SwapResult, TokenAccount};
 
 #[allow(dead_code)]
 struct TokenSwapCandidate<'a> {
@@ -52,58 +47,55 @@ struct TokenSwapCandidate<'a> {
 }
 
 #[allow(dead_code)]
-pub struct SolanaRelayer<R, T, J, S, JS, SP>
+pub struct SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     S: SolanaSignTrait + Send + Sync + 'static,
     JS: JupiterServiceTrait + Send + Sync + 'static,
     SP: SolanaProviderTrait + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
     signer: Arc<S>,
     network: SolanaNetwork,
     provider: Arc<SP>,
-    rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J>>>,
-    relayer_repository: Arc<R>,
-    transaction_repository: Arc<T>,
+    rpc_handler: SolanaRpcHandlerType<SP, S, JS, J, TR>,
+    relayer_repository: Arc<RR>,
+    transaction_repository: Arc<TR>,
     job_producer: Arc<J>,
     dex_service: Arc<NetworkDex<SP, S, JS>>,
+    network_repository: Arc<NR>,
 }
 
-pub type DefaultSolanaRelayer<J> = SolanaRelayer<
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryTransactionRepository,
-    J,
-    SolanaSigner,
-    JupiterService,
-    SolanaProvider,
->;
+pub type DefaultSolanaRelayer<J, TR, RR, NR> =
+    SolanaRelayer<RR, TR, J, SolanaSigner, JupiterService, SolanaProvider, NR>;
 
-impl<R, T, J, S, JS, SP> SolanaRelayer<R, T, J, S, JS, SP>
+impl<RR, TR, J, S, JS, SP, NR> SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: SolanaSignTrait + Send + Sync,
-    JS: JupiterServiceTrait + Send + Sync,
-    SP: SolanaProviderTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Send + Sync + 'static,
+    JS: JupiterServiceTrait + Send + Sync + 'static,
+    SP: SolanaProviderTrait + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         relayer: RelayerRepoModel,
         signer: Arc<S>,
-        relayer_repository: Arc<R>,
-        network_repository: Arc<InMemoryNetworkRepository>,
+        relayer_repository: Arc<RR>,
+        network_repository: Arc<NR>,
         provider: Arc<SP>,
-        rpc_handler: Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J>>>,
-        transaction_repository: Arc<T>,
+        rpc_handler: SolanaRpcHandlerType<SP, S, JS, J, TR>,
+        transaction_repository: Arc<TR>,
         job_producer: Arc<J>,
         dex_service: Arc<NetworkDex<SP, S, JS>>,
     ) -> Result<Self, RelayerError> {
         let network_repo = network_repository
-            .get(NetworkType::Solana, &relayer.network)
+            .get_by_name(NetworkType::Solana, &relayer.network)
             .await
             .ok()
             .flatten()
@@ -123,6 +115,7 @@ where
             transaction_repository,
             job_producer,
             dex_service,
+            network_repository,
         })
     }
 
@@ -168,13 +161,13 @@ where
                 .get_token_metadata_from_pubkey(&token.mint)
                 .await
                 .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
-            Ok::<SolanaAllowedTokensPolicy, RelayerError>(SolanaAllowedTokensPolicy::new(
-                token_metadata.mint,
-                Some(token_metadata.decimals),
-                Some(token_metadata.symbol.to_string()),
-                token.max_allowed_fee,
-                token.swap_config.clone(),
-            ))
+            Ok::<SolanaAllowedTokensPolicy, RelayerError>(SolanaAllowedTokensPolicy {
+                mint: token_metadata.mint,
+                decimals: Some(token_metadata.decimals as u8),
+                symbol: Some(token_metadata.symbol.to_string()),
+                max_allowed_fee: token.max_allowed_fee,
+                swap_config: token.swap_config.clone(),
+            })
         });
 
         let updated_allowed_tokens = try_join_all(token_metadata_futures).await?;
@@ -311,14 +304,15 @@ where
 }
 
 #[async_trait]
-impl<R, T, J, S, JS, SP> SolanaRelayerDexTrait for SolanaRelayer<R, T, J, S, JS, SP>
+impl<RR, TR, J, S, JS, SP, NR> SolanaRelayerDexTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: SolanaSignTrait + Send + Sync,
-    JS: JupiterServiceTrait + Send + Sync,
-    SP: SolanaProviderTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Send + Sync + 'static,
+    JS: JupiterServiceTrait + Send + Sync + 'static,
+    SP: SolanaProviderTrait + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
     /// Processes a token‐swap request for the given relayer ID:
     ///
@@ -509,14 +503,15 @@ where
 }
 
 #[async_trait]
-impl<R, T, J, S, JS, SP> SolanaRelayerTrait for SolanaRelayer<R, T, J, S, JS, SP>
+impl<RR, TR, J, S, JS, SP, NR> SolanaRelayerTrait for SolanaRelayer<RR, TR, J, S, JS, SP, NR>
 where
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: SolanaSignTrait + Send + Sync,
-    JS: JupiterServiceTrait + Send + Sync,
-    SP: SolanaProviderTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: SolanaSignTrait + Send + Sync + 'static,
+    JS: JupiterServiceTrait + Send + Sync + 'static,
+    SP: SolanaProviderTrait + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
 {
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
         let address = &self.relayer.address;
@@ -664,7 +659,7 @@ where
 
         let policy = self.relayer.policies.get_solana_policy();
 
-        if balance < policy.min_balance {
+        if balance < policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE) {
             return Err(RelayerError::InsufficientBalanceError(
                 "Insufficient balance".to_string(),
             ));
@@ -742,7 +737,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{NetworkConfigCommon, SolanaNetworkConfig},
-        domain::create_network_dex_generic,
+        domain::{create_network_dex_generic, SolanaRpcHandler, SolanaRpcMethodsImpl},
         jobs::MockJobProducerTrait,
         models::{
             EncodedSerializedTransaction, FeeEstimateRequestParams,
@@ -750,12 +745,13 @@ mod tests {
             RelayerSolanaSwapConfig, SolanaAllowedTokensSwapConfig, SolanaRpcResult,
             SolanaSwapStrategy,
         },
-        repositories::{MockRelayerRepository, MockRepository},
+        repositories::{MockNetworkRepository, MockRelayerRepository, MockTransactionRepository},
         services::{
             MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait, QuoteResponse,
             RoutePlan, SolanaProviderError, SwapEvents, SwapInfo, SwapResponse,
             UltraExecuteResponse, UltraOrderResponse,
         },
+        utils::mocks::mockutils::create_mock_solana_network,
     };
     use mockall::predicate::*;
     use solana_sdk::{hash::Hash, program_pack::Pack, signature::Signature};
@@ -767,22 +763,19 @@ mod tests {
     struct TestCtx {
         relayer_model: RelayerRepoModel,
         mock_repo: MockRelayerRepository,
-        network_repository: Arc<InMemoryNetworkRepository>,
+        network_repository: Arc<MockNetworkRepository>,
         provider: Arc<MockSolanaProviderTrait>,
         signer: Arc<MockSolanaSignTrait>,
         jupiter: Arc<MockJupiterServiceTrait>,
         job_producer: Arc<MockJobProducerTrait>,
-        tx_repo: Arc<MockRepository<TransactionRepoModel, String>>,
+        tx_repo: Arc<MockTransactionRepository>,
         dex: Arc<NetworkDex<MockSolanaProviderTrait, MockSolanaSignTrait, MockJupiterServiceTrait>>,
-        rpc_handler: Arc<
-            SolanaRpcHandler<
-                SolanaRpcMethodsImpl<
-                    MockSolanaProviderTrait,
-                    MockSolanaSignTrait,
-                    MockJupiterServiceTrait,
-                    MockJobProducerTrait,
-                >,
-            >,
+        rpc_handler: SolanaRpcHandlerType<
+            MockSolanaProviderTrait,
+            MockSolanaSignTrait,
+            MockJupiterServiceTrait,
+            MockJobProducerTrait,
+            MockTransactionRepository,
         >,
     }
 
@@ -793,8 +786,9 @@ mod tests {
             let signer = Arc::new(MockSolanaSignTrait::new());
             let jupiter = Arc::new(MockJupiterServiceTrait::new());
             let job = Arc::new(MockJobProducerTrait::new());
-            let tx_repo = Arc::new(MockRepository::<TransactionRepoModel, String>::new());
-            let network_repository = Arc::new(InMemoryNetworkRepository::new());
+            let tx_repo = Arc::new(MockTransactionRepository::new());
+            let mut network_repository = MockNetworkRepository::new();
+            let transaction_repository = Arc::new(MockTransactionRepository::new());
 
             let relayer_model = RelayerRepoModel {
                 id: "test-id".to_string(),
@@ -813,31 +807,18 @@ mod tests {
                 .unwrap(),
             );
 
+            let test_network = create_mock_solana_network();
+
             let rpc_handler = Arc::new(SolanaRpcHandler::new(SolanaRpcMethodsImpl::new_mock(
                 relayer_model.clone(),
+                test_network.clone(),
                 provider.clone(),
                 signer.clone(),
                 jupiter.clone(),
                 job.clone(),
+                transaction_repository.clone(),
             )));
 
-            TestCtx {
-                relayer_model,
-                mock_repo,
-                network_repository,
-                provider,
-                signer,
-                jupiter,
-                job_producer: job,
-                tx_repo,
-                dex,
-                rpc_handler,
-            }
-        }
-    }
-
-    impl TestCtx {
-        async fn setup_network(&self) {
             let test_network = NetworkRepoModel {
                 id: "solana:devnet".to_string(),
                 name: "devnet".to_string(),
@@ -855,26 +836,41 @@ mod tests {
                 }),
             };
 
-            self.network_repository.create(test_network).await.unwrap();
-        }
+            network_repository
+                .expect_get_by_name()
+                .returning(move |_, _| Ok(Some(test_network.clone())));
 
+            TestCtx {
+                relayer_model,
+                mock_repo,
+                network_repository: Arc::new(network_repository),
+                provider,
+                signer,
+                jupiter,
+                job_producer: job,
+                tx_repo,
+                dex,
+                rpc_handler,
+            }
+        }
+    }
+
+    impl TestCtx {
         async fn into_relayer(
             self,
         ) -> SolanaRelayer<
             MockRelayerRepository,
-            MockRepository<TransactionRepoModel, String>,
+            MockTransactionRepository,
             MockJobProducerTrait,
             MockSolanaSignTrait,
             MockJupiterServiceTrait,
             MockSolanaProviderTrait,
+            MockNetworkRepository,
         > {
-            // Setup network first
-            self.setup_network().await;
-
             // Get the network from the repository
             let network_repo = self
                 .network_repository
-                .get(NetworkType::Solana, "devnet")
+                .get_by_name(NetworkType::Solana, "devnet")
                 .await
                 .unwrap()
                 .unwrap();
@@ -890,6 +886,7 @@ mod tests {
                 transaction_repository: self.tx_repo,
                 job_producer: self.job_producer,
                 dex_service: self.dex,
+                network_repository: self.network_repository,
             }
         }
     }
@@ -1679,7 +1676,7 @@ mod tests {
 
         let mut model = create_test_relayer();
         model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            min_balance: 50,
+            min_balance: Some(50),
             ..Default::default()
         });
 
@@ -1703,7 +1700,7 @@ mod tests {
 
         let mut model = create_test_relayer();
         model.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            min_balance: 50,
+            min_balance: Some(50),
             ..Default::default()
         });
 

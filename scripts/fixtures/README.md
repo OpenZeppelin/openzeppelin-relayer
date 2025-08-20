@@ -60,7 +60,7 @@ let context_bytes = fs::read("tests/fixtures/midnight/context_<seed>_<height>.bi
 let context = create_context_from_serialized(&context_bytes, &[seed], NetworkId::TestNet)?;
 
 // Or in transaction tests, the helper functions will automatically load context fixtures:
-let sync_manager = create_sync_manager_with_fixture(&wallet_seed, &network, relayer_id);
+let sync_manager = create_sync_manager_with_fixture(&wallet_seed, &network, relayer_id).await;
 ```
 
 ## Important Notes

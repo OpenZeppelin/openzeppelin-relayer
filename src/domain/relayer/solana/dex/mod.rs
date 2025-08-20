@@ -148,10 +148,10 @@ mod tests {
 
     use crate::{
         models::{
-            LocalSignerConfig, RelayerSolanaPolicy, RelayerSolanaSwapConfig, RpcConfig,
-            SignerConfig, SignerRepoModel,
+            LocalSignerConfigStorage, RelayerSolanaPolicy, RelayerSolanaSwapConfig,
+            SignerConfigStorage, SignerRepoModel,
         },
-        services::SolanaSignerFactory,
+        services::{MockSolanaProviderTrait, SolanaSignerFactory},
     };
 
     use super::*;
@@ -161,7 +161,7 @@ mod tests {
         let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
         SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Local(LocalSignerConfig { raw_key }),
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage { raw_key }),
         }
     }
 
@@ -180,18 +180,10 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
@@ -220,18 +212,10 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
@@ -260,18 +244,10 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
@@ -295,18 +271,10 @@ mod tests {
 
         relayer.policies = policy;
 
-        let provider = Arc::new(
-            SolanaProvider::new(
-                vec![RpcConfig {
-                    url: "https://api.mainnet-beta.solana.com".to_string(),
-                    weight: 100,
-                }],
-                10,
-            )
-            .unwrap(),
-        );
+        let provider = Arc::new(MockSolanaProviderTrait::new());
+
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 

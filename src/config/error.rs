@@ -1,7 +1,6 @@
 //! Error types for configuration system.
 //!
 //! This module defines all possible error types used in the configuration system.
-
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -46,4 +45,6 @@ pub enum ConfigFileError {
     MaxInheritanceDepthExceeded(String),
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
+    #[error("Invalid timeout: {0}")]
+    InvalidTimeout(u64),
 }

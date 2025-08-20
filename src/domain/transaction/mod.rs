@@ -19,8 +19,9 @@ use crate::{
         SignerRepoModel, SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemorySyncState,
-        InMemoryTransactionCounter, InMemoryTransactionRepository, RelayerRepositoryStorage,
+        NetworkRepository, NetworkRepositoryStorage, RelayerRepositoryStorage,
+        RelayerStateRepositoryStorage, TransactionCounterRepositoryStorage,
+        TransactionRepositoryStorage,
     },
     services::{
         get_network_extra_fee_calculator_service, get_network_provider,
@@ -47,7 +48,7 @@ pub use util::*;
 // Explicit re-exports to avoid ambiguous glob re-exports
 pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
 pub use midnight::{midnight_transaction::DefaultMidnightTransaction, to_midnight_network_id};
-pub use solana::SolanaRelayerTransaction;
+pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
 /// A trait that defines the operations for handling transactions across different networks.
@@ -175,7 +176,7 @@ pub trait Transaction {
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
-    Solana(SolanaRelayerTransaction),
+    Solana(DefaultSolanaTransaction),
     Stellar(DefaultStellarTransaction),
     Midnight(DefaultMidnightTransaction),
 }
@@ -369,7 +370,7 @@ pub trait RelayerTransactionFactoryTrait {
     ///
     /// * `relayer` - A `RelayerRepoModel` representing the relayer.
     /// * `relayer_repository` - An `Arc` to the `RelayerRepositoryStorage`.
-    /// * `transaction_repository` - An `Arc` to the `InMemoryTransactionRepository`.
+    /// * `transaction_repository` - An `Arc` to the `TransactionRepositoryStorage`.
     /// * `job_producer` - An `Arc` to the `JobProducer`.
     ///
     /// # Returns
@@ -377,8 +378,8 @@ pub trait RelayerTransactionFactoryTrait {
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
     fn create_transaction(
         relayer: RelayerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
+        transaction_repository: Arc<TransactionRepositoryStorage>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError>;
 }
@@ -396,7 +397,7 @@ impl RelayerTransactionFactory {
     /// * `relayer_repository` - An `Arc` to the `RelayerRepositoryStorage`.
     /// * `transaction_repository` - An `Arc` to the `InMemoryTransactionRepository`.
     /// * `transaction_counter_store` - An `Arc` to the `InMemoryTransactionCounter`.
-    /// * `sync_state_store` - An `Arc` to the `InMemorySyncState`.
+    /// * `sync_state_store` - An `Arc` to the `InMemoryRelayerStateRepository`.
     /// * `job_producer` - An `Arc` to the `JobProducer`.
     ///
     /// # Returns
@@ -406,17 +407,17 @@ impl RelayerTransactionFactory {
     pub async fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        relayer_repository: Arc<RelayerRepositoryStorage<InMemoryRelayerRepository>>,
-        network_repository: Arc<InMemoryNetworkRepository>,
-        transaction_repository: Arc<InMemoryTransactionRepository>,
-        transaction_counter_store: Arc<InMemoryTransactionCounter>,
-        sync_state_store: Arc<InMemorySyncState>,
+        relayer_repository: Arc<RelayerRepositoryStorage>,
+        network_repository: Arc<NetworkRepositoryStorage>,
+        transaction_repository: Arc<TransactionRepositoryStorage>,
+        transaction_counter_store: Arc<TransactionCounterRepositoryStorage>,
+        sync_state_store: Arc<RelayerStateRepositoryStorage>,
         job_producer: Arc<JobProducer>,
     ) -> Result<NetworkTransaction, TransactionError> {
         match relayer.network_type {
             NetworkType::Evm => {
                 let network_repo = network_repository
-                    .get(NetworkType::Evm, &relayer.network)
+                    .get_by_name(NetworkType::Evm, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -432,7 +433,7 @@ impl RelayerTransactionFactory {
 
                 let evm_provider =
                     get_network_provider(&network, relayer.custom_rpc_urls.clone(), None)?;
-                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer.into()).await?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
                 let price_calculator = evm::PriceCalculator::new(
@@ -456,7 +457,7 @@ impl RelayerTransactionFactory {
             }
             NetworkType::Solana => {
                 let network_repo = network_repository
-                    .get(NetworkType::Solana, &relayer.network)
+                    .get_by_name(NetworkType::Solana, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -486,10 +487,10 @@ impl RelayerTransactionFactory {
             }
             NetworkType::Stellar => {
                 let signer_service =
-                    Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
+                    Arc::new(StellarSignerFactory::create_stellar_signer(&signer.into())?);
 
                 let network_repo = network_repository
-                    .get(NetworkType::Stellar, &relayer.network)
+                    .get_by_name(NetworkType::Stellar, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -519,12 +520,12 @@ impl RelayerTransactionFactory {
             }
             NetworkType::Midnight => {
                 let signer_service = Arc::new(MidnightSignerFactory::create_midnight_signer(
-                    &signer,
+                    &signer.into(),
                     to_midnight_network_id(&relayer.network),
                 )?);
 
                 let network_repo = network_repository
-                    .get(NetworkType::Midnight, &relayer.network)
+                    .get_by_name(NetworkType::Midnight, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -560,13 +561,14 @@ impl RelayerTransactionFactory {
                 // This still requires `MIDNIGHT_LEDGER_TEST_STATIC_DIR` environment variable to be set (limitation by LedgerContext test resolver)
                 // TODO: We should check with the Midnight team if we can use a different constructor for LedgerContext
                 let sync_manager = Arc::new(Mutex::new(
-                    SyncManager::<QuickSyncStrategy>::new(
+                    SyncManager::<QuickSyncStrategy, RelayerStateRepositoryStorage>::new(
                         indexer_client,
                         wallet_seed,
                         network_id,
                         sync_state_store.clone(),
                         relayer.id.clone(),
                     )
+                    .await
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?,
                 ));
 

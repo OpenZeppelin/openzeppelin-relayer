@@ -13,6 +13,7 @@ const PLUGIN_LANG: &str = "typescript";
 pub struct PluginFileConfig {
     pub id: String,
     pub path: String,
+    pub timeout: Option<u64>,
 }
 
 pub struct PluginsFileConfig {
@@ -37,6 +38,13 @@ impl PluginsFileConfig {
 
             if plugin.path.is_empty() {
                 return Err(ConfigFileError::MissingField("path".into()));
+            }
+
+            // validate timeout
+            if let Some(timeout) = plugin.timeout {
+                if timeout == 0 {
+                    return Err(ConfigFileError::InvalidTimeout(timeout));
+                }
             }
 
             if !plugin.path.ends_with(PLUGIN_FILE_TYPE) {

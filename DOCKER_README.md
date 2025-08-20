@@ -1,7 +1,5 @@
 # OpenZeppelin Relayer
 
-> ⚠️ This software is in alpha. Use in production environments at your own risk.
-
 This relayer service enables interaction with blockchain networks through transaction submissions. It offers multi-chain support and an extensible architecture for adding new chains.
 
 [User Docs](https://docs.openzeppelin.com/relayer/) | [Quickstart](https://docs.openzeppelin.com/relayer/quickstart)

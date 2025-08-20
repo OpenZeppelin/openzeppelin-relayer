@@ -3,9 +3,7 @@
     {
       "type": "midnight",
       "network": "testnet",
-      "rpc_urls": [
-        "wss://rpc.testnet-02.midnight.network/"
-      ],
+      "rpc_urls": ["wss://rpc.testnet-02.midnight.network/"],
       "explorer_urls": [
         "https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.testnet-02.midnight.network#/explorer"
       ],

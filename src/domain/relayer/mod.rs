@@ -25,15 +25,19 @@ use crate::{
     models::{
         AppState, DecoratedSignature, DeletePendingTransactionsResponse, EvmNetwork,
         EvmTransactionDataSignature, JsonRpcRequest, JsonRpcResponse, MidnightNetwork,
-        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerError,
-        RelayerRepoModel, RelayerStatus, SignerRepoModel, StellarNetwork, TransactionError,
-        TransactionRepoModel,
+        NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        NetworkType, NotificationRepoModel, RelayerError, RelayerRepoModel, RelayerStatus,
+        SignerRepoModel, StellarNetwork, TransactionError, TransactionRepoModel,
+    },
+    repositories::{
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository, SyncStateTrait,
+        TransactionCounterTrait, TransactionRepository,
     },
     services::{
         get_network_provider,
         midnight::handler::{QuickSyncStrategy, SyncManager},
         EvmSignerFactory, MidnightProvider, MidnightProviderTrait, MidnightSignerFactory,
-        MidnightSignerTrait, TransactionCounterService,
+        MidnightSignerTrait, StellarSignerFactory, TransactionCounterService,
     },
 };
 
@@ -153,6 +157,21 @@ pub trait Relayer {
     ///
     /// A `Result` indicating success, or a `RelayerError` on failure.
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
+
+    /// Signs a transaction using the relayer's credentials.
+    ///
+    /// # Arguments
+    ///
+    /// * `unsigned_xdr` - The unsigned transaction XDR string to be signed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `SignTransactionExternalResponse` on success, or a
+    /// `RelayerError` on failure.
+    async fn sign_transaction(
+        &self,
+        request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError>;
 }
 
 /// Solana Relayer Dex Trait
@@ -212,15 +231,30 @@ pub trait SolanaRelayerTrait {
     async fn validate_min_balance(&self) -> Result<(), RelayerError>;
 }
 
-pub enum NetworkRelayer<J: JobProducerTrait + 'static> {
-    Evm(DefaultEvmRelayer<J>),
-    Solana(DefaultSolanaRelayer<J>),
-    Stellar(DefaultStellarRelayer<J>),
-    Midnight(DefaultMidnightRelayer<J>),
+pub enum NetworkRelayer<
+    J: JobProducerTrait + 'static,
+    T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
+> {
+    Evm(DefaultEvmRelayer<J, T, RR, NR, TCR>),
+    Solana(DefaultSolanaRelayer<J, T, RR, NR>),
+    Stellar(DefaultStellarRelayer<J, T, NR, RR, TCR>),
+    Midnight(DefaultMidnightRelayer<J, T, NR, RR, TCR, RSR>),
 }
 
 #[async_trait]
-impl<J: JobProducerTrait + 'static> Relayer for NetworkRelayer<J> {
+impl<
+        J: JobProducerTrait + 'static,
+        T: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
+    > Relayer for NetworkRelayer<J, T, RR, NR, TCR, RSR>
+{
     async fn process_transaction_request(
         &self,
         tx_request: NetworkTransactionRequest,
@@ -316,31 +350,69 @@ impl<J: JobProducerTrait + 'static> Relayer for NetworkRelayer<J> {
             NetworkRelayer::Midnight(relayer) => relayer.initialize_relayer().await,
         }
     }
+
+    async fn sign_transaction(
+        &self,
+        request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
+                "sign_transaction not supported for EVM".to_string(),
+            )),
+            NetworkRelayer::Solana(_) => Err(RelayerError::NotSupported(
+                "sign_transaction not supported for Solana".to_string(),
+            )),
+            NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(request).await,
+            NetworkRelayer::Midnight(relayer) => relayer.sign_transaction(request).await,
+        }
+    }
 }
 
 #[async_trait]
-pub trait RelayerFactoryTrait<J: JobProducerTrait + 'static> {
+pub trait RelayerFactoryTrait<
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+>
+{
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J>>,
-    ) -> Result<NetworkRelayer<J>, RelayerError>;
+        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>,
+    ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR, RSR>, RelayerError>;
 }
 
 pub struct RelayerFactory;
 
 #[async_trait]
-impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
+impl<
+        J: JobProducerTrait + 'static,
+        TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+        TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
+        PR: PluginRepositoryTrait + Send + Sync + 'static,
+    > RelayerFactoryTrait<J, RR, TR, NR, NFR, SR, TCR, RSR, PR> for RelayerFactory
+{
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
-        state: &ThinData<AppState<J>>,
-    ) -> Result<NetworkRelayer<J>, RelayerError> {
+        state: &ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>,
+    ) -> Result<NetworkRelayer<J, TR, RR, NR, TCR, RSR>, RelayerError> {
         match relayer.network_type {
             NetworkType::Evm => {
                 let network_repo = state
                     .network_repository()
-                    .get(NetworkType::Evm, &relayer.network)
+                    .get_by_name(NetworkType::Evm, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -355,7 +427,7 @@ impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
 
                 let evm_provider =
                     get_network_provider(&network, relayer.custom_rpc_urls.clone(), None)?;
-                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer.into()).await?;
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
@@ -390,7 +462,7 @@ impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
             NetworkType::Stellar => {
                 let network_repo = state
                     .network_repository()
-                    .get(NetworkType::Stellar, &relayer.network)
+                    .get_by_name(NetworkType::Stellar, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -407,14 +479,17 @@ impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
                     get_network_provider(&network, relayer.custom_rpc_urls.clone(), None)
                         .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
 
+                let signer_service = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+
                 let transaction_counter_service = Arc::new(TransactionCounterService::new(
                     relayer.id.clone(),
                     relayer.address.clone(),
                     state.transaction_counter_store(),
                 ));
 
-                let relayer = DefaultStellarRelayer::<J>::new(
+                let relayer = DefaultStellarRelayer::<J, TR, NR, RR, TCR>::new(
                     relayer,
+                    signer_service,
                     stellar_provider,
                     stellar::StellarRelayerDependencies::new(
                         state.relayer_repository(),
@@ -430,7 +505,7 @@ impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
             NetworkType::Midnight => {
                 let network_repo = state
                     .network_repository()
-                    .get(NetworkType::Midnight, &relayer.network)
+                    .get_by_name(NetworkType::Midnight, &relayer.network)
                     .await
                     .ok()
                     .flatten()
@@ -462,25 +537,28 @@ impl<J: JobProducerTrait + 'static> RelayerFactoryTrait<J> for RelayerFactory {
                 let network_id = to_midnight_network_id(&relayer.network);
 
                 // Create the Midnight signer to get the wallet seed
-                let midnight_signer = MidnightSignerFactory::create_midnight_signer(
-                    &signer, network_id,
-                )
-                .map_err(|e| {
-                    RelayerError::NetworkConfiguration(format!("Failed to create signer: {}", e))
-                })?;
+                let midnight_signer =
+                    MidnightSignerFactory::create_midnight_signer(&signer.into(), network_id)
+                        .map_err(|e| {
+                            RelayerError::NetworkConfiguration(format!(
+                                "Failed to create signer: {}",
+                                e
+                            ))
+                        })?;
                 let wallet_seed = midnight_signer.wallet_seed();
 
                 // Get the indexer client from provider
                 let indexer_client = midnight_provider.get_indexer_client();
 
                 // Create the sync manager
-                let sync_manager = SyncManager::<QuickSyncStrategy>::new(
+                let sync_manager = SyncManager::<QuickSyncStrategy, RSR>::new(
                     indexer_client,
                     wallet_seed,
                     network_id,
                     state.sync_state_store(),
                     relayer.id.clone(),
                 )
+                .await
                 .map_err(|e| {
                     RelayerError::NetworkConfiguration(format!(
                         "Failed to create sync manager: {}",
@@ -544,6 +622,20 @@ pub struct SignTypedDataRequest {
     pub hash_struct_message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SignTransactionRequestStellar {
+    pub unsigned_xdr: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum SignTransactionRequest {
+    Stellar(SignTransactionRequestStellar),
+    Evm(Vec<u8>),
+    Solana(Vec<u8>),
+    Midnight(Vec<u8>),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignTransactionResponseEvm {
     pub hash: String,
@@ -562,11 +654,36 @@ pub struct SignTransactionResponseMidnight {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignXdrTransactionResponseStellar {
+    pub signed_xdr: String,
+    pub signature: DecoratedSignature,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
     Solana(Vec<u8>),
     Stellar(SignTransactionResponseStellar),
     Midnight(SignTransactionResponseMidnight),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = SignTransactionResponseStellar)]
+pub struct SignTransactionExternalResponseStellar {
+    pub signed_xdr: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+#[schema(as = SignTransactionResponse)]
+pub enum SignTransactionExternalResponse {
+    Stellar(SignTransactionExternalResponseStellar),
+    Evm(Vec<u8>),
+    Solana(Vec<u8>),
+    Midnight(Vec<u8>),
 }
 
 impl SignTransactionResponse {
@@ -585,10 +702,4 @@ pub struct BalanceResponse {
     pub balance: u128,
     #[schema(example = "wei")]
     pub unit: String,
-}
-
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct RelayerUpdateRequest {
-    #[schema(nullable = false)]
-    pub paused: Option<bool>,
 }

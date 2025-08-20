@@ -11,14 +11,14 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
-#[derive(Clone)]
-pub struct TransactionCounterService<T: TransactionCounterTrait + Send + Sync> {
+#[derive(Clone, Debug)]
+pub struct TransactionCounterService<T> {
     relayer_id: String,
     address: String,
     store: Arc<T>,
 }
 
-impl<T: TransactionCounterTrait + Send + Sync> TransactionCounterService<T> {
+impl<T> TransactionCounterService<T> {
     pub fn new(relayer_id: String, address: String, store: Arc<T>) -> Self {
         Self {
             relayer_id,
@@ -39,24 +39,36 @@ pub trait TransactionCounterServiceTrait: Send + Sync {
 
 #[async_trait]
 #[allow(dead_code)]
-impl<T: TransactionCounterTrait + Send + Sync> TransactionCounterServiceTrait
-    for TransactionCounterService<T>
+impl<T> TransactionCounterServiceTrait for TransactionCounterService<T>
+where
+    T: TransactionCounterTrait + Send + Sync,
 {
     async fn get(&self) -> Result<Option<u64>, TransactionCounterError> {
-        self.store.get(&self.relayer_id, &self.address)
+        self.store
+            .get(&self.relayer_id, &self.address)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 
     async fn get_and_increment(&self) -> Result<u64, TransactionCounterError> {
         self.store
             .get_and_increment(&self.relayer_id, &self.address)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 
     async fn decrement(&self) -> Result<u64, TransactionCounterError> {
-        self.store.decrement(&self.relayer_id, &self.address)
+        self.store
+            .decrement(&self.relayer_id, &self.address)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 
     async fn set(&self, value: u64) -> Result<(), TransactionCounterError> {
-        self.store.set(&self.relayer_id, &self.address, value)
+        self.store
+            .set(&self.relayer_id, &self.address, value)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
 }
 

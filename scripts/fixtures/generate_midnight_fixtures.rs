@@ -19,8 +19,8 @@ use midnight_node_ledger_helpers::{
 };
 use openzeppelin_relayer::{
     config::network::IndexerUrls,
-    repositories::{InMemorySyncState, SyncStateTrait},
-    services::midnight::{
+    repositories::{RelayerStateRepositoryStorage, SyncStateTrait},
+    services::sync::midnight::{
         handler::{QuickSyncStrategy, SyncManager},
         indexer::MidnightIndexerClient,
     },
@@ -153,7 +153,7 @@ async fn generate_context_fixture(
 
 /// Set up progress monitoring task
 fn setup_progress_monitoring(
-    sync_state_store: Arc<InMemorySyncState>,
+    sync_state_store: Arc<RelayerStateRepositoryStorage>,
     relayer_id: String,
     save_interval: Option<u64>,
 ) {
@@ -162,7 +162,8 @@ fn setup_progress_monitoring(
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
-                if let Ok(Some(height)) = sync_state_store.get_last_synced_index(&relayer_id) {
+                if let Ok(Some(height)) = sync_state_store.get_last_synced_index(&relayer_id).await
+                {
                     if height > 0 && height % interval == 0 {
                         println!("📊 Checkpoint: Synced to height {}", height);
                     }
@@ -205,7 +206,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let indexer_client = MidnightIndexerClient::new(indexer_urls);
 
     // Create sync manager
-    let sync_state_store = Arc::new(InMemorySyncState::new());
+    let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
+
     let relayer_id = "unified-fixture-generator".to_string();
 
     // Set up progress monitoring if needed
@@ -222,7 +224,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         NetworkId::TestNet,
         sync_state_store.clone(),
         relayer_id.clone(),
-    )?;
+    )
+    .await?;
 
     // Perform sync
     println!("\n🔄 Starting sync from height {}...", config.start_height);
@@ -233,7 +236,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get final sync height
     let final_height = sync_state_store
-        .get_last_synced_index(&relayer_id)?
+        .get_last_synced_index(&relayer_id)
+        .await?
         .unwrap_or(config.start_height);
 
     println!("📊 Final synced height: {}", final_height);

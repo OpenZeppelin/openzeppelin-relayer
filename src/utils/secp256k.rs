@@ -13,15 +13,17 @@ pub fn recover_public_key(pk: &[u8], sig: &Signature, bytes: &[u8]) -> Result<u8
     let mut hasher = Keccak256::new();
     hasher.update(bytes);
     for v in 0..2 {
-        let rec_id =
-            RecoveryId::try_from(v).map_err(|e| Secp256k1Error::RecoveryError(e.to_string()))?;
+        let rec_id = match RecoveryId::try_from(v) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
 
-        let recovered_key = VerifyingKey::recover_from_digest(hasher.clone(), sig, rec_id)
-            .map_err(|e| Secp256k1Error::RecoveryError(e.to_string()))?
-            .to_encoded_point(false)
-            .as_bytes()
-            .to_vec();
-
+        let recovered_key = match VerifyingKey::recover_from_digest(hasher.clone(), sig, rec_id) {
+            Ok(key) => key.to_encoded_point(false).as_bytes().to_vec(),
+            Err(_) => {
+                continue;
+            }
+        };
         if recovered_key[1..] == pk[..] {
             return Ok(v);
         }

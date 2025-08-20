@@ -19,34 +19,39 @@
 //! * `signature` - Signature of the submitted transaction.
 use std::str::FromStr;
 
+use chrono::Utc;
 use futures::try_join;
 use log::info;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 
 use crate::{
     models::{
-        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction,
-        SignAndSendTransactionRequestParams, SignAndSendTransactionResult,
-        SolanaFeePaymentStrategy, SolanaWebhookRpcPayload,
+        produce_solana_rpc_webhook_payload, EncodedSerializedTransaction, NetworkTransactionData,
+        NetworkTransactionRequest, SignAndSendTransactionRequestParams,
+        SignAndSendTransactionResult, SolanaFeePaymentStrategy, SolanaTransactionData,
+        SolanaTransactionRequest, SolanaWebhookRpcPayload, TransactionRepoModel, TransactionStatus,
+        TransactionUpdateRequest,
     },
+    repositories::{Repository, TransactionRepository},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     pub(crate) async fn sign_and_send_transaction_impl(
         &self,
         params: SignAndSendTransactionRequestParams,
     ) -> Result<SignAndSendTransactionResult, SolanaRpcError> {
         info!("Processing sign and send transaction request");
-        let transaction_request = Transaction::try_from(params.transaction)?;
+        let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
         validate_sign_and_send_transaction(&transaction_request, &self.relayer, &*self.provider)
             .await?;
@@ -60,7 +65,8 @@ where
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        let user_pays_fee = policy.fee_payment_strategy == SolanaFeePaymentStrategy::User;
+        let user_pays_fee =
+            policy.fee_payment_strategy.unwrap_or_default() == SolanaFeePaymentStrategy::User;
 
         if user_pays_fee {
             self.confirm_user_fee_payment(&transaction_request, total_fee)
@@ -86,6 +92,26 @@ where
 
         let (signed_transaction, _) = self.relayer_sign_transaction(transaction_request).await?;
 
+        let network_transaction = NetworkTransactionRequest::Solana(SolanaTransactionRequest {
+            transaction: params.transaction.clone(),
+        });
+
+        let transaction =
+            TransactionRepoModel::try_from((&network_transaction, &self.relayer, &self.network))
+                .map_err(|e| {
+                    error!("Failed to create transaction repo model: {}", e);
+                    SolanaRpcError::Internal(e.to_string())
+                })?;
+
+        let tx_repo_model = self
+            .transaction_repository
+            .create(transaction.clone())
+            .await
+            .map_err(|e| {
+                error!("Failed to create transaction repo model: {}", e);
+                SolanaRpcError::Internal(e.to_string())
+            })?;
+
         let send_signature = self
             .provider
             .send_transaction(&signed_transaction)
@@ -95,11 +121,31 @@ where
                 SolanaRpcError::Send(e.to_string())
             })?;
 
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Submitted),
+            sent_at: Some(Utc::now().to_rfc3339()),
+            network_data: Some(NetworkTransactionData::Solana(SolanaTransactionData {
+                signature: Some(send_signature.to_string()),
+                transaction: params.transaction.clone().into_inner(),
+            })),
+            ..Default::default()
+        };
+
+        let _updated_tx = self
+            .transaction_repository
+            .partial_update(tx_repo_model.id.clone(), update)
+            .await
+            .map_err(|e| {
+                error!("Failed to update transaction status: {}", e);
+                SolanaRpcError::Internal(e.to_string())
+            })?;
+
         let serialized_transaction = EncodedSerializedTransaction::try_from(&signed_transaction)?;
 
         let result = SignAndSendTransactionResult {
             transaction: serialized_transaction,
             signature: send_signature.to_string(),
+            id: tx_repo_model.id.clone(),
         };
 
         if let Some(notification_id) = &self.relayer.notification_id {
@@ -119,6 +165,10 @@ where
                 error!("Failed to produce notification job: {}", e);
             }
         }
+
+        self.schedule_status_check_job(&tx_repo_model, Some(5))
+            .await?;
+
         info!(
             "Transaction signed and sent successfully with signature: {}",
             result.signature
@@ -164,6 +214,7 @@ mod tests {
     use crate::{
         constants::WRAPPED_SOL_MINT,
         services::{QuoteResponse, RoutePlan, SwapInfo},
+        utils::mocks::mockutils::create_mock_solana_transaction,
     };
 
     use super::*;
@@ -173,8 +224,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_and_send_transaction_success_relayer_fee_strategy() {
-        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
-            setup_test_context();
+        let (
+            relayer,
+            mut signer,
+            mut provider,
+            jupiter_service,
+            encoded_tx,
+            mut job_producer,
+            network,
+        ) = setup_test_context();
 
         let expected_signature = Signature::new_unique();
 
@@ -215,12 +273,27 @@ mod tests {
             .expect_send_transaction()
             .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
 
+        let mut tx_repo_mock = MockTransactionRepository::new();
+        tx_repo_mock
+            .expect_create()
+            .returning(move |_| Ok(create_mock_solana_transaction()));
+
+        tx_repo_mock
+            .expect_partial_update()
+            .returning(move |_, _| Ok(create_mock_solana_transaction()));
+
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(move |_, _| Box::pin(async { Ok(()) }));
+
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(tx_repo_mock),
         );
 
         let params = SignAndSendTransactionRequestParams {
@@ -232,6 +305,7 @@ mod tests {
 
         let send_result = result.unwrap();
         assert_eq!(send_result.signature, expected_signature.to_string());
+        assert!(!send_result.id.is_empty());
     }
 
     #[tokio::test]
@@ -368,12 +442,26 @@ mod tests {
             .expect_send_transaction()
             .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
 
+        ctx.transaction_repository
+            .expect_create()
+            .returning(move |_| Ok(create_mock_solana_transaction()));
+
+        ctx.transaction_repository
+            .expect_partial_update()
+            .returning(move |_, _| Ok(create_mock_solana_transaction()));
+
+        ctx.job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(move |_, _| Box::pin(async { Ok(()) }));
+
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
+            ctx.network,
             Arc::new(ctx.provider),
             Arc::new(ctx.signer),
             Arc::new(ctx.jupiter_service),
             Arc::new(ctx.job_producer),
+            Arc::new(ctx.transaction_repository),
         );
 
         let params = SignAndSendTransactionRequestParams {
@@ -526,10 +614,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
+            ctx.network,
             Arc::new(ctx.provider),
             Arc::new(ctx.signer),
             Arc::new(ctx.jupiter_service),
             Arc::new(ctx.job_producer),
+            Arc::new(ctx.transaction_repository),
         );
 
         let params = SignAndSendTransactionRequestParams {
@@ -697,10 +787,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
+            ctx.network,
             Arc::new(ctx.provider),
             Arc::new(ctx.signer),
             Arc::new(ctx.jupiter_service),
             Arc::new(ctx.job_producer),
+            Arc::new(ctx.transaction_repository),
         );
 
         let params = SignAndSendTransactionRequestParams {
@@ -715,7 +807,7 @@ mod tests {
             Err(SolanaRpcError::InsufficientFunds(err)) => {
                 let error_string = err.to_string();
                 assert!(
-                    error_string.contains("Insufficient funds:"),
+                    error_string.contains("Insufficient balance:"),
                     "Unexpected error message: {}",
                     err
                 );
@@ -726,7 +818,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_and_send_transaction_invalid_blockhash() {
-        let (relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         provider
@@ -735,10 +827,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let result = rpc
@@ -755,7 +849,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_and_send_transaction_simulation_failure() {
-        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         let expected_signature = Signature::new_unique();
@@ -783,10 +877,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let result = rpc
@@ -802,8 +898,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_and_send_transaction_with_webhook_success() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, mut job_producer) =
-            setup_test_context();
+        let (
+            mut relayer,
+            mut signer,
+            mut provider,
+            jupiter_service,
+            encoded_tx,
+            mut job_producer,
+            network,
+        ) = setup_test_context();
 
         relayer.notification_id = Some("test-webhook-id".to_string());
 
@@ -852,12 +955,29 @@ mod tests {
             })
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let mut tx_repo_mock = MockTransactionRepository::new();
+
+        tx_repo_mock
+            .expect_create()
+            .returning(move |_| Ok(create_mock_solana_transaction()));
+
+        tx_repo_mock
+            .expect_partial_update()
+            .returning(move |_, _| Ok(create_mock_solana_transaction()));
+
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(move |_, _| Box::pin(async { Ok(()) }));
+
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(tx_repo_mock),
         );
 
         let params = SignAndSendTransactionRequestParams {

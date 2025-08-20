@@ -10,6 +10,7 @@ use std::collections::HashMap;
 /// * Have correct fee payer configuration
 /// * Comply with relayer policies
 use crate::{
+    constants::{DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE},
     domain::{SolanaTokenProgram, TokenInstruction as SolanaTokenInstruction},
     models::RelayerSolanaPolicy,
     services::SolanaProviderTrait,
@@ -44,6 +45,8 @@ pub enum SolanaTransactionValidationError {
     FeePayer(String),
     #[error("Insufficient funds: {0}")]
     InsufficientFunds(String),
+    #[error("Insufficient balance: {0}")]
+    InsufficientBalance(String),
 }
 
 #[allow(dead_code)]
@@ -245,7 +248,10 @@ impl SolanaTransactionValidator {
         tx: &Transaction,
         config: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
-        let max_size: usize = config.max_tx_data_size.into();
+        let max_size: usize = config
+            .max_tx_data_size
+            .unwrap_or(DEFAULT_SOLANA_MAX_TX_DATA_SIZE)
+            .into();
         let tx_bytes = bincode::serialize(tx)
             .map_err(|e| SolanaTransactionValidationError::DeserializeError(e.to_string()))?;
 
@@ -327,16 +333,14 @@ impl SolanaTransactionValidator {
             .map_err(|e| SolanaTransactionValidationError::ValidationError(e.to_string()))?;
 
         // Ensure minimum balance policy is maintained
-        let min_balance = policy.min_balance;
+        let min_balance = policy.min_balance.unwrap_or(DEFAULT_SOLANA_MIN_BALANCE);
         let required_balance = fee + min_balance;
 
         if balance < required_balance {
-            return Err(SolanaTransactionValidationError::InsufficientFunds(
-                format!(
-                    "Relayer balance {} is insufficient to cover fee {} plus minimum balance {}",
-                    balance, fee, min_balance
-                ),
-            ));
+            return Err(SolanaTransactionValidationError::InsufficientBalance(format!(
+                "Insufficient relayer balance. Required: {}, Available: {}, Fee: {}, Min balance: {}",
+                required_balance, balance, fee, min_balance
+            )));
         }
 
         Ok(())
@@ -557,7 +561,7 @@ impl SolanaTransactionValidator {
 #[cfg(test)]
 mod tests {
     use crate::{
-        models::{SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig},
+        models::{relayer::SolanaAllowedTokensSwapConfig, SolanaAllowedTokensPolicy},
         services::{MockSolanaProviderTrait, SolanaProviderError},
     };
 
@@ -1008,7 +1012,7 @@ mod tests {
         let tx = create_test_transaction(&payer.pubkey());
 
         let policy = RelayerSolanaPolicy {
-            max_tx_data_size: 1500,
+            max_tx_data_size: Some(1500),
             ..Default::default()
         };
 
@@ -1022,7 +1026,7 @@ mod tests {
         let tx = create_test_transaction(&payer.pubkey());
 
         let policy = RelayerSolanaPolicy {
-            max_tx_data_size: 10,
+            max_tx_data_size: Some(10),
             ..Default::default()
         };
 
@@ -1052,7 +1056,7 @@ mod tests {
         let tx = Transaction::new_unsigned(message);
 
         let policy = RelayerSolanaPolicy {
-            max_tx_data_size: 500,
+            max_tx_data_size: Some(500),
             ..Default::default()
         };
 
@@ -1074,7 +1078,7 @@ mod tests {
         let tx = Transaction::new_unsigned(message);
 
         let policy = RelayerSolanaPolicy {
-            max_tx_data_size: 1500,
+            max_tx_data_size: Some(1500),
             ..Default::default()
         };
 

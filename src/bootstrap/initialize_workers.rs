@@ -12,8 +12,8 @@ use tokio::signal::unix::SignalKind;
 use crate::{
     jobs::{
         notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
-        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
-        BackoffRetryPolicy,
+        transaction_cleanup_handler, transaction_request_handler, transaction_status_handler,
+        transaction_submission_handler, BackoffRetryPolicy,
     },
     models::DefaultAppState,
     repositories::RelayerRepository,
@@ -29,6 +29,7 @@ const TRANSACTION_SENDER: &str = "transaction_sender";
 const TRANSACTION_STATUS_CHECKER: &str = "transaction_status_checker";
 const NOTIFICATION_SENDER: &str = "notification_sender";
 const SOLANA_TOKEN_SWAP_REQUEST: &str = "solana_token_swap_request";
+const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
 
 pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<()> {
     let queue = app_state.job_producer.get_queue().await?;
@@ -88,12 +89,27 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
         .backend(queue.solana_token_swap_request_queue.clone())
         .build_fn(solana_token_swap_request_handler);
 
+    let transaction_cleanup_queue_worker = WorkerBuilder::new(TRANSACTION_CLEANUP)
+        .layer(ErrorHandlingLayer::new())
+        .enable_tracing()
+        .catch_panic()
+        .rate_limit(DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_DURATION)
+        .retry(BackoffRetryPolicy::default())
+        .concurrency(1)
+        .data(app_state.clone())
+        .backend(CronStream::new(
+            // every 30 minutes
+            apalis_cron::Schedule::from_str("0 */30 * * * *").unwrap(),
+        ))
+        .build_fn(transaction_cleanup_handler);
+
     let monitor = Monitor::new()
         .register(transaction_request_queue_worker)
         .register(transaction_submission_queue_worker)
         .register(transaction_status_queue_worker)
         .register(notification_queue_worker)
         .register(solana_token_swap_request_queue_worker)
+        .register(transaction_cleanup_queue_worker)
         .on_event(monitor_handle_event)
         .shutdown_timeout(Duration::from_millis(5000));
 

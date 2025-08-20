@@ -25,7 +25,10 @@ use crate::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
         SignTypedDataRequest,
     },
-    models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, TransactionRepoModel},
+    models::{
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
+        TransactionRepoModel,
+    },
     services::{Signer, VaultConfig, VaultService, VaultServiceTrait},
     utils::{base64_decode, base64_encode},
 };
@@ -44,7 +47,7 @@ where
 }
 
 impl VaultTransitSigner<DefaultVaultService> {
-    pub fn new(signer_model: &SignerRepoModel, vault_service: DefaultVaultService) -> Self {
+    pub fn new(signer_model: &SignerDomainModel, vault_service: DefaultVaultService) -> Self {
         let config = signer_model
             .config
             .get_vault_transit()
@@ -60,7 +63,7 @@ impl VaultTransitSigner<DefaultVaultService> {
 
 #[cfg(test)]
 impl<T: VaultServiceTrait> VaultTransitSigner<T> {
-    pub fn new_with_service(signer_model: &SignerRepoModel, vault_service: T) -> Self {
+    pub fn new_with_service(signer_model: &SignerDomainModel, vault_service: T) -> Self {
         let config = signer_model
             .config
             .get_vault_transit()
@@ -136,13 +139,16 @@ impl<T: VaultServiceTrait> Signer for VaultTransitSigner<T> {
 mod tests {
     use super::*;
     use crate::{
-        models::{SecretString, SignerConfig, SolanaTransactionData, VaultTransitSignerConfig},
+        models::{
+            SecretString, Signer as SignerDomainModel, SignerConfig, SolanaTransactionData,
+            VaultTransitSignerConfig,
+        },
         services::{vault::VaultError, MockVaultServiceTrait},
     };
     use mockall::predicate::*;
 
-    fn create_test_signer_model() -> SignerRepoModel {
-        SignerRepoModel {
+    fn create_test_signer_model() -> SignerDomainModel {
+        SignerDomainModel {
             id: "test-vault-transit-signer".to_string(),
             config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
                 key_name: "transit-key".to_string(),
@@ -226,10 +232,8 @@ mod tests {
             mock_vault_service,
         );
         let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            fee_payer: "test".to_string(),
-            hash: None,
-            recent_blockhash: None,
-            instructions: vec![],
+            transaction: "transaction_123".to_string(),
+            signature: None,
         });
 
         let result = signer.sign_transaction(transaction_data).await;

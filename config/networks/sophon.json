@@ -1,0 +1,37 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 1000,
+      "chain_id": 50104,
+      "explorer_urls": [
+        "https://sophscan.xyz/",
+        "https://explorer.sophon.xyz/",
+        "https://api-explorer.sophon.xyz/"
+      ],
+      "is_testnet": false,
+      "network": "sophon",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://rpc.sophon.xyz",
+        "https://rpc-quicknode.sophon.xyz"
+      ],
+      "symbol": "SOPH",
+      "tags": [],
+      "type": "evm"
+    },
+    {
+      "from": "sophon",
+      "type": "evm",
+      "network": "sophon-testnet",
+      "chain_id": 531050104,
+      "explorer_urls": [
+        "https://testnet.sophscan.xyz/"
+      ],
+      "is_testnet": true,
+      "rpc_urls": [
+        "https://rpc.testnet.sophon.xyz",
+        "https://rpc-quicknode.testnet.sophon.xyz"
+      ]
+    }
+  ]
+}

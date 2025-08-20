@@ -185,7 +185,6 @@ mod tests {
     use super::*;
     use actix_web::body::MessageBody;
     use alloy::primitives::{keccak256, private::alloy_rlp::*};
-    use rand::rngs::mock;
 
     use crate::{
         models::{SecretString, TurnkeySignerConfig},
@@ -272,7 +271,7 @@ mod tests {
             from: "0x7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
             gas_price: None,
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             nonce: Some(0),
             value: crate::models::U256::from(1000000000000000000u64),
             data: Some("0x".to_string()),
@@ -399,7 +398,7 @@ mod tests {
             from: "0x7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
             gas_price: Some(20_000_000_000),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             nonce: Some(0),
             value: crate::models::U256::from(1000000000000000000u64),
             data: Some("0x".to_string()),
@@ -450,7 +449,7 @@ mod tests {
             from: "0x7f5f4552091a69125d5dfcb7b8c2658029395bdf".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
             gas_price: None,
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             nonce: Some(0),
             value: crate::models::U256::from(1000000000000000000u64),
             data: Some("0x".to_string()),

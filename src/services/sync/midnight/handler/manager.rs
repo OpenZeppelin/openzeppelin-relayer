@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    repositories::{InMemorySyncState, SyncStateTrait},
+    repositories::{RelayerStateRepositoryStorage, SyncStateTrait},
     services::midnight::{
         handler::{
             ChronologicalUpdate, EventDispatcher, EventHandlerType, ProgressTracker, SyncConfig,
@@ -24,7 +24,7 @@ use midnight_node_ledger_helpers::{
 /// This struct is the entry point for wallet synchronization. It manages the lifecycle of the sync
 /// process, wires together all services, and ensures that events are handled and state is updated
 /// correctly. It is responsible for selecting the sync strategy, managing persistence, and tracking progress.
-pub struct SyncManager<S: SyncStrategy> {
+pub struct SyncManager<S: SyncStrategy, SS: SyncStateTrait = RelayerStateRepositoryStorage> {
     // The ledger context
     // We use an Arc to allow for multiple references to the same context
     context: Arc<LedgerContext<DefaultDB>>,
@@ -35,12 +35,12 @@ pub struct SyncManager<S: SyncStrategy> {
     // The network
     network: NetworkId,
     // The sync state store
-    sync_state_store: Arc<InMemorySyncState>,
+    sync_state_store: Arc<SS>,
     // The relayer ID for tracking sync state
     relayer_id: String,
 }
 
-impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
+impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> SyncManager<S, SS> {
     /// Serialize the current ledger context to bytes
     fn serialize_context(&self) -> Result<Vec<u8>, SyncError> {
         // Serialize the wallet state for the current seed
@@ -138,11 +138,11 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
     ///
     /// This method initializes all services and selects the sync strategy based on the provided options.
     /// It will also attempt to restore the ledger context from a previous sync if available.
-    pub fn new(
+    pub async fn new(
         indexer_client: &MidnightIndexerClient,
         seed: &WalletSeed,
         network: NetworkId,
-        sync_state_store: Arc<InMemorySyncState>,
+        sync_state_store: Arc<SS>,
         relayer_id: String,
     ) -> Result<Self, SyncError> {
         // Temporarily add random destination seed to the context until Midnight fixes this
@@ -180,6 +180,7 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
         if let Ok(Some(serialized_context)) = manager
             .sync_state_store
             .get_ledger_context(&manager.relayer_id)
+            .await
         {
             info!(
                 "Found saved ledger context for relayer {}, attempting to restore",
@@ -207,6 +208,7 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
                 // Read from sync state store
                 self.sync_state_store
                     .get_last_synced_index(&self.relayer_id)
+                    .await
                     .map_err(|e| SyncError::SyncError(format!("Failed to get sync state: {}", e)))?
                     .unwrap_or(0)
             }
@@ -310,6 +312,7 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
             // Save both the index and the serialized context
             self.sync_state_store
                 .set_sync_state(&self.relayer_id, last_blockchain_index, Some(context_bytes))
+                .await
                 .map_err(|e| SyncError::SyncError(format!("Failed to save sync state: {}", e)))?;
 
             info!(
@@ -333,7 +336,9 @@ impl<S: SyncStrategy + Sync + Send> SyncManager<S> {
 }
 
 #[async_trait::async_trait]
-impl<S: SyncStrategy + Sync + Send> super::SyncManagerTrait for SyncManager<S> {
+impl<S: SyncStrategy + Sync + Send, SS: SyncStateTrait + Send + Sync> super::SyncManagerTrait
+    for SyncManager<S, SS>
+{
     async fn sync(&mut self, start_index: u64) -> Result<(), SyncError> {
         self.sync(Some(start_index)).await
     }
@@ -346,7 +351,7 @@ impl<S: SyncStrategy + Sync + Send> super::SyncManagerTrait for SyncManager<S> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        repositories::{InMemorySyncState, SyncStateTrait},
+        repositories::{RelayerStateRepositoryStorage, SyncStateTrait},
         services::{
             midnight::{
                 handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
@@ -412,7 +417,7 @@ mod tests {
         setup_test_env();
 
         let seed = WalletSeed::from([1u8; 32]);
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
         let relayer_id = "test-relayer".to_string();
         let indexer_urls = crate::config::network::IndexerUrls {
             http: "http://localhost:8080".to_string(),
@@ -426,7 +431,8 @@ mod tests {
             NetworkId::TestNet,
             sync_state_store,
             relayer_id,
-        );
+        )
+        .await;
 
         assert!(manager.is_ok());
     }
@@ -436,7 +442,7 @@ mod tests {
         setup_test_env();
 
         let seed = WalletSeed::from([1u8; 32]);
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
         let relayer_id = "test-relayer".to_string();
         let indexer_urls = crate::config::network::IndexerUrls {
             http: "http://localhost:8080".to_string(),
@@ -451,6 +457,7 @@ mod tests {
             sync_state_store.clone(),
             relayer_id.clone(),
         )
+        .await
         .unwrap();
 
         // Sync from index 100
@@ -463,12 +470,13 @@ mod tests {
         setup_test_env();
 
         let seed = WalletSeed::from([1u8; 32]);
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
         let relayer_id = "test-relayer".to_string();
 
         // Pre-set a sync state
         sync_state_store
             .set_last_synced_index(&relayer_id, 500)
+            .await
             .unwrap();
 
         let indexer_urls = crate::config::network::IndexerUrls {
@@ -484,6 +492,7 @@ mod tests {
             sync_state_store.clone(),
             relayer_id.clone(),
         )
+        .await
         .unwrap();
 
         // Sync incrementally (should start from 500)
@@ -492,7 +501,10 @@ mod tests {
 
         // Verify sync was called - the mock doesn't actually update the state
         // because SyncManager only saves state when there are real chronological updates
-        let stored_index = sync_state_store.get_last_synced_index(&relayer_id).unwrap();
+        let stored_index = sync_state_store
+            .get_last_synced_index(&relayer_id)
+            .await
+            .unwrap();
         assert_eq!(stored_index, Some(500)); // Should remain at the pre-set value
     }
 
@@ -501,7 +513,7 @@ mod tests {
         setup_test_env();
 
         let seed = WalletSeed::from([1u8; 32]);
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
         let relayer_id = "test-relayer".to_string();
         let indexer_urls = crate::config::network::IndexerUrls {
             http: "http://localhost:8080".to_string(),
@@ -516,6 +528,7 @@ mod tests {
             sync_state_store,
             relayer_id,
         )
+        .await
         .unwrap();
 
         let context = manager.get_context();
@@ -527,7 +540,7 @@ mod tests {
         setup_test_env();
 
         let seed = WalletSeed::from([1u8; 32]);
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
         let relayer_id = "test-relayer".to_string();
         let indexer_urls = crate::config::network::IndexerUrls {
             http: "http://localhost:8080".to_string(),
@@ -543,6 +556,7 @@ mod tests {
                 sync_state_store,
                 relayer_id,
             )
+            .await
             .unwrap(),
         );
 
@@ -582,7 +596,7 @@ mod tests {
         setup_test_env();
 
         let seed = WalletSeed::from([1u8; 32]);
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
         let relayer_id = "test-relayer".to_string();
         let indexer_urls = crate::config::network::IndexerUrls {
             http: "http://localhost:8080".to_string(),
@@ -598,6 +612,7 @@ mod tests {
             sync_state_store.clone(),
             relayer_id.clone(),
         )
+        .await
         .unwrap();
 
         // Can't test private serialize_context method directly
@@ -605,6 +620,7 @@ mod tests {
         let dummy_context = vec![1, 2, 3, 4, 5];
         sync_state_store
             .set_sync_state(&relayer_id, 100, Some(dummy_context.clone()))
+            .await
             .unwrap();
 
         // Create second manager - should attempt to restore context
@@ -614,17 +630,18 @@ mod tests {
             NetworkId::TestNet,
             sync_state_store.clone(),
             relayer_id.clone(),
-        );
+        )
+        .await;
 
         assert!(manager2.is_ok()); // Should handle invalid data gracefully
     }
 
-    #[test]
-    fn test_restore_context_invalid_data() {
+    #[tokio::test]
+    async fn test_restore_context_invalid_data() {
         setup_test_env();
 
         let seed = WalletSeed::from([1u8; 32]);
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
         let relayer_id = "test-relayer".to_string();
         let indexer_urls = crate::config::network::IndexerUrls {
             http: "http://localhost:8080".to_string(),
@@ -635,6 +652,7 @@ mod tests {
         // Save invalid data
         sync_state_store
             .set_ledger_context(&relayer_id, vec![1, 2, 3, 4, 5]) // Invalid serialized data
+            .await
             .unwrap();
 
         // Create manager - should handle invalid data gracefully
@@ -644,7 +662,8 @@ mod tests {
             NetworkId::TestNet,
             sync_state_store,
             relayer_id,
-        );
+        )
+        .await;
 
         assert!(manager.is_ok()); // Should not fail, just start fresh
     }

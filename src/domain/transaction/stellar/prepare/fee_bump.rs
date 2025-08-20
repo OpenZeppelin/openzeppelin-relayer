@@ -41,15 +41,17 @@ where
 
     // Step 3: Build the fee-bump envelope
     let fee_bump_envelope =
-        build_fee_bump_envelope(inner_envelope, relayer_address, required_fee as i64).map_err(
-            |e| {
+        build_fee_bump_envelope(inner_envelope.clone(), relayer_address, required_fee as i64)
+            .map_err(|e| {
                 TransactionError::ValidationError(format!("Cannot create fee-bump envelope: {}", e))
-            },
-        )?;
+            })?;
 
     // Step 4: Sign the fee-bump transaction
     let signed_stellar_data =
         sign_fee_bump_transaction(stellar_data, fee_bump_envelope, relayer_address, signer).await?;
+
+    // Step 5: Update the fee in stellar data
+    let signed_stellar_data = signed_stellar_data.with_fee(required_fee);
 
     Ok(signed_stellar_data)
 }

@@ -14,8 +14,8 @@ use crate::{
         TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
-        InMemoryRelayerRepository, InMemoryTransactionCounter, InMemoryTransactionRepository,
-        RelayerRepositoryStorage, Repository, TransactionCounterTrait, TransactionRepository,
+        RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
+        TransactionCounterTrait, TransactionRepository, TransactionRepositoryStorage,
     },
     services::{
         midnight::handler::{QuickSyncStrategy, SyncManager},
@@ -795,11 +795,11 @@ where
 /// Default concrete type for Midnight transactions
 pub type DefaultMidnightTransaction = MidnightTransaction<
     MidnightProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryTransactionRepository,
+    RelayerRepositoryStorage,
+    TransactionRepositoryStorage,
     JobProducer,
     MidnightSigner,
-    InMemoryTransactionCounter,
+    TransactionCounterRepositoryStorage,
 >;
 
 #[cfg(test)]
@@ -818,8 +818,8 @@ mod tests {
             SignerError, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
-            InMemorySyncState, MockRepository, MockTransactionCounterTrait,
-            MockTransactionRepository,
+            MockRepository, MockTransactionCounterTrait, MockTransactionRepository,
+            RelayerStateRepositoryStorage,
         },
         services::{
             midnight::{handler::SyncManager, indexer::MidnightIndexerClient},
@@ -855,12 +855,12 @@ mod tests {
     }
 
     // Helper to create a sync manager with context from fixture
-    fn create_sync_manager_with_fixture(
+    async fn create_sync_manager_with_fixture(
         seed: &WalletSeed,
         network: &MidnightNetwork,
         relayer_id: String,
     ) -> SyncManager<crate::services::midnight::handler::QuickSyncStrategy> {
-        let sync_state_store = Arc::new(InMemorySyncState::new());
+        let sync_state_store = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
 
         // Create sync manager first
         let sync_manager = SyncManager::new(
@@ -870,6 +870,7 @@ mod tests {
             sync_state_store,
             relayer_id,
         )
+        .await
         .unwrap();
 
         // Try to load and restore context from fixture
@@ -930,7 +931,7 @@ mod tests {
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
             policies: RelayerNetworkPolicy::Midnight(RelayerMidnightPolicy {
-                min_balance: 100_000_000, // 0.1 tDUST
+                min_balance: Some(100_000_000), // 0.1 tDUST
             }),
             network_type: NetworkType::Midnight,
             custom_rpc_urls: None,
@@ -990,6 +991,7 @@ mod tests {
                 block_hash: None,
                 segment_results: None,
             }),
+            delete_at: None,
             priced_at: None,
             hashes: vec![],
             noop_count: None,
@@ -1065,9 +1067,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1118,9 +1121,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1177,9 +1181,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1226,9 +1231,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1274,9 +1280,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1328,9 +1335,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1374,9 +1382,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     midnight_node_ledger_helpers::NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1458,9 +1467,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     midnight_node_ledger_helpers::NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1545,9 +1555,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     midnight_node_ledger_helpers::NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1620,9 +1631,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     midnight_node_ledger_helpers::NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1688,9 +1700,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     midnight_node_ledger_helpers::NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1739,9 +1752,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     midnight_node_ledger_helpers::NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -1808,7 +1822,7 @@ mod tests {
 
         // Create transaction handler with fixture-loaded sync manager
         let sync_manager =
-            create_sync_manager_with_fixture(&wallet_seed, &network, relayer.id.clone());
+            create_sync_manager_with_fixture(&wallet_seed, &network, relayer.id.clone()).await;
         let midnight_transaction = MidnightTransaction::new(
             relayer.clone(),
             Arc::new(mock_provider),
@@ -1887,9 +1901,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     midnight_node_ledger_helpers::NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network.clone(),
@@ -1952,9 +1967,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network.clone(),
@@ -2024,9 +2040,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,
@@ -2074,9 +2091,10 @@ mod tests {
                     &MidnightIndexerClient::new(network.indexer_urls.clone()),
                     &wallet_seed,
                     NetworkId::TestNet,
-                    Arc::new(InMemorySyncState::new()),
+                    Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
                     relayer.id.clone(),
                 )
+                .await
                 .unwrap(),
             )),
             network,

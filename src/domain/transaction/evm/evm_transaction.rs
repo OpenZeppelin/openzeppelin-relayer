@@ -7,10 +7,11 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 
 use crate::{
+    constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
     domain::{
         transaction::{
             evm::{is_pending_transaction, PriceCalculator, PriceCalculatorTrait},
@@ -21,56 +22,54 @@ use crate::{
     jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
     models::{
         produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
-        NetworkTransactionData, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        NetworkRepoModel, NetworkTransactionData, NetworkTransactionRequest, NetworkType,
+        RelayerEvmPolicy, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        NetworkRepository, RelayerRepositoryStorage, Repository, TransactionCounterTrait,
-        TransactionRepository,
+        NetworkRepository, NetworkRepositoryStorage, RelayerRepository, RelayerRepositoryStorage,
+        Repository, TransactionCounterRepositoryStorage, TransactionCounterTrait,
+        TransactionRepository, TransactionRepositoryStorage,
     },
     services::{EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer},
+    utils::get_evm_default_gas_limit_for_tx,
 };
 
 use super::PriceParams;
 
-// Import shared test helpers from status module
-
-// Import shared test helpers from test_helpers module
-
 #[allow(dead_code)]
-pub struct EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+pub struct EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
     P: EvmProviderTrait,
-    R: Repository<RelayerRepoModel, String>,
-    N: NetworkRepository,
-    T: TransactionRepository,
-    J: JobProducerTrait,
-    S: Signer,
-    C: TransactionCounterTrait,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
     PC: PriceCalculatorTrait,
 {
     provider: P,
-    relayer_repository: Arc<R>,
-    network_repository: Arc<N>,
-    transaction_repository: Arc<T>,
+    relayer_repository: Arc<RR>,
+    network_repository: Arc<NR>,
+    transaction_repository: Arc<TR>,
     job_producer: Arc<J>,
     signer: S,
     relayer: RelayerRepoModel,
-    transaction_counter_service: Arc<C>,
+    transaction_counter_service: Arc<TCR>,
     price_calculator: PC,
 }
 
 #[allow(dead_code, clippy::too_many_arguments)]
-impl<P, R, N, T, J, S, C, PC> EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+impl<P, RR, NR, TR, J, S, TCR, PC> EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
     P: EvmProviderTrait,
-    R: Repository<RelayerRepoModel, String>,
-    N: NetworkRepository,
-    T: TransactionRepository,
-    J: JobProducerTrait,
-    S: Signer,
-    C: TransactionCounterTrait,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
     PC: PriceCalculatorTrait,
 {
     /// Creates a new `EvmRelayerTransaction`.
@@ -92,10 +91,10 @@ where
     pub fn new(
         relayer: RelayerRepoModel,
         provider: P,
-        relayer_repository: Arc<R>,
-        network_repository: Arc<N>,
-        transaction_repository: Arc<T>,
-        transaction_counter_service: Arc<C>,
+        relayer_repository: Arc<RR>,
+        network_repository: Arc<NR>,
+        transaction_repository: Arc<TR>,
+        transaction_counter_service: Arc<TCR>,
         job_producer: Arc<J>,
         price_calculator: PC,
         signer: S,
@@ -124,7 +123,7 @@ where
     }
 
     /// Returns a reference to the network repository.
-    pub fn network_repository(&self) -> &N {
+    pub fn network_repository(&self) -> &NR {
         &self.network_repository
     }
 
@@ -133,7 +132,7 @@ where
         &self.job_producer
     }
 
-    pub fn transaction_repository(&self) -> &T {
+    pub fn transaction_repository(&self) -> &TR {
         &self.transaction_repository
     }
 
@@ -257,61 +256,52 @@ where
         })
     }
 
-    /// Signs a transaction data, updates repository with the signed transaction, and optionally sends a resubmit job.
+    /// Estimates the gas limit for a transaction.
     ///
     /// # Arguments
     ///
-    /// * `tx_id` - The transaction ID to update
-    /// * `evm_data` - The EVM transaction data to sign
-    /// * `send_resubmit` - Whether to send a resubmit job after updating
+    /// * `evm_data` - The EVM transaction data.
+    /// * `relayer_policy` - The relayer policy.
     ///
-    /// # Returns
-    ///
-    /// The updated transaction model
-    async fn sign_update_and_notify(
+    async fn estimate_tx_gas_limit(
         &self,
-        tx_id: String,
-        evm_data: EvmTransactionData,
-        send_resubmit: bool,
-    ) -> Result<TransactionRepoModel, TransactionError> {
-        // Sign the transaction
-        let sig_result = self
-            .signer
-            .sign_transaction(NetworkTransactionData::Evm(evm_data.clone()))
-            .await?;
-
-        let final_evm_data = evm_data.with_signed_transaction_data(sig_result.into_evm()?);
-
-        // Update the transaction in the repository
-        let updated_tx = self
-            .transaction_repository
-            .update_network_data(tx_id, NetworkTransactionData::Evm(final_evm_data))
-            .await?;
-
-        // Send resubmit job if requested
-        if send_resubmit {
-            self.send_transaction_resubmit_job(&updated_tx).await?;
+        evm_data: &EvmTransactionData,
+        relayer_policy: &RelayerEvmPolicy,
+    ) -> Result<u64, TransactionError> {
+        if !relayer_policy
+            .gas_limit_estimation
+            .unwrap_or(DEFAULT_EVM_GAS_LIMIT_ESTIMATION)
+        {
+            warn!(
+                "Gas limit estimation is disabled for relayer: {:?}",
+                self.relayer().id
+            );
+            return Err(TransactionError::UnexpectedError(
+                "Gas limit estimation is disabled".to_string(),
+            ));
         }
 
-        // Send notification
-        self.send_transaction_update_notification(&updated_tx)
-            .await?;
+        let estimated_gas = self.provider.estimate_gas(evm_data).await.map_err(|e| {
+            warn!("Failed to estimate gas: {:?} for tx: {:?}", e, evm_data);
+            TransactionError::UnexpectedError(format!("Failed to estimate gas: {}", e))
+        })?;
 
-        Ok(updated_tx)
+        Ok(estimated_gas * GAS_LIMIT_BUFFER_MULTIPLIER / 100)
     }
 }
 
 #[async_trait]
-impl<P, R, N, T, J, S, C, PC> Transaction for EvmRelayerTransaction<P, R, N, T, J, S, C, PC>
+impl<P, RR, NR, TR, J, S, TCR, PC> Transaction
+    for EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
-    P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
-    C: TransactionCounterTrait + Send + Sync,
-    PC: PriceCalculatorTrait + Send + Sync,
+    P: EvmProviderTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: Signer + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PC: PriceCalculatorTrait + Send + Sync + 'static,
 {
     /// Prepares a transaction for submission.
     ///
@@ -328,9 +318,34 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("Preparing transaction: {:?}", tx.id);
 
-        let evm_data = tx.network_data.get_evm_transaction_data()?;
-        // set the gas price
+        let mut evm_data = tx.network_data.get_evm_transaction_data()?;
         let relayer = self.relayer();
+
+        if evm_data.gas_limit.is_none() {
+            match self
+                .estimate_tx_gas_limit(&evm_data, &relayer.policies.get_evm_policy())
+                .await
+            {
+                Ok(estimated_gas_limit) => {
+                    evm_data.gas_limit = Some(estimated_gas_limit);
+                }
+                Err(estimation_error) => {
+                    error!(
+                        "Failed to estimate gas limit for tx: {} : {:?}",
+                        tx.id, estimation_error
+                    );
+
+                    let default_gas_limit = get_evm_default_gas_limit_for_tx(&evm_data);
+                    info!(
+                        "Fallback to default gas limit: {} for tx: {}",
+                        default_gas_limit, tx.id
+                    );
+                    evm_data.gas_limit = Some(default_gas_limit);
+                }
+            }
+        }
+
+        // set the gas price
         let price_params: PriceParams = self
             .price_calculator
             .get_transaction_price_params(&evm_data, relayer)
@@ -341,11 +356,10 @@ where
         let nonce = self
             .transaction_counter_service
             .get_and_increment(&self.relayer.id, &self.relayer.address)
+            .await
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
-        let updated_evm_data = tx
-            .network_data
-            .get_evm_transaction_data()?
+        let updated_evm_data = evm_data
             .with_price_params(price_params.clone())
             .with_nonce(nonce);
 
@@ -532,13 +546,29 @@ where
         self.ensure_sufficient_balance(bumped_price_params.total_cost)
             .await?;
 
-        // sign, update and notify
+        let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
+            TransactionError::InvalidType("Raw transaction data is missing".to_string())
+        })?;
+
+        self.provider.send_raw_transaction(raw_tx).await?;
+
+        // Track attempt count and hash history
+        let mut hashes = tx.hashes.clone();
+        if let Some(hash) = final_evm_data.hash.clone() {
+            hashes.push(hash);
+        }
+
+        // Update the transaction in the repository
+        let update = TransactionUpdateRequest {
+            network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
+            hashes: Some(hashes),
+            priced_at: Some(Utc::now().to_rfc3339()),
+            ..Default::default()
+        };
+
         let updated_tx = self
-            .sign_update_and_notify(
-                tx.id.clone(),
-                final_evm_data,
-                true, // send_resubmit = true
-            )
+            .transaction_repository
+            .partial_update(tx.id.clone(), update)
             .await?;
 
         Ok(updated_tx)
@@ -671,19 +701,35 @@ where
         info!("Replacement price params: {:?}", price_params);
 
         // Apply the calculated price parameters to the updated EVM data
-        let final_evm_data = updated_evm_data.with_price_params(price_params.clone());
+        let evm_data_with_price_params = updated_evm_data.with_price_params(price_params.clone());
 
         // Validate the relayer has sufficient balance
         self.ensure_sufficient_balance(price_params.total_cost)
             .await?;
 
-        // sign, update and notify
+        let sig_result = self
+            .signer
+            .sign_transaction(NetworkTransactionData::Evm(
+                evm_data_with_price_params.clone(),
+            ))
+            .await?;
+
+        let final_evm_data =
+            evm_data_with_price_params.with_signed_transaction_data(sig_result.into_evm()?);
+
+        // Update the transaction in the repository
         let updated_tx = self
-            .sign_update_and_notify(
+            .transaction_repository
+            .update_network_data(
                 old_tx.id.clone(),
-                final_evm_data,
-                true, // send_resubmit = true
+                NetworkTransactionData::Evm(final_evm_data),
             )
+            .await?;
+
+        self.send_transaction_resubmit_job(&updated_tx).await?;
+
+        // Send notification
+        self.send_transaction_update_notification(&updated_tx)
             .await?;
 
         Ok(updated_tx)
@@ -731,12 +777,12 @@ where
 // we define concrete type for the evm transaction
 pub type DefaultEvmTransaction = EvmRelayerTransaction<
     EvmProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryNetworkRepository,
-    crate::repositories::transaction::InMemoryTransactionRepository,
+    RelayerRepositoryStorage,
+    NetworkRepositoryStorage,
+    TransactionRepositoryStorage,
     JobProducer,
     EvmSigner,
-    InMemoryTransactionCounter,
+    TransactionCounterRepositoryStorage,
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
 >;
 #[cfg(test)]
@@ -751,7 +797,7 @@ mod tests {
             RelayerNetworkPolicy, U256,
         },
         repositories::{
-            MockNetworkRepository, MockRepository, MockTransactionCounterTrait,
+            MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
             MockTransactionRepository,
         },
         services::{MockEvmProviderTrait, MockSigner},
@@ -781,6 +827,17 @@ mod tests {
 
     // Helper to create a relayer model with specific configuration for these tests
     fn create_test_relayer() -> RelayerRepoModel {
+        create_test_relayer_with_policy(crate::models::RelayerEvmPolicy {
+            min_balance: Some(100000000000000000u128), // 0.1 ETH
+            gas_limit_estimation: Some(true),
+            gas_price_cap: Some(100000000000), // 100 Gwei
+            whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
+            eip1559_pricing: Some(false),
+            private_transactions: Some(false),
+        })
+    }
+
+    fn create_test_relayer_with_policy(evm_policy: RelayerEvmPolicy) -> RelayerRepoModel {
         RelayerRepoModel {
             id: "test-relayer-id".to_string(),
             name: "Test Relayer".to_string(),
@@ -790,13 +847,7 @@ mod tests {
             system_disabled: false,
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
-            policies: RelayerNetworkPolicy::Evm(crate::models::RelayerEvmPolicy {
-                min_balance: 100000000000000000u128, // 0.1 ETH
-                whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
-                gas_price_cap: Some(100000000000), // 100 Gwei
-                eip1559_pricing: Some(false),
-                private_transactions: false,
-            }),
+            policies: RelayerNetworkPolicy::Evm(evm_policy),
             network_type: NetworkType::Evm,
             custom_rpc_urls: None,
         }
@@ -813,6 +864,7 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
+            delete_at: None,
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 chain_id: 1,
@@ -820,7 +872,7 @@ mod tests {
                 to: Some("0xRecipient".to_string()),
                 value: U256::from(1000000000000000000u64), // 1 ETH
                 data: Some("0xData".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(20000000000), // 20 Gwei
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -840,7 +892,7 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_transaction_with_sufficient_balance() {
         let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mut mock_signer = MockSigner::new();
         let mut mock_job_producer = MockJobProducerTrait::new();
@@ -852,7 +904,7 @@ mod tests {
 
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(42));
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let price_params = PriceParams {
             gas_price: Some(30000000000),
@@ -936,19 +988,23 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_transaction_with_insufficient_balance() {
         let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+        let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mut mock_signer = MockSigner::new();
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let mut counter_service = MockTransactionCounterTrait::new();
 
-        let relayer = create_test_relayer();
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(false),
+            min_balance: Some(100000000000000000u128),
+            ..Default::default()
+        });
         let test_tx = create_test_transaction();
 
         counter_service
             .expect_get_and_increment()
-            .returning(|_, _| Ok(42));
+            .returning(|_, _| Box::pin(ready(Ok(42))));
 
         let price_params = PriceParams {
             gas_price: Some(30000000000),
@@ -1028,7 +1084,7 @@ mod tests {
         {
             // Create mocks for all dependencies
             let mut mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mock_signer = MockSigner::new();
             let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1085,7 +1141,7 @@ mod tests {
         {
             // Create mocks for all dependencies
             let mut mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mut mock_signer = MockSigner::new();
             let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1159,7 +1215,37 @@ mod tests {
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(ready(Ok(()))));
 
-            let mock_network = MockNetworkRepository::new();
+            // Network repository expectations for cancellation NOOP transaction
+            let mut mock_network = MockNetworkRepository::new();
+            mock_network
+                .expect_get_by_chain_id()
+                .with(eq(NetworkType::Evm), eq(1))
+                .returning(|_, _| {
+                    use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+                    use crate::models::{NetworkConfigData, NetworkRepoModel};
+
+                    let config = EvmNetworkConfig {
+                        common: NetworkConfigCommon {
+                            network: "mainnet".to_string(),
+                            from: None,
+                            rpc_urls: Some(vec!["https://rpc.example.com".to_string()]),
+                            explorer_urls: None,
+                            average_blocktime_ms: Some(12000),
+                            is_testnet: Some(false),
+                            tags: Some(vec!["mainnet".to_string()]),
+                        },
+                        chain_id: Some(1),
+                        required_confirmations: Some(12),
+                        features: Some(vec!["eip1559".to_string()]),
+                        symbol: Some("ETH".to_string()),
+                    };
+                    Ok(Some(NetworkRepoModel {
+                        id: "evm:mainnet".to_string(),
+                        name: "mainnet".to_string(),
+                        network_type: NetworkType::Evm,
+                        config: NetworkConfigData::Evm(config),
+                    }))
+                });
 
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
@@ -1195,7 +1281,7 @@ mod tests {
         {
             // Create minimal mocks for failure case
             let mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mock_signer = MockSigner::new();
             let mock_job_producer = MockJobProducerTrait::new();
@@ -1239,7 +1325,7 @@ mod tests {
         {
             // Create mocks for all dependencies
             let mut mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mut mock_provider = MockEvmProviderTrait::new();
             let mut mock_signer = MockSigner::new();
             let mut mock_job_producer = MockJobProducerTrait::new();
@@ -1359,7 +1445,7 @@ mod tests {
                 to: Some("0xNewRecipient".to_string()),
                 value: U256::from(2000000000000000000u64), // 2 ETH
                 data: Some("0xNewData".to_string()),
-                gas_limit: 25000,
+                gas_limit: Some(25000),
                 gas_price: None, // Use speed-based pricing
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -1385,7 +1471,7 @@ mod tests {
                 assert_eq!(evm_data.to, Some("0xNewRecipient".to_string()));
                 assert_eq!(evm_data.value, U256::from(2000000000000000000u64));
                 assert_eq!(evm_data.gas_price, Some(40000000000));
-                assert_eq!(evm_data.gas_limit, 25000);
+                assert_eq!(evm_data.gas_limit, Some(25000));
                 assert!(evm_data.hash.is_some());
                 assert!(evm_data.raw.is_some());
             } else {
@@ -1397,7 +1483,7 @@ mod tests {
         {
             // Create minimal mocks for failure case
             let mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRepository::<RelayerRepoModel, String>::new();
+            let mock_relayer = MockRelayerRepository::new();
             let mock_provider = MockEvmProviderTrait::new();
             let mock_signer = MockSigner::new();
             let mock_job_producer = MockJobProducerTrait::new();
@@ -1429,7 +1515,7 @@ mod tests {
                 to: Some("0xNewRecipient".to_string()),
                 value: U256::from(1000000000000000000u64),
                 data: Some("0xData".to_string()),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 gas_price: Some(30000000000),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -1447,6 +1533,390 @@ mod tests {
             } else {
                 panic!("Expected ValidationError");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_estimate_tx_gas_limit_success() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        // Create test relayer and pending transaction
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(true),
+            ..Default::default()
+        });
+        let evm_data = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed".to_string()),
+            value: U256::from(1000000000000000000u128),
+            data: Some("0x".to_string()),
+            gas_limit: None,
+            gas_price: Some(20_000_000_000),
+            nonce: Some(1),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            speed: Some(Speed::Average),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        // Mock provider to return 21000 as estimated gas
+        mock_provider
+            .expect_estimate_gas()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(21000) }));
+
+        let transaction = EvmRelayerTransaction::new(
+            relayer.clone(),
+            mock_provider,
+            Arc::new(mock_relayer),
+            Arc::new(mock_network),
+            Arc::new(mock_transaction),
+            Arc::new(counter_service),
+            Arc::new(mock_job_producer),
+            mock_price_calculator,
+            mock_signer,
+        )
+        .unwrap();
+
+        let result = transaction
+            .estimate_tx_gas_limit(&evm_data, &relayer.policies.get_evm_policy())
+            .await;
+
+        assert!(result.is_ok());
+        // Expected: 21000 * 110 / 100 = 23100
+        assert_eq!(result.unwrap(), 23100);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_tx_gas_limit_disabled() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        // Create test relayer and pending transaction
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(false),
+            ..Default::default()
+        });
+
+        let evm_data = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed".to_string()),
+            value: U256::from(1000000000000000000u128),
+            data: Some("0x".to_string()),
+            gas_limit: None,
+            gas_price: Some(20_000_000_000),
+            nonce: Some(1),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            speed: Some(Speed::Average),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        // Provider should not be called when estimation is disabled
+        mock_provider.expect_estimate_gas().times(0);
+
+        let transaction = EvmRelayerTransaction::new(
+            relayer.clone(),
+            mock_provider,
+            Arc::new(mock_relayer),
+            Arc::new(mock_network),
+            Arc::new(mock_transaction),
+            Arc::new(counter_service),
+            Arc::new(mock_job_producer),
+            mock_price_calculator,
+            mock_signer,
+        )
+        .unwrap();
+
+        let result = transaction
+            .estimate_tx_gas_limit(&evm_data, &relayer.policies.get_evm_policy())
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TransactionError::UnexpectedError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_estimate_tx_gas_limit_default_enabled() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: None, // Should default to true
+            ..Default::default()
+        });
+
+        let evm_data = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed".to_string()),
+            value: U256::from(1000000000000000000u128),
+            data: Some("0x".to_string()),
+            gas_limit: None,
+            gas_price: Some(20_000_000_000),
+            nonce: Some(1),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            speed: Some(Speed::Average),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        // Mock provider to return 50000 as estimated gas
+        mock_provider
+            .expect_estimate_gas()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(50000) }));
+
+        let transaction = EvmRelayerTransaction::new(
+            relayer.clone(),
+            mock_provider,
+            Arc::new(mock_relayer),
+            Arc::new(mock_network),
+            Arc::new(mock_transaction),
+            Arc::new(counter_service),
+            Arc::new(mock_job_producer),
+            mock_price_calculator,
+            mock_signer,
+        )
+        .unwrap();
+
+        let result = transaction
+            .estimate_tx_gas_limit(&evm_data, &relayer.policies.get_evm_policy())
+            .await;
+
+        assert!(result.is_ok());
+        // Expected: 50000 * 110 / 100 = 55000
+        assert_eq!(result.unwrap(), 55000);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_tx_gas_limit_provider_error() {
+        let mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(true),
+            ..Default::default()
+        });
+
+        let evm_data = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed".to_string()),
+            value: U256::from(1000000000000000000u128),
+            data: Some("0x".to_string()),
+            gas_limit: None,
+            gas_price: Some(20_000_000_000),
+            nonce: Some(1),
+            chain_id: 1,
+            hash: None,
+            signature: None,
+            speed: Some(Speed::Average),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        // Mock provider to return an error
+        mock_provider.expect_estimate_gas().times(1).returning(|_| {
+            Box::pin(async {
+                Err(crate::services::ProviderError::Other(
+                    "RPC error".to_string(),
+                ))
+            })
+        });
+
+        let transaction = EvmRelayerTransaction::new(
+            relayer.clone(),
+            mock_provider,
+            Arc::new(mock_relayer),
+            Arc::new(mock_network),
+            Arc::new(mock_transaction),
+            Arc::new(counter_service),
+            Arc::new(mock_job_producer),
+            mock_price_calculator,
+            mock_signer,
+        )
+        .unwrap();
+
+        let result = transaction
+            .estimate_tx_gas_limit(&evm_data, &relayer.policies.get_evm_policy())
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            TransactionError::UnexpectedError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_uses_gas_estimation_and_stores_result() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        // Create test relayer with gas limit estimation enabled
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(true),
+            min_balance: Some(100000000000000000u128),
+            ..Default::default()
+        });
+
+        // Create test transaction WITHOUT gas_limit (so estimation will be triggered)
+        let mut test_tx = create_test_transaction();
+        if let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data {
+            evm_data.gas_limit = None; // This should trigger gas estimation
+            evm_data.nonce = None; // This will be set by the counter service
+        }
+
+        // Expected estimated gas from provider
+        const PROVIDER_GAS_ESTIMATE: u64 = 45000;
+        const EXPECTED_GAS_WITH_BUFFER: u64 = 49500; // 45000 * 110 / 100
+
+        // Mock provider to return specific gas estimate
+        mock_provider
+            .expect_estimate_gas()
+            .times(1)
+            .returning(move |_| Box::pin(async move { Ok(PROVIDER_GAS_ESTIMATE) }));
+
+        // Mock provider for balance check
+        mock_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(U256::from(2000000000000000000u128)) })); // 2 ETH
+
+        let price_params = PriceParams {
+            gas_price: Some(20_000_000_000), // 20 Gwei
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(1900000000000000000u128), // 1.9 ETH total cost
+        };
+
+        // Mock price calculator
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        // Mock transaction counter to return a nonce
+        counter_service
+            .expect_get_and_increment()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(42) }));
+
+        // Mock signer to return a signed transaction
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xhash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ),
+            )))
+        });
+
+        // Mock job producer to capture the submission job
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        // Mock transaction repository partial_update calls
+        let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .returning(move |_, _update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                    gas_limit: Some(expected_gas_limit),
+                    ..test_tx_clone
+                        .network_data
+                        .get_evm_transaction_data()
+                        .unwrap()
+                });
+                Ok(updated_tx)
+            });
+
+        let transaction = EvmRelayerTransaction::new(
+            relayer.clone(),
+            mock_provider,
+            Arc::new(mock_relayer),
+            Arc::new(mock_network),
+            Arc::new(mock_transaction),
+            Arc::new(counter_service),
+            Arc::new(mock_job_producer),
+            mock_price_calculator,
+            mock_signer,
+        )
+        .unwrap();
+
+        // Call prepare_transaction
+        let result = transaction.prepare_transaction(test_tx).await;
+
+        // Verify the transaction was prepared successfully
+        assert!(result.is_ok(), "prepare_transaction should succeed");
+        let prepared_tx = result.unwrap();
+
+        // Verify the final transaction has the estimated gas limit
+        if let NetworkTransactionData::Evm(evm_data) = prepared_tx.network_data {
+            assert_eq!(evm_data.gas_limit, Some(EXPECTED_GAS_WITH_BUFFER));
+        } else {
+            panic!("Expected EVM network data");
         }
     }
 }

@@ -5,8 +5,6 @@
 
 == Overview
 
-CAUTION: This software is in alpha stage. Use in production environments at your own risk.
-
 OpenZeppelin Relayer is a service that provides infrastructure to relay transactions to the EVM & Non-EVM networks. It is designed to be used as a backend for dApps that need to interact with these networks.
 
 
@@ -218,7 +216,7 @@ For detailed information about each directory and its contents, see xref:structu
 
 === Prerequisites
 
-* Rust 2021 edition
+* Rust 2021 edition, version `1.86` or later
 * Docker (optional, for containerized deployment)
 * Node.js, typescript and ts-node (optional, for plugins)
 
@@ -237,6 +235,9 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 * `evm-gcp-kms-signer`: Using Google Cloud KMS for EVM secure signing
 * `evm-turnkey-signer`: Using Turnkey for EVM secure signing
 * `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
+* `redis-storage`: Using Redis for Storage
+* `network-configuration-config-file`: Using Custom network configuration via config file
+* `network-configuration-json-file`: Using Custom network configuration via JSON file
 
 Each example includes a README with step-by-step instructions and Docker Compose configuration.
 ====
@@ -315,14 +316,22 @@ DOCKERFILE=Dockerfile.production docker compose up -d
 
 == Configuration
 
-OpenZeppelin Relayer requires proper configuration before starting. The configuration system uses two main files:
+OpenZeppelin Relayer supports two configuration approaches:
 
+**File-based Configuration:**
 - **`config.json`**: Contains relayer definitions, signer configurations, and network policies
 - **`.env`**: Contains environment variables like API keys and connection strings
 
+**API-based Configuration:**
+- Runtime configuration management via REST API
+- No service restarts required for configuration changes
+- Full CRUD operations for relayers, signers, and notifications
+
 [IMPORTANT]
 ====
-Both configuration files must be properly set up before starting the application. Changes to either file require restarting the container to take effect.
+Both approaches can be used together. File-based configuration is loaded on startup, while API changes provide runtime flexibility. Changes to environment variables (`.env`) always require restarting the container.
+
+When used together, API changes are not synced to file-based configuration. File-based configuration is loaded only once when using persistent storage mode.
 
 For quick setup examples with pre-configured files, see the https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[examples directory] in our GitHub repository.
 ====
@@ -340,8 +349,6 @@ For comprehensive configuration details, including:
 See the dedicated xref:configuration.adoc[Configuration Guide].
 
 == Important Considerations
-
-CAUTION: This software is in alpha stage. Use in production environments at your own risk.
 
 == Deployment Considerations
 

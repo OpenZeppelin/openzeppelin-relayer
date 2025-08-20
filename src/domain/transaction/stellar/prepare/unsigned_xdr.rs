@@ -6,6 +6,7 @@ use log::info;
 use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
 
 use crate::{
+    constants::STELLAR_DEFAULT_TRANSACTION_FEE,
     domain::{extract_operations, extract_source_account},
     models::{StellarTransactionData, StellarValidationError, TransactionError, TransactionInput},
     repositories::TransactionCounterTrait,
@@ -66,7 +67,7 @@ where
     }
 
     // Step 3: Get the next sequence number and update the envelope
-    let sequence = get_next_sequence(counter_service, relayer_id, relayer_address)?;
+    let sequence = get_next_sequence(counter_service, relayer_id, relayer_address).await?;
     info!(
         "Using sequence number {} for unsigned XDR transaction",
         sequence
@@ -104,7 +105,15 @@ where
                     ))
                 })?
         }
-        None => stellar_data,
+        None => {
+            // For non-simulated transactions, ensure fee is set from the envelope
+            let fee = match &envelope {
+                TransactionEnvelope::TxV0(e) => e.tx.fee,
+                TransactionEnvelope::Tx(e) => e.tx.fee,
+                _ => STELLAR_DEFAULT_TRANSACTION_FEE,
+            };
+            stellar_data.with_fee(fee)
+        }
     };
 
     // Step 6: Sign the transaction
@@ -116,8 +125,7 @@ mod tests {
     use super::*;
     use crate::{
         domain::SignTransactionResponse,
-        models::{DecoratedSignature, NetworkTransactionData},
-        repositories::TransactionCounterError,
+        models::{DecoratedSignature, NetworkTransactionData, RepositoryError},
     };
     use soroban_rs::xdr::{
         BytesM, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
@@ -130,37 +138,38 @@ mod tests {
         sequence: u64,
     }
 
+    #[async_trait::async_trait]
     impl TransactionCounterTrait for MockCounter {
-        fn get_and_increment(
+        async fn get_and_increment(
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<u64, TransactionCounterError> {
+        ) -> Result<u64, RepositoryError> {
             Ok(self.sequence)
         }
 
-        fn get(
+        async fn get(
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<Option<u64>, TransactionCounterError> {
+        ) -> Result<Option<u64>, RepositoryError> {
             Ok(Some(self.sequence))
         }
 
-        fn decrement(
+        async fn decrement(
             &self,
             _relayer_id: &str,
             _address: &str,
-        ) -> Result<u64, TransactionCounterError> {
+        ) -> Result<u64, RepositoryError> {
             Ok(self.sequence - 1)
         }
 
-        fn set(
+        async fn set(
             &self,
             _relayer_id: &str,
             _address: &str,
             _value: u64,
-        ) -> Result<(), TransactionCounterError> {
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
     }
@@ -242,6 +251,10 @@ mod tests {
             &self,
             _request: crate::services::GetEventsRequest,
         ) -> Result<soroban_rs::stellar_rpc_client::GetEventsResponse, eyre::Error> {
+            unimplemented!()
+        }
+
+        fn rpc_url(&self) -> &str {
             unimplemented!()
         }
     }
@@ -516,6 +529,8 @@ mod tests {
 
 #[cfg(test)]
 mod xdr_transaction_tests {
+    use std::future::ready;
+
     use super::*;
     use crate::constants::STELLAR_DEFAULT_TRANSACTION_FEE;
     use crate::domain::transaction::stellar::test_helpers::*;
@@ -565,7 +580,7 @@ mod xdr_transaction_tests {
         mocks
             .counter
             .expect_get_and_increment()
-            .returning(move |_, _| Ok(expected_sequence as u64));
+            .returning(move |_, _| Box::pin(ready(Ok(expected_sequence as u64))));
 
         // Mock signer for unsigned XDR
         mocks
@@ -664,11 +679,39 @@ mod xdr_transaction_tests {
         let relayer = create_test_relayer();
         let mut mocks = default_test_mocks();
 
-        // Mock counter service (will be called before validation fails)
+        // Don't expect counter to be called - validation fails before get_next_sequence
+
+        // Mock sync_sequence_from_chain for error handling
+        mocks.provider.expect_get_account().returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(0),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
         mocks
             .counter
-            .expect_get_and_increment()
-            .returning(|_, _| Ok(1));
+            .expect_set()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         // Mock finalize_transaction_state for failure handling
         mocks
@@ -703,6 +746,9 @@ mod xdr_transaction_tests {
             .get_stellar_transaction_data()
             .unwrap()
             .clone();
+
+        // Remove sequence number since validation fails before it's set
+        stellar_data.sequence_number = None;
 
         // Create unsigned XDR with different source
         let different_account = "GBCFR5QVA3K7JKIPT7WFULRXQVNTDZQLZHTUTGONFSTS5KCEGS6O5AZB";
@@ -739,7 +785,7 @@ mod xdr_transaction_tests {
             .counter
             .expect_get_and_increment()
             .withf(move |id, _| id == relayer_id)
-            .returning(move |_, _| Ok(expected_sequence as u64));
+            .returning(move |_, _| Box::pin(ready(Ok(expected_sequence as u64))));
 
         // Mock signer that verifies fee was updated
         mocks

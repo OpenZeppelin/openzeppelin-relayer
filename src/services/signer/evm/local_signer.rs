@@ -34,7 +34,8 @@ use crate::{
     },
     models::{
         Address, EvmTransactionData, EvmTransactionDataSignature, EvmTransactionDataTrait,
-        NetworkTransactionData, SignerError, SignerRepoModel, SignerType, TransactionRepoModel,
+        NetworkTransactionData, Signer as SignerDomainModel, SignerError, SignerRepoModel,
+        SignerType, TransactionRepoModel,
     },
     services::Signer,
 };
@@ -43,12 +44,13 @@ use super::DataSignerTrait;
 
 use alloy::rpc::types::TransactionRequest;
 
+#[derive(Clone)]
 pub struct LocalSigner {
     local_signer_client: AlloyLocalSignerClient<SigningKey>,
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: &SignerRepoModel) -> Result<Self, SignerError> {
+    pub fn new(signer_model: &SignerDomainModel) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_local()
@@ -58,7 +60,7 @@ impl LocalSigner {
             let key_bytes = config.raw_key.borrow();
 
             AlloyLocalSignerClient::from_bytes(&FixedBytes::from_slice(&key_bytes)).map_err(
-                |e| SignerError::Configuration(format!("Failed to create signer: {}", e)),
+                |e| SignerError::Configuration(format!("Failed to create local signer: {}", e)),
             )?
         };
 
@@ -181,10 +183,10 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    fn create_test_signer_model() -> SignerRepoModel {
+    fn create_test_signer_model() -> SignerDomainModel {
         let seed = vec![1u8; 32];
         let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
-        SignerRepoModel {
+        SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         }
@@ -195,7 +197,7 @@ mod tests {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
             gas_price: Some(20000000000),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             nonce: Some(0),
             value: U256::from(1000000000000000000u64),
             data: Some("0x".to_string()),

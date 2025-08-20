@@ -30,20 +30,17 @@ use crate::{
     constants::EVM_SMALLEST_UNIT_NAME,
     domain::{
         relayer::{Relayer, RelayerError},
-        BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, EvmNetwork,
-        JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult,
+        JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
         NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
         RpcErrorCodes, TransactionRepoModel, TransactionStatus,
     },
-    repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository, TransactionRepository,
-    },
+    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
         DataSignerTrait, EvmProvider, EvmProviderTrait, EvmSigner, TransactionCounterService,
         TransactionCounterServiceTrait,
@@ -51,44 +48,43 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use super::{
     create_error_response, create_success_response, map_provider_error, EvmTransactionValidator,
 };
 
 #[allow(dead_code)]
-pub struct EvmRelayer<P, R, N, T, J, S, C>
+pub struct EvmRelayer<P, RR, NR, TR, J, S, TCS>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: DataSignerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: DataSignerTrait + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
     signer: S,
     network: EvmNetwork,
     provider: P,
-    relayer_repository: Arc<R>,
-    network_repository: Arc<N>,
-    transaction_repository: Arc<T>,
-    transaction_counter_service: Arc<C>,
+    relayer_repository: Arc<RR>,
+    network_repository: Arc<NR>,
+    transaction_repository: Arc<TR>,
     job_producer: Arc<J>,
+    transaction_counter_service: Arc<TCS>,
 }
 
 #[allow(clippy::too_many_arguments)]
-impl<P, R, N, T, J, S, C> EvmRelayer<P, R, N, T, J, S, C>
+impl<P, RR, NR, TR, J, S, TCS> EvmRelayer<P, RR, NR, TR, J, S, TCS>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: DataSignerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: DataSignerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     /// Constructs a new `EvmRelayer` instance.
     ///
@@ -111,10 +107,10 @@ where
         signer: S,
         provider: P,
         network: EvmNetwork,
-        relayer_repository: Arc<R>,
-        network_repository: Arc<N>,
-        transaction_repository: Arc<T>,
-        transaction_counter_service: Arc<C>,
+        relayer_repository: Arc<RR>,
+        network_repository: Arc<NR>,
+        transaction_repository: Arc<TR>,
+        transaction_counter_service: Arc<TCS>,
         job_producer: Arc<J>,
     ) -> Result<Self, RelayerError> {
         Ok(Self {
@@ -142,12 +138,23 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
 
-        info!(
-            "Setting nonce: {} for relayer: {}",
-            on_chain_nonce, self.relayer.id
+        let transaction_counter_nonce = self
+            .transaction_counter_service
+            .get()
+            .await
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
+
+        let nonce = std::cmp::max(on_chain_nonce, transaction_counter_nonce);
+
+        debug!(
+            "Relayer: {} - On-chain nonce: {}, Transaction counter nonce: {}",
+            self.relayer.id, on_chain_nonce, transaction_counter_nonce
         );
 
-        self.transaction_counter_service.set(on_chain_nonce).await?;
+        info!("Setting nonce: {} for relayer: {}", nonce, self.relayer.id);
+
+        self.transaction_counter_service.set(nonce).await?;
 
         Ok(())
     }
@@ -197,26 +204,19 @@ where
 }
 
 // Define a concrete type alias for common usage
-pub type DefaultEvmRelayer<J> = EvmRelayer<
-    EvmProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryNetworkRepository,
-    InMemoryTransactionRepository,
-    J,
-    EvmSigner,
-    TransactionCounterService<InMemoryTransactionCounter>,
->;
+pub type DefaultEvmRelayer<J, T, RR, NR, TCR> =
+    EvmRelayer<EvmProvider, RR, NR, T, J, EvmSigner, TransactionCounterService<TCR>>;
 
 #[async_trait]
-impl<P, R, N, T, J, S, C> Relayer for EvmRelayer<P, R, N, T, J, S, C>
+impl<P, RR, NR, TR, J, S, TCS> Relayer for EvmRelayer<P, RR, NR, TR, J, S, TCS>
 where
     P: EvmProviderTrait + Send + Sync,
-    R: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync,
-    N: NetworkRepository + Send + Sync,
-    T: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync,
-    J: JobProducerTrait + Send + Sync,
-    S: DataSignerTrait + Send + Sync,
-    C: TransactionCounterServiceTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: DataSignerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
 {
     /// Processes a transaction request and creates a job for it.
     ///
@@ -556,6 +556,15 @@ where
         }
         Ok(())
     }
+
+    async fn sign_transaction(
+        &self,
+        _request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Transaction signing not supported for EVM".to_string(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -634,11 +643,12 @@ mod tests {
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
-                min_balance: 100000000000000000u128, // 0.1 ETH
+                min_balance: Some(100000000000000000u128), // 0.1 ETH
                 whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
                 gas_price_cap: Some(100000000000), // 100 Gwei
-                eip1559_pricing: Some(false),
-                private_transactions: false,
+                eip1559_pricing: Some(true),
+                private_transactions: Some(false),
+                gas_limit_estimation: Some(true),
             }),
             network_type: NetworkType::Evm,
             custom_rpc_urls: None,
@@ -711,7 +721,7 @@ mod tests {
             to: Some("0xRecipient".to_string()),
             value: U256::from(1000000000000000000u64),
             data: Some("0xData".to_string()),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             gas_price: Some(20000000000),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
@@ -816,6 +826,82 @@ mod tests {
         counter
             .expect_set()
             .returning(|_nonce| Box::pin(ready(Ok(()))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.sync_nonce().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_nonce_lower_on_chain_nonce() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(40u64))));
+
+        counter
+            .expect_set()
+            .with(eq(42u64))
+            .returning(|_nonce| Box::pin(ready(Ok(()))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.sync_nonce().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_sync_nonce_lower_transaction_counter_nonce() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(42u64))));
+
+        counter
+            .expect_set()
+            .with(eq(42u64))
+            .returning(|_nonce| Box::pin(ready(Ok(()))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(40u64)))));
 
         let relayer = EvmRelayer::new(
             relayer_model,

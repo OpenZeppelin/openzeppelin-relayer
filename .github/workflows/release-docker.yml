@@ -17,6 +17,10 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_CHANNEL: '#oss-releases'
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911  # v2.13.0
+        with:
+          egress-policy: audit
       - name: Slack notification
         uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
         with:
@@ -76,7 +80,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       - name: Attest
-        uses: actions/attest-build-provenance@db473fddc028af60658334401dc6fa3ffd8669fd  # v2.3.0
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         id: attest
         with:
           subject-name: docker.io/${{ env.DOCKERHUB_IMAGE }}
@@ -84,7 +88,7 @@ jobs:
           push-to-registry: false
           github-token: ${{ steps.gh-app-token.outputs.token }}
       - name: Docker Hub Description
-        uses: peter-evans/dockerhub-description@d2ae8d7d33235a2c36eca5780f07651ab62f54e4
+        uses: peter-evans/dockerhub-description@432a30c9e07499fd01da9f8a49f0faf9e0ca5b77  # v4.0.2
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PAT }}

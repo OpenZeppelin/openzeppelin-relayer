@@ -1,0 +1,85 @@
+{
+  "relayers": [
+    {
+      "id": "launchtube-fund",
+      "name": "LaunchTube Fund Account",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "launchtube-fund-signer",
+      "policies": {
+        "concurrent_transactions": true
+      }
+    },
+    {
+      "id": "launchtube-seq-001",
+      "name": "LaunchTube Sequence 001",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "launchtube-seq-001-signer"
+    },
+    {
+      "id": "launchtube-seq-002",
+      "name": "LaunchTube Sequence 002",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "launchtube-seq-002-signer"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "launchtube-fund-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/launchtube-fund.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_FUND"
+        }
+      }
+    },
+    {
+      "id": "launchtube-seq-001-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/launchtube-seq-001.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_SEQ_001"
+        }
+      }
+    },
+    {
+      "id": "launchtube-seq-002-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/launchtube-seq-002.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_SEQ_002"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": [
+    {
+      "id": "launchtube-plugin",
+      "path": "launchtube/index.ts",
+      "timeout": 30
+    }
+  ]
+}

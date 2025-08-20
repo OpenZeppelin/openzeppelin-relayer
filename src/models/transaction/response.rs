@@ -1,6 +1,9 @@
 use crate::{
-    models::{NetworkTransactionData, TransactionRepoModel, TransactionStatus, U256},
-    utils::{deserialize_optional_u128, deserialize_optional_u64, deserialize_u64},
+    models::{
+        evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, TransactionRepoModel,
+        TransactionStatus, U256,
+    },
+    utils::{deserialize_optional_u128, deserialize_optional_u64, serialize_optional_u128},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -8,10 +11,10 @@ use utoipa::ToSchema;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(untagged)]
 pub enum TransactionResponse {
-    Evm(EvmTransactionResponse),
-    Solana(SolanaTransactionResponse),
-    Stellar(StellarTransactionResponse),
-    Midnight(MidnightTransactionResponse),
+    Evm(Box<EvmTransactionResponse>),
+    Solana(Box<SolanaTransactionResponse>),
+    Stellar(Box<StellarTransactionResponse>),
+    Midnight(Box<MidnightTransactionResponse>),
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -26,11 +29,15 @@ pub struct EvmTransactionResponse {
     pub sent_at: Option<String>,
     #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
-    #[serde(deserialize_with = "deserialize_optional_u128", default)]
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
     #[schema(nullable = false)]
     pub gas_price: Option<u128>,
-    #[serde(deserialize_with = "deserialize_u64")]
-    pub gas_limit: u64,
+    #[serde(deserialize_with = "deserialize_optional_u64", default)]
+    pub gas_limit: Option<u64>,
     #[serde(deserialize_with = "deserialize_optional_u64", default)]
     #[schema(nullable = false)]
     pub nonce: Option<u64>,
@@ -40,21 +47,40 @@ pub struct EvmTransactionResponse {
     #[schema(nullable = false)]
     pub to: Option<String>,
     pub relayer_id: String,
+    #[schema(nullable = false)]
+    pub data: Option<String>,
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
+    #[schema(nullable = false)]
+    pub max_fee_per_gas: Option<u128>,
+    #[serde(
+        serialize_with = "serialize_optional_u128",
+        deserialize_with = "deserialize_optional_u128",
+        default
+    )]
+    #[schema(nullable = false)]
+    pub max_priority_fee_per_gas: Option<u128>,
+    pub signature: Option<EvmTransactionDataSignature>,
+    pub speed: Option<Speed>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct SolanaTransactionResponse {
     pub id: String,
     #[schema(nullable = false)]
-    pub hash: Option<String>,
+    pub signature: Option<String>,
     pub status: TransactionStatus,
+    pub status_reason: Option<String>,
     pub created_at: String,
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
     #[schema(nullable = false)]
     pub confirmed_at: Option<String>,
-    pub recent_blockhash: String,
-    pub fee_payer: String,
+    #[schema(nullable = false)]
+    pub transaction: String,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -63,6 +89,7 @@ pub struct StellarTransactionResponse {
     #[schema(nullable = false)]
     pub hash: Option<String>,
     pub status: TransactionStatus,
+    pub status_reason: Option<String>,
     pub created_at: String,
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
@@ -94,7 +121,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
     fn from(model: TransactionRepoModel) -> Self {
         match model.network_data {
             NetworkTransactionData::Evm(evm_data) => {
-                TransactionResponse::Evm(EvmTransactionResponse {
+                TransactionResponse::Evm(Box::new(EvmTransactionResponse {
                     id: model.id,
                     hash: evm_data.hash,
                     status: model.status,
@@ -109,35 +136,41 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     from: evm_data.from,
                     to: evm_data.to,
                     relayer_id: model.relayer_id,
-                })
+                    data: evm_data.data,
+                    max_fee_per_gas: evm_data.max_fee_per_gas,
+                    max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
+                    signature: evm_data.signature,
+                    speed: evm_data.speed,
+                }))
             }
             NetworkTransactionData::Solana(solana_data) => {
-                TransactionResponse::Solana(SolanaTransactionResponse {
+                TransactionResponse::Solana(Box::new(SolanaTransactionResponse {
                     id: model.id,
-                    hash: solana_data.hash,
+                    transaction: solana_data.transaction,
                     status: model.status,
+                    status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
-                    recent_blockhash: solana_data.recent_blockhash.unwrap_or_default(),
-                    fee_payer: solana_data.fee_payer,
-                })
+                    signature: solana_data.signature,
+                }))
             }
             NetworkTransactionData::Stellar(stellar_data) => {
-                TransactionResponse::Stellar(StellarTransactionResponse {
+                TransactionResponse::Stellar(Box::new(StellarTransactionResponse {
                     id: model.id,
                     hash: stellar_data.hash,
                     status: model.status,
+                    status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
                     source_account: stellar_data.source_account,
                     fee: stellar_data.fee.unwrap_or(0),
                     sequence_number: stellar_data.sequence_number.unwrap_or(0),
-                })
+                }))
             }
             NetworkTransactionData::Midnight(midnight_data) => {
-                TransactionResponse::Midnight(MidnightTransactionResponse {
+                TransactionResponse::Midnight(Box::new(MidnightTransactionResponse {
                     id: model.id,
                     hash: midnight_data.hash,
                     pallet_hash: midnight_data.pallet_hash,
@@ -146,7 +179,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
-                })
+                }))
             }
         }
     }
@@ -177,7 +210,7 @@ mod tests {
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 hash: Some("0xabc123".to_string()),
                 gas_price: Some(20_000_000_000),
-                gas_limit: 21000,
+                gas_limit: Some(21000),
                 nonce: Some(5),
                 value: U256::from(1000000000000000000u128), // 1 ETH
                 from: "0xsender".to_string(),
@@ -194,6 +227,7 @@ mod tests {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -207,7 +241,7 @@ mod tests {
                 assert_eq!(evm.sent_at, Some(now.clone()));
                 assert_eq!(evm.confirmed_at, None);
                 assert_eq!(evm.gas_price, Some(20_000_000_000));
-                assert_eq!(evm.gas_limit, 21000);
+                assert_eq!(evm.gas_limit, Some(21000));
                 assert_eq!(evm.nonce, Some(5));
                 assert_eq!(evm.value, U256::from(1000000000000000000u128));
                 assert_eq!(evm.from, "0xsender");
@@ -232,15 +266,14 @@ mod tests {
             priced_at: None,
             hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                hash: Some("solana_hash_123".to_string()),
-                recent_blockhash: Some("blockhash123".to_string()),
-                fee_payer: "fee_payer_pubkey".to_string(),
-                instructions: vec![],
+                transaction: "transaction_123".to_string(),
+                signature: Some("signature_123".to_string()),
             }),
             valid_until: None,
             network_type: NetworkType::Solana,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -248,13 +281,12 @@ mod tests {
         match response {
             TransactionResponse::Solana(solana) => {
                 assert_eq!(solana.id, model.id);
-                assert_eq!(solana.hash, Some("solana_hash_123".to_string()));
                 assert_eq!(solana.status, TransactionStatus::Confirmed);
                 assert_eq!(solana.created_at, now);
                 assert_eq!(solana.sent_at, Some(now.clone()));
                 assert_eq!(solana.confirmed_at, Some(now.clone()));
-                assert_eq!(solana.recent_blockhash, "blockhash123");
-                assert_eq!(solana.fee_payer, "fee_payer_pubkey");
+                assert_eq!(solana.transaction, "transaction_123");
+                assert_eq!(solana.signature, Some("signature_123".to_string()));
             }
             _ => panic!("Expected SolanaTransactionResponse"),
         }
@@ -290,6 +322,7 @@ mod tests {
             network_type: NetworkType::Stellar,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -343,6 +376,7 @@ mod tests {
             network_type: NetworkType::Stellar,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -377,22 +411,22 @@ mod tests {
             priced_at: None,
             hashes: vec![],
             network_data: NetworkTransactionData::Solana(SolanaTransactionData {
-                hash: None,
-                recent_blockhash: None, // Testing the default case
-                fee_payer: "fee_payer_pubkey".to_string(),
-                instructions: vec![],
+                transaction: "transaction_123".to_string(),
+                signature: None,
             }),
             valid_until: None,
             network_type: NetworkType::Solana,
             noop_count: None,
             is_canceled: Some(false),
+            delete_at: None,
         };
 
         let response = TransactionResponse::from(model);
 
         match response {
             TransactionResponse::Solana(solana) => {
-                assert_eq!(solana.recent_blockhash, ""); // Should be default empty string
+                assert_eq!(solana.transaction, "transaction_123");
+                assert_eq!(solana.signature, None);
             }
             _ => panic!("Expected SolanaTransactionResponse"),
         }

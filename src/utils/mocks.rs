@@ -3,23 +3,48 @@ pub mod mockutils {
     use std::sync::Arc;
 
     use alloy::primitives::U256;
+    use chrono::Utc;
     use secrets::SecretVec;
 
     use crate::{
-        config::{EvmNetworkConfig, NetworkConfigCommon},
+        config::{
+            EvmNetworkConfig, NetworkConfigCommon, RepositoryStorageType, ServerConfig,
+            SolanaNetworkConfig,
+        },
         jobs::MockJobProducerTrait,
         models::{
-            AppState, EvmTransactionRequest, LocalSignerConfig, NetworkRepoModel, NetworkType,
-            PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfig,
-            SignerRepoModel,
+            AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfigStorage,
+            NetworkConfigData, NetworkRepoModel, NetworkTransactionData, NetworkType,
+            NotificationRepoModel, PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy,
+            RelayerRepoModel, RelayerSolanaPolicy, SecretString, SignerConfigStorage,
+            SignerRepoModel, SolanaTransactionData, TransactionRepoModel, TransactionStatus,
         },
         repositories::{
-            InMemoryNetworkRepository, InMemoryNotificationRepository, InMemoryPluginRepository,
-            InMemoryRelayerRepository, InMemorySignerRepository, InMemorySyncState,
-            InMemoryTransactionCounter, InMemoryTransactionRepository, PluginRepositoryTrait,
-            RelayerRepositoryStorage, Repository,
+            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
+            PluginRepositoryTrait, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
+            Repository, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
     };
+
+    pub fn create_mock_solana_relayer(id: String, paused: bool) -> RelayerRepoModel {
+        RelayerRepoModel {
+            id: id.clone(),
+            name: format!("Relayer {}", id.clone()),
+            network: "test".to_string(),
+            paused,
+            network_type: NetworkType::Solana,
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                min_balance: Some(0),
+                ..Default::default()
+            }),
+            signer_id: "test".to_string(),
+            address: "0x".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+        }
+    }
 
     pub fn create_mock_relayer(id: String, paused: bool) -> RelayerRepoModel {
         RelayerRepoModel {
@@ -32,14 +57,24 @@ pub mod mockutils {
                 gas_price_cap: None,
                 whitelist_receivers: None,
                 eip1559_pricing: Some(false),
-                private_transactions: false,
-                min_balance: 0,
+                private_transactions: Some(false),
+                min_balance: Some(0),
+                gas_limit_estimation: Some(false),
             }),
             signer_id: "test".to_string(),
-            address: "0x".to_string(),
+            address: "0x742d35Cc6634C0532925a3b8D8C2e48a73F6ba2E".to_string(),
             notification_id: None,
             system_disabled: false,
             custom_rpc_urls: None,
+        }
+    }
+
+    pub fn create_mock_notification(id: String) -> NotificationRepoModel {
+        NotificationRepoModel {
+            id,
+            notification_type: crate::models::NotificationType::Webhook,
+            url: "https://example.com/webhook".to_string(),
+            signing_key: None,
         }
     }
 
@@ -48,7 +83,7 @@ pub mod mockutils {
         let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
         SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig { raw_key }),
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage { raw_key }),
         }
     }
 
@@ -75,39 +110,117 @@ pub mod mockutils {
         }
     }
 
+    pub fn create_mock_solana_network() -> NetworkRepoModel {
+        NetworkRepoModel {
+            id: "test".to_string(),
+            name: "test".to_string(),
+            network_type: NetworkType::Solana,
+            config: NetworkConfigData::Solana(SolanaNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "devnet".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["http://localhost:8545".to_string()]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(1000),
+                    is_testnet: Some(true),
+                    tags: None,
+                },
+            }),
+        }
+    }
+
+    pub fn create_mock_transaction() -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_data: NetworkTransactionData::Evm(EvmTransactionData::default()),
+            priced_at: None,
+            hashes: vec![],
+            network_type: NetworkType::Evm,
+            noop_count: None,
+            is_canceled: None,
+        }
+    }
+
+    pub fn create_mock_solana_transaction() -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "test".to_string(),
+            relayer_id: "test".to_string(),
+            status: TransactionStatus::Pending,
+            status_reason: None,
+            created_at: Utc::now().to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            network_data: NetworkTransactionData::Solana(SolanaTransactionData {
+                transaction: "test".to_string(),
+                signature: None,
+            }),
+            priced_at: None,
+            hashes: vec![],
+            network_type: NetworkType::Solana,
+            noop_count: None,
+            is_canceled: None,
+            delete_at: None,
+        }
+    }
+
     pub async fn create_mock_app_state(
         relayers: Option<Vec<RelayerRepoModel>>,
         signers: Option<Vec<SignerRepoModel>>,
         networks: Option<Vec<NetworkRepoModel>>,
         plugins: Option<Vec<PluginModel>>,
-    ) -> AppState<MockJobProducerTrait> {
-        let relayer_repository = Arc::new(RelayerRepositoryStorage::in_memory(
-            InMemoryRelayerRepository::default(),
-        ));
+        transactions: Option<Vec<TransactionRepoModel>>,
+    ) -> AppState<
+        MockJobProducerTrait,
+        RelayerRepositoryStorage,
+        TransactionRepositoryStorage,
+        NetworkRepositoryStorage,
+        NotificationRepositoryStorage,
+        SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage,
+        RelayerStateRepositoryStorage,
+        PluginRepositoryStorage,
+    > {
+        let relayer_repository = Arc::new(RelayerRepositoryStorage::new_in_memory());
         if let Some(relayers) = relayers {
             for relayer in relayers {
                 relayer_repository.create(relayer).await.unwrap();
             }
         }
 
-        let signer_repository = Arc::new(InMemorySignerRepository::default());
+        let signer_repository = Arc::new(SignerRepositoryStorage::new_in_memory());
         if let Some(signers) = signers {
             for signer in signers {
                 signer_repository.create(signer).await.unwrap();
             }
         }
 
-        let network_repository = Arc::new(InMemoryNetworkRepository::default());
+        let network_repository = Arc::new(NetworkRepositoryStorage::new_in_memory());
         if let Some(networks) = networks {
             for network in networks {
                 network_repository.create(network).await.unwrap();
             }
         }
 
-        let plugin_repository = Arc::new(InMemoryPluginRepository::default());
+        let plugin_repository = Arc::new(PluginRepositoryStorage::new_in_memory());
         if let Some(plugins) = plugins {
             for plugin in plugins {
                 plugin_repository.add(plugin).await.unwrap();
+            }
+        }
+
+        let transaction_repository = Arc::new(TransactionRepositoryStorage::new_in_memory());
+        if let Some(transactions) = transactions {
+            for transaction in transactions {
+                transaction_repository.create(transaction).await.unwrap();
             }
         }
 
@@ -135,14 +248,16 @@ pub mod mockutils {
 
         AppState {
             relayer_repository,
-            transaction_repository: Arc::new(InMemoryTransactionRepository::default()),
+            transaction_repository,
             signer_repository,
-            notification_repository: Arc::new(InMemoryNotificationRepository::default()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
             network_repository,
-            transaction_counter_store: Arc::new(InMemoryTransactionCounter::default()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
-            sync_state_store: Arc::new(InMemorySyncState::default()),
         }
     }
 
@@ -151,12 +266,39 @@ pub mod mockutils {
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: U256::from(0),
             data: Some("0x".to_string()),
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             gas_price: Some(0),
             speed: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             valid_until: None,
+        }
+    }
+
+    pub fn create_test_server_config(storage_type: RepositoryStorageType) -> ServerConfig {
+        ServerConfig {
+            host: "localhost".to_string(),
+            port: 8080,
+            redis_url: "redis://localhost:6379".to_string(),
+            config_file_path: "./config/test.json".to_string(),
+            api_key: SecretString::new("test_api_key_1234567890_test_key_32"),
+            rate_limit_requests_per_second: 100,
+            rate_limit_burst_size: 300,
+            metrics_port: 8081,
+            enable_swagger: false,
+            redis_connection_timeout_ms: 5000,
+            redis_key_prefix: "test-oz-relayer".to_string(),
+            rpc_timeout_ms: 10000,
+            provider_max_retries: 3,
+            provider_retry_base_delay_ms: 100,
+            provider_retry_max_delay_ms: 2000,
+            provider_max_failovers: 3,
+            repository_storage_type: storage_type,
+            reset_storage_on_start: false,
+            storage_encryption_key: Some(SecretString::new(
+                "test_encryption_key_1234567890_test_key_32",
+            )),
+            transaction_expiration_hours: 4,
         }
     }
 }

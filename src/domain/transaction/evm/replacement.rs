@@ -3,6 +3,7 @@
 //! and handling transaction compatibility checks.
 
 use crate::{
+    constants::{DEFAULT_EVM_GAS_PRICE_CAP, DEFAULT_GAS_LIMIT},
     domain::transaction::evm::price_calculator::{calculate_min_bump, PriceCalculatorTrait},
     models::{
         EvmTransactionData, EvmTransactionDataTrait, RelayerRepoModel, TransactionError, U256,
@@ -137,7 +138,7 @@ pub fn validate_explicit_price_bump(
         .policies
         .get_evm_policy()
         .gas_price_cap
-        .unwrap_or(u128::MAX);
+        .unwrap_or(DEFAULT_EVM_GAS_PRICE_CAP);
 
     // Check if gas prices exceed gas price cap
     if let Some(gas_price) = new_evm_data.gas_price {
@@ -187,7 +188,11 @@ pub fn validate_explicit_price_bump(
     let value = new_evm_data.value;
     let is_eip1559 = price_params.max_fee_per_gas.is_some();
 
-    price_params.total_cost = price_params.calculate_total_cost(is_eip1559, gas_limit, value);
+    price_params.total_cost = price_params.calculate_total_cost(
+        is_eip1559,
+        gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
+        value,
+    );
     price_params.is_min_bumped = Some(true);
 
     Ok(price_params)
@@ -421,7 +426,7 @@ mod tests {
     fn create_legacy_transaction_data() -> EvmTransactionData {
         EvmTransactionData {
             gas_price: Some(20_000_000_000), // 20 gwei
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             nonce: Some(1),
             value: U256::from(1000000000000000000u128), // 1 ETH
             data: Some("0x".to_string()),
@@ -440,7 +445,7 @@ mod tests {
     fn create_eip1559_transaction_data() -> EvmTransactionData {
         EvmTransactionData {
             gas_price: None,
-            gas_limit: 21000,
+            gas_limit: Some(21000),
             nonce: Some(1),
             value: U256::from(1000000000000000000u128), // 1 ETH
             data: Some("0x".to_string()),

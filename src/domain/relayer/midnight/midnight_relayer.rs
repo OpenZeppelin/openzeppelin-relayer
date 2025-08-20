@@ -24,7 +24,7 @@ use crate::{
     constants::MIDNIGHT_SMALLEST_UNIT_NAME,
     domain::{
         stellar::next_sequence_u64, BalanceResponse, SignDataRequest, SignDataResponse,
-        SignTypedDataRequest,
+        SignTransactionExternalResponse, SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -34,9 +34,8 @@ use crate::{
         RepositoryError, TransactionRepoModel, TransactionStatus,
     },
     repositories::{
-        InMemoryNetworkRepository, InMemoryRelayerRepository, InMemoryTransactionCounter,
-        InMemoryTransactionRepository, NetworkRepository, RelayerRepository,
-        RelayerRepositoryStorage, Repository, TransactionRepository,
+        NetworkRepository, RelayerRepository, RelayerStateRepositoryStorage, Repository,
+        TransactionRepository,
     },
     services::{
         sync::midnight::handler::{QuickSyncStrategy, SyncManager, SyncManagerTrait},
@@ -142,16 +141,17 @@ where
     job_producer: Arc<J>,
 }
 
-pub type DefaultMidnightRelayer<J> = MidnightRelayer<
-    MidnightProvider,
-    RelayerRepositoryStorage<InMemoryRelayerRepository>,
-    InMemoryNetworkRepository,
-    InMemoryTransactionRepository,
-    J,
-    TransactionCounterService<InMemoryTransactionCounter>,
-    SyncManager<QuickSyncStrategy>,
-    MidnightSigner,
->;
+pub type DefaultMidnightRelayer<J, TR, NR, RR, TCR, RSR = RelayerStateRepositoryStorage> =
+    MidnightRelayer<
+        MidnightProvider,
+        RR,
+        NR,
+        TR,
+        J,
+        TransactionCounterService<TCR>,
+        SyncManager<QuickSyncStrategy, RSR>,
+        MidnightSigner,
+    >;
 
 impl<P, R, N, T, J, C, S, SR> MidnightRelayer<P, R, N, T, J, C, S, SR>
 where
@@ -460,6 +460,15 @@ where
         );
         Ok(())
     }
+
+    async fn sign_transaction(
+        &self,
+        _request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Transaction signing not supported for Midnight".to_string(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -470,8 +479,8 @@ mod tests {
         constants::MIDNIGHT_SMALLEST_UNIT_NAME,
         jobs::MockJobProducerTrait,
         models::{
-            LocalSignerConfig, NetworkConfigData, NetworkRepoModel, NetworkType,
-            RelayerMidnightPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfig,
+            LocalSignerConfigStorage, NetworkConfigData, NetworkRepoModel, NetworkType,
+            RelayerMidnightPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfigStorage,
             SignerRepoModel,
         },
         repositories::{
@@ -510,13 +519,19 @@ mod tests {
 
     impl Default for TestCtx {
         fn default() -> Self {
+            // Set required environment variable for Midnight tests
+            std::env::set_var(
+                "MIDNIGHT_LEDGER_TEST_STATIC_DIR",
+                "/tmp/midnight-test-static",
+            );
+
             let network_repository = Arc::new(InMemoryNetworkRepository::new());
             let signer_repository = Arc::new(InMemorySignerRepository::new());
 
             // Create a 32-byte test key
             let signer_model = SignerRepoModel {
                 id: "signer-id".to_string(),
-                config: SignerConfig::Test(LocalSignerConfig {
+                config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                     raw_key: SecretVec::new(32, |buffer| {
                         buffer[0] = 1; // Make it non-zero
                     }),
@@ -610,9 +625,11 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer =
-            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
-                .unwrap();
+        let signer = MidnightSignerFactory::create_midnight_signer(
+            &ctx.signer_model.into(),
+            NetworkId::TestNet,
+        )
+        .unwrap();
 
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
@@ -649,9 +666,11 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer =
-            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
-                .unwrap();
+        let signer = MidnightSignerFactory::create_midnight_signer(
+            &ctx.signer_model.into(),
+            NetworkId::TestNet,
+        )
+        .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider,
@@ -692,9 +711,11 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let counter = MockTransactionCounterServiceTrait::new();
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer =
-            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
-                .unwrap();
+        let signer = MidnightSignerFactory::create_midnight_signer(
+            &ctx.signer_model.into(),
+            NetworkId::TestNet,
+        )
+        .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model.clone(),
             provider,
@@ -726,9 +747,11 @@ mod tests {
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
         let counter_mock = MockTransactionCounterServiceTrait::new();
-        let signer =
-            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
-                .unwrap();
+        let signer = MidnightSignerFactory::create_midnight_signer(
+            &ctx.signer_model.into(),
+            NetworkId::TestNet,
+        )
+        .unwrap();
         provider_mock
             .expect_get_nonce()
             .times(1)
@@ -818,9 +841,11 @@ mod tests {
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
         let counter_mock = MockTransactionCounterServiceTrait::new();
-        let signer =
-            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
-                .unwrap();
+        let signer = MidnightSignerFactory::create_midnight_signer(
+            &ctx.signer_model.into(),
+            NetworkId::TestNet,
+        )
+        .unwrap();
         provider_mock
             .expect_get_nonce()
             .with(eq(relayer_model.address.clone()))
@@ -873,9 +898,11 @@ mod tests {
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer =
-            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
-                .unwrap();
+        let signer = MidnightSignerFactory::create_midnight_signer(
+            &ctx.signer_model.into(),
+            NetworkId::TestNet,
+        )
+        .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model,
             provider,
@@ -915,9 +942,11 @@ mod tests {
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
         let sync_manager = TestCtx::create_mock_sync_manager();
-        let signer =
-            MidnightSignerFactory::create_midnight_signer(&ctx.signer_model, NetworkId::TestNet)
-                .unwrap();
+        let signer = MidnightSignerFactory::create_midnight_signer(
+            &ctx.signer_model.into(),
+            NetworkId::TestNet,
+        )
+        .unwrap();
         let relayer = MidnightRelayer::new(
             relayer_model,
             provider,

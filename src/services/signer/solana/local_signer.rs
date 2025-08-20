@@ -23,7 +23,10 @@ use crate::{
         SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
         SignTypedDataRequest,
     },
-    models::{Address, NetworkTransactionData, SignerError, SignerRepoModel, TransactionRepoModel},
+    models::{
+        Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError,
+        TransactionRepoModel,
+    },
     services::Signer,
 };
 
@@ -34,7 +37,7 @@ pub struct LocalSigner {
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: &SignerRepoModel) -> Result<Self, SignerError> {
+    pub fn new(signer_model: &SignerDomainModel) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_local()
@@ -44,7 +47,7 @@ impl LocalSigner {
             let key_bytes = config.raw_key.borrow();
 
             Keypair::from_seed(&key_bytes).map_err(|e| {
-                SignerError::Configuration(format!("Failed to create signer: {}", e))
+                SignerError::Configuration(format!("Failed to create local signer: {}", e))
             })?
         };
 
@@ -86,7 +89,10 @@ impl Signer for LocalSigner {
 #[cfg(test)]
 mod tests {
     use crate::{
-        models::{LocalSignerConfig, SignerConfig, SignerType, SolanaTransactionData},
+        models::{
+            LocalSignerConfig, Signer as SignerDomainModel, SignerConfig, SignerType,
+            SolanaTransactionData,
+        },
         services::Signer,
     };
 
@@ -101,7 +107,7 @@ mod tests {
     }
 
     fn create_testing_signer() -> LocalSigner {
-        let model = SignerRepoModel {
+        let model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: valid_seed(),
@@ -122,7 +128,7 @@ mod tests {
     fn test_new_local_signer_invalid_keypair() {
         let seed = vec![1u8; 10];
         let raw_key = SecretVec::new(10, |v| v.copy_from_slice(&seed));
-        let model = SignerRepoModel {
+        let model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         };
@@ -131,7 +137,7 @@ mod tests {
         assert!(result.is_err());
         match result.err() {
             Some(SignerError::Configuration(msg)) => {
-                assert!(msg.contains("Failed to create signer"));
+                assert!(msg.contains("Failed to create local signer"));
             }
             _ => panic!("Expected SignerError::Configuration"),
         }
@@ -180,7 +186,7 @@ mod tests {
     #[tokio::test]
     async fn test_pubkey_matches_keypair_pubkey() {
         let seed = valid_seed();
-        let model = SignerRepoModel {
+        let model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
                 raw_key: seed.clone(),
@@ -207,10 +213,8 @@ mod tests {
     async fn test_sign_transaction_not_implemented() {
         let local_signer = create_testing_signer();
         let transaction_data = NetworkTransactionData::Solana(SolanaTransactionData {
-            fee_payer: "test".to_string(),
-            hash: None,
-            recent_blockhash: None,
-            instructions: vec![],
+            transaction: "transaction_123".to_string(),
+            signature: None,
         });
 
         let result = local_signer.sign_transaction(transaction_data).await;

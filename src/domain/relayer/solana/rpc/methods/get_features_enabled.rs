@@ -15,18 +15,20 @@
 //! (e.g., "gasless").
 use crate::{
     jobs::JobProducerTrait,
-    models::{GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult},
+    models::{GetFeaturesEnabledRequestParams, GetFeaturesEnabledResult, TransactionRepoModel},
+    repositories::{Repository, TransactionRepository},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     pub(crate) async fn get_features_enabled_impl(
         &self,
@@ -45,14 +47,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_features_enabled() {
-        let (relayer, signer, provider, jupiter_service, _, job_producer) = setup_test_context();
+        let (relayer, signer, provider, jupiter_service, _, job_producer, network) =
+            setup_test_context();
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let result = rpc

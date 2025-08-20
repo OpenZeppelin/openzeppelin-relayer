@@ -1,9 +1,10 @@
 import '@jest/globals';
-import net from 'node:net';
-import { PluginAPI, runPlugin } from '../../lib/plugin';
+
+import { DefaultPluginAPI, PluginAPI } from '../../lib/plugin';
+import { NetworkTransactionRequest, Speed } from '@openzeppelin/relayer-sdk';
+
 import { LogInterceptor } from '../../lib/logger';
-import { NetworkTransactionRequest } from '@openzeppelin/relayer-sdk/dist/src/models/network-transaction-request';
-import { Speed } from '@openzeppelin/relayer-sdk/dist/src/models/speed';
+import net from 'node:net';
 
 jest.mock('../../lib/logger');
 const MockedLogInterceptor = LogInterceptor as jest.MockedClass<typeof LogInterceptor>;
@@ -15,7 +16,7 @@ beforeAll(() => {
 });
 
 describe('PluginAPI', () => {
-  let pluginAPI: PluginAPI;
+  let pluginAPI: DefaultPluginAPI;
   let mockSocket: jest.Mocked<net.Socket>;
   let mockWrite: jest.Mock;
   let mockEnd: jest.Mock;
@@ -44,7 +45,7 @@ describe('PluginAPI', () => {
 
   describe('constructor', () => {
     it('should create socket connection with provided path', () => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
 
       expect(net.createConnection).toHaveBeenCalledWith('/tmp/test.sock');
       expect(mockSocket.on).toHaveBeenCalledWith('connect', expect.any(Function));
@@ -53,14 +54,14 @@ describe('PluginAPI', () => {
     });
 
     it('should initialize pending map', () => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
 
       expect(pluginAPI.pending).toBeInstanceOf(Map);
       expect(pluginAPI.pending.size).toBe(0);
     });
 
     it('should set up connection promise', () => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
 
       expect((pluginAPI as any)._connectionPromise).toBeInstanceOf(Promise);
     });
@@ -68,7 +69,7 @@ describe('PluginAPI', () => {
 
   describe('useRelayer', () => {
     beforeEach(() => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
     });
 
     it('should return relayer object with sendTransaction method', () => {
@@ -81,7 +82,7 @@ describe('PluginAPI', () => {
 
   describe('_send', () => {
     beforeEach(() => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
       // Mock connection as established
       (pluginAPI as any)._connected = true;
     });
@@ -230,7 +231,7 @@ describe('PluginAPI', () => {
 
   describe('close', () => {
     beforeEach(() => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
     });
 
     it('should end socket connection', () => {
@@ -241,7 +242,7 @@ describe('PluginAPI', () => {
 
   describe('closeErrored', () => {
     beforeEach(() => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
     });
 
     it('should destroy socket with error', () => {
@@ -253,7 +254,7 @@ describe('PluginAPI', () => {
 
   describe('integration with relayer.sendTransaction', () => {
     beforeEach(() => {
-      pluginAPI = new PluginAPI('/tmp/test.sock');
+      pluginAPI = new DefaultPluginAPI('/tmp/test.sock');
       (pluginAPI as any)._connected = true;
     });
 

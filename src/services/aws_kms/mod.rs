@@ -38,7 +38,10 @@ use aws_sdk_kms::{
     types::{MessageType, SigningAlgorithmSpec},
     Client,
 };
+use once_cell::sync::Lazy;
 use serde::Serialize;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 
 use crate::{
     models::{Address, AwsKmsSignerConfig},
@@ -112,6 +115,10 @@ mock! {
 
 }
 
+// Global cache - HashMap keyed by kms_key_id
+static KMS_DER_PK_CACHE: Lazy<RwLock<HashMap<String, Vec<u8>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
 #[derive(Debug, Clone)]
 pub struct AwsKmsClient {
     inner: Client,
@@ -120,6 +127,16 @@ pub struct AwsKmsClient {
 #[async_trait]
 impl AwsKmsK256 for AwsKmsClient {
     async fn get_der_public_key<'a, 'b>(&'a self, key_id: &'b str) -> AwsKmsResult<Vec<u8>> {
+        // Try cache first with minimal lock time
+        let cached = {
+            let cache_read = KMS_DER_PK_CACHE.read().await;
+            cache_read.get(key_id).cloned()
+        };
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
+
+        // Fetch from AWS KMS
         let get_output = self
             .inner
             .get_public_key()
@@ -134,6 +151,11 @@ impl AwsKmsK256 for AwsKmsClient {
                 "No public key blob found".to_string(),
             ))?
             .into_inner();
+
+        // Cache the result
+        let mut cache_write = KMS_DER_PK_CACHE.write().await;
+        cache_write.insert(key_id.to_string(), der_pk_blob.clone());
+        drop(cache_write);
 
         Ok(der_pk_blob)
     }
@@ -216,9 +238,13 @@ impl<T: AwsKmsK256 + Clone> AwsKmsService<T> {
         let der_signature = self.client.sign_digest(&self.kms_key_id, digest).await?;
 
         // Parse DER into Secp256k1 format
-        let rs = k256::ecdsa::Signature::from_der(&der_signature)
+        let mut rs = k256::ecdsa::Signature::from_der(&der_signature)
             .map_err(|e| AwsKmsError::ParseError(e.to_string()))?;
 
+        // Normalize to low-s if necessary
+        if let Some(normalized) = rs.normalize_s() {
+            rs = normalized;
+        }
         let der_pk = self.client.get_der_public_key(&self.kms_key_id).await?;
 
         // Extract public key from AWS KMS and convert it to an uncompressed 64 pk
