@@ -55,11 +55,12 @@ impl MidnightNetworkConfig {
         })?;
 
         // Validate network_id if provided
+        // TODO: Add mainnet and other supported networks once announced
         match self.common.network.as_str() {
-            "mainnet" | "testnet" | "devnet" => {}
+            "testnet" => {}
             _ => {
                 return Err(ConfigFileError::InvalidFormat(format!(
-                    "Invalid network_id: {}. Must be one of: mainnet, testnet, devnet",
+                    "Invalid network_id: {}. Must be one of: testnet",
                     self.common.network
                 )))
             }

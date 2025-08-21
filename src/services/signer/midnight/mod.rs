@@ -26,14 +26,13 @@ pub trait MidnightSignerTrait: Signer {
 pub enum MidnightSigner {
     Local(LocalSigner),
     Vault(LocalSigner),
-    VaultCloud(LocalSigner),
 }
 
 #[async_trait]
 impl Signer for MidnightSigner {
     async fn address(&self) -> Result<Address, SignerError> {
         match self {
-            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.address().await,
+            Self::Local(s) | Self::Vault(s) => s.address().await,
         }
     }
 
@@ -42,7 +41,7 @@ impl Signer for MidnightSigner {
         tx: NetworkTransactionData,
     ) -> Result<SignTransactionResponse, SignerError> {
         match self {
-            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.sign_transaction(tx).await,
+            Self::Local(s) | Self::Vault(s) => s.sign_transaction(tx).await,
         }
     }
 }
@@ -50,7 +49,7 @@ impl Signer for MidnightSigner {
 impl MidnightSignerTrait for MidnightSigner {
     fn wallet_seed(&self) -> &midnight_node_ledger_helpers::WalletSeed {
         match self {
-            Self::Local(s) | Self::Vault(s) | Self::VaultCloud(s) => s.wallet_seed(),
+            Self::Local(s) | Self::Vault(s) => s.wallet_seed(),
         }
     }
 }

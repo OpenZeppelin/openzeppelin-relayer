@@ -1,0 +1,58 @@
+{
+  "relayers": [
+    {
+      "id": "midnight-testnet-example",
+      "name": "Midnight Testnet Example",
+      "network": "testnet",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "local-signer",
+      "network_type": "midnight",
+      "policies": {
+        "min_balance": 1000000000
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "https://webhook.site/86c98e1a-38c1-4f31-a33c-858090c7d0ad",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": [
+    {
+      "type": "midnight",
+      "network": "testnet",
+      "rpc_urls": ["wss://rpc.testnet-02.midnight.network/"],
+      "explorer_urls": [
+        "https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Frpc.testnet-02.midnight.network#/explorer"
+      ],
+      "indexer_urls": {
+        "ws": "wss://indexer.testnet-02.midnight.network/api/v1/graphql/ws",
+        "http": "https://indexer.testnet-02.midnight.network/api/v1/graphql"
+      },
+      "prover_url": "http://localhost:6300",
+      "average_blocktime_ms": 6000,
+      "is_testnet": true
+    }
+  ],
+  "plugins": []
+}

@@ -28,10 +28,10 @@ use crate::{
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
-        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcId,
-        JsonRpcRequest, JsonRpcResponse, MidnightNetwork, MidnightRpcResult, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus,
-        RepositoryError, TransactionRepoModel, TransactionStatus,
+        produce_relayer_disabled_payload, DeletePendingTransactionsResponse, JsonRpcRequest,
+        JsonRpcResponse, MidnightNetwork, NetworkRpcRequest, NetworkRpcResult,
+        NetworkTransactionRequest, NetworkType, RelayerRepoModel, RelayerStatus, RepositoryError,
+        TransactionRepoModel, TransactionStatus,
     },
     repositories::{
         NetworkRepository, RelayerRepository, RelayerStateRepositoryStorage, Repository,
@@ -376,12 +376,9 @@ where
     async fn delete_pending_transactions(
         &self,
     ) -> Result<DeletePendingTransactionsResponse, RelayerError> {
-        println!("Midnight delete_pending_transactions...");
-        Ok(DeletePendingTransactionsResponse {
-            queued_for_cancellation_transaction_ids: vec![],
-            failed_to_queue_transaction_ids: vec![],
-            total_processed: 0,
-        })
+        Err(RelayerError::NotSupported(
+            "Deleting transactions is not supported for Midnight".to_string(),
+        ))
     }
 
     async fn sign_data(&self, _request: SignDataRequest) -> Result<SignDataResponse, RelayerError> {
@@ -403,15 +400,9 @@ where
         &self,
         _request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, RelayerError> {
-        println!("Midnight rpc...");
-        Ok(JsonRpcResponse {
-            id: Some(JsonRpcId::Number(1)),
-            jsonrpc: "2.0".to_string(),
-            result: Some(NetworkRpcResult::Midnight(
-                MidnightRpcResult::GenericRpcResult("".to_string()),
-            )),
-            error: None,
-        })
+        Err(RelayerError::NotSupported(
+            "RPC is not supported for Midnight".to_string(),
+        ))
     }
 
     async fn validate_min_balance(&self) -> Result<(), RelayerError> {
