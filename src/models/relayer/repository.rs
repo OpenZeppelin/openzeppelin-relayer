@@ -1,5 +1,6 @@
 use crate::models::{
-    Relayer, RelayerError, RelayerEvmPolicy, RelayerSolanaPolicy, RelayerStellarPolicy,
+    Relayer, RelayerError, RelayerEvmPolicy, RelayerMidnightPolicy, RelayerSolanaPolicy,
+    RelayerStellarPolicy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -117,6 +118,9 @@ impl From<Relayer> for RelayerRepoModel {
                     }
                     RelayerNetworkType::Stellar => {
                         RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default())
+                    }
+                    RelayerNetworkType::Midnight => {
+                        RelayerNetworkPolicy::Midnight(RelayerMidnightPolicy::default())
                     }
                 }
             }),

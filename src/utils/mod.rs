@@ -17,6 +17,9 @@ pub use transaction::*;
 mod base64;
 pub use base64::*;
 
+mod token;
+pub use token::*;
+
 mod address_derivation;
 pub use address_derivation::*;
 

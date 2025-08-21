@@ -21,6 +21,13 @@ pub enum ConfigFileRelayerNetworkPolicy {
     Evm(ConfigFileRelayerEvmPolicy),
     Solana(ConfigFileRelayerSolanaPolicy),
     Stellar(ConfigFileRelayerStellarPolicy),
+    Midnight(ConfigFileRelayerMidnightPolicy),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigFileRelayerMidnightPolicy {
+    pub min_balance: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -241,6 +248,12 @@ impl<'de> Deserialize<'de> for RelayerFileConfig {
                         .map(Some)
                         .map_err(de::Error::custom)
                 }
+                ConfigFileNetworkType::Midnight => {
+                    serde_json::from_value::<ConfigFileRelayerMidnightPolicy>(policy_value.clone())
+                        .map(ConfigFileRelayerNetworkPolicy::Midnight)
+                        .map(Some)
+                        .map_err(de::Error::custom)
+                }
             }
         } else {
             Ok(None) // `policies` is optional
@@ -415,6 +428,11 @@ fn convert_config_policies_to_domain(
                 concurrent_transactions: stellar_policy.concurrent_transactions,
             }))
         }
+        ConfigFileRelayerNetworkPolicy::Midnight(midnight_policy) => Ok(
+            RelayerNetworkPolicy::Midnight(super::RelayerMidnightPolicy {
+                min_balance: midnight_policy.min_balance,
+            }),
+        ),
     }
 }
 

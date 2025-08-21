@@ -14,9 +14,9 @@ use crate::{
     repositories::{
         NetworkRepository, NetworkRepositoryStorage, NotificationRepositoryStorage,
         PluginRepositoryStorage, PluginRepositoryTrait, RelayerRepository,
-        RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
-        TransactionCounterRepositoryStorage, TransactionCounterTrait, TransactionRepository,
-        TransactionRepositoryStorage,
+        RelayerRepositoryStorage, RelayerStateRepositoryStorage, Repository,
+        SignerRepositoryStorage, SyncStateTrait, TransactionCounterRepositoryStorage,
+        TransactionCounterTrait, TransactionRepository, TransactionRepositoryStorage,
     },
 };
 
@@ -31,6 +31,7 @@ pub struct AppState<
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 > {
     /// Repository for managing relayer data.
@@ -45,6 +46,8 @@ pub struct AppState<
     pub network_repository: Arc<NR>,
     /// Store for managing transaction counters.
     pub transaction_counter_store: Arc<TCR>,
+    /// Store for managing sync state.
+    pub sync_state_store: Arc<RSR>,
     /// Producer for managing job creation and execution.
     pub job_producer: Arc<J>,
     /// Repository for managing plugins.
@@ -52,8 +55,8 @@ pub struct AppState<
 }
 
 /// type alias for the app state wrapped in a ThinData to avoid clippy warnings
-pub type ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR> =
-    ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>;
+pub type ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR> =
+    ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>;
 
 pub type DefaultAppState = AppState<
     JobProducer,
@@ -63,6 +66,7 @@ pub type DefaultAppState = AppState<
     NotificationRepositoryStorage,
     SignerRepositoryStorage,
     TransactionCounterRepositoryStorage,
+    RelayerStateRepositoryStorage,
     PluginRepositoryStorage,
 >;
 
@@ -74,8 +78,9 @@ impl<
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
-    > AppState<J, RR, TR, NR, NFR, SR, TCR, PR>
+    > AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>
 {
     /// Returns a clone of the relayer repository.
     ///
@@ -131,6 +136,15 @@ impl<
         Arc::clone(&self.transaction_counter_store)
     }
 
+    /// Returns a clone of the sync state store.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc` pointing to the `InMemoryRelayerStateRepository`.
+    pub fn sync_state_store(&self) -> Arc<RSR> {
+        Arc::clone(&self.sync_state_store)
+    }
+
     /// Returns a clone of the job producer.
     ///
     /// # Returns
@@ -165,6 +179,7 @@ mod tests {
         NotificationRepositoryStorage,
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
+        RelayerStateRepositoryStorage,
         PluginRepositoryStorage,
     > {
         // Create a mock job producer
@@ -196,6 +211,7 @@ mod tests {
             transaction_counter_store: Arc::new(
                 TransactionCounterRepositoryStorage::new_in_memory(),
             ),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
         }

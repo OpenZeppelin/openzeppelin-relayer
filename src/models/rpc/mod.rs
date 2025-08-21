@@ -13,6 +13,9 @@ pub use stellar::*;
 mod evm;
 pub use evm::*;
 
+mod midnight;
+pub use midnight::*;
+
 mod error;
 pub use error::*;
 
@@ -22,6 +25,7 @@ pub enum NetworkRpcResult {
     Solana(SolanaRpcResult),
     Stellar(StellarRpcResult),
     Evm(EvmRpcResult),
+    Midnight(MidnightRpcResult),
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -31,6 +35,7 @@ pub enum NetworkRpcRequest {
     Solana(SolanaRpcRequest),
     Stellar(StellarRpcRequest),
     Evm(EvmRpcRequest),
+    Midnight(MidnightRpcRequest),
 }
 
 /// Converts a raw JSON-RPC request to the internal NetworkRpcRequest format.
@@ -141,6 +146,21 @@ pub fn convert_to_internal_rpc_request(
             Ok(JsonRpcRequest {
                 jsonrpc,
                 params: NetworkRpcRequest::Stellar(stellar_request),
+                id,
+            })
+        }
+        crate::models::NetworkType::Midnight => {
+            let midnight_request: crate::models::MidnightRpcRequest =
+                serde_json::from_value(request.clone()).map_err(|e| {
+                    crate::models::ApiError::BadRequest(format!(
+                        "Invalid Midnight RPC request: {}",
+                        e
+                    ))
+                })?;
+
+            Ok(JsonRpcRequest {
+                jsonrpc,
+                params: NetworkRpcRequest::Midnight(midnight_request),
                 id,
             })
         }

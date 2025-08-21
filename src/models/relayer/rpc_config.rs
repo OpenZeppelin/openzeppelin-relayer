@@ -74,9 +74,10 @@ impl RpcConfig {
     /// Validates that a URL has an HTTP or HTTPS scheme.
     /// Helper function, hence private.
     fn validate_url_scheme(url: &str) -> Result<()> {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
+        let supported_protocols = ["http://", "https://", "wss://", "ws://"];
+        if !supported_protocols.iter().any(|p| url.starts_with(p)) {
             return Err(eyre!(
-                "Invalid URL scheme for {}: Only HTTP and HTTPS are supported",
+                "Invalid URL scheme for {}: Only HTTP, HTTPS, WSS, and WS are supported",
                 url
             ));
         }

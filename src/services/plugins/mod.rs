@@ -9,7 +9,7 @@ use crate::{
         RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
-        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository, SyncStateTrait,
         TransactionCounterTrait, TransactionRepository,
     },
 };
@@ -87,11 +87,11 @@ impl<R: PluginRunnerTrait> PluginService<R> {
     }
 
     #[allow(clippy::type_complexity)]
-    async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, PR>(
+    async fn call_plugin<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
         &self,
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
+        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>,
     ) -> Result<PluginCallResponse, PluginError>
     where
         J: JobProducerTrait + Send + Sync + 'static,
@@ -105,6 +105,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
         SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
         TCR: TransactionCounterTrait + Send + Sync + 'static,
+        RSR: SyncStateTrait + Send + Sync + 'static,
         PR: PluginRepositoryTrait + Send + Sync + 'static,
     {
         let socket_path = format!("/tmp/{}.sock", Uuid::new_v4());
@@ -138,7 +139,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>: Send + Sync
+pub trait PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, RSR, PR>: Send + Sync
 where
     J: JobProducerTrait + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
@@ -147,6 +148,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     fn new(runner: PluginRunner) -> Self;
@@ -154,12 +156,12 @@ where
         &self,
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError>;
 }
 
 #[async_trait]
-impl<J, TR, RR, NR, NFR, SR, TCR, PR> PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, PR>
+impl<J, TR, RR, NR, NFR, SR, TCR, RSR, PR> PluginServiceTrait<J, TR, RR, NR, NFR, SR, TCR, RSR, PR>
     for PluginService<PluginRunner>
 where
     J: JobProducerTrait + 'static,
@@ -169,6 +171,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     fn new(runner: PluginRunner) -> Self {
@@ -179,7 +182,7 @@ where
         &self,
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
-        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR>>>,
+        state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>>>,
     ) -> Result<PluginCallResponse, PluginError> {
         self.call_plugin(plugin, plugin_call_request, state).await
     }
@@ -195,8 +198,8 @@ mod tests {
         models::PluginModel,
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-            RelayerRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
-            TransactionRepositoryStorage,
+            RelayerRepositoryStorage, RelayerStateRepositoryStorage, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
         utils::mocks::mockutils::create_mock_app_state,
     };
@@ -236,13 +239,14 @@ mod tests {
             NotificationRepositoryStorage,
             SignerRepositoryStorage,
             TransactionCounterRepositoryStorage,
+            RelayerStateRepositoryStorage,
             PluginRepositoryStorage,
         > = create_mock_app_state(None, None, None, Some(vec![plugin.clone()]), None).await;
 
         let mut plugin_runner = MockPluginRunnerTrait::default();
 
         plugin_runner
-            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>()
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, RelayerStateRepositoryStorage, PluginRepositoryStorage>()
             .returning(|_, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {

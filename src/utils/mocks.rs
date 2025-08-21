@@ -21,8 +21,9 @@ pub mod mockutils {
         },
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-            PluginRepositoryTrait, RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
-            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+            PluginRepositoryTrait, RelayerRepositoryStorage, RelayerStateRepositoryStorage,
+            Repository, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
     };
 
@@ -185,6 +186,7 @@ pub mod mockutils {
         NotificationRepositoryStorage,
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
+        RelayerStateRepositoryStorage,
         PluginRepositoryStorage,
     > {
         let relayer_repository = Arc::new(RelayerRepositoryStorage::new_in_memory());
@@ -253,6 +255,7 @@ pub mod mockutils {
             transaction_counter_store: Arc::new(
                 TransactionCounterRepositoryStorage::new_in_memory(),
             ),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
         }

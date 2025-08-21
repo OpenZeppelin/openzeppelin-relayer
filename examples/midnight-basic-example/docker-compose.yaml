@@ -1,0 +1,104 @@
+---
+services:
+  # Midnight Prover Server
+  prover:
+    image: midnightnetwork/proof-server:latest
+    ports:
+      - 6300:6300/tcp
+    command: midnight-proof-server --network testnet
+    environment:
+      MIDNIGHT_LEDGER_TEST_STATIC_DIR: /tmp/midnight-test-static
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+    restart: on-failure:5
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:6300/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # OpenZeppelin Relayer
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.midnight.development
+      # TEMPORARY: GitHub secrets are only required until Midnight repositories are open-sourced
+      # Once the repos are public, these secrets can be removed
+      secrets:
+        - github_user
+        - github_pat
+    ports:
+      - 8080:8080/tcp
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - keystore_passphrase
+    environment:
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      MIDNIGHT_LEDGER_TEST_STATIC_DIR: /tmp/midnight-test-static
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+      - metrics-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+    depends_on:
+      - redis
+      - prover
+    restart: on-failure:5
+
+  # Redis for state management
+  redis:
+    image: redis:bookworm
+    ports:
+      - 6379:6379/tcp
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
+    networks:
+      - relayer-network
+      - metrics-network
+    restart: on-failure:5
+networks:
+  metrics-network:
+    internal: true
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local
+secrets:
+  api_key:
+    environment: API_KEY
+  webhook_signing_key:
+    environment: WEBHOOK_SIGNING_KEY
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE
+  # TEMPORARY: GitHub credentials are only required until Midnight repositories are open-sourced
+  # Once the repos are public, github_user and github_pat can be removed from secrets
+  github_user:
+    environment: GITHUB_USER
+  github_pat:
+    environment: GITHUB_PAT

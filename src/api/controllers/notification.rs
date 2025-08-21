@@ -15,7 +15,7 @@ use crate::{
         PaginationQuery, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
-        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
+        NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository, SyncStateTrait,
         TransactionCounterTrait, TransactionRepository,
     },
 };
@@ -33,9 +33,9 @@ use eyre::Result;
 /// # Returns
 ///
 /// A paginated list of notifications.
-pub async fn list_notifications<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn list_notifications<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
     query: PaginationQuery,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -45,6 +45,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     let notifications = state.notification_repository.list_paginated(query).await?;
@@ -72,9 +73,9 @@ where
 /// # Returns
 ///
 /// The notification details or an error if not found.
-pub async fn get_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn get_notification<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
     notification_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -84,6 +85,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     let notification = state
@@ -105,9 +107,9 @@ where
 /// # Returns
 ///
 /// The created notification or an error if creation fails.
-pub async fn create_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn create_notification<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
     request: NotificationCreateRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -117,6 +119,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     // Convert request to core notification (validates automatically)
@@ -144,10 +147,10 @@ where
 /// # Returns
 ///
 /// The updated notification or an error if update fails.
-pub async fn update_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn update_notification<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
     notification_id: String,
     request: NotificationUpdateRequest,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -157,6 +160,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     // Get the existing notification from repository
@@ -193,9 +197,9 @@ where
 /// This endpoint ensures that notifications cannot be deleted if they are still being
 /// used by any relayers. This prevents breaking existing relayer configurations
 /// and maintains system integrity.
-pub async fn delete_notification<J, RR, TR, NR, NFR, SR, TCR, PR>(
+pub async fn delete_notification<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>(
     notification_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>,
+    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, RSR, PR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -205,6 +209,7 @@ where
     NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
     SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
     TCR: TransactionCounterTrait + Send + Sync + 'static,
+    RSR: SyncStateTrait + Send + Sync + 'static,
     PR: PluginRepositoryTrait + Send + Sync + 'static,
 {
     // First check if the notification exists

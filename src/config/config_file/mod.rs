@@ -40,8 +40,8 @@ pub use plugin::*;
 
 pub mod network;
 pub use network::{
-    EvmNetworkConfig, NetworkConfigCommon, NetworkFileConfig, NetworksFileConfig,
-    SolanaNetworkConfig, StellarNetworkConfig,
+    EvmNetworkConfig, MidnightNetworkConfig, NetworkConfigCommon, NetworkFileConfig,
+    NetworksFileConfig, SolanaNetworkConfig, StellarNetworkConfig,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,6 +50,7 @@ pub enum ConfigFileNetworkType {
     Evm,
     Stellar,
     Solana,
+    Midnight,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -7,6 +7,7 @@
 * xref:evm.adoc[EVM Integration]
 * xref:solana.adoc[Solana Integration]
 * xref:stellar.adoc[Stellar Integration]
+* xref:midnight.adoc[Midnight Integration]
 * link:https://release-v1-1-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^]
 * xref:structure.adoc[Project Structure]
 * xref:roadmap.adoc[Project Roadmap]

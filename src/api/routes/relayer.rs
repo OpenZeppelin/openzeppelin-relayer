@@ -229,8 +229,9 @@ mod tests {
         },
         repositories::{
             NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-            RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
-            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+            RelayerRepositoryStorage, RelayerStateRepositoryStorage, Repository,
+            SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -245,6 +246,7 @@ mod tests {
         NotificationRepositoryStorage,
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
+        RelayerStateRepositoryStorage,
         PluginRepositoryStorage,
     > {
         let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
@@ -346,6 +348,7 @@ mod tests {
             transaction_counter_store: Arc::new(
                 TransactionCounterRepositoryStorage::new_in_memory(),
             ),
+            sync_state_store: Arc::new(RelayerStateRepositoryStorage::new_in_memory()),
             job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
         }
