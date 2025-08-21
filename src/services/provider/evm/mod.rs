@@ -7,17 +7,27 @@
 use std::time::Duration;
 
 use alloy::{
+    network::AnyNetwork,
     primitives::{Bytes, TxKind, Uint},
-    providers::{Provider, ProviderBuilder, RootProvider},
+    providers::{
+        fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
+        Identity, Provider, ProviderBuilder, RootProvider,
+    },
     rpc::{
         client::ClientBuilder,
-        types::{
-            Block as BlockResponse, BlockNumberOrTag, BlockTransactionsKind, FeeHistory,
-            TransactionInput, TransactionReceipt, TransactionRequest,
-        },
+        types::{BlockNumberOrTag, FeeHistory, TransactionInput, TransactionRequest},
     },
-    transports::http::{Client, Http},
+    transports::http::Http,
 };
+
+type EvmProviderType = FillProvider<
+    JoinFill<
+        Identity,
+        JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+    >,
+    RootProvider<AnyNetwork>,
+    AnyNetwork,
+>;
 use async_trait::async_trait;
 use eyre::Result;
 use reqwest::ClientBuilder as ReqwestClientBuilder;
@@ -25,7 +35,9 @@ use serde_json;
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, RetryConfig};
-use crate::models::{EvmTransactionData, RpcConfig, TransactionError, U256};
+use crate::models::{
+    BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
+};
 
 #[cfg(test)]
 use mockall::automock;
@@ -207,7 +219,7 @@ impl EvmProvider {
     }
 
     /// Initialize a provider for a given URL
-    fn initialize_provider(&self, url: &str) -> Result<RootProvider<Http<Client>>, ProviderError> {
+    fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
         let rpc_url = url.parse().map_err(|e| {
             ProviderError::NetworkConfiguration(format!("Invalid URL format: {}", e))
         })?;
@@ -223,7 +235,9 @@ impl EvmProvider {
         let is_local = transport.guess_local();
         let client = ClientBuilder::default().transport(transport, is_local);
 
-        let provider = ProviderBuilder::new().on_client(client);
+        let provider = ProviderBuilder::new()
+            .network::<AnyNetwork>()
+            .connect_client(client.clone());
 
         Ok(provider)
     }
@@ -237,7 +251,7 @@ impl EvmProvider {
         operation: F,
     ) -> Result<T, ProviderError>
     where
-        F: Fn(RootProvider<Http<Client>>) -> Fut,
+        F: Fn(EvmProviderType) -> Fut,
         Fut: std::future::Future<Output = Result<T, ProviderError>>,
     {
         // Classify which errors should be retried
@@ -304,7 +318,7 @@ impl EvmProviderTrait for EvmProvider {
             let tx_req = transaction_request.clone();
             async move {
                 provider
-                    .estimate_gas(&tx_req)
+                    .estimate_gas(tx_req.into())
                     .await
                     .map_err(ProviderError::from)
             }
@@ -325,7 +339,7 @@ impl EvmProviderTrait for EvmProvider {
                 let tx_req = tx.clone();
                 async move {
                     provider
-                        .send_transaction(tx_req)
+                        .send_transaction(tx_req.into())
                         .await
                         .map_err(ProviderError::from)
                 }
@@ -396,7 +410,7 @@ impl EvmProviderTrait for EvmProvider {
         let block_result = self
             .retry_rpc_call("get_block_by_number", |provider| async move {
                 provider
-                    .get_block_by_number(BlockNumberOrTag::Latest, BlockTransactionsKind::Hashes)
+                    .get_block_by_number(BlockNumberOrTag::Latest)
                     .await
                     .map_err(ProviderError::from)
             })
@@ -428,7 +442,12 @@ impl EvmProviderTrait for EvmProvider {
     async fn call_contract(&self, tx: &TransactionRequest) -> Result<Bytes, ProviderError> {
         self.retry_rpc_call("call_contract", move |provider| {
             let tx_req = tx.clone();
-            async move { provider.call(&tx_req).await.map_err(ProviderError::from) }
+            async move {
+                provider
+                    .call(tx_req.into())
+                    .await
+                    .map_err(ProviderError::from)
+            }
         })
         .await
     }

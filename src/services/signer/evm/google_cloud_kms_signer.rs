@@ -8,7 +8,7 @@
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, utils::eip191_message, PrimitiveSignature},
+    primitives::{eip191_hash_message, utils::eip191_message, Signature},
 };
 use async_trait::async_trait;
 
@@ -63,7 +63,7 @@ impl Signer for GoogleCloudKmsSigner {
                 )));
             }
 
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             let mut signature_bytes = signature.as_bytes();
@@ -100,7 +100,7 @@ impl Signer for GoogleCloudKmsSigner {
                 )));
             }
 
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             let signature_bytes = signature.as_bytes();

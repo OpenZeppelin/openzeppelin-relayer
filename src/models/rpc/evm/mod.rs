@@ -1,3 +1,4 @@
+use alloy::network::{AnyRpcBlock, AnyTransactionReceipt};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -20,3 +21,6 @@ pub enum EvmRpcRequest {
         params: serde_json::Value,
     },
 }
+
+pub type BlockResponse = AnyRpcBlock;
+pub type TransactionReceipt = AnyTransactionReceipt;
