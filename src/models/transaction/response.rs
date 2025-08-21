@@ -110,6 +110,7 @@ pub struct MidnightTransactionResponse {
     #[schema(nullable = false)]
     pub block_hash: Option<String>,
     pub status: TransactionStatus,
+    pub status_reason: Option<String>,
     pub created_at: String,
     #[schema(nullable = false)]
     pub sent_at: Option<String>,
@@ -176,6 +177,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     pallet_hash: midnight_data.pallet_hash,
                     block_hash: midnight_data.block_hash,
                     status: model.status,
+                    status_reason: model.status_reason,
                     created_at: model.created_at,
                     sent_at: model.sent_at,
                     confirmed_at: model.confirmed_at,
