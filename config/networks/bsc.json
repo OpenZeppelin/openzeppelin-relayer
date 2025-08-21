@@ -27,15 +27,15 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 3000,
+      "from": "binance-smart-chain",
+      "type": "evm",
+      "network": "binance-smart-chain-testnet",
       "chain_id": 97,
       "explorer_urls": [
         "https://api-testnet.bscscan.com/api",
         "https://testnet.bscscan.com"
       ],
       "is_testnet": true,
-      "network": "binance-smart-chain-testnet",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://bsc-testnet-dataseed.bnbchain.org",
         "https://bsc-testnet.bnbchain.org",
@@ -43,11 +43,9 @@
         "https://bsc-testnet.drpc.org",
         "https://bsc-testnet-rpc.publicnode.com"
       ],
-      "symbol": "BNB",
       "tags": [
         "deprecated"
-      ],
-      "type": "evm"
+      ]
     }
   ]
 }
