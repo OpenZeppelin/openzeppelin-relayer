@@ -17,8 +17,8 @@ WORKDIR /usr/app
 # TEMPORARY: GitHub credentials are only required until Midnight repositories are open-sourced
 # Once the repos are public, this authentication step can be removed entirely
 # Credentials are provided via Docker secrets for security (not exposed in logs)
-RUN --mount=type=secret,id=github_user \
-    --mount=type=secret,id=github_pat \
+RUN --mount=type=secret,id=github_user,mode=0400 \
+    --mount=type=secret,id=github_pat,mode=0400 \
     if [ ! -f /run/secrets/github_user ] || [ ! -f /run/secrets/github_pat ]; then \
         echo "ERROR: GitHub credentials must be provided as Docker secrets" && \
         echo "Please ensure GITHUB_USER and GITHUB_PAT are set in your .env file" && \
@@ -41,9 +41,15 @@ COPY . .
 
 # Build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/app/target \
+    --mount=type=secret,id=github_user,mode=0400 \
+    --mount=type=secret,id=github_pat,mode=0400 \
+    GITHUB_USER=$(cat /run/secrets/github_user) && \
+    GITHUB_PAT=$(cat /run/secrets/github_pat) && \
     cargo build --release && \
-    cargo install --root /usr/app --path . --debug
+    cargo install --root /usr/app --path . --debug && \
+    git config --global --unset-all url."https://${GITHUB_USER}:${GITHUB_PAT}@github.com/".insteadOf && \
+    echo "Git credentials cleared"
 
 # Setting up build directories
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base

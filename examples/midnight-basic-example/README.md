@@ -8,15 +8,13 @@ This comprehensive guide demonstrates how to configure and use the OpenZeppelin 
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
   - [Step 1: Clone the Repository](#step-1-clone-the-repository)
-  - [Step 2: Fetch Midnight Dependencies](#step-2-fetch-midnight-dependencies-temporary)
-  - [Step 3: Create a Signer](#step-3-create-a-signer)
-  - [Step 4: Configure Environment](#step-4-configure-environment)
-  - [Step 5: Configure Notifications](#step-5-configure-notifications)
-  - [Step 6: Configure API Key](#step-6-configure-api-key)
-  - [Step 7: Run the Service](#step-7-run-the-service)
-  - [Step 8: Verify the Setup](#step-8-verify-the-setup)
+  - [Step 2: Create a Signer](#step-2-create-a-signer)
+  - [Step 3: Configure Environment](#step-3-configure-environment)
+  - [Step 4: Configure Notifications](#step-4-configure-notifications)
+  - [Step 5: Configure API Key](#step-5-configure-api-key)
+  - [Step 6: Run the Service](#step-6-run-the-service)
+  - [Step 7: Verify the Setup](#step-7-verify-the-setup)
 - [Testing the Relayer](#testing-the-relayer)
-- [API Examples](#api-examples)
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
 - [Advanced Configuration](#advanced-configuration)
@@ -51,6 +49,7 @@ Before you begin, ensure you have the following installed:
 > **⚠️ TEMPORARY REQUIREMENT - WILL BE REMOVED**
 >
 > Currently, the Midnight blockchain repositories are private. To build the relayer, you need:
+>
 > - A GitHub username with access to the Midnight repositories
 > - A GitHub Personal Access Token (PAT) or password
 >
@@ -84,7 +83,7 @@ cargo run --example create_key -- \
 - Keep this password secure - you'll need it in the next step
 - The generated keystore file contains your private key encrypted with this password
 
-### Step 4: Configure Environment
+### Step 3: Configure Environment
 
 Create the environment configuration file from the template:
 
@@ -95,17 +94,17 @@ cp examples/midnight-basic-example/.env.example examples/midnight-basic-example/
 Edit the `.env` file and populate the following values:
 
 ```bash
-# The password you used in Step 3
+# The password you used in Step 2
 KEYSTORE_PASSPHRASE=your_keystore_password_here
 
-# Will be generated in Step 5
+# Will be generated in Step 4
 WEBHOOK_SIGNING_KEY=
 
-# Will be generated in Step 6
+# Will be generated in Step 5
 API_KEY=
 ```
 
-### Step 5: Configure Notifications
+### Step 4: Configure Notifications
 
 The relayer can send webhook notifications for transaction status updates.
 
@@ -132,7 +131,7 @@ cargo run --example generate_uuid
 
 Copy the generated UUID and update the `WEBHOOK_SIGNING_KEY` in your `.env` file.
 
-### Step 6: Configure API Key
+### Step 5: Configure API Key
 
 Generate an API key for authenticating requests to the relayer:
 
@@ -150,7 +149,7 @@ WEBHOOK_SIGNING_KEY=f9e8d7c6-b5a4-3210-fedc-ba0987654321
 KEYSTORE_PASSPHRASE=YourSecurePassword123!
 ```
 
-### Step 7: Run the Service
+### Step 6: Run the Service
 
 Start all services with Docker Compose:
 
@@ -172,7 +171,7 @@ Wait for the services to fully initialize. You should see logs indicating:
 - Relayer is listening on port 8080
 - Redis is ready to accept connections
 
-### Step 8: Verify the Setup
+### Step 7: Verify the Setup
 
 Check that all services are running correctly:
 
@@ -260,17 +259,6 @@ curl -X GET http://localhost:8080/api/v1/relayers/midnight-testnet-example/trans
 curl -X GET "http://localhost:8080/api/v1/relayers/midnight-testnet-example/transactions?per_page=5" \
   -H "AUTHORIZATION: Bearer YOUR_API_KEY" | jq
 ```
-
-## API Examples
-
-For more detailed API examples including:
-
-- Complex transactions with intents
-- Fallible offers
-- Transaction filtering
-- Pagination
-
-See [midnight-api-examples.md](midnight-api-examples.md)
 
 ## Architecture
 

@@ -353,7 +353,6 @@ The relayer manages Merkle commitment trees for efficient proof generation:
 
 === Network Security
 - Use secure connections (HTTPS/WSS) for all network communication
-- Configure appropriate `max_fee` to prevent excessive transaction costs
 - Monitor relayer balance and set appropriate `min_balance`
 - Regularly rotate wallet seeds in test environments
 
