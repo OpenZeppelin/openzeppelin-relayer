@@ -1,6 +1,6 @@
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, utils::eip191_message, PrimitiveSignature},
+    primitives::{eip191_hash_message, utils::eip191_message, Signature},
 };
 use async_trait::async_trait;
 
@@ -71,7 +71,7 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
             }
 
             // Construct primitive signature
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             // Extract signature array bytes
@@ -113,7 +113,7 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
                 )));
             }
 
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             let signature_bytes = signature.as_bytes();
