@@ -237,7 +237,7 @@ impl EvmProvider {
 
         let provider = ProviderBuilder::new()
             .network::<AnyNetwork>()
-            .connect_client(client.clone());
+            .connect_client(client);
 
         Ok(provider)
     }
@@ -428,7 +428,7 @@ impl EvmProviderTrait for EvmProvider {
     ) -> Result<Option<TransactionReceipt>, ProviderError> {
         let parsed_tx_hash = tx_hash
             .parse::<alloy::primitives::TxHash>()
-            .map_err(|e| ProviderError::InvalidAddress(e.to_string()))?;
+            .map_err(|e| ProviderError::Other(format!("Invalid transaction hash: {}", e)))?;
 
         self.retry_rpc_call("get_transaction_receipt", move |provider| async move {
             provider
@@ -458,7 +458,6 @@ impl EvmProviderTrait for EvmProvider {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ProviderError> {
         self.retry_rpc_call("raw_request_dyn", move |provider| {
-            let method_clone = method.to_string();
             let params_clone = params.clone();
             async move {
                 // Convert params to RawValue and use Cow for method
@@ -467,7 +466,7 @@ impl EvmProviderTrait for EvmProvider {
                 })?;
 
                 let result = provider
-                    .raw_request_dyn(std::borrow::Cow::Owned(method_clone), &params_raw)
+                    .raw_request_dyn(std::borrow::Cow::Owned(method.to_string()), &params_raw)
                     .await
                     .map_err(ProviderError::from)?;
 
