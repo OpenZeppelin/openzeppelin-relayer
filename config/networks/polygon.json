@@ -25,26 +25,21 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 2100,
+      "from": "polygon",
+      "type": "evm",
+      "network": "polygon-amoy",
       "chain_id": 80002,
       "explorer_urls": [
         "https://api-amoy.polygonscan.com/api",
         "https://amoy.polygonscan.com"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": true,
-      "network": "polygon-amoy",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://rpc-amoy.polygon.technology",
         "https://polygon-amoy.drpc.org",
         "https://polygon-amoy-bor-rpc.publicnode.com"
       ],
-      "symbol": "POL",
-      "tags": [],
-      "type": "evm"
+      "tags": []
     },
     {
       "average_blocktime_ms": 5000,
@@ -66,25 +61,22 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 5000,
+      "from": "polygon-zkevm",
+      "type": "evm",
+      "network": "polygon-zkevm-testnet",
       "chain_id": 1442,
       "explorer_urls": [
         "https://api-testnet-zkevm.polygonscan.com/api",
         "https://testnet-zkevm.polygonscan.com"
       ],
       "is_testnet": true,
-      "network": "polygon-zkevm-testnet",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://rpc.cardona.zkevm-rpc.com",
-        "https://polygon-zkevm-cardona.drpc.org",
-        "https://testnet-zkevm.polygonscan.com"
+        "https://polygon-zkevm-cardona.drpc.org"
       ],
-      "symbol": "ETH",
       "tags": [
         "deprecated"
-      ],
-      "type": "evm"
+      ]
     }
   ]
 }
