@@ -10,11 +10,13 @@ use std::str::FromStr;
 use crate::{
     jobs::MockJobProducerTrait,
     models::{
-        EncodedSerializedTransaction, NetworkType, RelayerNetworkPolicy, RelayerRepoModel,
-        RelayerSolanaPolicy, SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
-        SolanaFeePaymentStrategy,
+        EncodedSerializedTransaction, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
+        RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
+        SolanaAllowedTokensSwapConfig, SolanaFeePaymentStrategy,
     },
+    repositories::MockTransactionRepository,
     services::{MockJupiterServiceTrait, MockSolanaProviderTrait, MockSolanaSignTrait},
+    utils::mocks::mockutils::create_mock_solana_network,
 };
 
 /// Creates a test context for Solana RPC methods
@@ -27,6 +29,7 @@ pub fn setup_test_context() -> (
     MockJupiterServiceTrait,
     EncodedSerializedTransaction,
     MockJobProducerTrait,
+    NetworkRepoModel,
 ) {
     // Create test transaction
     let payer = Keypair::new();
@@ -43,16 +46,16 @@ pub fn setup_test_context() -> (
         paused: false,
         network_type: NetworkType::Solana,
         policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-            fee_margin_percentage: Some(0.5),
-            allowed_accounts: None,
-            allowed_tokens: None,
-            min_balance: 10000,
             allowed_programs: None,
             max_signatures: Some(10),
+            max_tx_data_size: Some(1000),
+            min_balance: Some(10000),
+            allowed_tokens: None,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            fee_margin_percentage: Some(0.5),
+            allowed_accounts: None,
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
-            max_tx_data_size: 1000,
             swap_config: None,
         }),
         signer_id: "test".to_string(),
@@ -61,6 +64,8 @@ pub fn setup_test_context() -> (
         system_disabled: false,
         custom_rpc_urls: None,
     };
+
+    let network = create_mock_solana_network();
 
     // Setup mock signer
     let mock_signer = MockSolanaSignTrait::new();
@@ -79,6 +84,7 @@ pub fn setup_test_context() -> (
         jupiter_service,
         encoded_tx,
         job_producer,
+        network,
     )
 }
 
@@ -95,6 +101,8 @@ pub struct RelayerFeeStrategyTestContext {
     pub token: String,
     pub token_mint: Pubkey,
     pub user_token_account: Pubkey,
+    pub transaction_repository: MockTransactionRepository,
+    pub network: NetworkRepoModel,
 }
 
 pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContext {
@@ -142,16 +150,16 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
         paused: false,
         network_type: NetworkType::Solana,
         policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             fee_margin_percentage: Some(0.5),
             allowed_accounts: None,
             allowed_tokens: None,
-            min_balance: 10000,
+            min_balance: Some(10000),
             allowed_programs: None,
             max_signatures: Some(10),
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
-            max_tx_data_size: 1000,
+            max_tx_data_size: Some(1000),
             swap_config: None,
         }),
         signer_id: "test".to_string(),
@@ -167,6 +175,8 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
     let jupiter_service = MockJupiterServiceTrait::new();
     let provider = MockSolanaProviderTrait::new();
     let job_producer = MockJobProducerTrait::new();
+    let transaction_repository = MockTransactionRepository::new();
+    let network = create_mock_solana_network();
 
     RelayerFeeStrategyTestContext {
         relayer,
@@ -181,6 +191,8 @@ pub fn setup_test_context_relayer_fee_strategy() -> RelayerFeeStrategyTestContex
         token_mint,
         token: test_token.to_string(),
         user_token_account: source_token_account,
+        transaction_repository,
+        network,
     }
 }
 
@@ -199,6 +211,8 @@ pub struct UserFeeStrategyTestContext {
     pub relayer_token_account: Pubkey,
     pub main_transfer_amount: u64,
     pub fee_amount: u64,
+    pub transaction_repository: MockTransactionRepository,
+    pub network: NetworkRepoModel,
 }
 
 /// This test context is for user fee strategy
@@ -263,7 +277,7 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
         paused: false,
         network_type: NetworkType::Solana,
         policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::User,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             fee_margin_percentage: Some(0.5),
             allowed_accounts: None,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -276,12 +290,12 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
                     ..Default::default()
                 }),
             }]),
-            min_balance: 10000,
+            min_balance: Some(10000),
             allowed_programs: None,
             max_signatures: Some(10),
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
-            max_tx_data_size: 1000,
+            max_tx_data_size: Some(1000),
             swap_config: None,
         }),
         signer_id: "test".to_string(),
@@ -295,6 +309,8 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
     let provider = MockSolanaProviderTrait::new();
     let jupiter_service = MockJupiterServiceTrait::new();
     let job_producer = MockJobProducerTrait::new();
+    let transaction_repository = MockTransactionRepository::new();
+    let network = create_mock_solana_network();
 
     UserFeeStrategyTestContext {
         relayer,
@@ -311,6 +327,8 @@ pub fn setup_test_context_user_fee_strategy() -> UserFeeStrategyTestContext {
         relayer_token_account,
         main_transfer_amount,
         fee_amount,
+        transaction_repository,
+        network,
     }
 }
 
@@ -331,6 +349,8 @@ pub struct UserFeeStrategySingleTxTestContext {
     pub payer_token_account: Pubkey,
     pub main_transfer_amount: u64,
     pub fee_amount: u64,
+    pub transaction_repository: MockTransactionRepository,
+    pub network: NetworkRepoModel,
 }
 
 // This test context is for a single transaction used in rpc methods like prepare transactions and fee estimate
@@ -382,7 +402,7 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
         paused: false,
         network_type: NetworkType::Solana,
         policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::User,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::User),
             fee_margin_percentage: Some(0.5),
             allowed_accounts: None,
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
@@ -395,12 +415,12 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
                     ..Default::default()
                 }),
             }]),
-            min_balance: 10000,
+            min_balance: Some(10000),
             allowed_programs: None,
             max_signatures: Some(10),
             disallowed_accounts: None,
             max_allowed_fee_lamports: None,
-            max_tx_data_size: 1000,
+            max_tx_data_size: Some(1000),
             swap_config: None,
         }),
         signer_id: "test".to_string(),
@@ -414,6 +434,8 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
     let provider = MockSolanaProviderTrait::new();
     let jupiter_service = MockJupiterServiceTrait::new();
     let job_producer = MockJobProducerTrait::new();
+    let transaction_repository = MockTransactionRepository::new();
+    let network = create_mock_solana_network();
 
     UserFeeStrategySingleTxTestContext {
         relayer,
@@ -432,5 +454,7 @@ pub fn setup_test_context_single_tx_user_fee_strategy() -> UserFeeStrategySingle
         relayer_token_account,
         main_transfer_amount,
         fee_amount,
+        transaction_repository,
+        network,
     }
 }

@@ -8,12 +8,18 @@ Please ensure appropriate access permissions on all configuration files (for `./
 
 [IMPORTANT]
 ====
-The configuration system consists of two main components:
+The OpenZeppelin Relayer supports two configuration approaches:
 
+**File-based Configuration:**
 1. **`config.json`**: Contains relayer definitions, signer configurations, and network policies
 2. **`.env`** file: Contains environment variables like API keys and connection strings
 
-Both files must be properly configured before starting the application. Changes to either file require restarting the container to take effect.
+**API-based Configuration:**
+- Full CRUD operations for relayers, signers, and notifications via REST API
+- Changes take effect immediately (no container restart required)
+- See the **API Reference** page for detailed endpoints documentation
+
+See xref:storage.adoc[Storage Configuration] for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
 
 For quick setup examples with pre-configured files, see the https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[examples directory] in our GitHub repository.
 ====
@@ -39,6 +45,21 @@ This table lists the environment variables and their default values.
 | `info`
 | `info, debug, warn, error, trace`
 | Log level.
+
+| `REPOSITORY_STORAGE_TYPE`
+| `in-memory`
+| `in-memory, redis`
+| Type of storage used for storing repository config and resources. See xref:storage.adoc[Storage Configuration] for detailed information.
+
+| `RESET_STORAGE_ON_START`
+| `false`
+| `bool`
+| Clears all resources from storage on startup and reloads entries from the config file. See xref:storage.adoc[Storage Configuration] for usage details.
+
+| `TRANSACTION_EXPIRATION_HOURS`
+| `4`
+| `number`
+| Number of hours after which transactions in a final state are removed from storage. See xref:storage.adoc[Storage Configuration] for more information.
 
 | `CONFIG_DIR`
 | `./config`
@@ -98,18 +119,22 @@ This table lists the environment variables and their default values.
 | `REDIS_URL`
 | `redis://localhost:6379`
 | `<redis connection string>`
-| Redis connection URL for the relayer.
+| Redis connection URL for the relayer. See xref:storage.adoc[Storage Configuration] for Redis setup details.
 
 | `REDIS_CONNECTION_TIMEOUT_MS`
 | `10000`
 | `<timeout in milliseconds>`
-| Connection timeout for Redis in milliseconds.
+| Connection timeout for Redis in milliseconds. See xref:storage.adoc[Storage Configuration] for Redis configuration.
 
 | `REDIS_KEY_PREFIX`
 | `oz-relayer`
 | `string`
-| Redis key prefix
+| Redis key prefix for namespacing. See xref:storage.adoc[Storage Configuration] for more information.
 
+| `STORAGE_ENCRYPTION_KEY`
+| ``
+| `string`
+| Encryption key used to encrypt data at rest in Redis storage. See xref:storage.adoc[Storage Configuration] for security details.
 
 | `RPC_TIMEOUT_MS`
 | `10000`
@@ -173,18 +198,20 @@ PROVIDER_RETRY_MAX_DELAY_MS=2000
 PROVIDER_MAX_FAILOVERS=3
 ENABLE_SWAGGER=false
 KEYSTORE_PASSPHRASE=your_keystore_passphrase
+STORAGE_ENCRYPTION_KEY=X67aXacJB+krEldv9i2w7NCSFwwOzVV/1ELM2KJJjQw=
+REPOSITORY_STORAGE_TYPE=redis
+RESET_STORAGE_ON_START=false
+TRANSACTION_EXPIRATION_HOURS=8
 ```
 
 == Main configuration file (config.json)
 
 This file can exist in any directory, but the default location is `./config/config.json`.
 
-Copy the example config file and update values according to your needs
-
-[source,bash]
-----
-cp config/config.example.json config/config.json
-----
+[NOTE]
+====
+All components defined in `config.json` can also be managed via REST API endpoints. This provides runtime flexibility for adding, updating, or removing relayers, signers, and notifications without restarting the service. See the **API Reference** page for detailed endpoints documentation.
+====
 
 Key sections in this file include:
 
@@ -196,22 +223,28 @@ Key sections in this file include:
 
 === 1. Signers
 
-Transaction signers are responsible for cryptographically signing transactions before they are submitted to blockchain networks. The `signers` array must contain at least one valid signer configuration.
+Transaction signers are responsible for cryptographically signing transactions before they are submitted to blockchain networks.
 
 For comprehensive details on configuring all supported signer types including:
 
 - Local keystore file signers
-- HashiCorp Vault (secret, cloud, and transit)
+- HashiCorp Vault (secret and transit)
 - Cloud KMS providers (Google Cloud, AWS)
 - Turnkey signers
 - Security best practices and troubleshooting
 
 See the dedicated xref:signers.adoc[Signers Configuration] guide.
 
+[TIP]
+====
+Signers can also be managed via API endpoints.
+
+See the **API Reference** page for detailed endpoints documentation.
+====
 
 === 2. Notifications
 
-* `notifications` array, which should contain, at least, one valid configuration:
+* `notifications` array containing notification entries:
 
 [source,json]
 ----
@@ -253,9 +286,16 @@ Available configuration fields
 |Signing key value, env variable name, ...
 |===
 
+[TIP]
+====
+Notifications can also be managed via API endpoints.
+
+See the **API Reference** page for detailed endpoints documentation.
+====
+
 === 3. Relayers
 
-* `relayers` array, containing at least one valid relayer configuration:
+* `relayers` array, containing relayer entries:
 
 [source,json]
 ----
@@ -468,6 +508,14 @@ When using custom RPC URLs:
 * A weight of 0 disables the endpoint.
 * If a weight is not specified for an endpoint, it defaults to 100.
 ====
+
+[TIP]
+====
+Relayers could also be managed via API endpoints.
+
+See the **API Reference** page for detailed endpoints documentation.
+====
+
 
 === 4. Plugins
 
@@ -684,3 +732,24 @@ Full `config/config.json` example with evm and solana relayers definitions using
   ]
 }
 ----
+
+== Configuration Management Approaches
+
+The OpenZeppelin Relayer supports two complementary approaches for configuration management:
+
+=== File-based Configuration
+- Ideal for initial setup and deployment
+- Configuration persists across restarts
+- Requires container restart for changes to take effect
+- Suitable for infrastructure-as-code workflows
+
+=== API-based Configuration
+- Enables runtime configuration changes
+- No service restarts required
+- Perfect for dynamic environments
+- Supports automated configuration management
+
+[NOTE]
+====
+See xref:storage.adoc[Storage Configuration] for detailed information about how file-based and API-based configurations work together, storage behavior, and best practices.
+====

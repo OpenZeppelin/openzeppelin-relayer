@@ -24,7 +24,8 @@ use crate::{
     constants::STELLAR_SMALLEST_UNIT_NAME,
     domain::{
         transaction::stellar::fetch_next_sequence_from_chain, BalanceResponse, SignDataRequest,
-        SignDataResponse, SignTypedDataRequest,
+        SignDataResponse, SignTransactionExternalResponse, SignTransactionExternalResponseStellar,
+        SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -35,8 +36,8 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        StellarProvider, StellarProviderTrait, TransactionCounterService,
-        TransactionCounterServiceTrait,
+        StellarProvider, StellarProviderTrait, StellarSignTrait, StellarSigner,
+        TransactionCounterService, TransactionCounterServiceTrait,
     },
 };
 use async_trait::async_trait;
@@ -101,7 +102,7 @@ where
 }
 
 #[allow(dead_code)]
-pub struct StellarRelayer<P, RR, NR, TR, J, TCS>
+pub struct StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
     P: StellarProviderTrait + Send + Sync,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -109,8 +110,10 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
 {
     relayer: RelayerRepoModel,
+    signer: S,
     network: StellarNetwork,
     provider: P,
     relayer_repository: Arc<RR>,
@@ -121,9 +124,9 @@ where
 }
 
 pub type DefaultStellarRelayer<J, TR, NR, RR, TCR> =
-    StellarRelayer<StellarProvider, RR, NR, TR, J, TransactionCounterService<TCR>>;
+    StellarRelayer<StellarProvider, RR, NR, TR, J, TransactionCounterService<TCR>, StellarSigner>;
 
-impl<P, RR, NR, TR, J, TCS> StellarRelayer<P, RR, NR, TR, J, TCS>
+impl<P, RR, NR, TR, J, TCS, S> StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
     P: StellarProviderTrait + Send + Sync,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -131,6 +134,7 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
 {
     /// Creates a new `StellarRelayer` instance.
     ///
@@ -141,6 +145,7 @@ where
     /// # Arguments
     ///
     /// * `relayer` - The relayer model containing configuration like ID, address, network name, and policies
+    /// * `signer` - The Stellar signer for signing transactions
     /// * `provider` - The Stellar provider implementation for blockchain interactions (account queries, transaction submission)
     /// * `dependencies` - Container with all required repositories and services (see [`StellarRelayerDependencies`])
     ///
@@ -151,6 +156,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         relayer: RelayerRepoModel,
+        signer: S,
         provider: P,
         dependencies: StellarRelayerDependencies<RR, NR, TR, J, TCS>,
     ) -> Result<Self, RelayerError> {
@@ -168,6 +174,7 @@ where
 
         Ok(Self {
             relayer,
+            signer,
             network,
             provider,
             relayer_repository: dependencies.relayer_repository,
@@ -221,7 +228,7 @@ where
 }
 
 #[async_trait]
-impl<P, RR, NR, TR, J, TCS> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS>
+impl<P, RR, NR, TR, J, TCS, S> Relayer for StellarRelayer<P, RR, NR, TR, J, TCS, S>
 where
     P: StellarProviderTrait + Send + Sync,
     RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
@@ -229,6 +236,7 @@ where
     TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
     TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+    S: StellarSignTrait + Send + Sync + 'static,
 {
     async fn process_transaction_request(
         &self,
@@ -389,6 +397,39 @@ where
         );
         Ok(())
     }
+
+    async fn sign_transaction(
+        &self,
+        request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        let stellar_req = match request {
+            SignTransactionRequest::Stellar(req) => req,
+            _ => {
+                return Err(RelayerError::NotSupported(
+                    "Invalid request type for Stellar relayer".to_string(),
+                ))
+            }
+        };
+
+        // Use the signer's sign_xdr_transaction method
+        let response = self
+            .signer
+            .sign_xdr_transaction(&stellar_req.unsigned_xdr, &self.network.passphrase)
+            .await
+            .map_err(RelayerError::SignerError)?;
+
+        // Convert DecoratedSignature to base64 string
+        let signature_bytes = &response.signature.signature.0;
+        let signature_string =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, signature_bytes);
+
+        Ok(SignTransactionExternalResponse::Stellar(
+            SignTransactionExternalResponseStellar {
+                signed_xdr: response.signed_xdr,
+                signature: signature_string,
+            },
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -397,21 +438,24 @@ mod tests {
     use crate::{
         config::{NetworkConfigCommon, StellarNetworkConfig},
         constants::STELLAR_SMALLEST_UNIT_NAME,
+        domain::{SignTransactionRequestStellar, SignXdrTransactionResponseStellar},
         jobs::MockJobProducerTrait,
         models::{
             NetworkConfigData, NetworkRepoModel, NetworkType, RelayerNetworkPolicy,
-            RelayerRepoModel, RelayerStellarPolicy,
+            RelayerRepoModel, RelayerStellarPolicy, SignerError,
         },
         repositories::{
             InMemoryNetworkRepository, MockRelayerRepository, MockTransactionRepository,
         },
-        services::{MockStellarProviderTrait, MockTransactionCounterServiceTrait},
+        services::{
+            MockStellarProviderTrait, MockStellarSignTrait, MockTransactionCounterServiceTrait,
+        },
     };
     use eyre::eyre;
     use mockall::predicate::*;
     use soroban_rs::xdr::{
-        AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32, Thresholds,
-        Uint256, VecM,
+        AccountEntry, AccountEntryExt, AccountId, DecoratedSignature, PublicKey, SequenceNumber,
+        Signature, SignatureHint, String32, Thresholds, Uint256, VecM,
     };
     use std::future::ready;
     use std::sync::Arc;
@@ -504,9 +548,11 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo),
@@ -537,9 +583,11 @@ mod tests {
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo),
@@ -575,9 +623,11 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let tx_repo = MockTransactionRepository::new();
         let counter = MockTransactionCounterServiceTrait::new();
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo),
@@ -646,9 +696,11 @@ mod tests {
                 Ok(vec![confirmed_tx.clone()]) as Result<Vec<TransactionRepoModel>, RepositoryError>
             })
             .once();
+        let signer = MockStellarSignTrait::new();
 
         let stellar_relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider_mock,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo_mock),
@@ -701,9 +753,11 @@ mod tests {
             .expect_get_account()
             .with(eq(relayer_model.address.clone()))
             .returning(|_| Box::pin(async { Err(eyre!("Stellar provider down")) }));
+        let signer = MockStellarSignTrait::new();
 
         let stellar_relayer = StellarRelayer::new(
             relayer_model.clone(),
+            signer,
             provider_mock,
             StellarRelayerDependencies::new(
                 Arc::new(relayer_repo_mock),
@@ -758,9 +812,11 @@ mod tests {
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model,
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 relayer_repo,
@@ -796,9 +852,11 @@ mod tests {
         let tx_repo = Arc::new(MockTransactionRepository::new());
         let job_producer = Arc::new(MockJobProducerTrait::new());
         let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+        let signer = MockStellarSignTrait::new();
 
         let relayer = StellarRelayer::new(
             relayer_model,
+            signer,
             provider,
             StellarRelayerDependencies::new(
                 relayer_repo,
@@ -818,6 +876,214 @@ mod tests {
                 assert!(msg.contains("Failed to fetch account for balance: provider failed"));
             }
             _ => panic!("Unexpected error type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_success() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
+        let provider = MockStellarProviderTrait::new();
+        let mut signer = MockStellarSignTrait::new();
+
+        let unsigned_xdr = "AAAAAgAAAAD///8AAAAAAAAAAQAAAAAAAAACAAAAAQAAAAAAAAAB";
+        let expected_signed_xdr =
+            "AAAAAgAAAAD///8AAAAAAAABAAAAAAAAAAIAAAABAAAAAAAAAAEAAAABAAAAA...";
+        let expected_signature = DecoratedSignature {
+            hint: SignatureHint([1, 2, 3, 4]),
+            signature: Signature([5u8; 64].try_into().unwrap()),
+        };
+        let expected_signature_for_closure = expected_signature.clone();
+
+        signer
+            .expect_sign_xdr_transaction()
+            .with(eq(unsigned_xdr), eq("Test SDF Network ; September 2015"))
+            .returning(move |_, _| {
+                Ok(SignXdrTransactionResponseStellar {
+                    signed_xdr: expected_signed_xdr.to_string(),
+                    signature: expected_signature_for_closure.clone(),
+                })
+            });
+
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+
+        let relayer = StellarRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                relayer_repo,
+                ctx.network_repository.clone(),
+                tx_repo,
+                counter,
+                job_producer,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: unsigned_xdr.to_string(),
+        });
+        let result = relayer.sign_transaction(&request).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            SignTransactionExternalResponse::Stellar(response) => {
+                assert_eq!(response.signed_xdr, expected_signed_xdr);
+                // Compare the base64 encoded signature
+                let expected_signature_base64 = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &expected_signature.signature.0,
+                );
+                assert_eq!(response.signature, expected_signature_base64);
+            }
+            _ => panic!("Expected Stellar response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_signer_error() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
+        let provider = MockStellarProviderTrait::new();
+        let mut signer = MockStellarSignTrait::new();
+
+        let unsigned_xdr = "INVALID_XDR";
+
+        signer
+            .expect_sign_xdr_transaction()
+            .with(eq(unsigned_xdr), eq("Test SDF Network ; September 2015"))
+            .returning(|_, _| Err(SignerError::SigningError("Invalid XDR format".to_string())));
+
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+
+        let relayer = StellarRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                relayer_repo,
+                ctx.network_repository.clone(),
+                tx_repo,
+                counter,
+                job_producer,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: unsigned_xdr.to_string(),
+        });
+        let result = relayer.sign_transaction(&request).await;
+        assert!(result.is_err());
+
+        match result.err().unwrap() {
+            RelayerError::SignerError(err) => match err {
+                SignerError::SigningError(msg) => {
+                    assert_eq!(msg, "Invalid XDR format");
+                }
+                _ => panic!("Expected SigningError"),
+            },
+            _ => panic!("Expected RelayerError::SignerError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_with_different_network_passphrase() {
+        let ctx = TestCtx::default();
+        // Create a custom network with a different passphrase
+        let custom_network = NetworkRepoModel {
+            id: "stellar:mainnet".to_string(),
+            name: "mainnet".to_string(),
+            network_type: NetworkType::Stellar,
+            config: NetworkConfigData::Stellar(StellarNetworkConfig {
+                common: NetworkConfigCommon {
+                    network: "mainnet".to_string(),
+                    from: None,
+                    rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
+                    explorer_urls: None,
+                    average_blocktime_ms: Some(5000),
+                    is_testnet: Some(false),
+                    tags: None,
+                },
+                passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
+            }),
+        };
+        ctx.network_repository.create(custom_network).await.unwrap();
+
+        let mut relayer_model = ctx.relayer_model.clone();
+        relayer_model.network = "mainnet".to_string();
+
+        let provider = MockStellarProviderTrait::new();
+        let mut signer = MockStellarSignTrait::new();
+
+        let unsigned_xdr = "AAAAAgAAAAD///8AAAAAAAAAAQAAAAAAAAACAAAAAQAAAAAAAAAB";
+        let expected_signature = DecoratedSignature {
+            hint: SignatureHint([10, 20, 30, 40]),
+            signature: Signature([15u8; 64].try_into().unwrap()),
+        };
+        let expected_signature_for_closure = expected_signature.clone();
+
+        signer
+            .expect_sign_xdr_transaction()
+            .with(
+                eq(unsigned_xdr),
+                eq("Public Global Stellar Network ; September 2015"),
+            )
+            .returning(move |_, _| {
+                Ok(SignXdrTransactionResponseStellar {
+                    signed_xdr: "mainnet_signed_xdr".to_string(),
+                    signature: expected_signature_for_closure.clone(),
+                })
+            });
+
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let tx_repo = Arc::new(MockTransactionRepository::new());
+        let job_producer = Arc::new(MockJobProducerTrait::new());
+        let counter = Arc::new(MockTransactionCounterServiceTrait::new());
+
+        let relayer = StellarRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                relayer_repo,
+                ctx.network_repository.clone(),
+                tx_repo,
+                counter,
+                job_producer,
+            ),
+        )
+        .await
+        .unwrap();
+
+        let request = SignTransactionRequest::Stellar(SignTransactionRequestStellar {
+            unsigned_xdr: unsigned_xdr.to_string(),
+        });
+        let result = relayer.sign_transaction(&request).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            SignTransactionExternalResponse::Stellar(response) => {
+                assert_eq!(response.signed_xdr, "mainnet_signed_xdr");
+                // Convert expected signature to base64 for comparison (just the signature bytes, not the whole struct)
+                let expected_signature_string = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &expected_signature.signature.0,
+                );
+                assert_eq!(response.signature, expected_signature_string);
+            }
+            _ => panic!("Expected Stellar response"),
         }
     }
 }

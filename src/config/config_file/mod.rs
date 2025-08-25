@@ -21,21 +21,19 @@
 //! To use this module, load a configuration file using `load_config`, which will parse
 //! the file and validate its contents. If the configuration is valid, it can be used
 //! to initialize the application components.
-use crate::config::ConfigFileError;
+use crate::{
+    config::ConfigFileError,
+    models::{
+        relayer::{RelayerFileConfig, RelayersFileConfig},
+        signer::{SignerFileConfig, SignersFileConfig},
+        NotificationConfig, NotificationConfigs,
+    },
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fs::{self},
 };
-
-mod relayer;
-pub use relayer::*;
-
-mod signer;
-pub use signer::*;
-
-mod notification;
-pub use notification::*;
 
 mod plugin;
 pub use plugin::*;
@@ -58,7 +56,7 @@ pub enum ConfigFileNetworkType {
 pub struct Config {
     pub relayers: Vec<RelayerFileConfig>,
     pub signers: Vec<SignerFileConfig>,
-    pub notifications: Vec<NotificationFileConfig>,
+    pub notifications: Vec<NotificationConfig>,
     pub networks: NetworksFileConfig,
     pub plugins: Option<Vec<PluginFileConfig>>,
 }
@@ -73,25 +71,13 @@ impl Config {
     /// # Errors
     /// Returns a `ConfigFileError` if any validation checks fail.
     pub fn validate(&self) -> Result<(), ConfigFileError> {
-        if self.relayers.is_empty() && self.signers.is_empty() && self.notifications.is_empty() {
-            return Err(ConfigFileError::MissingField(
-                "config must contain at least one relayer, signer or notification".into(),
-            ));
-        }
-
-        if self.networks.is_empty() {
-            return Err(ConfigFileError::MissingField(
-                "config must contain at least one network".into(),
-            ));
-        }
-
         self.validate_networks()?;
         self.validate_relayers(&self.networks)?;
         self.validate_signers()?;
         self.validate_notifications()?;
         self.validate_plugins()?;
 
-        self.validate_relayer_signer_refs(&self.networks)?;
+        self.validate_relayer_signer_refs()?;
         self.validate_relayer_notification_refs()?;
 
         Ok(())
@@ -105,10 +91,7 @@ impl Config {
     /// # Errors
     /// Returns a `ConfigFileError::InvalidReference` if a relayer references a non-existent signer.
     /// Returns a `ConfigFileError::TestSigner` if a test signer is used on a production network.
-    fn validate_relayer_signer_refs(
-        &self,
-        networks: &NetworksFileConfig,
-    ) -> Result<(), ConfigFileError> {
+    fn validate_relayer_signer_refs(&self) -> Result<(), ConfigFileError> {
         let signer_ids: HashSet<_> = self.signers.iter().map(|s| &s.id).collect();
 
         for relayer in &self.relayers {
@@ -117,31 +100,6 @@ impl Config {
                     "Relayer '{}' references non-existent signer '{}'",
                     relayer.id, relayer.signer_id
                 )));
-            }
-            let signer_config = self
-                .signers
-                .iter()
-                .find(|s| s.id == relayer.signer_id)
-                .ok_or_else(|| {
-                    ConfigFileError::InternalError(format!(
-                        "Signer '{}' not found for relayer '{}'",
-                        relayer.signer_id, relayer.id
-                    ))
-                })?;
-
-            if let SignerFileConfigEnum::Test(_) = signer_config.config {
-                // ensure that only testnets are used with test signers
-                let network = networks
-                    .get_network(relayer.network_type, &relayer.network)
-                    .ok_or_else(|| ConfigFileError::InvalidNetwork {
-                        network_type: format!("{:?}", relayer.network_type).to_lowercase(),
-                        name: relayer.network.clone(),
-                    })?;
-                if !network.is_testnet() {
-                    return Err(ConfigFileError::TestSigner(
-                        "Test signer type cannot be used on production networks".to_string(),
-                    ));
-                }
             }
         }
 
@@ -184,7 +142,7 @@ impl Config {
 
     /// Validates that all notifications are valid and have unique IDs.
     fn validate_notifications(&self) -> Result<(), ConfigFileError> {
-        NotificationsFileConfig::new(self.notifications.clone()).validate()
+        NotificationConfigs::new(self.notifications.clone()).validate()
     }
 
     /// Validates that all networks are valid and have unique IDs.
@@ -226,7 +184,10 @@ pub fn load_config(config_file_path: &str) -> Result<Config, ConfigFileError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{PlainOrEnvValue, SecretString};
+    use crate::models::{
+        signer::{LocalSignerFileConfig, SignerFileConfig, SignerFileConfigEnum},
+        NotificationType, PlainOrEnvValue, SecretString,
+    };
     use std::path::Path;
 
     use super::*;
@@ -244,24 +205,18 @@ mod tests {
                 notification_id: Some("test-1".to_string()),
                 custom_rpc_urls: None,
             }],
-            signers: vec![
-                SignerFileConfig {
-                    id: "test-1".to_string(),
-                    config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
-                        path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
-                        passphrase: PlainOrEnvValue::Plain {
-                            value: SecretString::new("test"),
-                        },
-                    }),
-                },
-                SignerFileConfig {
-                    id: "test-type".to_string(),
-                    config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
-                },
-            ],
-            notifications: vec![NotificationFileConfig {
+            signers: vec![SignerFileConfig {
                 id: "test-1".to_string(),
-                r#type: NotificationFileConfigType::Webhook,
+                config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                    path: "tests/utils/test_keys/unit-test-local-signer.json".to_string(),
+                    passphrase: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test"),
+                    },
+                }),
+            }],
+            notifications: vec![NotificationConfig {
+                id: "test-1".to_string(),
+                r#type: NotificationType::Webhook,
                 url: "https://api.example.com/notifications".to_string(),
                 signing_key: None,
             }],
@@ -319,10 +274,7 @@ mod tests {
             .unwrap(),
             plugins: Some(vec![]),
         };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -349,10 +301,7 @@ mod tests {
             .unwrap(),
             plugins: Some(vec![]),
         };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigFileError::MissingField(_))
-        ));
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -434,192 +383,6 @@ mod tests {
             config.validate(),
             Err(ConfigFileError::InvalidReference(_))
         ));
-    }
-
-    #[test]
-    fn test_evm_mainnet_not_allowed_for_signer_type_test() {
-        let mut config = create_valid_config();
-        config.relayers[0].network = "mainnet".to_string();
-        config.relayers[0].signer_id = "test-type".to_string();
-
-        // Add mainnet network to the config
-        let mainnet_network = NetworkFileConfig::Evm(EvmNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "mainnet".to_string(),
-                from: None,
-                rpc_urls: Some(vec!["https://rpc.mainnet.example.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.mainnet.example.com".to_string()]),
-                average_blocktime_ms: Some(12000),
-                is_testnet: Some(false), // This is mainnet, not testnet
-                tags: Some(vec!["mainnet".to_string()]),
-            },
-            chain_id: Some(1),
-            required_confirmations: Some(12),
-            features: None,
-            symbol: Some("ETH".to_string()),
-        });
-
-        let mut networks = config.networks.networks;
-        networks.push(mainnet_network);
-        config.networks =
-            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
-
-        let result = config.validate();
-        assert!(matches!(
-            result,
-            Err(ConfigFileError::TestSigner(msg)) if msg.contains("production networks")
-        ));
-    }
-
-    #[test]
-    fn test_evm_sepolia_allowed_for_signer_type_test() {
-        let mut config = create_valid_config();
-        config.relayers[0].network = "sepolia".to_string();
-        config.relayers[0].signer_id = "test-type".to_string();
-
-        let sepolia_network = NetworkFileConfig::Evm(EvmNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "sepolia".to_string(),
-                from: None,
-                rpc_urls: Some(vec!["https://rpc.sepolia.example.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.sepolia.example.com".to_string()]),
-                average_blocktime_ms: Some(12000),
-                is_testnet: Some(true),
-                tags: Some(vec!["test".to_string()]),
-            },
-            chain_id: Some(11155111),
-            required_confirmations: Some(1),
-            features: None,
-            symbol: Some("ETH".to_string()),
-        });
-
-        let mut networks = config.networks.networks;
-        networks.push(sepolia_network);
-        config.networks =
-            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
-
-        let result = config.validate();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_solana_mainnet_not_allowed_for_signer_type_test() {
-        let mut config = create_valid_config();
-        config.relayers[0].network_type = ConfigFileNetworkType::Solana;
-        config.relayers[0].network = "mainnet-beta".to_string();
-        config.relayers[0].signer_id = "test-type".to_string();
-
-        let mainnet_beta_network = NetworkFileConfig::Solana(SolanaNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "mainnet-beta".to_string(),
-                from: None,
-                rpc_urls: Some(vec!["https://api.mainnet-beta.solana.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
-                average_blocktime_ms: Some(400),
-                is_testnet: Some(false),
-                tags: Some(vec!["mainnet".to_string()]),
-            },
-        });
-
-        let mut networks = config.networks.networks;
-        networks.push(mainnet_beta_network);
-        config.networks =
-            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
-
-        let result = config.validate();
-        assert!(matches!(
-            result,
-            Err(ConfigFileError::TestSigner(msg)) if msg.contains("production networks")
-        ));
-    }
-
-    #[test]
-    fn test_solana_devnet_allowed_for_signer_type_test() {
-        let mut config = create_valid_config();
-        config.relayers[0].network_type = ConfigFileNetworkType::Solana;
-        config.relayers[0].network = "devnet".to_string();
-        config.relayers[0].signer_id = "test-type".to_string();
-
-        let devnet_network = NetworkFileConfig::Solana(SolanaNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "devnet".to_string(),
-                from: None,
-                rpc_urls: Some(vec!["https://api.devnet.solana.com".to_string()]),
-                explorer_urls: Some(vec!["https://explorer.solana.com".to_string()]),
-                average_blocktime_ms: Some(400),
-                is_testnet: Some(true),
-                tags: Some(vec!["test".to_string()]),
-            },
-        });
-
-        let mut networks = config.networks.networks;
-        networks.push(devnet_network);
-        config.networks =
-            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
-
-        let result = config.validate();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_stellar_mainnet_not_allowed_for_signer_type_test() {
-        let mut config = create_valid_config();
-        config.relayers[0].network_type = ConfigFileNetworkType::Stellar;
-        config.relayers[0].network = "mainnet".to_string();
-        config.relayers[0].signer_id = "test-type".to_string();
-
-        let mainnet_network = NetworkFileConfig::Stellar(StellarNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "mainnet".to_string(),
-                from: None,
-                rpc_urls: Some(vec!["https://horizon.stellar.org".to_string()]),
-                explorer_urls: Some(vec!["https://stellar.expert".to_string()]),
-                average_blocktime_ms: Some(5000),
-                is_testnet: Some(false),
-                tags: Some(vec!["mainnet".to_string()]),
-            },
-            passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
-        });
-
-        let mut networks = config.networks.networks;
-        networks.push(mainnet_network);
-        config.networks =
-            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
-
-        let result = config.validate();
-        assert!(matches!(
-            result,
-            Err(ConfigFileError::TestSigner(msg)) if msg.contains("production networks")
-        ));
-    }
-
-    #[test]
-    fn test_stellar_testnet_allowed_for_signer_type_test() {
-        let mut config = create_valid_config();
-        config.relayers[0].network_type = ConfigFileNetworkType::Stellar;
-        config.relayers[0].network = "testnet".to_string();
-        config.relayers[0].signer_id = "test-type".to_string();
-
-        let testnet_network = NetworkFileConfig::Stellar(StellarNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "testnet".to_string(),
-                from: None,
-                rpc_urls: Some(vec!["https://soroban-testnet.stellar.org".to_string()]),
-                explorer_urls: Some(vec!["https://stellar.expert/explorer/testnet".to_string()]),
-                average_blocktime_ms: Some(5000),
-                is_testnet: Some(true),
-                tags: Some(vec!["test".to_string()]),
-            },
-            passphrase: Some("Test SDF Network ; September 2015".to_string()),
-        });
-
-        let mut networks = config.networks.networks;
-        networks.push(testnet_network);
-        config.networks =
-            NetworksFileConfig::new(networks).expect("Failed to create NetworksFileConfig");
-
-        let result = config.validate();
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -1128,8 +891,14 @@ mod tests {
             }],
             "signers": [{
                 "id": "test-signer",
-                "type": "test",
-                "config": {}
+                "type": "local",
+                "config": {
+                    "path": "tests/utils/test_keys/unit-test-local-signer.json",
+                    "passphrase": {
+                        "value": "test",
+                        "type": "plain"
+                    }
+                }
             }],
             "notifications": [{
                 "id": "test-notification",
@@ -1214,40 +983,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_config_validation_failure() {
-        let dir = tempdir().expect("Failed to create temp dir");
-        let config_path = dir.path().join("invalid_validation.json");
-
-        let invalid_config = serde_json::json!({
-            "relayers": [],
-            "signers": [],
-            "notifications": [],
-            "plugins": [],
-            "networks": [{
-                "type": "evm",
-                "network": "test-network",
-                "chain_id": 31337,
-                "required_confirmations": 1,
-                "symbol": "ETH",
-                "rpc_urls": ["https://rpc.test.example.com"]
-            }]
-        });
-
-        setup_config_file(
-            dir.path(),
-            "invalid_validation.json",
-            &invalid_config.to_string(),
-        );
-
-        let result = load_config(config_path.to_str().unwrap());
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
-    }
-
-    #[test]
     fn test_load_config_with_unicode_content() {
         let dir = tempdir().expect("Failed to create temp dir");
         let config_path = dir.path().join("unicode_config.json");
@@ -1264,8 +999,14 @@ mod tests {
             }],
             "signers": [{
                 "id": "test-signer-unicode",
-                "type": "test",
-                "config": {}
+                "type": "local",
+                "config": {
+                    "path": "tests/utils/test_keys/unit-test-local-signer.json",
+                    "passphrase": {
+                        "value": "test",
+                        "type": "plain"
+                    }
+                }
             }],
             "notifications": [{
                 "id": "test-notification-unicode",
@@ -1445,7 +1186,12 @@ mod tests {
             relayers: vec![],
             signers: vec![SignerFileConfig {
                 id: "test-signer".to_string(),
-                config: SignerFileConfigEnum::Test(TestSignerFileConfig {}),
+                config: SignerFileConfigEnum::Local(LocalSignerFileConfig {
+                    path: "test-path".to_string(),
+                    passphrase: PlainOrEnvValue::Plain {
+                        value: SecretString::new("test-passphrase"),
+                    },
+                }),
             }],
             notifications: vec![],
             networks: NetworksFileConfig::new(vec![NetworkFileConfig::Evm(EvmNetworkConfig {
@@ -1468,13 +1214,7 @@ mod tests {
         };
 
         let result = config.validate();
-        // This should fail because SignersFileConfig::validate() requires non-empty signers
-        // but the main Config::validate() also requires non-empty relayers
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1482,9 +1222,9 @@ mod tests {
         let config = Config {
             relayers: vec![],
             signers: vec![],
-            notifications: vec![NotificationFileConfig {
+            notifications: vec![NotificationConfig {
                 id: "test-notification".to_string(),
-                r#type: NotificationFileConfigType::Webhook,
+                r#type: NotificationType::Webhook,
                 url: "https://api.example.com/notifications".to_string(),
                 signing_key: None,
             }],
@@ -1508,12 +1248,7 @@ mod tests {
         };
 
         let result = config.validate();
-        // This should fail because the validation requires non-empty relayers AND signers
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1528,7 +1263,7 @@ mod tests {
             paused: false,
             network_type: ConfigFileNetworkType::Solana,
             policies: None,
-            signer_id: "test-type".to_string(),
+            signer_id: "test-1".to_string(),
             notification_id: None,
             custom_rpc_urls: None,
         });
@@ -1660,10 +1395,9 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigFileError::MissingField(_)
-        ));
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, ConfigFileError::InvalidFormat(_)));
     }
 
     #[test]
@@ -1729,8 +1463,14 @@ mod tests {
             }],
             "signers": [{
                 "id": "test-signer",
-                "type": "test",
-                "config": {}
+                "type": "local",
+                "config": {
+                    "path": "tests/utils/test_keys/unit-test-local-signer.json",
+                    "passphrase": {
+                        "value": "test",
+                        "type": "plain"
+                    }
+                }
             }],
             "notifications": [{
                 "id": "test-notification",

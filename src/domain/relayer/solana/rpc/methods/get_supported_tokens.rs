@@ -12,19 +12,25 @@
 use log::info;
 
 use crate::{
+    constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE,
     jobs::JobProducerTrait,
-    models::{GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult},
+    models::{
+        GetSupportedTokensItem, GetSupportedTokensRequestParams, GetSupportedTokensResult,
+        TransactionRepoModel,
+    },
+    repositories::{Repository, TransactionRepository},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
 use super::*;
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     pub(crate) async fn get_supported_tokens_impl(
         &self,
@@ -45,10 +51,13 @@ where
                         symbol: token.symbol.as_deref().unwrap_or("").to_string(),
                         decimals: token.decimals.unwrap_or(0),
                         max_allowed_fee: token.max_allowed_fee,
-                        conversion_slippage_percentage: token
-                            .swap_config
-                            .as_ref()
-                            .and_then(|config| config.slippage_percentage),
+                        conversion_slippage_percentage: Some(
+                            token
+                                .swap_config
+                                .as_ref()
+                                .and_then(|config| config.slippage_percentage)
+                                .unwrap_or(DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE),
+                        ),
                     })
                     .collect()
             })
@@ -73,11 +82,12 @@ mod tests {
             GetSupportedTokensRequestParams, RelayerNetworkPolicy, RelayerSolanaPolicy,
             SolanaAllowedTokensPolicy, SolanaAllowedTokensSwapConfig,
         },
+        repositories::MockTransactionRepository,
     };
 
     #[tokio::test]
     async fn test_get_supported_tokens() {
-        let (mut relayer, signer, provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         // Update relayer policy with some tokens
@@ -107,10 +117,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let result = rpc

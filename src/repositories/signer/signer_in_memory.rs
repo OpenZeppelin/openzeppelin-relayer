@@ -161,14 +161,14 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
 mod tests {
     use secrets::SecretVec;
 
-    use crate::models::{LocalSignerConfig, SignerConfig};
+    use crate::models::{LocalSignerConfigStorage, SignerConfigStorage};
 
     use super::*;
 
     fn create_test_signer(id: String) -> SignerRepoModel {
         SignerRepoModel {
             id: id.clone(),
-            config: SignerConfig::Local(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::zero(0),
             }),
         }
@@ -203,7 +203,7 @@ mod tests {
         // Update the signer
         let updated_signer = SignerRepoModel {
             id: "test".to_string(),
-            config: SignerConfig::Test(LocalSignerConfig {
+            config: SignerConfigStorage::Local(LocalSignerConfigStorage {
                 raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[2; 32])),
             }),
         };

@@ -39,12 +39,25 @@ mod stellar;
 pub use stellar::*;
 
 use crate::{
-    domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
+    domain::{
+        SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest,
+        SignXdrTransactionResponseStellar,
+    },
     models::{
-        Address, NetworkTransactionData, NetworkType, SignerError, SignerFactoryError,
-        SignerRepoModel, SignerType, TransactionError, TransactionRepoModel,
+        Address, DecoratedSignature, NetworkTransactionData, NetworkType,
+        Signer as SignerDomainModel, SignerError, SignerFactoryError, SignerType, TransactionError,
+        TransactionRepoModel,
     },
 };
+
+/// Response from signing an XDR transaction
+#[derive(Debug, Clone, Serialize)]
+pub struct XdrSigningResponse {
+    /// The signed XDR in base64 format
+    pub signed_xdr: String,
+    /// The signature that was applied
+    pub signature: DecoratedSignature,
+}
 
 #[async_trait]
 #[cfg_attr(test, automock)]
@@ -134,7 +147,7 @@ pub struct SignerFactory;
 impl SignerFactory {
     pub async fn create_signer(
         network_type: &NetworkType,
-        signer_model: &SignerRepoModel,
+        signer_model: &SignerDomainModel,
     ) -> Result<NetworkSigner, SignerFactoryError> {
         let signer = match network_type {
             NetworkType::Evm => {

@@ -27,27 +27,22 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 2000,
+      "from": "mantle",
+      "type": "evm",
+      "network": "mantle-sepolia",
       "chain_id": 5003,
       "explorer_urls": [
         "https://explorer.sepolia.mantle.xyz/api",
         "https://explorer.sepolia.mantle.xyz"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": true,
-      "network": "mantle-sepolia",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://rpc.sepolia.mantle.xyz"
       ],
-      "symbol": "MNT",
       "tags": [
         "deprecated",
         "rollup"
-      ],
-      "type": "evm"
+      ]
     }
   ]
 }

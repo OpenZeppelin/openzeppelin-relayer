@@ -895,28 +895,8 @@ impl TransactionRepository for RedisTransactionRepository {
         let mut tx = self.get_by_id(tx_id.clone()).await?;
         let old_tx = tx.clone(); // Keep copy for index updates
 
-        // Apply partial updates
-        if let Some(status) = update.status {
-            tx.status = status;
-        }
-        if let Some(status_reason) = update.status_reason {
-            tx.status_reason = Some(status_reason);
-        }
-        if let Some(sent_at) = update.sent_at {
-            tx.sent_at = Some(sent_at);
-        }
-        if let Some(confirmed_at) = update.confirmed_at {
-            tx.confirmed_at = Some(confirmed_at);
-        }
-        if let Some(network_data) = update.network_data {
-            tx.network_data = network_data;
-        }
-        if let Some(hashes) = update.hashes {
-            tx.hashes = hashes;
-        }
-        if let Some(is_canceled) = update.is_canceled {
-            tx.is_canceled = Some(is_canceled);
-        }
+        // Apply partial updates using the model's business logic
+        tx.apply_partial_update(update);
 
         // Update transaction and indexes atomically
         let key = self.tx_key(&tx.relayer_id, &tx_id);
@@ -975,10 +955,18 @@ mod tests {
     use super::*;
     use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
     use alloy::primitives::U256;
+    use lazy_static::lazy_static;
     use redis::Client;
     use std::str::FromStr;
     use tokio;
     use uuid::Uuid;
+
+    use tokio::sync::Mutex;
+
+    // Use a mutex to ensure tests don't run in parallel when modifying env vars
+    lazy_static! {
+        static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
 
     // Helper function to create test transactions
     fn create_test_transaction(id: &str) -> TransactionRepoModel {
@@ -991,6 +979,7 @@ mod tests {
             sent_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             confirmed_at: Some("2025-01-27T15:31:10.777083+00:00".to_string()),
             valid_until: None,
+            delete_at: None,
             network_type: NetworkType::Evm,
             priced_at: None,
             hashes: vec![],
@@ -1439,6 +1428,7 @@ mod tests {
             is_canceled: None,
             priced_at: None,
             noop_count: None,
+            delete_at: None,
         };
 
         let updated = repo
@@ -1632,5 +1622,275 @@ mod tests {
 
         repo.drop_all_entries().await.unwrap();
         assert!(!repo.has_entries().await.unwrap());
+    }
+
+    // Tests for delete_at field setting on final status updates
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_status_sets_delete_at_for_final_statuses() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use chrono::{DateTime, Duration, Utc};
+        use std::env;
+
+        // Use a unique test environment variable to avoid conflicts
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "6");
+
+        let repo = setup_test_repo().await;
+
+        let final_statuses = [
+            TransactionStatus::Canceled,
+            TransactionStatus::Confirmed,
+            TransactionStatus::Failed,
+            TransactionStatus::Expired,
+        ];
+
+        for (i, status) in final_statuses.iter().enumerate() {
+            let tx_id = format!("test-final-{}-{}", i, Uuid::new_v4());
+            let mut tx = create_test_transaction(&tx_id);
+
+            // Ensure transaction has no delete_at initially and is in pending state
+            tx.delete_at = None;
+            tx.status = TransactionStatus::Pending;
+
+            repo.create(tx).await.unwrap();
+
+            let before_update = Utc::now();
+
+            // Update to final status
+            let updated = repo
+                .update_status(tx_id.clone(), status.clone())
+                .await
+                .unwrap();
+
+            // Should have delete_at set
+            assert!(
+                updated.delete_at.is_some(),
+                "delete_at should be set for status: {:?}",
+                status
+            );
+
+            // Verify the timestamp is reasonable (approximately 6 hours from now)
+            let delete_at_str = updated.delete_at.unwrap();
+            let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+                .expect("delete_at should be valid RFC3339")
+                .with_timezone(&Utc);
+
+            let duration_from_before = delete_at.signed_duration_since(before_update);
+            let expected_duration = Duration::hours(6);
+            let tolerance = Duration::minutes(5);
+
+            assert!(
+                duration_from_before >= expected_duration - tolerance &&
+                duration_from_before <= expected_duration + tolerance,
+                "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
+                status, duration_from_before
+            );
+        }
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_status_does_not_set_delete_at_for_non_final_statuses() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "4");
+
+        let repo = setup_test_repo().await;
+
+        let non_final_statuses = [
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+        ];
+
+        for (i, status) in non_final_statuses.iter().enumerate() {
+            let tx_id = format!("test-non-final-{}-{}", i, Uuid::new_v4());
+            let mut tx = create_test_transaction(&tx_id);
+            tx.delete_at = None;
+            tx.status = TransactionStatus::Pending;
+
+            repo.create(tx).await.unwrap();
+
+            // Update to non-final status
+            let updated = repo
+                .update_status(tx_id.clone(), status.clone())
+                .await
+                .unwrap();
+
+            // Should NOT have delete_at set
+            assert!(
+                updated.delete_at.is_none(),
+                "delete_at should NOT be set for status: {:?}",
+                status
+            );
+        }
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_partial_update_sets_delete_at_for_final_statuses() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use chrono::{DateTime, Duration, Utc};
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "8");
+
+        let repo = setup_test_repo().await;
+        let tx_id = format!("test-partial-final-{}", Uuid::new_v4());
+        let mut tx = create_test_transaction(&tx_id);
+        tx.delete_at = None;
+        tx.status = TransactionStatus::Pending;
+
+        repo.create(tx).await.unwrap();
+
+        let before_update = Utc::now();
+
+        // Use partial_update to set status to Confirmed (final status)
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            status_reason: Some("Transaction completed".to_string()),
+            confirmed_at: Some("2023-01-01T12:05:00Z".to_string()),
+            ..Default::default()
+        };
+
+        let updated = repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        // Should have delete_at set
+        assert!(
+            updated.delete_at.is_some(),
+            "delete_at should be set when updating to Confirmed status"
+        );
+
+        // Verify the timestamp is reasonable (approximately 8 hours from now)
+        let delete_at_str = updated.delete_at.unwrap();
+        let delete_at = DateTime::parse_from_rfc3339(&delete_at_str)
+            .expect("delete_at should be valid RFC3339")
+            .with_timezone(&Utc);
+
+        let duration_from_before = delete_at.signed_duration_since(before_update);
+        let expected_duration = Duration::hours(8);
+        let tolerance = Duration::minutes(5);
+
+        assert!(
+            duration_from_before >= expected_duration - tolerance
+                && duration_from_before <= expected_duration + tolerance,
+            "delete_at should be approximately 8 hours from now. Duration: {:?}",
+            duration_from_before
+        );
+
+        // Also verify other fields were updated
+        assert_eq!(updated.status, TransactionStatus::Confirmed);
+        assert_eq!(
+            updated.status_reason,
+            Some("Transaction completed".to_string())
+        );
+        assert_eq!(
+            updated.confirmed_at,
+            Some("2023-01-01T12:05:00Z".to_string())
+        );
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_status_preserves_existing_delete_at() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "2");
+
+        let repo = setup_test_repo().await;
+        let tx_id = format!("test-preserve-delete-at-{}", Uuid::new_v4());
+        let mut tx = create_test_transaction(&tx_id);
+
+        // Set an existing delete_at value
+        let existing_delete_at = "2025-01-01T12:00:00Z".to_string();
+        tx.delete_at = Some(existing_delete_at.clone());
+        tx.status = TransactionStatus::Pending;
+
+        repo.create(tx).await.unwrap();
+
+        // Update to final status
+        let updated = repo
+            .update_status(tx_id.clone(), TransactionStatus::Confirmed)
+            .await
+            .unwrap();
+
+        // Should preserve the existing delete_at value
+        assert_eq!(
+            updated.delete_at,
+            Some(existing_delete_at),
+            "Existing delete_at should be preserved when updating to final status"
+        );
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_partial_update_without_status_change_preserves_delete_at() {
+        let _lock = ENV_MUTEX.lock().await;
+
+        use std::env;
+
+        env::set_var("TRANSACTION_EXPIRATION_HOURS", "3");
+
+        let repo = setup_test_repo().await;
+        let tx_id = format!("test-preserve-no-status-{}", Uuid::new_v4());
+        let mut tx = create_test_transaction(&tx_id);
+        tx.delete_at = None;
+        tx.status = TransactionStatus::Pending;
+
+        repo.create(tx).await.unwrap();
+
+        // First, update to final status to set delete_at
+        let updated1 = repo
+            .update_status(tx_id.clone(), TransactionStatus::Confirmed)
+            .await
+            .unwrap();
+
+        assert!(updated1.delete_at.is_some());
+        let original_delete_at = updated1.delete_at.clone();
+
+        // Now update other fields without changing status
+        let update = TransactionUpdateRequest {
+            status: None, // No status change
+            status_reason: Some("Updated reason".to_string()),
+            confirmed_at: Some("2023-01-01T12:10:00Z".to_string()),
+            ..Default::default()
+        };
+
+        let updated2 = repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        // delete_at should be preserved
+        assert_eq!(
+            updated2.delete_at, original_delete_at,
+            "delete_at should be preserved when status is not updated"
+        );
+
+        // Other fields should be updated
+        assert_eq!(updated2.status, TransactionStatus::Confirmed); // Unchanged
+        assert_eq!(updated2.status_reason, Some("Updated reason".to_string()));
+        assert_eq!(
+            updated2.confirmed_at,
+            Some("2023-01-01T12:10:00Z".to_string())
+        );
+
+        // Cleanup
+        env::remove_var("TRANSACTION_EXPIRATION_HOURS");
     }
 }

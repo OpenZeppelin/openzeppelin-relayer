@@ -7,8 +7,12 @@ OpenZeppelin Relayer supports plugins to extend the functionality of the relayer
 
 Plugins are `TypeScript` functions running in the Relayer server that can include any arbitrary logic defined by the Relayer operator.
 
-It also includes a simple `PluginAPI` library to interact with the Relayer, allowing to send transactions, and
-is extensible to support new features in the future.
+The plugin system features:
+- **Handler Pattern**: Simple export-based plugin development
+- **TypeScript Support**: Full type safety and IntelliSense
+- **Plugin API**: Clean interface for interacting with relayers
+- **Docker Integration**: Seamless development and deployment
+- **Comprehensive Error Handling**: Detailed logging and debugging capabilities
 
 == Configuration
 
@@ -25,39 +29,109 @@ openzeppelin-relayer/
     └── config.json     # Plugins in configuration file
 ----
 
-The plugin code must include the following structure:
+==== Handler Pattern (Recommended)
+
+This approach uses a simple `handler` export pattern:
 
 [source,typescript]
 ----
 /// Required imports.
+import { Speed, PluginAPI } from "@openzeppelin/relayer-sdk";
+
+/// Define your plugin parameters interface
+type MyPluginParams = {
+  destinationAddress: string;
+  amount?: number;
+  message?: string;
+  relayerId?: string;
+}
+
+/// Define your plugin return type
+type MyPluginResult = {
+  success: boolean;
+  transactionId: string;
+  message: string;
+}
+
+/// Export a handler function - that's it!
+export async function handler(api: PluginAPI, params: MyPluginParams): Promise<MyPluginResult> {
+    console.info("🚀 Plugin started...");
+
+    // Validate parameters
+    if (!params.destinationAddress) {
+        throw new Error("destinationAddress is required");
+    }
+
+    // Use the relayer API
+    const relayer = api.useRelayer(params.relayerId || "my-relayer");
+
+    const result = await relayer.sendTransaction({
+        to: params.destinationAddress,
+        value: params.amount || 1,
+        data: "0x",
+        gas_limit: 21000,
+        speed: Speed.FAST,
+    });
+
+    console.info(`Transaction submitted: ${result.id}`);
+
+    // Wait for confirmation
+    await result.wait({
+        interval: 5000,  // Check every 5 seconds
+        timeout: 120000  // Timeout after 2 minutes
+    });
+
+    return {
+        success: true,
+        transactionId: result.id,
+        message: `Successfully sent ${params.amount || 1} wei to ${params.destinationAddress}`
+    };
+}
+----
+
+==== Legacy Pattern (Deprecated, but supported)
+
+WARNING: The `runPlugin()` pattern is deprecated and will be removed in a future version. Please migrate to the handler export pattern above. Legacy plugins will continue to work but will show deprecation warnings.
+
+[source,typescript]
+----
 import { runPlugin, PluginAPI } from "./lib/plugin";
 
-/// Additional imports.
-import { ethers } from "ethers";
-
-/// Here you can define custom params that will be included as part
-/// of the request when the plugin is invoked.
-type MyCustomParams = {
-  foo: string,
-  bar: number
+async function myPlugin(api: PluginAPI, params: any) {
+    // Plugin logic here
+    return "result";
 }
 
-/// The plugin function body.
-async function myPlugin(api: PluginAPI, params: MyCustomParams) {
-    // You can use the `params` to access the custom params passed to the plugin.
-    console.log(params.foo);
-    console.log(params.bar);
+runPlugin(myPlugin); // ⚠️ Deprecated - shows warning but still works
+----
 
-    // Api usage to send a transaction:
-    let relayer = api.relayer('my-relayer');
-    const tx = await relayer.sendTransaction({
-        to: "0x1234567890123456789012345678901234567890",
-        value: ethers.parseEther("1"),
+**Example legacy plugin** (`plugins/examples/example-deprecated.ts`):
+[source,typescript]
+----
+import { PluginAPI, runPlugin } from "../lib/plugin";
+import { Speed } from "@openzeppelin/relayer-sdk";
+
+type Params = {
+    destinationAddress: string;
+};
+
+async function example(api: PluginAPI, params: Params): Promise<string> {
+    console.info("Plugin started...");
+
+    const relayer = api.useRelayer("sepolia-example");
+    const result = await relayer.sendTransaction({
+        to: params.destinationAddress,
+        value: 1,
+        data: "0x",
+        gas_limit: 21000,
+        speed: Speed.FAST,
     });
+
+    await result.wait();
+    return "done!";
 }
 
-/// `runPlugin` is the entry point for the plugin.
-runPlugin(myPlugin);
+runPlugin(example);
 ----
 
 === Declaring in config file
@@ -89,23 +163,54 @@ The timeout is the maximum time *in seconds* that the plugin can run. If the plu
 The timeout is optional, and if not provided, the default is 300 seconds (5 minutes).
 
 
+== Plugin Development Guidelines
+
+=== TypeScript Best Practices
+
+- **Define Parameter Types**: Always create interfaces or types for your plugin parameters
+- **Define Return Types**: Specify what your plugin returns for better developer experience
+- **Handle Errors Gracefully**: Use try-catch blocks and return structured error responses
+- **Validate Input**: Check required parameters and provide meaningful error messages
+- **Use Async/Await**: Modern async patterns for better readability
+
+=== Testing Your Plugin
+
+You can test your handler function directly:
+
+[source,typescript]
+----
+import { handler } from './my-plugin';
+
+// Mock API for testing (in real scenarios, use proper mocking)
+const mockApi = {
+  useRelayer: (id: string) => ({
+    sendTransaction: async (tx: any) => ({ id: "test-tx-123", wait: async () => {} })
+  })
+} as any;
+
+const result = await handler(mockApi, {
+  destinationAddress: "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+  amount: 1000
+});
+console.log(result);
+----
+
 == Invocation
 
 Plugins are invoked by hitting the `api/v1/plugins/{plugin-id}/call` endpoint.
 
-The endpoint accepts a `POST` request with the following body:
+The endpoint accepts a `POST` request. Example post request body:
 
 [source,json]
 ----
 {
-  "params": {
-    "foo": "bar",
-    "bar": 1
-  }
+  "destinationAddress": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+  "amount": 1000000000000000,
+  "message": "Hello from OpenZeppelin Relayer!"
 }
 ----
 
-Then the plugin will be invoked passing the `params` as the second argument of the plugin function.
+The parameters are passed directly to your plugin's `handler` function.
 
 == Debugging
 
@@ -116,47 +221,114 @@ When invoking a plugin, the response will include:
 - `error`: An error message if the plugin execution failed.
 - `traces`: A list of messages sent between the plugin and the Relayer instance. This includes all the payloads passed through the `PluginAPI` object.
 
-=== Example
+=== Complete Example
 
-1. Example Plugin code:
+1. **Plugin Code** (`plugins/example.ts`):
 
 [source,typescript]
 ----
-import { runPlugin, Plugin } from "./lib/plugin";
-import { ethers } from "ethers";
+import { Speed, PluginAPI } from "@openzeppelin/relayer-sdk";
 
-type MyCustomParams = {
-  foo: string,
+type ExampleParams = {
+  destinationAddress: string;
+  amount?: number;
+  message?: string;
 }
 
-async function myPlugin(api: Plugin, params: MyCustomParams) {
-    console.log("Hello, world!");
-
-    // For example, to send a transaction:
-    let relayer = api.relayer('my-relayer');
-    const tx = await relayer.sendTransaction({
-        to: "0x1234567890123456789012345678901234567890",
-        value: ethers.parseEther("1"),
-    });
-
-    console.log("Foo ", params.foo);
-
-    return `Successfully sent transaction with id: ${tx.id}`;
+type ExampleResult = {
+  success: boolean;
+  transactionId: string;
+  transactionHash: string | null;
+  message: string;
+  timestamp: string;
 }
 
-runPlugin(myPlugin);
+export async function handler(api: PluginAPI, params: ExampleParams): Promise<ExampleResult> {
+    console.info("🚀 Example plugin started");
+    console.info(`📋 Parameters:`, JSON.stringify(params, null, 2));
+
+    try {
+        // Validate parameters
+        if (!params.destinationAddress) {
+            throw new Error("destinationAddress is required");
+        }
+
+        const amount = params.amount || 1;
+        const message = params.message || "Hello from OpenZeppelin Relayer!";
+
+        console.info(`💰 Sending ${amount} wei to ${params.destinationAddress}`);
+
+        // Get relayer and send transaction
+        const relayer = api.useRelayer("my-relayer");
+        const result = await relayer.sendTransaction({
+            to: params.destinationAddress,
+            value: amount,
+            data: "0x",
+            gas_limit: 21000,
+            speed: Speed.FAST,
+        });
+
+        console.info(`✅ Transaction submitted: ${result.id}`);
+
+        // Wait for confirmation
+        const confirmation = await result.wait({
+            interval: 5000,
+            timeout: 120000
+        });
+
+        console.info(`🎉 Transaction confirmed: ${confirmation.hash}`);
+
+        return {
+            success: true,
+            transactionId: result.id,
+            transactionHash: confirmation.hash || null,
+            message: `Successfully sent ${amount} wei to ${params.destinationAddress}. ${message}`,
+            timestamp: new Date().toISOString()
+        };
+
+    } catch (error) {
+        console.error("❌ Plugin execution failed:", error);
+        return {
+            success: false,
+            transactionId: "",
+            transactionHash: null,
+            message: `Plugin failed: ${(error as Error).message}`,
+            timestamp: new Date().toISOString()
+        };
+    }
+}
 ----
 
-2. Example Invocation:
+2. **Plugin Configuration** (`config/config.json`):
+
+[source,json]
+----
+{
+  "plugins": [
+    {
+      "id": "example-plugin",
+      "path": "example-plugin.ts",
+      "timeout": 30
+    }
+  ]
+}
+----
+
+3. **API Invocation**:
 
 [source,bash]
 ----
-curl -X POST http://localhost:3000/api/v1/plugins/my-plugin/call \
+curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 -H "Content-Type: application/json" \
--d '{"params": {"foo": "bar"}}'
+-H "Authorization: Bearer YOUR_API_KEY" \
+-d '{
+  "destinationAddress": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+  "amount": 1000000000000000,
+  "message": "Test transaction from plugin"
+}'
 ----
 
-3. Example Response:
+4. **API Response**:
 
 [source,json]
 ----
@@ -165,31 +337,106 @@ curl -X POST http://localhost:3000/api/v1/plugins/my-plugin/call \
   "message": "Plugin called successfully",
   "logs": [
     {
-      "level": "log",
-      "message": "Hello, world!"
+      "level": "info",
+      "message": "🚀 Example plugin started"
     },
     {
-      "level": "log",
-      "message": "Foo bar"
+      "level": "info",
+      "message": "💰 Sending 1000000000000000 wei to 0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A"
+    },
+    {
+      "level": "info",
+      "message": "✅ Transaction submitted: tx-123456"
+    },
+    {
+      "level": "info",
+      "message": "🎉 Transaction confirmed: 0xabc123..."
     }
   ],
-  "return_value": "Successfully sent transaction with id: 1234567890",
+  "return_value": {
+    "success": true,
+    "transactionId": "tx-123456",
+    "transactionHash": "0xabc123def456...",
+    "message": "Successfully sent 1000000000000000 wei to 0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A. Test transaction from plugin",
+    "timestamp": "2024-01-15T10:30:00.000Z"
+  },
   "error": "",
   "traces": [
     {
       "relayer_id": "my-relayer",
       "method": "sendTransaction",
       "payload": {
-        "to": "0x1234567890123456789012345678901234567890",
-        "value": "1000000000000000000"
+        "to": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+        "value": "1000000000000000",
+        "data": "0x",
+        "gas_limit": 21000,
+        "speed": "fast"
       }
     }
   ]
 }
 ----
 
-Where:
-- `logs` indicates the terminal logs (console.log, console.error, etc.) of the plugin.
-- `traces` are the messages sent between the plugin and the Relayer instance.
-- `error` will include the error message if the plugin fails.
-- `return_value` will include the returned value of the plugin execution.
+== Response Fields
+
+- **`logs`**: Terminal output from the plugin (console.log, console.error, etc.)
+- **`return_value`**: The value returned by your plugin's handler function
+- **`error`**: Error message if the plugin execution failed
+- **`traces`**: Messages exchanged between the plugin and the Relayer instance via PluginAPI
+
+== Migration from Legacy Pattern
+
+=== Current Status
+
+- ✅ **Legacy plugins still work** - No immediate action required
+- ⚠️ **Deprecation warnings** - Legacy plugins will show console warnings
+- 📅 **Future removal** - The `runPlugin` pattern will be removed in a future major version
+- 🎯 **Recommended action** - Migrate to handler pattern for new plugins
+
+=== Migration Steps
+
+If you have existing plugins using `runPlugin()`, migration is simple:
+
+**Before (Legacy - still works)**:
+[source,typescript]
+----
+import { runPlugin, PluginAPI } from "./lib/plugin";
+
+async function myPlugin(api: PluginAPI, params: any): Promise<any> {
+    // Your plugin logic
+    return result;
+}
+
+runPlugin(myPlugin); // ⚠️ Shows deprecation warning
+----
+
+**After (Modern - recommended)**:
+[source,typescript]
+----
+import { PluginAPI } from "@openzeppelin/relayer-sdk";
+
+
+export async function handler(api: PluginAPI, params: any): Promise<any> {
+    // Same plugin logic - just export as handler!
+    return result;
+}
+----
+
+=== Step-by-Step Migration
+
+1. **Remove the `runPlugin()` call** at the bottom of your file
+2. **Rename your function to `handler`** (or create a new handler export)
+3. **Export the `handler` function** using `export async function handler`
+4. **Add proper TypeScript types** for better development experience
+5. **Test your plugin** to ensure it works with the new pattern
+6. **Update your documentation** to reflect the new pattern
+
+=== Backwards Compatibility
+
+The relayer will automatically detect which pattern your plugin uses:
+
+- If it finds a `handler` export → uses modern pattern
+- If no `handler` but `runPlugin()` was called → uses legacy pattern with warning
+- If neither → shows clear error message
+
+This ensures a smooth transition period where both patterns work simultaneously.

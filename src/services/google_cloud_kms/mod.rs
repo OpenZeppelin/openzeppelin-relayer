@@ -426,8 +426,7 @@ impl From<utils::AddressDerivationError> for GoogleCloudKmsError {
 mod tests {
     use super::*;
     use crate::models::{
-        GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-        GoogleCloudKmsSignerServiceAccountConfig, SecretString,
+        GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, SecretString,
     };
     use alloy::primitives::utils::eip191_message;
     use serde_json::json;

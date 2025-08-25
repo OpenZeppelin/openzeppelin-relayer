@@ -30,7 +30,7 @@ pub trait RedisRepository {
         })
     }
 
-    /// Deserialize entity with detailed error context  
+    /// Deserialize entity with detailed error context
     /// Default implementation that works for any Deserialize type
     fn deserialize_entity<T>(
         &self,
@@ -58,35 +58,38 @@ pub trait RedisRepository {
 
     /// Convert Redis errors to appropriate RepositoryError types
     fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
+        warn!("Redis operation failed in context '{}': {}", context, error);
+
         match error.kind() {
-            redis::ErrorKind::IoError => {
-                error!("Redis IO error in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis connection failed: {}", error))
-            }
+            redis::ErrorKind::TypeError => RepositoryError::InvalidData(format!(
+                "Redis data type error in operation '{}': {}",
+                context, error
+            )),
             redis::ErrorKind::AuthenticationFailed => {
-                error!("Redis authentication failed in {}: {}", context, error);
-                RepositoryError::PermissionDenied(format!("Redis authentication failed: {}", error))
+                RepositoryError::InvalidData("Redis authentication failed".to_string())
             }
-            redis::ErrorKind::TypeError => {
-                error!("Redis type error in {}: {}", context, error);
-                RepositoryError::InvalidData(format!("Redis data type error: {}", error))
-            }
-            redis::ErrorKind::ExecAbortError => {
-                warn!("Redis transaction aborted in {}: {}", context, error);
-                RepositoryError::TransactionFailure(format!("Redis transaction aborted: {}", error))
-            }
-            redis::ErrorKind::BusyLoadingError => {
-                warn!("Redis busy loading in {}: {}", context, error);
-                RepositoryError::ConnectionError(format!("Redis is loading: {}", error))
-            }
-            redis::ErrorKind::NoScriptError => {
-                error!("Redis script error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis script error: {}", error))
-            }
-            _ => {
-                error!("Unexpected Redis error in {}: {}", context, error);
-                RepositoryError::Other(format!("Redis error in {}: {}", context, error))
-            }
+            redis::ErrorKind::NoScriptError => RepositoryError::InvalidData(format!(
+                "Redis script error in operation '{}': {}",
+                context, error
+            )),
+            redis::ErrorKind::ReadOnly => RepositoryError::InvalidData(format!(
+                "Redis is read-only in operation '{}': {}",
+                context, error
+            )),
+            redis::ErrorKind::ExecAbortError => RepositoryError::InvalidData(format!(
+                "Redis transaction aborted in operation '{}': {}",
+                context, error
+            )),
+            redis::ErrorKind::BusyLoadingError => RepositoryError::InvalidData(format!(
+                "Redis is busy in operation '{}': {}",
+                context, error
+            )),
+            redis::ErrorKind::ExtensionError => RepositoryError::InvalidData(format!(
+                "Redis extension error in operation '{}': {}",
+                context, error
+            )),
+            // Default to Other for connection errors and other issues
+            _ => RepositoryError::Other(format!("Redis operation '{}' failed: {}", context, error)),
         }
     }
 }
@@ -95,7 +98,6 @@ pub trait RedisRepository {
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
-    use std::io;
 
     // Test structs for serialization/deserialization
     #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -208,9 +210,9 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_entity_wrong_structure() {
+    fn test_deserialize_entity_invalid_structure() {
         let repo = TestRedisRepository::new();
-        let json = r#"{"wrong":"field"}"#;
+        let json = r#"{"wrongfield":"test-id"}"#;
 
         let result: Result<TestEntity, RepositoryError> =
             repo.deserialize_entity(json, "test-id", "TestEntity");
@@ -221,68 +223,6 @@ mod tests {
                 assert!(msg.contains("Failed to deserialize TestEntity test-id"));
             }
             _ => panic!("Expected InvalidData error"),
-        }
-    }
-
-    #[test]
-    fn test_deserialize_entity_empty_json() {
-        let repo = TestRedisRepository::new();
-        let json = "";
-
-        let result: Result<TestEntity, RepositoryError> =
-            repo.deserialize_entity(json, "test-id", "TestEntity");
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            RepositoryError::InvalidData(msg) => {
-                assert!(msg.contains("Failed to deserialize TestEntity test-id"));
-                assert!(msg.contains("JSON length: 0"));
-            }
-            _ => panic!("Expected InvalidData error"),
-        }
-    }
-
-    #[test]
-    fn test_deserialize_entity_simple_struct() {
-        let repo = TestRedisRepository::new();
-        let json = r#"{"id":"simple-id"}"#;
-
-        let result: Result<SimpleEntity, RepositoryError> =
-            repo.deserialize_entity(json, "simple-id", "SimpleEntity");
-
-        assert!(result.is_ok());
-        let entity = result.unwrap();
-        assert_eq!(entity.id, "simple-id");
-    }
-
-    #[test]
-    fn test_map_redis_error_io_error() {
-        let repo = TestRedisRepository::new();
-        let io_error = io::Error::new(io::ErrorKind::ConnectionRefused, "Connection refused");
-        let redis_error = RedisError::from(io_error);
-
-        let result = repo.map_redis_error(redis_error, "test_context");
-
-        match result {
-            RepositoryError::ConnectionError(msg) => {
-                assert!(msg.contains("Redis connection failed"));
-            }
-            _ => panic!("Expected ConnectionError"),
-        }
-    }
-
-    #[test]
-    fn test_map_redis_error_authentication_failed() {
-        let repo = TestRedisRepository::new();
-        let redis_error = RedisError::from((redis::ErrorKind::AuthenticationFailed, "Auth failed"));
-
-        let result = repo.map_redis_error(redis_error, "test_context");
-
-        match result {
-            RepositoryError::PermissionDenied(msg) => {
-                assert!(msg.contains("Redis authentication failed"));
-            }
-            _ => panic!("Expected PermissionDenied error"),
         }
     }
 
@@ -291,11 +231,75 @@ mod tests {
         let repo = TestRedisRepository::new();
         let redis_error = RedisError::from((redis::ErrorKind::TypeError, "Type error"));
 
-        let result = repo.map_redis_error(redis_error, "test_context");
+        let result = repo.map_redis_error(redis_error, "test_operation");
 
         match result {
             RepositoryError::InvalidData(msg) => {
                 assert!(msg.contains("Redis data type error"));
+                assert!(msg.contains("test_operation"));
+            }
+            _ => panic!("Expected InvalidData error"),
+        }
+    }
+
+    #[test]
+    fn test_map_redis_error_authentication_failed() {
+        let repo = TestRedisRepository::new();
+        let redis_error = RedisError::from((redis::ErrorKind::AuthenticationFailed, "Auth failed"));
+
+        let result = repo.map_redis_error(redis_error, "auth_operation");
+
+        match result {
+            RepositoryError::InvalidData(msg) => {
+                assert!(msg.contains("Redis authentication failed"));
+            }
+            _ => panic!("Expected InvalidData error"),
+        }
+    }
+
+    #[test]
+    fn test_map_redis_error_connection_error() {
+        let repo = TestRedisRepository::new();
+        let redis_error = RedisError::from((redis::ErrorKind::IoError, "Connection failed"));
+
+        let result = repo.map_redis_error(redis_error, "connection_operation");
+
+        match result {
+            RepositoryError::Other(msg) => {
+                assert!(msg.contains("Redis operation"));
+                assert!(msg.contains("connection_operation"));
+            }
+            _ => panic!("Expected Other error"),
+        }
+    }
+
+    #[test]
+    fn test_map_redis_error_no_script_error() {
+        let repo = TestRedisRepository::new();
+        let redis_error = RedisError::from((redis::ErrorKind::NoScriptError, "Script not found"));
+
+        let result = repo.map_redis_error(redis_error, "script_operation");
+
+        match result {
+            RepositoryError::InvalidData(msg) => {
+                assert!(msg.contains("Redis script error"));
+                assert!(msg.contains("script_operation"));
+            }
+            _ => panic!("Expected InvalidData error"),
+        }
+    }
+
+    #[test]
+    fn test_map_redis_error_read_only() {
+        let repo = TestRedisRepository::new();
+        let redis_error = RedisError::from((redis::ErrorKind::ReadOnly, "Read only"));
+
+        let result = repo.map_redis_error(redis_error, "write_operation");
+
+        match result {
+            RepositoryError::InvalidData(msg) => {
+                assert!(msg.contains("Redis is read-only"));
+                assert!(msg.contains("write_operation"));
             }
             _ => panic!("Expected InvalidData error"),
         }
@@ -307,58 +311,46 @@ mod tests {
         let redis_error =
             RedisError::from((redis::ErrorKind::ExecAbortError, "Transaction aborted"));
 
-        let result = repo.map_redis_error(redis_error, "test_context");
+        let result = repo.map_redis_error(redis_error, "transaction_operation");
 
         match result {
-            RepositoryError::TransactionFailure(msg) => {
+            RepositoryError::InvalidData(msg) => {
                 assert!(msg.contains("Redis transaction aborted"));
+                assert!(msg.contains("transaction_operation"));
             }
-            _ => panic!("Expected TransactionFailure error"),
+            _ => panic!("Expected InvalidData error"),
         }
     }
 
     #[test]
-    fn test_map_redis_error_busy_loading_error() {
+    fn test_map_redis_error_busy_error() {
         let repo = TestRedisRepository::new();
-        let redis_error = RedisError::from((redis::ErrorKind::BusyLoadingError, "Loading"));
+        let redis_error = RedisError::from((redis::ErrorKind::BusyLoadingError, "Server busy"));
 
-        let result = repo.map_redis_error(redis_error, "test_context");
+        let result = repo.map_redis_error(redis_error, "busy_operation");
 
         match result {
-            RepositoryError::ConnectionError(msg) => {
-                assert!(msg.contains("Redis is loading"));
+            RepositoryError::InvalidData(msg) => {
+                assert!(msg.contains("Redis is busy"));
+                assert!(msg.contains("busy_operation"));
             }
-            _ => panic!("Expected ConnectionError"),
+            _ => panic!("Expected InvalidData error"),
         }
     }
 
     #[test]
-    fn test_map_redis_error_no_script_error() {
+    fn test_map_redis_error_extension_error() {
         let repo = TestRedisRepository::new();
-        let redis_error = RedisError::from((redis::ErrorKind::NoScriptError, "Script not found"));
+        let redis_error = RedisError::from((redis::ErrorKind::ExtensionError, "Extension error"));
 
-        let result = repo.map_redis_error(redis_error, "test_context");
+        let result = repo.map_redis_error(redis_error, "extension_operation");
 
         match result {
-            RepositoryError::Other(msg) => {
-                assert!(msg.contains("Redis script error"));
+            RepositoryError::InvalidData(msg) => {
+                assert!(msg.contains("Redis extension error"));
+                assert!(msg.contains("extension_operation"));
             }
-            _ => panic!("Expected Other error"),
-        }
-    }
-
-    #[test]
-    fn test_map_redis_error_cluster_down() {
-        let repo = TestRedisRepository::new();
-        let redis_error = RedisError::from((redis::ErrorKind::ClusterDown, "Cluster down"));
-
-        let result = repo.map_redis_error(redis_error, "test_context");
-
-        match result {
-            RepositoryError::Other(msg) => {
-                assert!(msg.contains("Redis error in test_context"));
-            }
-            _ => panic!("Expected Other error"),
+            _ => panic!("Expected InvalidData error"),
         }
     }
 
@@ -461,61 +453,100 @@ mod tests {
         assert!(json.contains("[1,2,3]"));
     }
 
+    // Test specifically for u128 serialization/deserialization with large values
     #[test]
-    fn test_deserialize_entity_with_optional_fields() {
-        let repo = TestRedisRepository::new();
+    fn test_serialize_deserialize_u128_large_values() {
+        use crate::utils::{deserialize_optional_u128, serialize_optional_u128};
 
-        #[derive(Deserialize, Debug, PartialEq)]
-        struct OptionalEntity {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct TestU128Entity {
             id: String,
-            optional_field: Option<String>,
+            #[serde(
+                serialize_with = "serialize_optional_u128",
+                deserialize_with = "deserialize_optional_u128",
+                default
+            )]
+            gas_price: Option<u128>,
+            #[serde(
+                serialize_with = "serialize_optional_u128",
+                deserialize_with = "deserialize_optional_u128",
+                default
+            )]
+            max_fee_per_gas: Option<u128>,
         }
 
-        // Test with optional field present
-        let json_with_optional = r#"{"id":"test-id","optional_field":"present"}"#;
-        let result: Result<OptionalEntity, RepositoryError> =
-            repo.deserialize_entity(json_with_optional, "test-id", "OptionalEntity");
+        let repo = TestRedisRepository::new();
 
-        assert!(result.is_ok());
-        let entity = result.unwrap();
-        assert_eq!(entity.id, "test-id");
-        assert_eq!(entity.optional_field, Some("present".to_string()));
+        // Test with very large u128 values that would overflow JSON numbers
+        let original = TestU128Entity {
+            id: "u128-test".to_string(),
+            gas_price: Some(u128::MAX), // 340282366920938463463374607431768211455
+            max_fee_per_gas: Some(999999999999999999999999999999999u128),
+        };
 
-        // Test with optional field missing
-        let json_without_optional = r#"{"id":"test-id"}"#;
-        let result: Result<OptionalEntity, RepositoryError> =
-            repo.deserialize_entity(json_without_optional, "test-id", "OptionalEntity");
+        // Serialize
+        let json = repo
+            .serialize_entity(&original, |e| &e.id, "TestU128Entity")
+            .unwrap();
 
-        assert!(result.is_ok());
-        let entity = result.unwrap();
-        assert_eq!(entity.id, "test-id");
-        assert_eq!(entity.optional_field, None);
+        // Verify it contains string representations, not numbers
+        assert!(json.contains("\"340282366920938463463374607431768211455\""));
+        assert!(json.contains("\"999999999999999999999999999999999\""));
+        // Make sure they're not stored as numbers (which would cause overflow)
+        assert!(!json.contains("3.4028236692093846e+38"));
+
+        // Deserialize
+        let deserialized: TestU128Entity = repo
+            .deserialize_entity(&json, "u128-test", "TestU128Entity")
+            .unwrap();
+
+        // Should be identical
+        assert_eq!(original, deserialized);
+        assert_eq!(deserialized.gas_price, Some(u128::MAX));
+        assert_eq!(
+            deserialized.max_fee_per_gas,
+            Some(999999999999999999999999999999999u128)
+        );
     }
 
     #[test]
-    fn test_error_propagation_with_different_entity_types() {
+    fn test_serialize_deserialize_u128_none_values() {
+        use crate::utils::{deserialize_optional_u128, serialize_optional_u128};
+
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct TestU128Entity {
+            id: String,
+            #[serde(
+                serialize_with = "serialize_optional_u128",
+                deserialize_with = "deserialize_optional_u128",
+                default
+            )]
+            gas_price: Option<u128>,
+        }
+
         let repo = TestRedisRepository::new();
 
-        // Test with different entity types to ensure error messages are correct
-        let invalid_json = r#"{"invalid": "json"}"#;
+        // Test with None values
+        let original = TestU128Entity {
+            id: "u128-none-test".to_string(),
+            gas_price: None,
+        };
 
-        let result1: Result<TestEntity, RepositoryError> =
-            repo.deserialize_entity(invalid_json, "id1", "TestEntity");
-        let result2: Result<SimpleEntity, RepositoryError> =
-            repo.deserialize_entity(invalid_json, "id2", "SimpleEntity");
+        // Serialize
+        let json = repo
+            .serialize_entity(&original, |e| &e.id, "TestU128Entity")
+            .unwrap();
 
-        assert!(result1.is_err());
-        assert!(result2.is_err());
+        // Should contain null
+        assert!(json.contains("null"));
 
-        let error1 = result1.unwrap_err();
-        let error2 = result2.unwrap_err();
+        // Deserialize
+        let deserialized: TestU128Entity = repo
+            .deserialize_entity(&json, "u128-none-test", "TestU128Entity")
+            .unwrap();
 
-        match (error1, error2) {
-            (RepositoryError::InvalidData(msg1), RepositoryError::InvalidData(msg2)) => {
-                assert!(msg1.contains("TestEntity id1"));
-                assert!(msg2.contains("SimpleEntity id2"));
-            }
-            _ => panic!("Expected InvalidData errors"),
-        }
+        // Should be identical
+        assert_eq!(original, deserialized);
+        assert_eq!(deserialized.gas_price, None);
     }
 }

@@ -30,7 +30,8 @@ use crate::{
     constants::EVM_SMALLEST_UNIT_NAME,
     domain::{
         relayer::{Relayer, RelayerError},
-        BalanceResponse, SignDataRequest, SignDataResponse, SignTypedDataRequest,
+        BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
+        SignTransactionRequest, SignTypedDataRequest,
     },
     jobs::{JobProducerTrait, TransactionRequest},
     models::{
@@ -555,6 +556,15 @@ where
         }
         Ok(())
     }
+
+    async fn sign_transaction(
+        &self,
+        _request: &SignTransactionRequest,
+    ) -> Result<SignTransactionExternalResponse, RelayerError> {
+        Err(RelayerError::NotSupported(
+            "Transaction signing not supported for EVM".to_string(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -633,11 +643,11 @@ mod tests {
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
-                min_balance: 100000000000000000u128, // 0.1 ETH
+                min_balance: Some(100000000000000000u128), // 0.1 ETH
                 whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
                 gas_price_cap: Some(100000000000), // 100 Gwei
-                eip1559_pricing: Some(false),
-                private_transactions: false,
+                eip1559_pricing: Some(true),
+                private_transactions: Some(false),
                 gas_limit_estimation: Some(true),
             }),
             network_type: NetworkType::Evm,

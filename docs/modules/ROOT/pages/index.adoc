@@ -231,6 +231,7 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 * `evm-gcp-kms-signer`: Using Google Cloud KMS for EVM secure signing
 * `evm-turnkey-signer`: Using Turnkey for EVM secure signing
 * `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
+* `redis-storage`: Using Redis for Storage
 * `network-configuration-config-file`: Using Custom network configuration via config file
 * `network-configuration-json-file`: Using Custom network configuration via JSON file
 
@@ -311,14 +312,22 @@ DOCKERFILE=Dockerfile.production docker compose up -d
 
 == Configuration
 
-OpenZeppelin Relayer requires proper configuration before starting. The configuration system uses two main files:
+OpenZeppelin Relayer supports two configuration approaches:
 
+**File-based Configuration:**
 - **`config.json`**: Contains relayer definitions, signer configurations, and network policies
 - **`.env`**: Contains environment variables like API keys and connection strings
 
+**API-based Configuration:**
+- Runtime configuration management via REST API
+- No service restarts required for configuration changes
+- Full CRUD operations for relayers, signers, and notifications
+
 [IMPORTANT]
 ====
-Both configuration files must be properly set up before starting the application. Changes to either file require restarting the container to take effect.
+Both approaches can be used together. File-based configuration is loaded on startup, while API changes provide runtime flexibility. Changes to environment variables (`.env`) always require restarting the container.
+
+When used together, API changes are not synced to file-based configuration. File-based configuration is loaded only once when using persistent storage mode.
 
 For quick setup examples with pre-configured files, see the https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples[examples directory] in our GitHub repository.
 ====

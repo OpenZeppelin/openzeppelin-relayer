@@ -1,14 +1,23 @@
-import { Speed } from "@openzeppelin/relayer-sdk";
-import { PluginAPI, runPlugin } from "../lib/plugin";
+/**
+ * Example plugin using 'handler' export pattern
+ */
+
+import { PluginAPI, Speed } from "@openzeppelin/relayer-sdk";
 
 type Params = {
     destinationAddress: string;
+    amount?: number;
 };
 
-async function example(api: PluginAPI, params: Params): Promise<string> {
-    console.info("Plugin started...");
+/**
+ * Plugin handler function - this is the entry point
+ * Export it as 'handler' and the relayer will automatically call it
+ */
+export async function handler(api: PluginAPI, params: Params): Promise<string> {
+    console.info("Plugin started with new handler pattern...");
+
     /**
-     * Instances the relayer with the given id.
+     * Instance the relayer with the given id.
      */
     const relayer = api.useRelayer("sepolia-example");
 
@@ -17,21 +26,19 @@ async function example(api: PluginAPI, params: Params): Promise<string> {
      */
     const result = await relayer.sendTransaction({
         to: params.destinationAddress,
-        value: 1,
+        value: params.amount || 1,
         data: "0x",
         gas_limit: 21000,
         speed: Speed.FAST,
     });
+
+    console.info(`Transaction submitted: ${result.id}`);
 
     /*
     * Waits for the transaction to be mined on chain.
     */
     await result.wait();
 
-    return "done!";
+    console.info("Transaction confirmed!");
+    return `Transaction ${result.id} completed successfully!`;
 }
-
-/**
- * This is the entry point for the plugin
- */
-runPlugin(example);

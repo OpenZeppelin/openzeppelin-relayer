@@ -5,7 +5,7 @@
 
 Signers are responsible for cryptographically signing transactions before they are submitted to blockchain networks. OpenZeppelin Relayer supports multiple signer types to accommodate different security requirements and infrastructure setups.
 
-The `signers` array in your configuration must contain at least one valid signer configuration. Each signer is referenced by its `id` in relayer configurations.
+Each signer is referenced by its `id` in relayer configurations.
 
 == Configuration Structure
 
@@ -33,7 +33,6 @@ OpenZeppelin Relayer supports the following signer types:
 
 - `local`: Keystore file signer
 - `vault`: HashiCorp Vault secret signer
-- `vault_cloud`: Hosted HashiCorp Vault secret signer
 - `vault_transit`: HashiCorp Vault Transit signer
 - `turnkey`: Turnkey signer
 - `google_cloud_kms`: Google Cloud KMS signer
@@ -53,11 +52,6 @@ The following table shows which signer types are compatible with each network ty
 |✅ Supported
 
 |`vault`
-|✅ Supported
-|✅ Supported
-|❌ Not supported
-
-|`vault_cloud`
 |✅ Supported
 |✅ Supported
 |❌ Not supported
@@ -212,63 +206,6 @@ Configuration fields:
 | mount_point
 | String
 | The mount point for the Secrets engine in Vault. Defaults to `secret` if not explicitly specified. Optional.
-|===
-
-=== Vault Cloud Signer
-
-Uses HashiCorp Vault Cloud (HCP Vault) for key management.
-
-[source,json]
-----
-{
-  "id": "vault-cloud-signer",
-  "type": "vault_cloud",
-  "config": {
-    "client_id": "your-client-id",
-    "client_secret": {
-      "type": "env",
-      "value": "VAULT_CLOUD_CLIENT_SECRET"
-    },
-    "org_id": "your-org-id",
-    "project_id": "your-project-id",
-    "app_name": "relayer-app",
-    "key_name": "signing-key"
-  }
-}
-----
-
-Configuration fields:
-[cols="1,1,2"]
-|===
-|Field |Type |Description
-
-| client_id
-| String
-| The client identifier used to authenticate with Vault Cloud
-
-| client_secret.type
-| String
-| Type of value source (`env` or `plain`)
-
-| client_secret.value
-| String
-| The Vault secret value, or the environment variable name where the secret value is stored
-
-| org_id
-| String
-| The organization ID for your Vault Cloud account
-
-| project_id
-| String
-| The project ID that uniquely identifies your Vault Cloud project
-
-| app_name
-| String
-| The name of the application integrating with Vault Cloud
-
-| key_name
-| String
-| The name of the cryptographic key used for signing or encryption operations in Vault Cloud
 |===
 
 === Vault Transit Signer

@@ -86,7 +86,53 @@ For more configuration examples, visit the link:https://github.com/OpenZeppelin/
 
 === Relayer Policies
 
-Stellar relayers support standard relayer configuration options. Check all options in xref:index.adoc#3_relayers[User Documentation - Relayers].
+Stellar relayers support standard relayer configuration options along with Stellar-specific policies:
+
+[cols="1,1,1,2"]
+|===
+|Policy |Type |Default |Description
+
+|`min_balance`
+|integer
+|None
+|Minimum balance in stroops (1 XLM = 10,000,000 stroops) required for the relayer account
+
+|`max_fee`
+|integer
+|None
+|Maximum transaction fee in stroops the relayer is willing to pay
+
+|`timeout_seconds`
+|integer
+|None
+|Transaction timeout in seconds
+
+|`concurrent_transactions`
+|boolean
+|false
+|Enable concurrent transaction processing. When enabled, bypasses the lane gating mechanism that normally ensures sequential processing for each relayer. Only enable this when your relayer manages transactions from multiple accounts with independent sequence number pools.
+|===
+
+Example configuration with policies:
+[source,json]
+----
+{
+  "id": "stellar-example",
+  "name": "Stellar Example",
+  "network": "testnet",
+  "paused": false,
+  "network_type": "stellar",
+  "signer_id": "local-signer",
+  "policies": {
+    "min_balance": 10000000,
+    "max_fee": 1000000,
+    "timeout_seconds": 30,
+    "concurrent_transactions": false
+  }
+}
+----
+
+For general relayer configuration options, check xref:index.adoc#3_relayers[User Documentation - Relayers].
 
 == API Reference
 
@@ -150,9 +196,10 @@ The relayer supports three ways to submit transactions:
 
 1. **Operations-based**: Build a transaction by specifying the `operations` array (recommended for most use cases)
 2. **Transaction XDR (unsigned)**: Submit a pre-built unsigned transaction using `transaction_xdr` field (advanced use case)
-3. **Transaction XDR (signed) with fee bump**: Submit a signed transaction using `transaction_xdr` with `fee_bump: true` to wrap it in a fee bump transaction
+3. **Transaction XDR (signed)**: Submit a signed transaction using `transaction_xdr` with `fee_bump: true` (required for signed XDR) to wrap it in a fee bump transaction
 
-Example: Send Transaction
+==== Example 1: Operations-based Transaction
+
 [source,bash]
 ----
 curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
@@ -171,6 +218,56 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_r
   "memo": {"type": "text", "value": "Payment for services"}
 }'
 ----
+
+==== Example 2: Unsigned Transaction XDR
+
+Submit a pre-built unsigned transaction. The relayer will sign it with its configured signer:
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "network": "testnet",
+  "transaction_xdr": "AAAAAgAAAACige4lTdwSB/sto4SniEdJ2kOa2X65s5bqkd40J4DjSwAAAGQAAHAkAAAADgAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAKKB7iVN3BIH+y2jhKeIR0naQ5rZfrmzluqR3jQngONLAAAAAAAAAAAAD0JAAAAAAAAAAAA="
+}'
+----
+
+The `transaction_xdr` field should contain a base64-encoded unsigned transaction envelope. This is useful when:
+- You need precise control over transaction structure
+- You want to use advanced Stellar features not exposed via the operations API
+
+==== Example 3: Signed Transaction XDR
+
+Submit a pre-signed transaction with fee bump wrapper. **Note: `fee_bump: true` is required when submitting signed XDR**:
+
+[source,bash]
+----
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/<stellar_relayer_id>/transactions' \
+--header 'Authorization: Bearer <api_key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "network": "testnet",
+  "transaction_xdr": "AAAAAgAAAABjc+mbXCnvmVk4lxqVl7s0LAz5slXqmkHBg8PpH7p3DgAAAGQABpK0AAAACQAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAGN0qQBW8x3mfbwGGYndt2uq4O4sZPUrDx5HlwuQke9zAAAAAAAAAAAAAA9CAAAAAQAAAAA=",
+  "fee_bump": true,
+  "max_fee": 10000000
+}'
+----
+
+The fee bump feature is useful when:
+- You have a pre-signed transaction from another system or wallet
+- You want the relayer to pay transaction fees on behalf of the original signer
+- You need to increase the fee for a transaction to ensure timely execution
+
+[IMPORTANT]
+====
+When using `transaction_xdr`:
+- The XDR must be properly formatted and valid for the target network
+- For unsigned XDR, the relayer will add its signature before submission
+- **For signed XDR, `fee_bump: true` is mandatory** - the relayer requires this to wrap the signed transaction in a fee bump envelope
+- The `max_fee` parameter (in stroops) controls the maximum fee for fee bump transactions (defaults to 1,000,000 = 0.1 XLM)
+====
 
 See link:https://release-v1-0-0%2D%2Dopenzeppelin-relayer.netlify.app/api_docs.html[API Reference^] for full details and examples.
 

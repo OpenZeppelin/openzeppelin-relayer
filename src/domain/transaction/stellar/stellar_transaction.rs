@@ -4,12 +4,13 @@
 /// managing notifications for transactions. The module leverages various
 /// services and repositories to perform these operations asynchronously.
 use crate::{
+    constants::DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS,
     domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
     jobs::{JobProducer, JobProducerTrait, TransactionRequest},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionRequest,
-        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        RelayerNetworkPolicy, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
@@ -113,6 +114,16 @@ where
         &self.transaction_counter_service
     }
 
+    pub fn concurrent_transactions_enabled(&self) -> bool {
+        if let RelayerNetworkPolicy::Stellar(policy) = &self.relayer().policies {
+            policy
+                .concurrent_transactions
+                .unwrap_or(DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS)
+        } else {
+            DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS
+        }
+    }
+
     /// Send a transaction-request job for the given transaction.
     pub async fn send_transaction_request_job(
         &self,
@@ -165,17 +176,19 @@ where
         &self,
         finished_tx_id: &str,
     ) -> Result<(), TransactionError> {
-        if let Some(next) = self
-            .find_oldest_pending_for_relayer(&self.relayer().id)
-            .await?
-        {
-            // Atomic hand-over while still owning the lane
-            info!("Handing over lane from {} to {}", finished_tx_id, next.id);
-            lane_gate::pass_to(&self.relayer().id, finished_tx_id, &next.id);
-            self.send_transaction_request_job(&next, None).await?;
-        } else {
-            info!("Releasing relayer lane after {}", finished_tx_id);
-            lane_gate::free(&self.relayer().id, finished_tx_id);
+        if !self.concurrent_transactions_enabled() {
+            if let Some(next) = self
+                .find_oldest_pending_for_relayer(&self.relayer().id)
+                .await?
+            {
+                // Atomic hand-over while still owning the lane
+                info!("Handing over lane from {} to {}", finished_tx_id, next.id);
+                lane_gate::pass_to(&self.relayer().id, finished_tx_id, &next.id);
+                self.send_transaction_request_job(&next, None).await?;
+            } else {
+                info!("Releasing relayer lane after {}", finished_tx_id);
+                lane_gate::free(&self.relayer().id, finished_tx_id);
+            }
         }
         Ok(())
     }
@@ -652,6 +665,62 @@ mod tests {
             }
             _ => panic!("Expected UnexpectedError"),
         }
+    }
+
+    #[test]
+    fn test_concurrent_transactions_enabled() {
+        // Test with concurrent transactions explicitly enabled
+        let mut relayer = create_test_relayer();
+        if let RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(true);
+        }
+        let mocks = default_test_mocks();
+        let handler = make_stellar_tx_handler(relayer, mocks);
+        assert!(handler.concurrent_transactions_enabled());
+
+        // Test with concurrent transactions explicitly disabled
+        let mut relayer = create_test_relayer();
+        if let RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(false);
+        }
+        let mocks = default_test_mocks();
+        let handler = make_stellar_tx_handler(relayer, mocks);
+        assert!(!handler.concurrent_transactions_enabled());
+
+        // Test with default (None) - should use DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS
+        let relayer = create_test_relayer();
+        let mocks = default_test_mocks();
+        let handler = make_stellar_tx_handler(relayer, mocks);
+        assert_eq!(
+            handler.concurrent_transactions_enabled(),
+            DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_next_pending_transaction_with_concurrency_enabled() {
+        // With concurrent transactions enabled, lane management should be skipped
+        let mut relayer = create_test_relayer();
+        if let RelayerNetworkPolicy::Stellar(ref mut policy) = relayer.policies {
+            policy.concurrent_transactions = Some(true);
+        }
+        let mut mocks = default_test_mocks();
+
+        // Should NOT look for pending transactions when concurrency is enabled
+        mocks.tx_repo.expect_find_by_status().times(0); // Expect zero calls
+
+        // Should NOT produce any job when concurrency is enabled
+        mocks
+            .job_producer
+            .expect_produce_transaction_request_job()
+            .times(0); // Expect zero calls
+
+        let handler = make_stellar_tx_handler(relayer, mocks);
+
+        let result = handler
+            .enqueue_next_pending_transaction("finished-tx")
+            .await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

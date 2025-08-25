@@ -11,7 +11,7 @@ use log::{debug, error, info, warn};
 use std::sync::Arc;
 
 use crate::{
-    constants::GAS_LIMIT_BUFFER_MULTIPLIER,
+    constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
     domain::{
         transaction::{
             evm::{is_pending_transaction, PriceCalculator, PriceCalculatorTrait},
@@ -268,7 +268,10 @@ where
         evm_data: &EvmTransactionData,
         relayer_policy: &RelayerEvmPolicy,
     ) -> Result<u64, TransactionError> {
-        if !relayer_policy.gas_limit_estimation.unwrap_or(true) {
+        if !relayer_policy
+            .gas_limit_estimation
+            .unwrap_or(DEFAULT_EVM_GAS_LIMIT_ESTIMATION)
+        {
             warn!(
                 "Gas limit estimation is disabled for relayer: {:?}",
                 self.relayer().id
@@ -825,12 +828,12 @@ mod tests {
     // Helper to create a relayer model with specific configuration for these tests
     fn create_test_relayer() -> RelayerRepoModel {
         create_test_relayer_with_policy(crate::models::RelayerEvmPolicy {
-            min_balance: 100000000000000000u128, // 0.1 ETH
-            whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
-            gas_price_cap: Some(100000000000), // 100 Gwei
-            eip1559_pricing: Some(false),
-            private_transactions: false,
+            min_balance: Some(100000000000000000u128), // 0.1 ETH
             gas_limit_estimation: Some(true),
+            gas_price_cap: Some(100000000000), // 100 Gwei
+            whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
+            eip1559_pricing: Some(false),
+            private_transactions: Some(false),
         })
     }
 
@@ -861,6 +864,7 @@ mod tests {
             sent_at: None,
             confirmed_at: None,
             valid_until: None,
+            delete_at: None,
             network_type: NetworkType::Evm,
             network_data: NetworkTransactionData::Evm(EvmTransactionData {
                 chain_id: 1,
@@ -993,7 +997,7 @@ mod tests {
 
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
             gas_limit_estimation: Some(false),
-            min_balance: 100000000000000000u128,
+            min_balance: Some(100000000000000000u128),
             ..Default::default()
         });
         let test_tx = create_test_transaction();
@@ -1795,7 +1799,7 @@ mod tests {
         // Create test relayer with gas limit estimation enabled
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
             gas_limit_estimation: Some(true),
-            min_balance: 100000000000000000u128,
+            min_balance: Some(100000000000000000u128),
             ..Default::default()
         });
 

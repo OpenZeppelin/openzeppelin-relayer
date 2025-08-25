@@ -7,6 +7,7 @@ use log::{info, warn};
 
 use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
+    constants::{STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS, STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS},
     jobs::{JobProducerTrait, TransactionStatusCheck},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
@@ -82,7 +83,7 @@ where
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                None,
+                Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS),
             )
             .await?;
 
@@ -140,7 +141,13 @@ where
             match self.reset_transaction_for_retry(tx.clone()).await {
                 Ok(reset_tx) => {
                     // Re-enqueue the transaction to go through the pipeline again
-                    if let Err(e) = self.send_transaction_request_job(&reset_tx, Some(2)).await {
+                    if let Err(e) = self
+                        .send_transaction_request_job(
+                            &reset_tx,
+                            Some(STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS),
+                        )
+                        .await
+                    {
                         warn!(
                             "Failed to re-enqueue transaction {} after reset: {}",
                             tx_id, e

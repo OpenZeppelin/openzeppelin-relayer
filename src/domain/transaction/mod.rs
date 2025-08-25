@@ -41,7 +41,7 @@ pub use util::*;
 
 // Explicit re-exports to avoid ambiguous glob re-exports
 pub use evm::{DefaultEvmTransaction, EvmRelayerTransaction};
-pub use solana::SolanaRelayerTransaction;
+pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
 /// A trait that defines the operations for handling transactions across different networks.
@@ -169,7 +169,7 @@ pub trait Transaction {
 /// An enum representing a transaction for different network types.
 pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
-    Solana(SolanaRelayerTransaction),
+    Solana(DefaultSolanaTransaction),
     Stellar(DefaultStellarTransaction),
 }
 
@@ -411,7 +411,7 @@ impl RelayerTransactionFactory {
                     .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
-                let signer_service = EvmSignerFactory::create_evm_signer(signer).await?;
+                let signer_service = EvmSignerFactory::create_evm_signer(signer.into()).await?;
                 let network_extra_fee_calculator =
                     get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
                 let price_calculator = evm::PriceCalculator::new(
@@ -464,7 +464,7 @@ impl RelayerTransactionFactory {
             }
             NetworkType::Stellar => {
                 let signer_service =
-                    Arc::new(StellarSignerFactory::create_stellar_signer(&signer)?);
+                    Arc::new(StellarSignerFactory::create_stellar_signer(&signer.into())?);
 
                 let network_repo = network_repository
                     .get_by_name(NetworkType::Stellar, &relayer.network)

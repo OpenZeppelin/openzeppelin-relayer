@@ -54,10 +54,17 @@ impl ScriptExecutor {
             ));
         }
 
+        // Use the centralized executor script instead of executing user script directly
+        // Use absolute path to avoid working directory issues in CI
+        let executor_path = std::env::current_dir()
+            .map(|cwd| cwd.join("plugins/lib/executor.ts").display().to_string())
+            .unwrap_or_else(|_| "plugins/lib/executor.ts".to_string());
+
         let output = Command::new("ts-node")
-            .arg(script_path)
-            .arg(socket_path)
-            .arg(script_params)
+            .arg(executor_path)       // Execute executor script
+            .arg(socket_path)         // Socket path (argv[2])
+            .arg(script_params)       // Plugin parameters (argv[3])
+            .arg(script_path)         // User script path (argv[4])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -128,9 +135,11 @@ mod tests {
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
         let content = r#"
-            console.log(JSON.stringify({ level: 'log', message: 'test' }));
-            console.log(JSON.stringify({ level: 'info', message: 'test-info' }));
-            console.log(JSON.stringify({ level: 'result', message: 'test-result' }));
+            export async function handler(api: any, params: any) {
+                console.log('test');
+                console.info('test-info');
+                return 'test-result';
+            }
         "#;
         fs::write(script_path.clone(), content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
@@ -149,6 +158,49 @@ mod tests {
         assert_eq!(result.logs[1].level, LogLevel::Info);
         assert_eq!(result.logs[1].message, "test-info");
         assert_eq!(result.return_value, "test-result");
+    }
+
+    #[tokio::test]
+    async fn test_execute_typescript_with_result() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_result.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_with_result.sock");
+
+        let content = r#"
+            export async function handler(api: any, params: any) {
+                console.log('test');
+                console.info('test-info');
+                return {
+                    test: 'test-result',
+                    test2: 'test-result2'
+                };
+            }
+        "#;
+        fs::write(script_path.clone(), content).unwrap();
+        fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.logs[0].level, LogLevel::Log);
+        assert_eq!(result.logs[0].message, "test");
+        assert_eq!(result.logs[1].level, LogLevel::Info);
+        assert_eq!(result.logs[1].message, "test-info");
+        assert_eq!(
+            result.return_value,
+            "{\"test\":\"test-result\",\"test2\":\"test-result2\"}"
+        );
     }
 
     #[tokio::test]
@@ -172,7 +224,11 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
-        assert!(result.error.contains("logger"));
+        assert_eq!(result.error, "");
+
+        assert!(!result.logs.is_empty());
+        assert_eq!(result.logs[0].level, LogLevel::Error);
+        assert!(result.logs[0].message.contains("logger"));
     }
 
     #[tokio::test]
@@ -183,9 +239,13 @@ mod tests {
         let socket_path = temp_dir.path().join("test_execute_typescript.sock");
 
         let invalid_content = r#"
-            console.log({ level: 'log', message: 'test' });
-            console.log({ level: 'info', message: 'test-info' });
-            console.log({ level: 'result', message: 'test-result' });
+            export async function handler(api: any, params: any) {
+                // Output raw invalid JSON directly to stdout (bypasses LogInterceptor)
+                process.stdout.write('invalid json line\n');
+                process.stdout.write('{"level":"log","message":"valid"}\n');
+                process.stdout.write('another invalid line\n');
+                return 'test';
+            }
         "#;
         fs::write(script_path.clone(), invalid_content).unwrap();
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();

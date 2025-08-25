@@ -34,17 +34,19 @@ use super::{utils::FeeQuote, *};
 use crate::{
     models::{
         EncodedSerializedTransaction, PrepareTransactionRequestParams, PrepareTransactionResult,
-        SolanaFeePaymentStrategy,
+        SolanaFeePaymentStrategy, TransactionRepoModel,
     },
+    repositories::{Repository, TransactionRepository},
     services::{JupiterServiceTrait, SolanaProviderTrait, SolanaSignTrait},
 };
 
-impl<P, S, J, JP> SolanaRpcMethodsImpl<P, S, J, JP>
+impl<P, S, J, JP, TR> SolanaRpcMethodsImpl<P, S, J, JP, TR>
 where
     P: SolanaProviderTrait + Send + Sync,
     S: SolanaSignTrait + Send + Sync,
     J: JupiterServiceTrait + Send + Sync,
     JP: JobProducerTrait + Send + Sync,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
 {
     pub(crate) async fn prepare_transaction_impl(
         &self,
@@ -125,7 +127,8 @@ where
         fee_token: &str,
     ) -> Result<(Transaction, (Hash, u64), u64, FeeQuote), SolanaRpcError> {
         let policies = self.relayer.policies.get_solana_policy();
-        let user_pays_fee = policies.fee_payment_strategy == SolanaFeePaymentStrategy::User;
+        let user_pays_fee =
+            policies.fee_payment_strategy.unwrap_or_default() == SolanaFeePaymentStrategy::User;
 
         let result = if user_pays_fee {
             // First create draft transaction with minimal fee to get structure right
@@ -247,12 +250,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_success_relayer_fee_strategy() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, encoded_tx, job_producer) =
-            setup_test_context();
+        let (
+            mut relayer,
+            mut signer,
+            mut provider,
+            jupiter_service,
+            encoded_tx,
+            job_producer,
+            network,
+        ) = setup_test_context();
 
         // Setup policy with WSOL
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -301,10 +311,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -484,10 +496,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             ctx.relayer,
+            ctx.network,
             Arc::new(ctx.provider),
             Arc::new(ctx.signer),
             Arc::new(ctx.jupiter_service),
             Arc::new(ctx.job_producer),
+            Arc::new(ctx.transaction_repository),
         );
 
         let token_test = &ctx.token;
@@ -513,13 +527,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_insufficient_balance() {
-        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, encoded_tx, job_producer, network) =
             setup_test_context();
 
         // Set high minimum balance requirement
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-            min_balance: 100_000_000, // 0.1 SOL minimum balance
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(100_000_000), // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -560,10 +574,12 @@ mod tests {
         });
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -577,12 +593,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_updates_fee_payer() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-            min_balance: 100_000_000, // 0.1 SOL minimum balance
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(100_000_000), // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -636,10 +652,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer.clone(),
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -660,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_signature_verification() {
-        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, mut signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
         println!("Setting up known keypair for signature verification");
         let relayer_keypair = Keypair::new();
@@ -668,8 +686,8 @@ mod tests {
 
         relayer.address = relayer_keypair.pubkey().to_string();
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
-            min_balance: 100_000_000, // 0.1 SOL minimum balance
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+            min_balance: Some(100_000_000), // 0.1 SOL minimum balance
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: WRAPPED_SOL_MINT.to_string(),
                 symbol: Some("SOL".to_string()),
@@ -721,10 +739,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = PrepareTransactionRequestParams {
@@ -757,12 +777,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_not_allowed_token() {
-        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer) =
+        let (mut relayer, signer, mut provider, jupiter_service, _, job_producer, network) =
             setup_test_context();
 
         // Configure policy with allowed tokens
         relayer.policies = RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
-            fee_payment_strategy: SolanaFeePaymentStrategy::Relayer,
+            fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
             allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
                 mint: "AllowedToken111111111111111111111111111111".to_string(),
                 symbol: Some("ALLOWED".to_string()),
@@ -812,10 +832,12 @@ mod tests {
 
         let rpc = SolanaRpcMethodsImpl::new_mock(
             relayer,
+            network,
             Arc::new(provider),
             Arc::new(signer),
             Arc::new(jupiter_service),
             Arc::new(job_producer),
+            Arc::new(MockTransactionRepository::new()),
         );
 
         let params = PrepareTransactionRequestParams {

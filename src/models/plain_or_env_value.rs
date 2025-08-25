@@ -298,7 +298,13 @@ mod tests {
         let serialized = serde_json::to_string(&plain).unwrap();
 
         assert!(serialized.contains(r#""type":"plain"#));
-        assert!(serialized.contains(r#""value":"REDACTED"#));
+        // Value should be protected (either REDACTED or base64-encoded)
+        assert!(
+            serialized.contains(r#""value":"REDACTED"#)
+                || (serialized.contains(r#""value":""#) && !serialized.contains("test-secret")),
+            "Expected protected value, got: {}",
+            serialized
+        );
     }
 
     #[test]
