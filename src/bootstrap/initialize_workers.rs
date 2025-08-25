@@ -1,14 +1,7 @@
-//! # Workers
-//! Initialise and starts the workers for the application
-
-use actix_web::web::ThinData;
-use apalis::{layers::ErrorHandlingLayer, prelude::*};
-use apalis_cron::CronStream;
-use eyre::Result;
-use log::{error, info};
-use std::{str::FromStr, time::Duration};
-use tokio::signal::unix::SignalKind;
-
+//! Worker initialization
+//!
+//! This module contains functions for initializing background workers,
+//! including job processors and other long-running tasks.
 use crate::{
     jobs::{
         notification_handler, solana_token_swap_cron_handler, solana_token_swap_request_handler,
@@ -18,6 +11,13 @@ use crate::{
     models::DefaultAppState,
     repositories::RelayerRepository,
 };
+use actix_web::web::ThinData;
+use apalis::{layers::ErrorHandlingLayer, prelude::*};
+use apalis_cron::CronStream;
+use eyre::Result;
+use log::{error, info};
+use std::{str::FromStr, time::Duration};
+use tokio::signal::unix::SignalKind;
 
 // Review and fine tune configuration for the workers
 const DEFAULT_CONCURRENCY: usize = 2;

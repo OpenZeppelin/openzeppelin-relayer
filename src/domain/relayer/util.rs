@@ -12,7 +12,7 @@
 /// These utilities are essential for the application's relayer management and
 /// interaction with the underlying repositories and factories.
 use crate::{
-    domain::{RelayerFactory, RelayerFactoryTrait},
+    domain::relayer::{RelayerFactory, RelayerFactoryTrait},
     jobs::JobProducerTrait,
     models::{
         ApiError, NetworkRepoModel, NotificationRepoModel, RelayerError, RelayerRepoModel,
