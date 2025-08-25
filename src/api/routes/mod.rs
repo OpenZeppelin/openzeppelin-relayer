@@ -9,6 +9,7 @@
 //! * `/notifications` - Notification management endpoints
 //! * `/signers` - Signer management endpoints
 
+pub mod api_keys;
 pub mod docs;
 pub mod health;
 pub mod metrics;
@@ -25,4 +26,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .configure(metrics::init)
         .configure(notification::init)
         .configure(signer::init);
+
+    #[cfg(feature = "authV2")]
+    cfg.configure(api_keys::init);
 }
