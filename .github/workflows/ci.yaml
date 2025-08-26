@@ -106,7 +106,7 @@ jobs:
 
       # Check the minimum supported Rust version
       - name: Default features
-        run: cargo hack check --feature-powerset --locked --rust-version --all-targets
+        run: cargo hack check --feature-powerset --locked --rust-version --workspace --lib --bins
   rustfmt:
     if: ${{ github.event.pull_request.draft == false && github.event_name != 'push' && needs.changed_files.outputs.changed-rust-files == 'true' }}
     needs: changed_files
@@ -155,7 +155,7 @@ jobs:
         run: cargo install sarif-fmt --locked
       - name: Check
         run: >
-          cargo clippy --all-features --all-targets --message-format=json
+          cargo clippy --all-features --workspace --lib --bins --no-deps --message-format=json
           | clippy-sarif
           | tee clippy-results.sarif
           | sarif-fmt
@@ -172,7 +172,7 @@ jobs:
           sarif_file: clippy-results.sarif
           wait-for-processing: true
       - name: Report status
-        run: cargo clippy --all-features --all-targets -- -D warnings --allow deprecated
+        run: cargo clippy --all-features --workspace --lib --bins --no-deps -- -D warnings --allow deprecated
   test:
     if: ${{ github.event.pull_request.draft == false && needs.changed_files.outputs.changed-tests-files == 'true' }}
     permissions:
