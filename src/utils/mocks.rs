@@ -13,12 +13,12 @@ pub mod mockutils {
         },
         jobs::MockJobProducerTrait,
         models::{
-            AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfig,
+            ApiKeyModel, AppState, EvmTransactionData, EvmTransactionRequest,
             LocalSignerConfigStorage, NetworkConfigData, NetworkRepoModel, NetworkTransactionData,
             NetworkType, NotificationRepoModel, PluginModel, RelayerEvmPolicy,
             RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SecretString,
-            SignerConfig, SignerConfigStorage, SignerRepoModel, SolanaTransactionData,
-            TransactionRepoModel, TransactionStatus,
+            SignerConfigStorage, SignerRepoModel, SolanaTransactionData, TransactionRepoModel,
+            TransactionStatus,
         },
         repositories::{
             ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
