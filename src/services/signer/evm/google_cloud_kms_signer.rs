@@ -221,6 +221,7 @@ mod tests {
                 }))
                 .unwrap(),
             )
+            .expect(1)
             .create_async()
             .await;
 
@@ -273,6 +274,7 @@ mod tests {
                 }))
                 .unwrap(),
             )
+            .expect(1)
             .create_async()
             .await;
 
@@ -307,6 +309,7 @@ mod tests {
                 }))
                 .unwrap(),
             )
+            .expect(1)
             .create_async()
             .await;
 

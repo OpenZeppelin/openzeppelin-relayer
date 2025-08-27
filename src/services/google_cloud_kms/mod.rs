@@ -325,7 +325,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn get_solana_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
-        println!("PEM solana: {}", pem_str);
+        debug!("PEM solana: {}", pem_str);
 
         utils::derive_solana_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)
     }
@@ -333,7 +333,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn get_evm_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
-        println!("PEM evm: {}", pem_str);
+        debug!("PEM evm: {}", pem_str);
 
         let address_bytes =
             utils::derive_ethereum_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)?;
@@ -360,7 +360,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
 
-        println!("KMS asymmetricSign response: {}", resp);
+        debug!("KMS asymmetricSign response: {}", resp);
 
         let signature = base64_decode(signature_b64)
             .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
@@ -392,10 +392,10 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
 
-        println!("KMS asymmetricSign response: {}", resp);
+        debug!("KMS asymmetricSign response: {}", resp);
         let signature_b64 =
             base64_decode(signature).map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
-        print!("Signature b64 decoded: {:?}", signature_b64);
+        debug!("Signature b64 decoded: {:?}", signature_b64);
         Ok(signature_b64)
     }
 }

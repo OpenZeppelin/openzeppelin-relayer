@@ -700,6 +700,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::to_string(&swap_response).unwrap())
+            .expect(1)
             .create_async()
             .await;
 
@@ -775,6 +776,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::to_string(&ultra_response).unwrap())
+            .expect(1)
             .create_async()
             .await;
         let service = MainnetJupiterService {
@@ -826,6 +828,7 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(serde_json::to_string(&execute_response).unwrap())
+            .expect(1)
             .create_async()
             .await;
 
@@ -881,7 +884,7 @@ mod tests {
                     .to_string()
                     .contains("HTTP status client error (400 Bad Request)"));
             }
-            _ => panic!("Expected ApiError but got different error type"),
+            _ => panic!("Expected HttpRequestError but got different error type"),
         }
     }
 }

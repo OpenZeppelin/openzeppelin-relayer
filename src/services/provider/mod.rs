@@ -275,7 +275,6 @@ pub fn get_network_provider<N: NetworkConfiguration>(
 mod tests {
     use super::*;
     use lazy_static::lazy_static;
-    use mockito;
     use std::env;
     use std::sync::Mutex;
     use std::time::Duration;

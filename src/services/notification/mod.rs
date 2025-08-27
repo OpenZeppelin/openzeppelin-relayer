@@ -179,7 +179,7 @@ mod tests {
             .await;
 
         let secret_key = SecretString::new("test_secret");
-        let service = WebhookNotificationService::new(mock_server.url(), Some(secret_key.clone()));
+        let service = WebhookNotificationService::new(mock_server.url(), Some(secret_key));
 
         let notification = WebhookNotification {
             id: "123".to_string(),
@@ -240,7 +240,7 @@ mod tests {
             .await;
 
         let secret_key = SecretString::new("test_secret");
-        let service = WebhookNotificationService::new(mock_server.url(), Some(secret_key.clone()));
+        let service = WebhookNotificationService::new(mock_server.url(), Some(secret_key));
 
         let notification = WebhookNotification {
             id: "123".to_string(),
