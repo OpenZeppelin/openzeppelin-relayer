@@ -83,9 +83,6 @@ async fn main() -> Result<()> {
 
     let app_state = initialize_app_state(server_config.clone()).await?;
 
-    // Setup workers for processing jobs
-    initialize_workers(app_state.clone()).await?;
-
     process_config_file(config_file, server_config.clone(), &app_state).await?;
 
     info!("Initializing relayers");
@@ -93,6 +90,9 @@ async fn main() -> Result<()> {
     initialize_relayers(app_state.clone()).await?;
 
     initialize_solana_swap_workers(app_state.clone()).await?;
+
+    // Setup workers for processing jobs
+    initialize_workers(app_state.clone()).await?;
 
     // Rate limit configuration
     let rate_limit_config = GovernorConfigBuilder::default()
