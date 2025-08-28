@@ -284,9 +284,8 @@ impl VaultServiceTrait for VaultService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockito;
     use serde_json::json;
-    use wiremock::matchers::{body_json, header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_vault_config_new() {
@@ -368,79 +367,94 @@ mod tests {
 
     // utility function to setup a mock AppRole login response
     async fn setup_mock_approle_login(
-        mock_server: &MockServer,
+        mock_server: &mut mockito::ServerGuard,
         role_id: &str,
         secret_id: &str,
         token: &str,
-    ) {
-        Mock::given(method("POST"))
-            .and(path("/v1/auth/approle/login"))
-            .and(body_json(json!({
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", "/v1/auth/approle/login")
+            .match_body(mockito::Matcher::Json(json!({
                 "role_id": role_id,
                 "secret_id": secret_id
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": null,
-                "wrap_info": null,
-                "warnings": null,
-                "auth": {
-                    "client_token": token,
-                    "accessor": "test-accessor",
-                    "policies": ["default"],
-                    "token_policies": ["default"],
-                    "metadata": {
-                        "role_name": "test-role"
-                    },
-                    "lease_duration": 3600,
-                    "renewable": true,
-                    "entity_id": "test-entity-id",
-                    "token_type": "service",
-                    "orphan": true
-                }
-            })))
-            .mount(mock_server)
-            .await;
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "request_id": "test-request-id",
+                    "lease_id": "",
+                    "renewable": false,
+                    "lease_duration": 0,
+                    "data": null,
+                    "wrap_info": null,
+                    "warnings": null,
+                    "auth": {
+                        "client_token": token,
+                        "accessor": "test-accessor",
+                        "policies": ["default"],
+                        "token_policies": ["default"],
+                        "metadata": {
+                            "role_name": "test-role"
+                        },
+                        "lease_duration": 3600,
+                        "renewable": true,
+                        "entity_id": "test-entity-id",
+                        "token_type": "service",
+                        "orphan": true
+                    }
+                }))
+                .unwrap(),
+            )
+            .create_async()
+            .await
     }
 
     #[tokio::test]
     async fn test_vault_service_auth_failure() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
-            .await;
+        let _login_mock = setup_mock_approle_login(
+            &mut mock_server,
+            "test-role-id",
+            "test-secret-id",
+            "test-token",
+        )
+        .await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1/test-mount/data/my-secret"))
-            .and(header("X-Vault-Token", "test-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": {
+        let _secret_mock = mock_server
+            .mock("GET", "/v1/test-mount/data/my-secret")
+            .match_header("X-Vault-Token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "request_id": "test-request-id",
+                    "lease_id": "",
+                    "renewable": false,
+                    "lease_duration": 0,
                     "data": {
-                        "value": "super-secret-value"
+                        "data": {
+                            "value": "super-secret-value"
+                        },
+                        "metadata": {
+                            "created_time": "2024-01-01T00:00:00Z",
+                            "deletion_time": "",
+                            "destroyed": false,
+                            "version": 1
+                        }
                     },
-                    "metadata": {
-                        "created_time": "2024-01-01T00:00:00Z",
-                        "deletion_time": "",
-                        "destroyed": false,
-                        "version": 1
-                    }
-                },
-                "wrap_info": null,
-                "warnings": null,
-                "auth": null
-            })))
-            .mount(&mock_server)
+                    "wrap_info": null,
+                    "warnings": null,
+                    "auth": null
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
         let config = VaultConfig::new(
-            mock_server.uri(),
+            mock_server.url(),
             SecretString::new("test-role-id-fake"),
             SecretString::new("test-secret-id-fake"),
             None,
@@ -462,39 +476,52 @@ mod tests {
 
     #[tokio::test]
     async fn test_vault_service_retrieve_secret_success() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
-            .await;
+        let _login_mock = setup_mock_approle_login(
+            &mut mock_server,
+            "test-role-id",
+            "test-secret-id",
+            "test-token",
+        )
+        .await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1/test-mount/data/my-secret"))
-            .and(header("X-Vault-Token", "test-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": {
+        let _secret_mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/v1/test-mount/data/my-secret.*".to_string()),
+            )
+            .match_header("X-Vault-Token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "request_id": "test-request-id",
+                    "lease_id": "",
+                    "renewable": false,
+                    "lease_duration": 0,
                     "data": {
-                        "value": "super-secret-value"
+                        "data": {
+                            "value": "super-secret-value"
+                        },
+                        "metadata": {
+                            "created_time": "2024-01-01T00:00:00Z",
+                            "deletion_time": "",
+                            "destroyed": false,
+                            "version": 1
+                        }
                     },
-                    "metadata": {
-                        "created_time": "2024-01-01T00:00:00Z",
-                        "deletion_time": "",
-                        "destroyed": false,
-                        "version": 1
-                    }
-                },
-                "wrap_info": null,
-                "warnings": null,
-                "auth": null
-            })))
-            .mount(&mock_server)
+                    "wrap_info": null,
+                    "warnings": null,
+                    "auth": null
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
         let config = VaultConfig::new(
-            mock_server.uri(),
+            mock_server.url(),
             SecretString::new("test-role-id"),
             SecretString::new("test-secret-id"),
             None,
@@ -511,38 +538,48 @@ mod tests {
 
     #[tokio::test]
     async fn test_vault_service_sign_success() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
-            .await;
+        let _login_mock = setup_mock_approle_login(
+            &mut mock_server,
+            "test-role-id",
+            "test-secret-id",
+            "test-token",
+        )
+        .await;
 
         let message = b"hello world";
         let encoded_message = base64_encode(message);
 
-        Mock::given(method("POST"))
-            .and(path("/v1/test-mount/sign/my-signing-key"))
-            .and(header("X-Vault-Token", "test-token"))
-            .and(body_json(json!({
+        let _sign_mock = mock_server
+            .mock("POST", "/v1/test-mount/sign/my-signing-key")
+            .match_header("X-Vault-Token", "test-token")
+            .match_body(mockito::Matcher::Json(json!({
                 "input": encoded_message
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": {
-                    "signature": "vault:v1:fake-signature",
-                    "key_version": 1
-                },
-                "wrap_info": null,
-                "warnings": null,
-                "auth": null
-            })))
-            .mount(&mock_server)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "request_id": "test-request-id",
+                    "lease_id": "",
+                    "renewable": false,
+                    "lease_duration": 0,
+                    "data": {
+                        "signature": "vault:v1:fake-signature",
+                        "key_version": 1
+                    },
+                    "wrap_info": null,
+                    "warnings": null,
+                    "auth": null
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
         let config = VaultConfig::new(
-            mock_server.uri(),
+            mock_server.url(),
             SecretString::new("test-role-id"),
             SecretString::new("test-secret-id"),
             None,
@@ -558,22 +595,35 @@ mod tests {
 
     #[tokio::test]
     async fn test_vault_service_retrieve_secret_failure() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
-            .await;
+        let _login_mock = setup_mock_approle_login(
+            &mut mock_server,
+            "test-role-id",
+            "test-secret-id",
+            "test-token",
+        )
+        .await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1/test-mount/data/my-secret"))
-            .and(header("X-Vault-Token", "test-token"))
-            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
-                "errors": ["secret not found:"]
-            })))
-            .mount(&mock_server)
+        let _secret_mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/v1/test-mount/data/my-secret.*".to_string()),
+            )
+            .match_header("X-Vault-Token", "test-token")
+            .with_status(404)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "errors": ["secret not found:"]
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
         let config = VaultConfig::new(
-            mock_server.uri(),
+            mock_server.url(),
             SecretString::new("test-role-id"),
             SecretString::new("test-secret-id"),
             None,
@@ -596,28 +646,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_vault_service_sign_failure() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
-            .await;
+        let _login_mock = setup_mock_approle_login(
+            &mut mock_server,
+            "test-role-id",
+            "test-secret-id",
+            "test-token",
+        )
+        .await;
 
         let message = b"hello world";
         let encoded_message = base64_encode(message);
 
-        Mock::given(method("POST"))
-            .and(path("/v1/test-mount/sign/my-signing-key"))
-            .and(header("X-Vault-Token", "test-token"))
-            .and(body_json(json!({
+        let _sign_mock = mock_server
+            .mock("POST", "/v1/test-mount/sign/my-signing-key")
+            .match_header("X-Vault-Token", "test-token")
+            .match_body(mockito::Matcher::Json(json!({
                 "input": encoded_message
             })))
-            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
-                "errors": ["1 error occurred:\n\t* signing key not found"]
-            })))
-            .mount(&mock_server)
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "errors": ["1 error occurred:\n\t* signing key not found"]
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
         let config = VaultConfig::new(
-            mock_server.uri(),
+            mock_server.url(),
             SecretString::new("test-role-id"),
             SecretString::new("test-secret-id"),
             None,

@@ -370,10 +370,9 @@ mod tests {
         },
     };
     use actix_web::web::ThinData;
+    use mockito;
     use serde_json::json;
     use std::{sync::Arc, time::Duration};
-    use wiremock::matchers::{body_json, header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn create_test_app_state() -> AppState<
         MockJobProducerTrait,
@@ -528,55 +527,67 @@ mod tests {
 
     // utility function to setup a mock AppRole login response
     async fn setup_mock_approle_login(
-        mock_server: &MockServer,
+        mock_server: &mut mockito::ServerGuard,
         role_id: &str,
         secret_id: &str,
         token: &str,
-    ) {
-        Mock::given(method("POST"))
-            .and(path("/v1/auth/approle/login"))
-            .and(body_json(json!({
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", "/v1/auth/approle/login")
+            .match_body(mockito::Matcher::Json(json!({
                 "role_id": role_id,
                 "secret_id": secret_id
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "request_id": "test-request-id",
-                "lease_id": "",
-                "renewable": false,
-                "lease_duration": 0,
-                "data": null,
-                "wrap_info": null,
-                "warnings": null,
-                "auth": {
-                    "client_token": token,
-                    "accessor": "test-accessor",
-                    "policies": ["default"],
-                    "token_policies": ["default"],
-                    "metadata": {
-                        "role_name": "test-role"
-                    },
-                    "lease_duration": 3600,
-                    "renewable": true,
-                    "entity_id": "test-entity-id",
-                    "token_type": "service",
-                    "orphan": true
-                }
-            })))
-            .mount(mock_server)
-            .await;
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "request_id": "test-request-id",
+                    "lease_id": "",
+                    "renewable": false,
+                    "lease_duration": 0,
+                    "data": null,
+                    "wrap_info": null,
+                    "warnings": null,
+                    "auth": {
+                        "client_token": token,
+                        "accessor": "test-accessor",
+                        "policies": ["default"],
+                        "token_policies": ["default"],
+                        "metadata": {
+                            "role_name": "test-role"
+                        },
+                        "lease_duration": 3600,
+                        "renewable": true,
+                        "entity_id": "test-entity-id",
+                        "token_type": "service",
+                        "orphan": true
+                    }
+                }))
+                .unwrap(),
+            )
+            .create_async()
+            .await
     }
 
     #[tokio::test]
     async fn test_process_signer_vault() -> Result<()> {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        setup_mock_approle_login(&mock_server, "test-role-id", "test-secret-id", "test-token")
-            .await;
+        let _login_mock = setup_mock_approle_login(
+            &mut mock_server,
+            "test-role-id",
+            "test-secret-id",
+            "test-token",
+        )
+        .await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1/secret/data/test-key"))
-            .and(header("X-Vault-Token", "test-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        let _secret_mock = mock_server
+            .mock("GET", "/v1/secret/data/test-key")
+            .match_header("X-Vault-Token", "test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "request_id": "test-request-id",
                 "lease_id": "",
                 "renewable": false,
@@ -595,15 +606,15 @@ mod tests {
                 "wrap_info": null,
                 "warnings": null,
                 "auth": null
-            })))
-            .mount(&mock_server)
+            })).unwrap())
+            .create_async()
             .await;
 
         let signer = SignerFileConfig {
             id: "vault-signer".to_string(),
             config: SignerFileConfigEnum::Vault(VaultSignerFileConfig {
                 key_name: "test-key".to_string(),
-                address: mock_server.uri(),
+                address: mock_server.url(),
                 namespace: Some("test-namespace".to_string()),
                 role_id: PlainOrEnvValue::Plain {
                     value: SecretString::new("test-role-id"),
