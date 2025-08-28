@@ -133,9 +133,8 @@ mod tests {
     use crate::models::{WebhookNotification, WebhookPayload};
     use crate::services::notification::WebhookNotificationService;
     use base64::{engine::general_purpose::STANDARD, Engine};
+    use mockito;
     use serde_json::json;
-    use wiremock::matchers::{header_exists, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn mock_transaction_response() -> TransactionResponse {
         TransactionResponse::Evm(Box::new(EvmTransactionResponse {
@@ -163,22 +162,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_successful_notification_with_signature() {
-        let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/"))
-            .and(header_exists("X-Signature"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "status": "success",
-                "message": null
-            })))
-            .mount(&mock_server)
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = mock_server
+            .mock("POST", "/")
+            .match_header("X-Signature", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "status": "success",
+                    "message": null
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
         let secret_key = SecretString::new("test_secret");
-        let service = WebhookNotificationService::new(
-            mock_server.uri().to_string(),
-            Some(secret_key.clone()),
-        );
+        let service = WebhookNotificationService::new(mock_server.url(), Some(secret_key));
 
         let notification = WebhookNotification {
             id: "123".to_string(),
@@ -193,17 +194,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_failed_notification_without_signature() {
-        let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "status": "success",
-                "message": null
-            })))
-            .mount(&mock_server)
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = mock_server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "status": "success",
+                    "message": null
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
-        let service = WebhookNotificationService::new(mock_server.uri().to_string(), None);
+        let service = WebhookNotificationService::new(mock_server.url(), None);
 
         let notification = WebhookNotification {
             id: "123".to_string(),
@@ -218,21 +224,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_failed_notification_with_http_error() {
-        let mock_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/"))
-            .respond_with(ResponseTemplate::new(500).set_body_json(json!({
-                "status": "error",
-                "message": "Internal Server Error"
-            })))
-            .mount(&mock_server)
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = mock_server
+            .mock("POST", "/")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "status": "error",
+                    "message": "Internal Server Error"
+                }))
+                .unwrap(),
+            )
+            .create_async()
             .await;
 
         let secret_key = SecretString::new("test_secret");
-        let service = WebhookNotificationService::new(
-            mock_server.uri().to_string(),
-            Some(secret_key.clone()),
-        );
+        let service = WebhookNotificationService::new(mock_server.url(), Some(secret_key));
 
         let notification = WebhookNotification {
             id: "123".to_string(),

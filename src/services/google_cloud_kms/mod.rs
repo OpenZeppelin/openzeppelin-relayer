@@ -325,7 +325,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn get_solana_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
-        println!("PEM solana: {}", pem_str);
+        debug!("PEM solana: {}", pem_str);
 
         utils::derive_solana_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)
     }
@@ -333,7 +333,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn get_evm_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
-        println!("PEM evm: {}", pem_str);
+        debug!("PEM evm: {}", pem_str);
 
         let address_bytes =
             utils::derive_ethereum_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)?;
@@ -360,7 +360,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
 
-        println!("KMS asymmetricSign response: {}", resp);
+        debug!("KMS asymmetricSign response: {}", resp);
 
         let signature = base64_decode(signature_b64)
             .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
@@ -392,10 +392,10 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
 
-        println!("KMS asymmetricSign response: {}", resp);
+        debug!("KMS asymmetricSign response: {}", resp);
         let signature_b64 =
             base64_decode(signature).map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
-        print!("Signature b64 decoded: {:?}", signature_b64);
+        debug!("Signature b64 decoded: {:?}", signature_b64);
         Ok(signature_b64)
     }
 }
@@ -429,9 +429,8 @@ mod tests {
         GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, SecretString,
     };
     use alloy::primitives::utils::eip191_message;
+    use mockito::{Mock, ServerGuard};
     use serde_json::json;
-    use wiremock::matchers::{header_exists, method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn create_test_config(uri: &str) -> GoogleCloudKmsSignerConfig {
         GoogleCloudKmsSignerConfig {
@@ -493,90 +492,102 @@ mod tests {
     }
 
     // Mock setup helpers
-    async fn setup_mock_solana_public_key(mock_server: &MockServer) {
-        Mock::given(method("GET"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+    async fn setup_mock_solana_public_key(mock_server: &mut ServerGuard) -> Mock {
+        mock_server
+            .mock("GET", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAVyC+iqnSu0vo6R8x0sRMhintQtoZgcLOur1VyvCrdrs=\n-----END PUBLIC KEY-----\n",
                 "algorithm": "ECDSA_P256_SHA256"
-            })))
-            .mount(mock_server)
-            .await;
+            })).unwrap())
+            .create_async()
+            .await
     }
 
-    async fn setup_mock_evm_public_key(mock_server: &MockServer) {
-        Mock::given(method("GET"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+    async fn setup_mock_evm_public_key(mock_server: &mut ServerGuard) -> Mock {
+        mock_server
+            .mock("GET", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "pem": "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh\nkFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n", // noboost
                 "algorithm": "ECDSA_SECP256K1_SHA256"
-            })))
-            .mount(mock_server)
-            .await;
+            })).unwrap())
+            .create_async()
+            .await
     }
 
-    async fn setup_mock_sign_success(mock_server: &MockServer) {
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+    async fn setup_mock_sign_success(mock_server: &mut ServerGuard) -> Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "signature": "ZHVtbXlzaWduYXR1cmU="  // Base64 encoded "dummysignature"
-            })))
-            .mount(mock_server)
-            .await;
+            })).unwrap())
+            .create_async()
+            .await
     }
 
-    async fn setup_mock_sign_error(mock_server: &MockServer) {
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+    async fn setup_mock_sign_error(mock_server: &mut ServerGuard) -> Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "error": {
                     "code": 400,
                     "message": "Invalid request",
                     "status": "INVALID_ARGUMENT"
                 }
-            })))
-            .mount(mock_server)
-            .await;
+            })).unwrap())
+            .create_async()
+            .await
     }
 
-    async fn setup_mock_get_key_error(mock_server: &MockServer) {
-        Mock::given(method("GET"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+    async fn setup_mock_get_key_error(mock_server: &mut ServerGuard) -> Mock {
+        mock_server
+            .mock("GET", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(404)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "error": {
                     "code": 404,
                     "message": "Key not found",
                     "status": "NOT_FOUND"
                 }
-            })))
-            .mount(mock_server)
-            .await;
+            })).unwrap())
+            .create_async()
+            .await
     }
 
-    async fn setup_mock_malformed_response(mock_server: &MockServer) {
-        Mock::given(method("GET"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+    async fn setup_mock_malformed_response(mock_server: &mut ServerGuard) -> Mock {
+        mock_server
+            .mock("GET", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "algorithm": "ED25519"
                 // Missing "pem" field
-            })))
-            .mount(mock_server)
-            .await;
+            })).unwrap())
+            .create_async()
+            .await
     }
 
     // GoogleCloudKmsServiceTrait tests
     #[tokio::test]
     async fn test_get_solana_address_success() {
-        let mock_server = MockServer::start().await;
-        setup_mock_solana_public_key(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_solana_public_key(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.get_solana_address().await;
@@ -589,10 +600,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_solana_address_api_error() {
-        let mock_server = MockServer::start().await;
-        setup_mock_get_key_error(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_get_key_error(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.get_solana_address().await;
@@ -605,10 +616,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_evm_address_success() {
-        let mock_server = MockServer::start().await;
-        setup_mock_evm_public_key(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_evm_public_key(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = GoogleCloudKmsServiceTrait::get_evm_address(&service).await;
@@ -621,10 +632,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_solana_success() {
-        let mock_server = MockServer::start().await;
-        setup_mock_sign_success(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_success(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.sign_solana(b"test message").await;
@@ -634,10 +645,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_solana_api_error() {
-        let mock_server = MockServer::start().await;
-        setup_mock_sign_error(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_error(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.sign_solana(b"test message").await;
@@ -650,10 +661,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_evm_success() {
-        let mock_server = MockServer::start().await;
-        setup_mock_sign_success(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_success(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.sign_evm(b"test message").await;
@@ -663,10 +674,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_evm_api_error() {
-        let mock_server = MockServer::start().await;
-        setup_mock_sign_error(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_error(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.sign_evm(b"test message").await;
@@ -680,10 +691,10 @@ mod tests {
     // GoogleCloudKmsEvmService tests
     #[tokio::test]
     async fn test_evm_service_get_address_success() {
-        let mock_server = MockServer::start().await;
-        setup_mock_evm_public_key(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_evm_public_key(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = GoogleCloudKmsEvmService::get_evm_address(&service).await;
@@ -698,10 +709,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_evm_service_get_address_api_error() {
-        let mock_server = MockServer::start().await;
-        setup_mock_get_key_error(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_get_key_error(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = GoogleCloudKmsEvmService::get_evm_address(&service).await;
@@ -728,10 +739,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_pem_public_key_success() {
-        let mock_server = MockServer::start().await;
-        setup_mock_evm_public_key(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_evm_public_key(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = GoogleCloudKmsK256::get_pem_public_key(&service).await;
@@ -741,10 +752,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_pem_public_key_missing_field() {
-        let mock_server = MockServer::start().await;
-        setup_mock_malformed_response(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_malformed_response(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = GoogleCloudKmsK256::get_pem_public_key(&service).await;
@@ -757,10 +768,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_digest_success() {
-        let mock_server = MockServer::start().await;
-        setup_mock_sign_success(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_success(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let digest = [0u8; 32];
@@ -771,10 +782,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_digest_api_error() {
-        let mock_server = MockServer::start().await;
-        setup_mock_sign_error(&mock_server).await;
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_error(&mut mock_server).await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let digest = [0u8; 32];
@@ -845,16 +856,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_malformed_json_response() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        Mock::given(method("GET"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("invalid json"))
-            .mount(&mock_server)
+        let _mock = mock_server
+            .mock("GET", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*/publicKey".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("invalid json")
+            .create_async()
             .await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.get_solana_address().await;
@@ -867,19 +880,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_missing_signature_field_in_response() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        Mock::given(method("POST"))
-            .and(path_regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign"))
-            .and(header_exists("Authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+        let _mock = mock_server
+            .mock("POST", mockito::Matcher::Regex(r"/v1/projects/.*/locations/global/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*:asymmetricSign".to_string()))
+            .match_header("Authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
                 "name": "test-key"
                 // Missing "signature" field
-            })))
-            .mount(&mock_server)
+            })).unwrap())
+            .create_async()
             .await;
 
-        let config = create_test_config(&mock_server.uri());
+        let config = create_test_config(&mock_server.url());
         let service = GoogleCloudKmsService::new(&config).unwrap();
 
         let result = service.sign_solana(b"test").await;
