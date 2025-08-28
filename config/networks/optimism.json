@@ -28,31 +28,26 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 2000,
+      "from": "optimism",
+      "type": "evm",
+      "network": "optimism-sepolia",
       "chain_id": 11155420,
       "explorer_urls": [
         "https://api-sepolia-optimistic.etherscan.io/api",
         "https://sepolia-optimism.etherscan.io"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": true,
-      "network": "optimism-sepolia",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://sepolia.optimism.io",
         "https://optimism-sepolia.drpc.org",
         "https://optimism-sepolia-rpc.publicnode.com",
         "https://optimism-sepolia-public.nodies.app"
       ],
-      "symbol": "ETH",
       "tags": [
         "deprecated",
         "rollup",
         "optimism-based"
-      ],
-      "type": "evm"
+      ]
     },
     {
       "average_blocktime_ms": 2000,
@@ -81,30 +76,25 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 2000,
+      "from": "base",
+      "type": "evm",
+      "network": "base-sepolia",
       "chain_id": 84532,
       "explorer_urls": [
         "https://api-sepolia.basescan.org/api",
         "https://sepolia.basescan.org"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": true,
-      "network": "base-sepolia",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://sepolia.base.org",
         "https://base-sepolia.drpc.org",
         "https://base-sepolia-rpc.publicnode.com",
         "https://base-sepolia-public.nodies.app"
       ],
-      "symbol": "ETH",
       "tags": [
         "deprecated",
         "rollup"
-      ],
-      "type": "evm"
+      ]
     },
     {
       "average_blocktime_ms": 1000,

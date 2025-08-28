@@ -22,24 +22,22 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 5000,
+      "from": "zk-sync",
+      "type": "evm",
+      "network": "zk-sync-testnet",
       "chain_id": 300,
       "explorer_urls": [
         "https://api-sepolia-era.zksync.network/api",
         "https://sepolia-era.zksync.network"
       ],
       "is_testnet": true,
-      "network": "zk-sync-testnet",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://sepolia.era.zksync.dev"
       ],
-      "symbol": "ETH",
       "tags": [
         "deprecated",
         "rollup"
-      ],
-      "type": "evm"
+      ]
     }
   ]
 }

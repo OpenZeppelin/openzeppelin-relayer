@@ -278,8 +278,6 @@ mod tests {
     use std::env;
     use std::sync::Mutex;
     use std::time::Duration;
-    use wiremock::matchers::any;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // Use a mutex to ensure tests don't run in parallel when modifying env vars
     lazy_static! {
@@ -380,16 +378,17 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_categorize_reqwest_error_rate_limited() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        Mock::given(any())
-            .respond_with(ResponseTemplate::new(429))
-            .mount(&mock_server)
+        let _mock = mock_server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(429)
+            .create_async()
             .await;
 
         let client = reqwest::Client::new();
         let response = client
-            .get(mock_server.uri())
+            .get(mock_server.url())
             .send()
             .await
             .expect("Failed to get response");
@@ -407,16 +406,17 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_categorize_reqwest_error_bad_gateway() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        Mock::given(any())
-            .respond_with(ResponseTemplate::new(502))
-            .mount(&mock_server)
+        let _mock = mock_server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(502)
+            .create_async()
             .await;
 
         let client = reqwest::Client::new();
         let response = client
-            .get(mock_server.uri())
+            .get(mock_server.url())
             .send()
             .await
             .expect("Failed to get response");
