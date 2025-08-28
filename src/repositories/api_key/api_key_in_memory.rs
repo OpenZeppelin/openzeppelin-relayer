@@ -3,7 +3,7 @@
 //! The `InMemoryApiKeyRepository` struct is used to store and retrieve api keys
 //! permissions.
 use crate::{
-    models::{ApiKeyModel, PaginationQuery},
+    models::{ApiKeyRepoModel, PaginationQuery},
     repositories::{ApiKeyRepositoryTrait, PaginatedResult, RepositoryError},
 };
 
@@ -14,7 +14,7 @@ use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemoryApiKeyRepository {
-    store: Mutex<HashMap<String, ApiKeyModel>>,
+    store: Mutex<HashMap<String, ApiKeyRepoModel>>,
 }
 
 impl Clone for InMemoryApiKeyRepository {
@@ -52,13 +52,13 @@ impl Default for InMemoryApiKeyRepository {
 
 #[async_trait]
 impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
-    async fn create(&self, api_key: ApiKeyModel) -> Result<ApiKeyModel, RepositoryError> {
+    async fn create(&self, api_key: ApiKeyRepoModel) -> Result<ApiKeyRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
         store.insert(api_key.id.clone(), api_key.clone());
         Ok(api_key)
     }
 
-    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyModel>, RepositoryError> {
+    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError> {
         let store = Self::acquire_lock(&self.store).await?;
         Ok(store.get(id).cloned())
     }
@@ -66,7 +66,7 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
     async fn list_paginated(
         &self,
         query: PaginationQuery,
-    ) -> Result<PaginatedResult<ApiKeyModel>, RepositoryError> {
+    ) -> Result<PaginatedResult<ApiKeyRepoModel>, RepositoryError> {
         let total = self.count().await?;
         let start = ((query.page - 1) * query.per_page) as usize;
 
@@ -134,7 +134,7 @@ mod tests {
         let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
 
         // Test add and get_by_id
-        let api_key = ApiKeyModel {
+        let api_key = ApiKeyRepoModel {
             id: "test-api-key".to_string(),
             value: "test-value".to_string(),
             name: "test-name".to_string(),
@@ -161,7 +161,7 @@ mod tests {
     async fn test_get_by_id() {
         let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
 
-        let api_key = ApiKeyModel {
+        let api_key = ApiKeyRepoModel {
             id: "test-api-key".to_string(),
             value: "test-value".to_string(),
             name: "test-name".to_string(),
@@ -180,7 +180,7 @@ mod tests {
     async fn test_list_paginated_api_keys() {
         let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
 
-        let api_key1 = ApiKeyModel {
+        let api_key1 = ApiKeyRepoModel {
             id: "test-api-key1".to_string(),
             value: "test-value1".to_string(),
             name: "test-name1".to_string(),
@@ -189,7 +189,7 @@ mod tests {
             created_at: Utc::now().to_string(),
         };
 
-        let api_key2 = ApiKeyModel {
+        let api_key2 = ApiKeyRepoModel {
             id: "test-api-key2".to_string(),
             value: "test-value2".to_string(),
             name: "test-name2".to_string(),
@@ -217,7 +217,7 @@ mod tests {
         let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
         assert!(!api_key_repository.has_entries().await.unwrap());
         api_key_repository
-            .create(ApiKeyModel {
+            .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
                 value: "test-value".to_string(),
                 name: "test-name".to_string(),
@@ -237,7 +237,7 @@ mod tests {
     async fn test_delete_by_id_api_key() {
         let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
         api_key_repository
-            .create(ApiKeyModel {
+            .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
                 value: "test-value".to_string(),
                 name: "test-name".to_string(),
@@ -260,7 +260,7 @@ mod tests {
     async fn test_list_permissions_api_key() {
         let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
         api_key_repository
-            .create(ApiKeyModel {
+            .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
                 value: "test-value".to_string(),
                 name: "test-name".to_string(),
@@ -285,7 +285,7 @@ mod tests {
     async fn test_drop_all_entries() {
         let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
         api_key_repository
-            .create(ApiKeyModel {
+            .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
                 value: "test-value".to_string(),
                 name: "test-name".to_string(),

@@ -1,6 +1,6 @@
 //! Redis-backed implementation of the ApiKeyRepository.
 
-use crate::models::{ApiKeyModel, PaginationQuery, RepositoryError};
+use crate::models::{ApiKeyRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{ApiKeyRepositoryTrait, BatchRetrievalResult, PaginatedResult};
 use async_trait::async_trait;
@@ -51,7 +51,7 @@ impl RedisApiKeyRepository {
     async fn get_by_ids(
         &self,
         ids: &[String],
-    ) -> Result<BatchRetrievalResult<ApiKeyModel>, RepositoryError> {
+    ) -> Result<BatchRetrievalResult<ApiKeyRepoModel>, RepositoryError> {
         if ids.is_empty() {
             debug!("No api key IDs provided for batch fetch");
             return Ok(BatchRetrievalResult {
@@ -114,7 +114,7 @@ impl fmt::Debug for RedisApiKeyRepository {
 
 #[async_trait]
 impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
-    async fn create(&self, entity: ApiKeyModel) -> Result<ApiKeyModel, RepositoryError> {
+    async fn create(&self, entity: ApiKeyRepoModel) -> Result<ApiKeyRepoModel, RepositoryError> {
         if entity.id.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "API Key ID cannot be empty".to_string(),
@@ -156,7 +156,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
     async fn list_paginated(
         &self,
         query: PaginationQuery,
-    ) -> Result<PaginatedResult<ApiKeyModel>, RepositoryError> {
+    ) -> Result<PaginatedResult<ApiKeyRepoModel>, RepositoryError> {
         if query.page == 0 {
             return Err(RepositoryError::InvalidData(
                 "Page number must be greater than 0".to_string(),
@@ -206,7 +206,7 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         })
     }
 
-    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyModel>, RepositoryError> {
+    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError> {
         if id.is_empty() {
             return Err(RepositoryError::InvalidData(
                 "API Key ID cannot be empty".to_string(),
@@ -357,8 +357,8 @@ mod tests {
     use super::*;
     use chrono::Utc;
 
-    fn create_test_api_key(id: &str) -> ApiKeyModel {
-        ApiKeyModel {
+    fn create_test_api_key(id: &str) -> ApiKeyRepoModel {
+        ApiKeyRepoModel {
             id: id.to_string(),
             value: "test-value".to_string(),
             name: "test-name".to_string(),
@@ -431,7 +431,7 @@ mod tests {
         let json = repo
             .serialize_entity(&api_key, |a| &a.id, "apikey")
             .unwrap();
-        let deserialized: ApiKeyModel = repo
+        let deserialized: ApiKeyRepoModel = repo
             .deserialize_entity(&json, &api_key.id, "apikey")
             .unwrap();
 

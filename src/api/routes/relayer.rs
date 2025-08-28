@@ -222,10 +222,10 @@ mod tests {
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
         models::{
-            ApiKeyModel, AppState, EvmTransactionData, LocalSignerConfigStorage, NetworkConfigData,
-            NetworkRepoModel, NetworkTransactionData, NetworkType, RelayerEvmPolicy,
-            RelayerNetworkPolicy, RelayerRepoModel, SignerConfigStorage, SignerRepoModel,
-            TransactionRepoModel, TransactionStatus, U256,
+            ApiKeyRepoModel, AppState, EvmTransactionData, LocalSignerConfigStorage,
+            NetworkConfigData, NetworkRepoModel, NetworkTransactionData, NetworkType,
+            RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfigStorage,
+            SignerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
             ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
@@ -341,7 +341,7 @@ mod tests {
         transaction_repo.create(test_transaction).await.unwrap();
 
         // Create test api key
-        let test_api_key = ApiKeyModel {
+        let test_api_key = ApiKeyRepoModel {
             id: "test-api-key".to_string(),
             name: "Test API Key".to_string(),
             value: "test-value".to_string(),

@@ -29,7 +29,7 @@ pub use api_key_redis::*;
 use mockall::automock;
 
 use crate::{
-    models::{ApiKeyModel, PaginationQuery, RepositoryError},
+    models::{ApiKeyRepoModel, PaginationQuery, RepositoryError},
     repositories::PaginatedResult,
 };
 
@@ -37,12 +37,12 @@ use crate::{
 #[allow(dead_code)]
 #[cfg_attr(test, automock)]
 pub trait ApiKeyRepositoryTrait {
-    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyModel>, RepositoryError>;
-    async fn create(&self, api_key: ApiKeyModel) -> Result<ApiKeyModel, RepositoryError>;
+    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError>;
+    async fn create(&self, api_key: ApiKeyRepoModel) -> Result<ApiKeyRepoModel, RepositoryError>;
     async fn list_paginated(
         &self,
         query: PaginationQuery,
-    ) -> Result<PaginatedResult<ApiKeyModel>, RepositoryError>;
+    ) -> Result<PaginatedResult<ApiKeyRepoModel>, RepositoryError>;
     async fn count(&self) -> Result<usize, RepositoryError>;
     async fn list_permissions(&self, api_key_id: &str) -> Result<Vec<String>, RepositoryError>;
     async fn delete_by_id(&self, api_key_id: &str) -> Result<(), RepositoryError>;
@@ -73,14 +73,14 @@ impl ApiKeyRepositoryStorage {
 
 #[async_trait]
 impl ApiKeyRepositoryTrait for ApiKeyRepositoryStorage {
-    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyModel>, RepositoryError> {
+    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError> {
         match self {
             ApiKeyRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
             ApiKeyRepositoryStorage::Redis(repo) => repo.get_by_id(id).await,
         }
     }
 
-    async fn create(&self, api_key: ApiKeyModel) -> Result<ApiKeyModel, RepositoryError> {
+    async fn create(&self, api_key: ApiKeyRepoModel) -> Result<ApiKeyRepoModel, RepositoryError> {
         match self {
             ApiKeyRepositoryStorage::InMemory(repo) => repo.create(api_key).await,
             ApiKeyRepositoryStorage::Redis(repo) => repo.create(api_key).await,
@@ -104,7 +104,7 @@ impl ApiKeyRepositoryTrait for ApiKeyRepositoryStorage {
     async fn list_paginated(
         &self,
         query: PaginationQuery,
-    ) -> Result<PaginatedResult<ApiKeyModel>, RepositoryError> {
+    ) -> Result<PaginatedResult<ApiKeyRepoModel>, RepositoryError> {
         match self {
             ApiKeyRepositoryStorage::InMemory(repo) => repo.list_paginated(query).await,
             ApiKeyRepositoryStorage::Redis(repo) => repo.list_paginated(query).await,
@@ -133,7 +133,7 @@ impl ApiKeyRepositoryTrait for ApiKeyRepositoryStorage {
     }
 }
 
-impl PartialEq for ApiKeyModel {
+impl PartialEq for ApiKeyRepoModel {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
             && self.name == other.name
@@ -155,8 +155,8 @@ mod tests {
         value: &str,
         allowed_origins: &[&str],
         permissions: &[&str],
-    ) -> ApiKeyModel {
-        ApiKeyModel {
+    ) -> ApiKeyRepoModel {
+        ApiKeyRepoModel {
             id: id.to_string(),
             name: name.to_string(),
             value: value.to_string(),

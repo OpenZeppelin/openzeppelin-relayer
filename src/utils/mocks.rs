@@ -13,7 +13,7 @@ pub mod mockutils {
         },
         jobs::MockJobProducerTrait,
         models::{
-            ApiKeyModel, AppState, EvmTransactionData, EvmTransactionRequest,
+            ApiKeyRepoModel, AppState, EvmTransactionData, EvmTransactionRequest,
             LocalSignerConfigStorage, NetworkConfigData, NetworkRepoModel, NetworkTransactionData,
             NetworkType, NotificationRepoModel, PluginModel, RelayerEvmPolicy,
             RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SecretString,
@@ -174,7 +174,7 @@ pub mod mockutils {
     }
 
     pub async fn create_mock_app_state(
-        api_keys: Option<Vec<ApiKeyModel>>,
+        api_keys: Option<Vec<ApiKeyRepoModel>>,
         relayers: Option<Vec<RelayerRepoModel>>,
         signers: Option<Vec<SignerRepoModel>>,
         networks: Option<Vec<NetworkRepoModel>>,
@@ -284,8 +284,8 @@ pub mod mockutils {
         }
     }
 
-    pub fn create_mock_api_key() -> ApiKeyModel {
-        ApiKeyModel {
+    pub fn create_mock_api_key() -> ApiKeyRepoModel {
+        ApiKeyRepoModel {
             id: "test-api-key".to_string(),
             name: "test-name".to_string(),
             value: "test-value".to_string(),
