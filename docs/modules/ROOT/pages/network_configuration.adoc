@@ -173,6 +173,9 @@ Some tags have special meaning and affect relayer behavior:
 |`optimism-based`
 |Identifies Optimism-based networks using the OP Stack (e.g., Optimism, Base, World Chain)
 
+|`optimism` _(deprecated)_
+|**DEPRECATED**: Use `optimism-based` instead. This tag will be removed in a future version.
+
 |`arbitrum-based`
 |Identifies Arbitrum-based networks using the Arbitrum Stack
 

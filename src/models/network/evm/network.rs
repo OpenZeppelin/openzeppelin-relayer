@@ -1,4 +1,6 @@
-use crate::constants::{ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, ROLLUP_TAG};
+use crate::constants::{
+    ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, ROLLUP_TAG,
+};
 use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
 use std::time::Duration;
 
@@ -94,7 +96,9 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
 
 impl EvmNetwork {
     pub fn is_optimism(&self) -> bool {
-        self.tags.iter().any(|t| t == OPTIMISM_BASED_TAG)
+        self.tags
+            .iter()
+            .any(|t| t == OPTIMISM_BASED_TAG || t == OPTIMISM_TAG)
     }
 
     pub fn is_rollup(&self) -> bool {
@@ -155,7 +159,7 @@ impl EvmNetwork {
 mod tests {
     use super::*;
     use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
-    use crate::constants::NO_MEMPOOL_TAG;
+    use crate::constants::{NO_MEMPOOL_TAG, OPTIMISM_TAG};
     use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
 
     fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
@@ -183,6 +187,18 @@ mod tests {
     fn test_is_optimism_without_optimism_tag() {
         let network = create_test_evm_network_with_tags(vec![ROLLUP_TAG, "mainnet"]);
         assert!(!network.is_optimism());
+    }
+
+    #[test]
+    fn test_is_optimism_with_deprecated_optimism_tag() {
+        let network = create_test_evm_network_with_tags(vec![OPTIMISM_TAG, ROLLUP_TAG]);
+        assert!(network.is_optimism());
+    }
+
+    #[test]
+    fn test_lacks_mempool_with_deprecated_optimism_tag() {
+        let network = create_test_evm_network_with_tags(vec![OPTIMISM_TAG, ROLLUP_TAG]);
+        assert!(network.lacks_mempool());
     }
 
     #[test]
