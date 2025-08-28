@@ -6013,8 +6013,7 @@
             "type": [
               "boolean",
               "null"
-            ],
-            "description": "Allow concurrent transactions (essential for channel accounts using different accounts' sequence numbers)"
+            ]
           },
           "max_fee": {
             "type": [
@@ -6754,25 +6753,151 @@
       "SolanaRpcResult": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/FeeEstimateResult"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeeEstimateResult"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "feeEstimate"
+                    ]
+                  }
+                }
+              }
+            ]
           },
           {
-            "$ref": "#/components/schemas/TransferTransactionResult"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferTransactionResult"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "transferTransaction"
+                    ]
+                  }
+                }
+              }
+            ]
           },
           {
-            "$ref": "#/components/schemas/PrepareTransactionResult"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PrepareTransactionResult"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "prepareTransaction"
+                    ]
+                  }
+                }
+              }
+            ]
           },
           {
-            "$ref": "#/components/schemas/SignTransactionResult"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignTransactionResult"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "signTransaction"
+                    ]
+                  }
+                }
+              }
+            ]
           },
           {
-            "$ref": "#/components/schemas/SignAndSendTransactionResult"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SignAndSendTransactionResult"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "signAndSendTransaction"
+                    ]
+                  }
+                }
+              }
+            ]
           },
           {
-            "$ref": "#/components/schemas/GetSupportedTokensResult"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GetSupportedTokensResult"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "getSupportedTokens"
+                    ]
+                  }
+                }
+              }
+            ]
           },
           {
-            "$ref": "#/components/schemas/GetFeaturesEnabledResult"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GetFeaturesEnabledResult"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "method"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "getFeaturesEnabled"
+                    ]
+                  }
+                }
+              }
+            ]
           }
         ]
       },

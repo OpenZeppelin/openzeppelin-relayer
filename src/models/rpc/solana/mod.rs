@@ -240,7 +240,7 @@ pub enum SolanaRpcRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
-#[serde(untagged)]
+#[serde(tag = "method", rename_all = "camelCase")]
 pub enum SolanaRpcResult {
     FeeEstimate(FeeEstimateResult),
     TransferTransaction(TransferTransactionResult),
