@@ -354,13 +354,15 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::SecretString;
+
     use super::*;
     use chrono::Utc;
 
     fn create_test_api_key(id: &str) -> ApiKeyRepoModel {
         ApiKeyRepoModel {
             id: id.to_string(),
-            value: "test-value".to_string(),
+            value: SecretString::new("test-value"),
             name: "test-name".to_string(),
             allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],

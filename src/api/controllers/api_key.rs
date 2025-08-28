@@ -4,26 +4,21 @@
 //! - Create api keys
 //! - List api keys
 //! - Delete api keys
-#[cfg(feature = "authV2")]
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        ApiError, ApiKeyModel, ApiKeyRequest, ApiKeyResponse, ApiResponse, NetworkRepoModel,
-        NotificationRepoModel, PaginationMeta, PaginationQuery, RelayerRepoModel, SignerRepoModel,
-        ThinDataAppState, TransactionRepoModel,
+        ApiError, ApiKeyRepoModel, ApiKeyRequest, ApiKeyResponse, ApiResponse, NetworkRepoModel,
+        NotificationRepoModel, PaginationMeta, PaginationQuery, RelayerRepoModel, SecretString,
+        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
 };
-#[cfg(feature = "authV2")]
 use actix_web::HttpResponse;
-#[cfg(feature = "authV2")]
 use chrono::Utc;
-#[cfg(feature = "authV2")]
 use eyre::Result;
-#[cfg(feature = "authV2")]
 use uuid::Uuid;
 
 /// Create api key
@@ -39,7 +34,6 @@ use uuid::Uuid;
 /// # Returns
 ///
 /// The result of the plugin call.
-#[cfg(feature = "authV2")]
 pub async fn create_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     api_key_request: ApiKeyRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -55,9 +49,9 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    let api_key = ApiKeyModel {
+    let api_key = ApiKeyRepoModel {
         id: Uuid::new_v4().to_string(),
-        value: Uuid::new_v4().to_string(),
+        value: SecretString::new(&Uuid::new_v4().to_string()),
         name: api_key_request.name,
         allowed_origins: api_key_request
             .allowed_origins
@@ -83,7 +77,6 @@ where
 /// # Returns
 ///
 /// The result of the api key list.
-#[cfg(feature = "authV2")]
 pub async fn list_api_keys<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     query: PaginationQuery,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -101,7 +94,7 @@ where
 {
     let api_keys = state.api_key_repository.list_paginated(query).await?;
 
-    let api_key_items: Vec<ApiKeyModel> = api_keys.items.into_iter().collect();
+    let api_key_items: Vec<ApiKeyRepoModel> = api_keys.items.into_iter().collect();
 
     // Subtract the "value" from the api key to avoid exposing it.
     let api_key_items: Vec<ApiKeyResponse> = api_key_items
@@ -132,7 +125,6 @@ where
 /// * `api_key_id` - The id of the api key.
 /// * `state` - The application state containing the api key repository.
 ///
-#[cfg(feature = "authV2")]
 pub async fn get_api_key_permissions<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     api_key_id: String,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -165,7 +157,6 @@ where
 ///
 /// If the API key is the last Admin API key in the system, it will return an error.
 ///
-#[cfg(feature = "authV2")]
 pub async fn delete_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     api_key_id: String,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,

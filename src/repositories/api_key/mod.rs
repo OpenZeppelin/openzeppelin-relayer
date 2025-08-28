@@ -144,6 +144,8 @@ impl PartialEq for ApiKeyRepoModel {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::SecretString;
+
     use super::*;
 
     use chrono::Utc;
@@ -159,7 +161,7 @@ mod tests {
         ApiKeyRepoModel {
             id: id.to_string(),
             name: name.to_string(),
-            value: value.to_string(),
+            value: SecretString::new(value),
             allowed_origins: allowed_origins.iter().map(|s| s.to_string()).collect(),
             permissions: permissions.iter().map(|s| s.to_string()).collect(),
             created_at: Utc::now().to_string(),

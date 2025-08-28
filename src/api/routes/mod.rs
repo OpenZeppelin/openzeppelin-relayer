@@ -25,8 +25,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .configure(plugin::init)
         .configure(metrics::init)
         .configure(notification::init)
-        .configure(signer::init);
-
-    #[cfg(feature = "authV2")]
-    cfg.configure(api_keys::init);
+        .configure(signer::init)
+        .configure(api_keys::init);
 }

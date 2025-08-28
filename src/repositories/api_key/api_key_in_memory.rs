@@ -127,6 +127,8 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
 
+    use crate::models::SecretString;
+
     use super::*;
 
     #[tokio::test]
@@ -136,7 +138,7 @@ mod tests {
         // Test add and get_by_id
         let api_key = ApiKeyRepoModel {
             id: "test-api-key".to_string(),
-            value: "test-value".to_string(),
+            value: SecretString::new("test-value"),
             name: "test-name".to_string(),
             allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
@@ -163,7 +165,7 @@ mod tests {
 
         let api_key = ApiKeyRepoModel {
             id: "test-api-key".to_string(),
-            value: "test-value".to_string(),
+            value: SecretString::new("test-value"),
             name: "test-name".to_string(),
             allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
@@ -182,7 +184,7 @@ mod tests {
 
         let api_key1 = ApiKeyRepoModel {
             id: "test-api-key1".to_string(),
-            value: "test-value1".to_string(),
+            value: SecretString::new("test-value1"),
             name: "test-name1".to_string(),
             allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
@@ -191,7 +193,7 @@ mod tests {
 
         let api_key2 = ApiKeyRepoModel {
             id: "test-api-key2".to_string(),
-            value: "test-value2".to_string(),
+            value: SecretString::new("test-value2"),
             name: "test-name2".to_string(),
             allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
@@ -219,7 +221,7 @@ mod tests {
         api_key_repository
             .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
-                value: "test-value".to_string(),
+                value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
                 allowed_origins: vec!["*".to_string()],
                 permissions: vec!["relayer:all:execute".to_string()],
@@ -239,7 +241,7 @@ mod tests {
         api_key_repository
             .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
-                value: "test-value".to_string(),
+                value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
                 allowed_origins: vec!["*".to_string()],
                 permissions: vec!["relayer:all:execute".to_string()],
@@ -262,7 +264,7 @@ mod tests {
         api_key_repository
             .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
-                value: "test-value".to_string(),
+                value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
                 allowed_origins: vec!["*".to_string()],
                 permissions: vec![
@@ -287,7 +289,7 @@ mod tests {
         api_key_repository
             .create(ApiKeyRepoModel {
                 id: "test-api-key".to_string(),
-                value: "test-value".to_string(),
+                value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
                 allowed_origins: vec!["*".to_string()],
                 permissions: vec!["relayer:all:execute".to_string()],

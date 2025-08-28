@@ -288,7 +288,7 @@ pub mod mockutils {
         ApiKeyRepoModel {
             id: "test-api-key".to_string(),
             name: "test-name".to_string(),
-            value: "test-value".to_string(),
+            value: SecretString::new("test-value"),
             allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),

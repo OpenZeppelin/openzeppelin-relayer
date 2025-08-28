@@ -224,8 +224,8 @@ mod tests {
         models::{
             ApiKeyRepoModel, AppState, EvmTransactionData, LocalSignerConfigStorage,
             NetworkConfigData, NetworkRepoModel, NetworkTransactionData, NetworkType,
-            RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SignerConfigStorage,
-            SignerRepoModel, TransactionRepoModel, TransactionStatus, U256,
+            RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SecretString,
+            SignerConfigStorage, SignerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
             ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
@@ -344,7 +344,7 @@ mod tests {
         let test_api_key = ApiKeyRepoModel {
             id: "test-api-key".to_string(),
             name: "Test API Key".to_string(),
-            value: "test-value".to_string(),
+            value: SecretString::new("test-value"),
             permissions: vec!["test-permission".to_string()],
             created_at: chrono::Utc::now().to_rfc3339(),
             allowed_origins: vec!["*".to_string()],
