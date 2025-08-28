@@ -107,10 +107,12 @@ impl EvmNetwork {
 
     ///  Returns whether this network lacks mempool-like behavior (no public/pending pool).
     ///
-    /// Returns true if any of these tags are present:
+    /// Returns true if any tag in `constants::LACKS_MEMPOOL_TAGS` is present.
+    /// Currently includes:
     /// - "no-mempool"
     /// - "arbitrum-based"
     /// - "optimism-based"
+    /// - "optimism" (deprecated; kept for compatibility)
     pub fn lacks_mempool(&self) -> bool {
         self.tags
             .iter()
