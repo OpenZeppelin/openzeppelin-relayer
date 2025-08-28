@@ -8,8 +8,8 @@ use crate::{
     jobs::JobProducerTrait,
     models::{
         ApiError, ApiKeyRepoModel, ApiKeyRequest, ApiKeyResponse, ApiResponse, NetworkRepoModel,
-        NotificationRepoModel, PaginationMeta, PaginationQuery, RelayerRepoModel, SecretString,
-        SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        NotificationRepoModel, PaginationMeta, PaginationQuery, RelayerRepoModel, SignerRepoModel,
+        ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -17,9 +17,7 @@ use crate::{
     },
 };
 use actix_web::HttpResponse;
-use chrono::Utc;
 use eyre::Result;
-use uuid::Uuid;
 
 /// Create api key
 ///
@@ -49,16 +47,7 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    let api_key = ApiKeyRepoModel {
-        id: Uuid::new_v4().to_string(),
-        value: SecretString::new(&Uuid::new_v4().to_string()),
-        name: api_key_request.name,
-        allowed_origins: api_key_request
-            .allowed_origins
-            .unwrap_or(vec!["*".to_string()]),
-        permissions: api_key_request.permissions,
-        created_at: Utc::now().to_string(),
-    };
+    let api_key = ApiKeyRepoModel::try_from(api_key_request)?;
 
     let api_key = state.api_key_repository.create(api_key).await?;
 
@@ -99,14 +88,8 @@ where
     // Subtract the "value" from the api key to avoid exposing it.
     let api_key_items: Vec<ApiKeyResponse> = api_key_items
         .into_iter()
-        .map(|api_key| ApiKeyResponse {
-            id: api_key.id,
-            name: api_key.name,
-            allowed_origins: api_key.allowed_origins,
-            created_at: api_key.created_at,
-            permissions: api_key.permissions,
-        })
-        .collect();
+        .map(ApiKeyResponse::try_from)
+        .collect::<Result<Vec<ApiKeyResponse>, ApiError>>()?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::paginated(
         api_key_items,
