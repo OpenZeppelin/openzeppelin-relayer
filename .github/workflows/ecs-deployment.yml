@@ -53,6 +53,8 @@ jobs:
             --password "$KEYSTORE_PASSPHRASE_FUND" \
             --output-dir config/keys \
             --filename launchtube-fund.json
+        env:
+          KEYSTORE_PASSPHRASE_FUND: ${{ secrets.KEYSTORE_PASSPHRASE_FUND }}
 
       - name: Create launchtube sequence account 001
         run: |
@@ -60,6 +62,8 @@ jobs:
             --password "$KEYSTORE_PASSPHRASE_SEQ_001" \
             --output-dir config/keys \
             --filename launchtube-seq-001.json
+        env:
+          KEYSTORE_PASSPHRASE_SEQ_001: ${{ secrets.KEYSTORE_PASSPHRASE_SEQ_001 }}
 
       - name: Create launchtube sequence account 002
         run: |
@@ -67,10 +71,7 @@ jobs:
             --password "$KEYSTORE_PASSPHRASE_SEQ_002" \
             --output-dir config/keys \
             --filename launchtube-seq-002.json
-
         env:
-          KEYSTORE_PASSPHRASE_FUND: ${{ secrets.KEYSTORE_PASSPHRASE_FUND }}
-          KEYSTORE_PASSPHRASE_SEQ_001: ${{ secrets.KEYSTORE_PASSPHRASE_SEQ_001 }}
           KEYSTORE_PASSPHRASE_SEQ_002: ${{ secrets.KEYSTORE_PASSPHRASE_SEQ_002 }}
 
       - name: Set up QEMU
