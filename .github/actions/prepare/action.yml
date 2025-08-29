@@ -42,3 +42,4 @@ runs:
         pnpm install
         pnpm run build
         cd ..
+      shell: bash
