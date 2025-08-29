@@ -35,7 +35,6 @@ runs:
       uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
       with:
         node-version: 22.18.0
-        cache: 'pnpm'
 
     - name: Build launchtube plugin example
       run: |
