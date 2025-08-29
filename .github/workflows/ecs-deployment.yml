@@ -100,8 +100,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/openzeppelin-layer:latest
-            ${{ env.REGISTRY }}/openzeppelin-layer:${{ github.sha }}
+            ${{ env.REGISTRY }}/openzeppelin-relayer:latest
+            ${{ env.REGISTRY }}/openzeppelin-relayer:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
