@@ -47,18 +47,22 @@ jobs:
         with:
           token: ${{ steps.gh-app-token.outputs.token }}
 
-      - name: Create launchtube fund and sequence accounts
+      - name: Create launchtube fund
         run: |
           cargo run --example create_key -- \
             --password "$KEYSTORE_PASSPHRASE_FUND" \
             --output-dir config/keys \
             --filename launchtube-fund.json
 
+      - name: Create launchtube sequence account 001
+        run: |
           cargo run --example create_key -- \
             --password "$KEYSTORE_PASSPHRASE_SEQ_001" \
             --output-dir config/keys \
             --filename launchtube-seq-001.json
 
+      - name: Create launchtube sequence account 002
+        run: |
           cargo run --example create_key -- \
             --password "$KEYSTORE_PASSPHRASE_SEQ_002" \
             --output-dir config/keys \
