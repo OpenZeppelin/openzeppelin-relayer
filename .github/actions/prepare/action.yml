@@ -41,5 +41,5 @@ runs:
         cd examples/launchtube-plugin-example/launchtube
         pnpm install
         pnpm run build
-        cd ..
+        cd ../..
       shell: bash
