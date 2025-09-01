@@ -1,9 +1,5 @@
-# syntax=docker/dockerfile:1.7
-
-############################
-# Builder (runs on TARGETPLATFORM via QEMU)
-############################
-FROM --platform=${TARGETPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS builder
+# Base image
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -12,54 +8,47 @@ RUN apk update && apk --no-cache add \
     libsodium-dev
 
 WORKDIR /usr/app
+
 COPY . .
-
-# Build natively for the TARGET platform.
-# NOTE: --mount flags MUST come immediately after RUN.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/app/target \
-    sh -lc 'set -eux; \
-      cargo build --release --locked; \
-      mkdir -p /out; \
-      cp target/release/openzeppelin-relayer /out/openzeppelin-relayer; \
-      # copy shared libs only if they exist (dynamic link); harmless if static
-      cp /usr/lib/libssl.so.3 /out/ 2>/dev/null || true; \
-      cp /usr/lib/libcrypto.so.3 /out/ 2>/dev/null || true \
-    '
+    --mount=type=cache,target=/app/target \
+    cargo install --root /usr/app --path . --debug --locked
 
-############################
-# Final image (must match TARGETPLATFORM)
-############################
-FROM --platform=${TARGETPLATFORM} cgr.dev/chainguard/wolfi-base
+# Setting up build directories
+FROM cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
+COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
+COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
+COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-# App binary (already built for TARGET arch)
-COPY --from=builder /out/openzeppelin-relayer /app/openzeppelin-relayer
-# If present, include these shared libs (won’t fail if they weren’t copied)
-COPY --from=builder /out/libssl.so.3     /usr/lib/libssl.so.3
-COPY --from=builder /out/libcrypto.so.3  /usr/lib/libcrypto.so.3
-
-# ---- Plugin dependencies (Node + pnpm) ----
-USER root
+# Install plugin dependencies
 ARG NODE_VERSION=20.19
-RUN apk add --no-cache "nodejs~${NODE_VERSION}" npm && \
-    npm install -g pnpm ts-node typescript
 
-# Copy plugins and install
+# Install Node.js
+USER root
+RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
+ENV PATH="/usr/local/bin:$PATH"
+
+RUN npm install -g pnpm ts-node typescript
+
+# removes apk and unneeded wolfi-base tools.
+RUN apk del wolfi-base apk-tools
+
+# Copy plugins folder and install dependencies
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
+
 USER nonroot
 WORKDIR /app/plugins
 RUN pnpm install --frozen-lockfile
 
-# ---- App runtime ----
+# Return to app root
 WORKDIR /app
-ENV APP_PORT=8080 \
-    METRICS_PORT=8081
-EXPOSE 8080/tcp 8081/tcp
 
-USER root
-RUN chmod +x /app/openzeppelin-relayer
-USER nonroot
+ENV APP_PORT=8080
+ENV METRICS_PORT=8081
 
+EXPOSE ${APP_PORT}/tcp ${METRICS_PORT}/tcp
+
+# starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]
