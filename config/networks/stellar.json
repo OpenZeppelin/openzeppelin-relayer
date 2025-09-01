@@ -10,11 +10,11 @@
       "passphrase": "Public Global Stellar Network ; September 2015"
     },
     {
+      "from": "mainnet",
       "type": "stellar",
       "network": "testnet",
       "rpc_urls": ["https://soroban-testnet.stellar.org"],
       "explorer_urls": ["https://stellar.expert/explorer/testnet"],
-      "average_blocktime_ms": 5000,
       "is_testnet": true,
       "passphrase": "Test SDF Network ; September 2015"
     }

@@ -125,6 +125,7 @@ pub fn get_age_of_sent_at(tx: &TransactionRepoModel) -> Result<Duration, Transac
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{ARBITRUM_BASED_TAG, ROLLUP_TAG};
     use crate::models::{evm::Speed, NetworkTransactionData};
     use crate::services::{MockEvmProviderTrait, ProviderError};
 
@@ -151,7 +152,7 @@ mod tests {
             explorer_urls: None,
             average_blocktime_ms: 1000,
             is_testnet: false,
-            tags: vec!["rollup".to_string(), "arbitrum-based".to_string()],
+            tags: vec![ROLLUP_TAG.to_string(), ARBITRUM_BASED_TAG.to_string()],
             chain_id: 42161,
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
@@ -167,7 +168,7 @@ mod tests {
             explorer_urls: None,
             average_blocktime_ms: 1000,
             is_testnet: false,
-            tags: vec!["rollup".to_string(), "arbitrum-based".to_string()],
+            tags: vec![ROLLUP_TAG.to_string(), ARBITRUM_BASED_TAG.to_string()],
             chain_id: 42170,
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],

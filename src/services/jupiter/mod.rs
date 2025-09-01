@@ -580,10 +580,7 @@ impl JupiterService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{
-        matchers::{method, path, query_param},
-        Mock, MockServer, ResponseTemplate,
-    };
+    use mockito;
 
     #[tokio::test]
     async fn test_get_quote() {
@@ -662,7 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_swap_transaction() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
         let quote = QuoteResponse {
             input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
@@ -698,16 +695,18 @@ mod tests {
             simulation_error: None,
         };
 
-        Mock::given(method("POST"))
-            .and(path("/swap/v1/swap"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&swap_response))
+        let _mock = mock_server
+            .mock("POST", "/swap/v1/swap")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&swap_response).unwrap())
             .expect(1)
-            .mount(&mock_server)
+            .create_async()
             .await;
 
         let service = MainnetJupiterService {
             client: Client::new(),
-            base_url: mock_server.uri(),
+            base_url: mock_server.url(),
         };
 
         let request = SwapRequest {
@@ -731,7 +730,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_ultra_order() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
         let ultra_response = UltraOrderResponse {
             input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
@@ -760,25 +759,29 @@ mod tests {
             request_id: "test_request_id".to_string(),
         };
 
-        Mock::given(method("GET"))
-            .and(path("/ultra/v1/order"))
-            .and(query_param(
-                "inputMint",
-                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-            ))
-            .and(query_param(
-                "outputMint",
-                "So11111111111111111111111111111111111111112",
-            ))
-            .and(query_param("amount", "1000000"))
-            .and(query_param("taker", "test_taker"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&ultra_response))
+        let _mock = mock_server
+            .mock("GET", "/ultra/v1/order")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded(
+                    "inputMint".into(),
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".into(),
+                ),
+                mockito::Matcher::UrlEncoded(
+                    "outputMint".into(),
+                    "So11111111111111111111111111111111111111112".into(),
+                ),
+                mockito::Matcher::UrlEncoded("amount".into(), "1000000".into()),
+                mockito::Matcher::UrlEncoded("taker".into(), "test_taker".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&ultra_response).unwrap())
             .expect(1)
-            .mount(&mock_server)
+            .create_async()
             .await;
         let service = MainnetJupiterService {
             client: Client::new(),
-            base_url: mock_server.uri(),
+            base_url: mock_server.url(),
         };
 
         let request = UltraOrderRequest {
@@ -800,7 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_ultra_order() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
         let execute_response = UltraExecuteResponse {
             signature: Some("mock_signature".to_string()),
@@ -820,16 +823,18 @@ mod tests {
             }]),
         };
 
-        Mock::given(method("POST"))
-            .and(path("/ultra/v1/execute"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&execute_response))
+        let _mock = mock_server
+            .mock("POST", "/ultra/v1/execute")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&execute_response).unwrap())
             .expect(1)
-            .mount(&mock_server)
+            .create_async()
             .await;
 
         let service = MainnetJupiterService {
             client: Client::new(),
-            base_url: mock_server.uri(),
+            base_url: mock_server.url(),
         };
 
         let request = UltraExecuteRequest {
@@ -846,18 +851,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_error_handling_for_api_errors() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
-        Mock::given(method("GET"))
-            .and(path("/ultra/v1/order"))
-            .respond_with(ResponseTemplate::new(400).set_body_string("Invalid request"))
-            .expect(1)
-            .mount(&mock_server)
+        let _mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/ultra/v1/order\?.*".to_string()),
+            )
+            .with_status(400)
+            .with_body("Invalid request")
+            .create_async()
             .await;
 
         let service = MainnetJupiterService {
             client: Client::new(),
-            base_url: mock_server.uri(),
+            base_url: mock_server.url(),
         };
 
         let request = UltraOrderRequest {
@@ -876,7 +884,7 @@ mod tests {
                     .to_string()
                     .contains("HTTP status client error (400 Bad Request)"));
             }
-            _ => panic!("Expected ApiError but got different error type"),
+            _ => panic!("Expected HttpRequestError but got different error type"),
         }
     }
 }

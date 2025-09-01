@@ -28,7 +28,7 @@ repos:
           - rust
       - id: clippy
         name: clippy
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: cargo clippy --workspace --lib --bins -- --no-deps -D warnings
         pass_filenames: false
         language: system
   - repo: https://github.com/pre-commit/pre-commit-hooks

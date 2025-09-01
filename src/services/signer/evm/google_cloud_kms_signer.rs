@@ -8,7 +8,7 @@
 
 use alloy::{
     consensus::{SignableTransaction, TxEip1559, TxLegacy},
-    primitives::{eip191_hash_message, utils::eip191_message, PrimitiveSignature},
+    primitives::{eip191_hash_message, utils::eip191_message, Signature},
 };
 use async_trait::async_trait;
 
@@ -63,7 +63,7 @@ impl Signer for GoogleCloudKmsSigner {
                 )));
             }
 
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             let mut signature_bytes = signature.as_bytes();
@@ -100,7 +100,7 @@ impl Signer for GoogleCloudKmsSigner {
                 )));
             }
 
-            let signature = PrimitiveSignature::from_raw(&signed_bytes)
+            let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
             let signature_bytes = signature.as_bytes();
@@ -168,11 +168,10 @@ mod tests {
         EvmTransactionData, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
         GoogleCloudKmsSignerServiceAccountConfig, SecretString, U256,
     };
-    use wiremock::matchers::{header_exists, method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use mockito::{Mock, ServerGuard};
 
-    async fn setup_mock_gcp_signer(mock_server: &MockServer) -> GoogleCloudKmsSigner {
-        let base_url = mock_server.uri();
+    async fn setup_mock_gcp_signer(mock_server: &ServerGuard) -> GoogleCloudKmsSigner {
+        let base_url = mock_server.url();
 
         let config = GoogleCloudKmsSignerConfig {
             service_account: GoogleCloudKmsSignerServiceAccountConfig {
@@ -201,19 +200,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_evm() {
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
         // Mock the public key endpoint
-        Mock::given(method("GET"))
-            .and(path_regex(
-                r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*",
-            ))
-            .and(header_exists("authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "pem": "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh\nkFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n", // noboost
-                "algorithm": "ECDSA_SECP256K1_SHA256"
-            })))
-            .mount(&mock_server)
+        let _mock = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(
+                    r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*"
+                        .to_string(),
+                ),
+            )
+            .match_header("authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&serde_json::json!({
+                    "pem": "-----BEGIN PUBLIC KEY-----\nMFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEjJaJh5wfZwvj8b3bQ4GYikqDTLXWUjMh\nkFs9lGj2N9B17zo37p4PSy99rDio0QHLadpso0rtTJDSISRW9MdOqA==\n-----END PUBLIC KEY-----\n", // noboost
+                    "algorithm": "ECDSA_SECP256K1_SHA256"
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
             .await;
 
         let signer = setup_mock_gcp_signer(&mock_server).await;
@@ -229,7 +238,7 @@ mod tests {
         use k256::pkcs8::EncodePublicKey;
         use sha3::{Digest, Keccak256};
 
-        let mock_server = MockServer::start().await;
+        let mut mock_server = mockito::Server::new_async().await;
 
         // Generate a test keypair
         let signing_key = SigningKey::from_slice(
@@ -247,16 +256,26 @@ mod tests {
         );
 
         // Mock the public key endpoint with our generated public key
-        Mock::given(method("GET"))
-            .and(path_regex(
-                r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*",
-            ))
-            .and(header_exists("authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "pem": public_key_pem,
-                "algorithm": "ECDSA_SECP256K1_SHA256"
-            })))
-            .mount(&mock_server)
+        let _mock_pubkey = mock_server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(
+                    r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*/cryptoKeyVersions/.*"
+                        .to_string(),
+                ),
+            )
+            .match_header("authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&serde_json::json!({
+                    "pem": public_key_pem,
+                    "algorithm": "ECDSA_SECP256K1_SHA256"
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
             .await;
 
         // The test message
@@ -273,15 +292,25 @@ mod tests {
         let signature_base64 = base64_encode(der_signature.as_bytes());
 
         // Mock the sign endpoint with the valid signature
-        Mock::given(method("POST"))
-            .and(path_regex(
-                r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*:asymmetricSign",
-            ))
-            .and(header_exists("authorization"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "signature": signature_base64
-            })))
-            .mount(&mock_server)
+        let _mock_sign = mock_server
+            .mock(
+                "POST",
+                mockito::Matcher::Regex(
+                    r"/v1/projects/.*/locations/.*/keyRings/.*/cryptoKeys/.*:asymmetricSign"
+                        .to_string(),
+                ),
+            )
+            .match_header("authorization", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&serde_json::json!({
+                    "signature": signature_base64
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
             .await;
 
         let signer = setup_mock_gcp_signer(&mock_server).await;

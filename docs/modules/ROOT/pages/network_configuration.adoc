@@ -170,14 +170,17 @@ Some tags have special meaning and affect relayer behavior:
 |`rollup`
 |Identifies Layer 2 rollup networks (e.g., Arbitrum, Optimism, Base)
 
-|`optimism`
+|`optimism-based`
 |Identifies Optimism-based networks using the OP Stack (e.g., Optimism, Base, World Chain)
+
+|`optimism` _(deprecated)_
+|**DEPRECATED**: Use `optimism-based` instead. This tag will be removed in a future version.
 
 |`arbitrum-based`
 |Identifies Arbitrum-based networks using the Arbitrum Stack
 
 |`no-mempool`
-|Indicates networks that lack a traditional mempool (e.g., Arbitrum)
+|Indicates networks that lack a traditional mempool (e.g., Arbitrum). Note: The relayer also treats networks tagged as `arbitrum-based` or `optimism-based` as lacking a mempool, even if `no-mempool` is not present.
 
 |`deprecated`
 |Marks networks that are deprecated and may be removed in future versions
@@ -323,7 +326,7 @@ Here's an example showing a Stellar network configuration with passphrase:
     "https://optimism.drpc.org"
   ],
   "features": ["eip1559"],
-  "tags": ["rollup", "optimism"],
+  "tags": ["rollup", "optimism-based"],
   "average_blocktime_ms": 2000,
   "is_testnet": false
 }

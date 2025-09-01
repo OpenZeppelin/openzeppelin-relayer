@@ -29,30 +29,25 @@
       "type": "evm"
     },
     {
-      "average_blocktime_ms": 260,
+      "from": "arbitrum-one",
+      "type": "evm",
+      "network": "arbitrum-sepolia",
       "chain_id": 421614,
       "explorer_urls": [
         "https://api-sepolia.arbiscan.io/api",
         "https://sepolia.arbiscan.io"
       ],
-      "features": [
-        "eip1559"
-      ],
       "is_testnet": true,
-      "network": "arbitrum-sepolia",
-      "required_confirmations": 1,
       "rpc_urls": [
         "https://sepolia-rollup.arbitrum.io/rpc",
         "https://arbitrum-sepolia-rpc.publicnode.com"
       ],
-      "symbol": "ETH",
       "tags": [
         "arbitrum-based",
         "deprecated",
         "rollup",
         "no-mempool"
-      ],
-      "type": "evm"
+      ]
     },
     {
       "average_blocktime_ms": 260,

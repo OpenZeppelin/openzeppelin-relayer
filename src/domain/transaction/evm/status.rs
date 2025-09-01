@@ -2,6 +2,7 @@
 //! It includes methods for checking transaction status, determining when to resubmit
 //! or replace transactions with NOOPs, and updating transaction status in the repository.
 
+use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 use log::info;
@@ -59,7 +60,7 @@ where
         let receipt_result = self.provider().get_transaction_receipt(tx_hash).await?;
 
         if let Some(receipt) = receipt_result {
-            if !receipt.status() {
+            if !receipt.inner.status() {
                 return Ok(TransactionStatus::Failed);
             }
             let last_block_number = self.provider().get_block_number().await?;
@@ -386,7 +387,7 @@ mod tests {
         models::{
             evm::Speed, EvmTransactionData, NetworkConfigData, NetworkRepoModel,
             NetworkTransactionData, NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy,
-            RelayerRepoModel, TransactionRepoModel, TransactionStatus, U256,
+            RelayerRepoModel, TransactionReceipt, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
             MockNetworkRepository, MockRelayerRepository, MockTransactionCounterTrait,
@@ -395,9 +396,9 @@ mod tests {
         services::{MockEvmProviderTrait, MockSigner},
     };
     use alloy::{
-        consensus::{Eip658Value, Receipt, ReceiptEnvelope, ReceiptWithBloom},
+        consensus::{Eip658Value, Receipt, ReceiptWithBloom},
+        network::AnyReceiptEnvelope,
         primitives::{b256, Address, BlockHash, Bloom, TxHash},
-        rpc::types::TransactionReceipt,
     };
     use chrono::{Duration, Utc};
     use std::sync::Arc;
@@ -592,27 +593,31 @@ mod tests {
         let from_address = Address::from([0x11; 20]);
 
         TransactionReceipt {
-            // A default, minimal "Legacy" receipt envelope
-            inner: ReceiptEnvelope::Legacy(ReceiptWithBloom {
-                receipt: Receipt {
-                    status: Eip658Value::Eip658(status), // determines success/fail
-                    cumulative_gas_used: 0,
-                    logs: vec![],
+            inner: alloy::rpc::types::TransactionReceipt {
+                inner: AnyReceiptEnvelope {
+                    inner: ReceiptWithBloom {
+                        receipt: Receipt {
+                            status: Eip658Value::Eip658(status), // determines success/fail
+                            cumulative_gas_used: 0,
+                            logs: vec![],
+                        },
+                        logs_bloom: Bloom::ZERO,
+                    },
+                    r#type: 0, // Legacy transaction type
                 },
-                logs_bloom: Bloom::ZERO,
-            }),
-            transaction_hash: tx_hash,
-            transaction_index: Some(0),
-            block_hash: block_number.map(|_| block_hash), // only set if mined
-            block_number,
-            gas_used: 21000,
-            effective_gas_price: 1000,
-            blob_gas_used: None,
-            blob_gas_price: None,
-            from: from_address,
-            to: None,
-            contract_address: None,
-            authorization_list: None,
+                transaction_hash: tx_hash,
+                transaction_index: Some(0),
+                block_hash: block_number.map(|_| block_hash), // only set if mined
+                block_number,
+                gas_used: 21000,
+                effective_gas_price: 1000,
+                blob_gas_used: None,
+                blob_gas_price: None,
+                from: from_address,
+                to: None,
+                contract_address: None,
+            },
+            other: Default::default(),
         }
     }
 

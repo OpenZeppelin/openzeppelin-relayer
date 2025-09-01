@@ -9,19 +9,19 @@
       "is_testnet": false
     },
     {
+      "from": "mainnet-beta",
       "type": "solana",
       "network": "testnet",
       "rpc_urls": ["https://api.testnet.solana.com"],
       "explorer_urls": ["https://explorer.solana.com?cluster=testnet"],
-      "average_blocktime_ms": 400,
       "is_testnet": true
     },
     {
+      "from": "mainnet-beta",
       "type": "solana",
       "network": "devnet",
       "rpc_urls": ["https://api.devnet.solana.com"],
       "explorer_urls": ["https://explorer.solana.com?cluster=devnet"],
-      "average_blocktime_ms": 400,
       "is_testnet": true
     }
   ]

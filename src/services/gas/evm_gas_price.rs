@@ -395,10 +395,12 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
 
 #[cfg(test)]
 mod tests {
-    use alloy::rpc::types::FeeHistory;
+    use alloy::{
+        network::AnyRpcBlock,
+        rpc::types::{Block, FeeHistory},
+    };
 
     use crate::services::provider::evm::MockEvmProviderTrait;
-    use alloy::rpc::types::{Block as BlockResponse, Header};
 
     use super::*;
 
@@ -524,16 +526,9 @@ mod tests {
             .times(1)
             .returning(move || {
                 Box::pin(async move {
-                    Ok(BlockResponse {
-                        header: Header {
-                            inner: alloy::consensus::Header {
-                                base_fee_per_gas: Some(expected_base_fee as u64),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
+                    let mut block: Block = Block::default();
+                    block.header.base_fee_per_gas = Some(expected_base_fee as u64);
+                    Ok(AnyRpcBlock::from(block))
                 })
             });
 
@@ -560,16 +555,9 @@ mod tests {
             .times(1)
             .returning(move || {
                 Box::pin(async move {
-                    Ok(BlockResponse {
-                        header: Header {
-                            inner: alloy::consensus::Header {
-                                base_fee_per_gas: Some(base_fee as u64),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
+                    let mut block: Block = Block::default();
+                    block.header.base_fee_per_gas = Some(base_fee as u64);
+                    Ok(AnyRpcBlock::from(block))
                 })
             });
 
