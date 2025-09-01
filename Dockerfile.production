@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
+COPY --chown=nonroot:nonroot ./config /app/config
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
