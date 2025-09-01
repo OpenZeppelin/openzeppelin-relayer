@@ -133,7 +133,15 @@ Update the `.env` file with your configuration:
 
 Update the `url` field in the notifications section of `config/config.json`. For testing, you can use [Webhook.site](https://webhook.site) to get a test URL.
 
-### Step 5: Run the Service
+### Step 5: Set Environment Variables
+
+Before running any commands to interact with the API, export your API key as an environment variable:
+
+```bash
+export API_KEY="your-api-key-here"
+```
+
+### Step 6: Run the Service
 
 Start the service with Docker Compose:
 
@@ -150,7 +158,7 @@ The service will be available at `http://localhost:8080/api/v1`
 ```bash
 curl -X GET http://localhost:8080/api/v1/relayers \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY"
+  -H "Authorization: Bearer $API_KEY"
 ```
 
 ### Test Transaction with Cached Gas Prices
@@ -158,7 +166,7 @@ curl -X GET http://localhost:8080/api/v1/relayers \
 ```bash
 curl -X POST http://localhost:8080/api/v1/relayers/sepolia-example/transactions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{
     "value": 1000000000000000,
     "data": "0x",

@@ -13,27 +13,76 @@ use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 
+/// Default value for gas price cache enabled flag
+fn default_gas_cache_enabled() -> bool {
+   false 
+}
+
+/// Default value for gas price cache stale after duration in milliseconds
+fn default_gas_cache_stale_after_ms() -> u64 {
+    20_000 // 20 seconds
+}
+
+/// Default value for gas price cache expire after duration in milliseconds
+fn default_gas_cache_expire_after_ms() -> u64 {
+    45_000 // 45 seconds
+}
+
 /// Configuration for gas price caching
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
 pub struct GasPriceCacheConfig {
     /// Enable gas price caching for this network
+    #[serde(default = "default_gas_cache_enabled")]
     pub enabled: bool,
 
     /// When data becomes stale (milliseconds)
+    #[serde(default = "default_gas_cache_stale_after_ms")]
     pub stale_after_ms: u64,
 
     /// When to expire and force refresh (milliseconds)
+    #[serde(default = "default_gas_cache_expire_after_ms")]
     pub expire_after_ms: u64,
 }
 
 impl Default for GasPriceCacheConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            stale_after_ms: 20_000,  // 20 seconds
-            expire_after_ms: 45_000, // 45 seconds
+            enabled: default_gas_cache_enabled(),
+            stale_after_ms: default_gas_cache_stale_after_ms(),
+            expire_after_ms: default_gas_cache_expire_after_ms(),
         }
+    }
+}
+
+impl GasPriceCacheConfig {
+    /// Validates the gas price cache configuration
+    ///
+    /// # Returns
+    /// - `Ok(())` if the configuration is valid
+    /// - `Err(ConfigFileError)` if validation fails
+    pub fn validate(&self) -> Result<(), ConfigFileError> {
+        // Check that durations are non-zero
+        if self.stale_after_ms == 0 {
+            return Err(ConfigFileError::InvalidFormat(
+                "Gas price cache stale_after_ms must be greater than zero".into(),
+            ));
+        }
+
+        if self.expire_after_ms == 0 {
+            return Err(ConfigFileError::InvalidFormat(
+                "Gas price cache expire_after_ms must be greater than zero".into(),
+            ));
+        }
+
+        // Check that expire_after_ms > stale_after_ms
+        if self.expire_after_ms <= self.stale_after_ms {
+            return Err(ConfigFileError::InvalidFormat(
+                "Gas price cache expire_after_ms must be greater than stale_after_ms".into(),
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -79,6 +128,11 @@ impl EvmNetworkConfig {
 
         if self.symbol.is_none() || self.symbol.as_ref().unwrap_or(&String::new()).is_empty() {
             return Err(ConfigFileError::MissingField("symbol".into()));
+        }
+
+        // Validate gas price cache configuration if present
+        if let Some(gas_price_cache) = &self.gas_price_cache {
+            gas_price_cache.validate()?;
         }
 
         Ok(())
@@ -752,5 +806,98 @@ mod tests {
             result.unwrap_err(),
             ConfigFileError::MissingField(_)
         ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_zero_stale_after() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 0, // Invalid: zero value
+            expire_after_ms: 45_000,
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_zero_expire_after() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 20_000,
+            expire_after_ms: 0, // Invalid: zero value
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_expire_less_than_stale() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 45_000,
+            expire_after_ms: 20_000, // Invalid: less than stale_after_ms
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_expire_equal_to_stale() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 20_000,
+            expire_after_ms: 20_000, // Invalid: equal to stale_after_ms
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_valid_config() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 20_000,
+            expire_after_ms: 45_000, // Valid: greater than stale_after_ms
+        });
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_gas_price_cache_default_values() {
+        let config = GasPriceCacheConfig::default();
+        
+        assert_eq!(config.enabled, false);
+        assert_eq!(config.stale_after_ms, 20_000);
+        assert_eq!(config.expire_after_ms, 45_000);
+        
+        // Validation should pass for default values
+        assert!(config.validate().is_ok());
     }
 }

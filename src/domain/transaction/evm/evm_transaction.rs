@@ -1170,7 +1170,7 @@ mod tests {
                         max_fee_per_gas: None,
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
-                        extra_fee: Some(0),
+                        extra_fee: Some(U256::ZERO),
                         total_cost: U256::ZERO,
                     })
                 });
@@ -1350,7 +1350,7 @@ mod tests {
                         max_fee_per_gas: None,
                         max_priority_fee_per_gas: None,
                         is_min_bumped: Some(true),
-                        extra_fee: Some(0),
+                        extra_fee: Some(U256::ZERO),
                         total_cost: U256::from(2001000000000000000u64), // 2 ETH + gas costs
                     })
                 });

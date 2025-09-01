@@ -80,7 +80,7 @@ pub struct PriceParams {
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
     pub is_min_bumped: Option<bool>,
-    pub extra_fee: Option<u128>,
+    pub extra_fee: Option<U256>,
     pub total_cost: U256,
 }
 
@@ -90,12 +90,12 @@ impl PriceParams {
             true => {
                 U256::from(self.max_fee_per_gas.unwrap_or(0)) * U256::from(gas_limit)
                     + value
-                    + U256::from(self.extra_fee.unwrap_or(0))
+                    + self.extra_fee.unwrap_or(U256::ZERO)
             }
             false => {
                 U256::from(self.gas_price.unwrap_or(0)) * U256::from(gas_limit)
                     + value
-                    + U256::from(self.extra_fee.unwrap_or(0))
+                    + self.extra_fee.unwrap_or(U256::ZERO)
             }
         }
     }
@@ -168,6 +168,24 @@ where
             extra_fee_calculator,
         }
     }
+    
+    /// Helper method to build an EvmTransactionRequest from transaction data and price parameters
+    fn build_request_from(
+        tx_data: &EvmTransactionData,
+        params: &PriceParams,
+    ) -> crate::models::EvmTransactionRequest {
+        crate::models::EvmTransactionRequest {
+            to: tx_data.to.clone(),
+            value: tx_data.value,
+            data: tx_data.data.clone(),
+            gas_limit: tx_data.gas_limit,
+            gas_price: params.gas_price,
+            speed: tx_data.speed.clone(),
+            max_fee_per_gas: params.max_fee_per_gas,
+            max_priority_fee_per_gas: params.max_priority_fee_per_gas,
+            valid_until: None,
+        }
+    }
 
     /// Calculates transaction price parameters based on the transaction type and network conditions.
     ///
@@ -210,19 +228,9 @@ where
         };
 
         if let Some(svc) = &self.extra_fee_calculator {
-            let req = crate::models::EvmTransactionRequest {
-                to: tx_data.to.clone(),
-                value: tx_data.value,
-                data: tx_data.data.clone(),
-                gas_limit: tx_data.gas_limit,
-                gas_price: final_params.gas_price,
-                speed: tx_data.speed.clone(),
-                max_fee_per_gas: final_params.max_fee_per_gas,
-                max_priority_fee_per_gas: final_params.max_priority_fee_per_gas,
-                valid_until: None,
-            };
+            let req = Self::build_request_from(tx_data, &final_params);
             let extra_fee = svc.get_extra_fee(&req).await?;
-            final_params.extra_fee = Some(extra_fee.try_into().unwrap_or(0));
+            final_params.extra_fee = Some(extra_fee);
         }
 
         final_params.total_cost = final_params.calculate_total_cost(
@@ -309,19 +317,9 @@ where
         let is_eip1559 = tx_data.is_eip1559();
 
         if let Some(svc) = &self.extra_fee_calculator {
-            let req = crate::models::EvmTransactionRequest {
-                to: tx_data.to.clone(),
-                value: tx_data.value,
-                data: tx_data.data.clone(),
-                gas_limit: tx_data.gas_limit,
-                gas_price: final_params.gas_price,
-                speed: tx_data.speed.clone(),
-                max_fee_per_gas: final_params.max_fee_per_gas,
-                max_priority_fee_per_gas: final_params.max_priority_fee_per_gas,
-                valid_until: None,
-            };
+            let req = Self::build_request_from(tx_data, &final_params);
             let extra_fee = svc.get_extra_fee(&req).await?;
-            final_params.extra_fee = Some(extra_fee.try_into().unwrap_or(0));
+            final_params.extra_fee = Some(extra_fee);
         }
 
         final_params.total_cost = final_params.calculate_total_cost(
@@ -1509,7 +1507,7 @@ mod tests {
         let price_params = result.unwrap();
         assert_eq!(
             price_params.extra_fee,
-            Some(expected_extra_fee.try_into().unwrap_or(0))
+            Some(expected_extra_fee)
         );
     }
 
@@ -1564,7 +1562,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: Some(5_000_000_000),
+            extra_fee: Some(U256::from(5_000_000_000u128)),
             total_cost: U256::ZERO,
         };
 
@@ -1587,7 +1585,7 @@ mod tests {
             max_fee_per_gas: Some(0),
             max_priority_fee_per_gas: Some(0),
             is_min_bumped: None,
-            extra_fee: Some(0),
+            extra_fee: Some(U256::ZERO),
             total_cost: U256::ZERO,
         };
 
