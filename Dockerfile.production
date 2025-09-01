@@ -1,5 +1,5 @@
 # Base image
-FROM cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install --root /usr/app --path . --debug --locked
 
 # Setting up build directories
-FROM cgr.dev/chainguard/wolfi-base
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
@@ -23,6 +23,7 @@ COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
 # Install plugin dependencies
+ARG TARGETARCH
 ARG NODE_VERSION=20.19
 
 # Install Node.js
