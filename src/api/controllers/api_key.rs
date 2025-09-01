@@ -51,7 +51,7 @@ where
 
     let api_key = state.api_key_repository.create(api_key).await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(api_key)))
+    Ok(HttpResponse::Created().json(ApiResponse::success(api_key)))
 }
 
 /// List api keys
@@ -137,8 +137,6 @@ where
 ///
 /// * `api_key_id` - The id of the api key.
 /// * `state` - The application state containing the api key repository.
-///
-/// If the API key is the last Admin API key in the system, it will return an error.
 ///
 pub async fn delete_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     api_key_id: String,

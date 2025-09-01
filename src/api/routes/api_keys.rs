@@ -6,7 +6,7 @@ use crate::{
 };
 use actix_web::{delete, get, post, web, Responder};
 
-/// List plugins
+/// List API keys
 #[get("/api-keys")]
 async fn list_api_keys(
     query: web::Query<PaginationQuery>,
@@ -23,7 +23,7 @@ async fn get_api_key_permissions(
     api_key::get_api_key_permissions(api_key_id.into_inner(), data).await
 }
 
-/// Calls a plugin method.
+/// Create a new API key
 #[post("/api-keys")]
 async fn create_api_key(
     req: web::Json<ApiKeyRequest>,
