@@ -1,5 +1,7 @@
-# Base image
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS base
+############################
+# Builder (native to BUILDPLATFORM)
+############################
+FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS builder
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -8,48 +10,67 @@ RUN apk update && apk --no-cache add \
     libsodium-dev
 
 WORKDIR /usr/app
-
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo install --root /usr/app --path . --debug --locked
 
-# Setting up build directories
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
+# Build for the TARGET arch, not the builder arch.
+# BuildKit provides TARGETOS/TARGETARCH automatically.
+ARG TARGETOS
+ARG TARGETARCH
+
+# Select a Rust target triple based on TARGETARCH (musl to match wolfi)
+# Produce the binary at a fixed path (/out/openzeppelin-relayer) so the final stage
+# doesn't need to know the triple.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      arm64) RUST_TARGET="aarch64-unknown-linux-musl" ;; \
+      amd64) RUST_TARGET="x86_64-unknown-linux-musl" ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    rustup target add "${RUST_TARGET}"; \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/app/target \
+    cargo build --release --locked --target "${RUST_TARGET}"; \
+    mkdir -p /out; \
+    cp "target/${RUST_TARGET}/release/openzeppelin-relayer" /out/openzeppelin-relayer; \
+    # Copy dynamic libs if the build links against OpenSSL at runtime (musl wolfi base compatible)
+    cp /usr/lib/libssl.so.3 /out/ || true; \
+    cp /usr/lib/libcrypto.so.3 /out/ || true
+
+############################
+# Final image (must match TARGETPLATFORM)
+############################
+FROM --platform=${TARGETPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
-COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
-COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
-COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-# Install plugin dependencies
-ARG TARGETARCH
-ARG NODE_VERSION=20.19
+# App binary (built for TARGETARCH)
+COPY --from=builder /out/openzeppelin-relayer /app/openzeppelin-relayer
+# If present, include these shared libs (harmless if not needed)
+COPY --from=builder /out/libssl.so.3     /usr/lib/libssl.so.3
+COPY --from=builder /out/libcrypto.so.3  /usr/lib/libcrypto.so.3
 
-# Install Node.js
+# ---- Plugin dependencies (Node + pnpm) ----
 USER root
-RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
-ENV PATH="/usr/local/bin:$PATH"
+ARG NODE_VERSION=20.19
+# wolfi-base is apk-compatible
+RUN apk add --no-cache "nodejs~${NODE_VERSION}" npm && \
+    npm install -g pnpm ts-node typescript
 
-RUN npm install -g pnpm ts-node typescript
-
-# removes apk and unneeded wolfi-base tools.
-RUN apk del wolfi-base apk-tools
-
-# Copy plugins folder and install dependencies
+# Copy plugins and install
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
-
 USER nonroot
 WORKDIR /app/plugins
 RUN pnpm install --frozen-lockfile
 
-# Return to app root
+# ---- App runtime ----
 WORKDIR /app
+ENV APP_PORT=8080 \
+    METRICS_PORT=8081
+EXPOSE 8080/tcp 8081/tcp
 
-ENV APP_PORT=8080
-ENV METRICS_PORT=8081
+# Ensure the binary is executable
+USER root
+RUN chmod +x /app/openzeppelin-relayer
+USER nonroot
 
-EXPOSE ${APP_PORT}/tcp ${METRICS_PORT}/tcp
-
-# starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]
