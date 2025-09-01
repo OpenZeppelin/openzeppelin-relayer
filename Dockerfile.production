@@ -1,7 +1,9 @@
+# syntax=docker/dockerfile:1.7
+
 ############################
-# Builder (native to BUILDPLATFORM)
+# Builder (runs on TARGETPLATFORM via QEMU)
 ############################
-FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS builder
+FROM --platform=${TARGETPLATFORM} cgr.dev/chainguard/rust:latest-dev@sha256:faf49718aaa95c798ed1dfdf3e4edee2cdbc3790c8994705ca6ef35972128459 AS builder
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -12,29 +14,18 @@ RUN apk update && apk --no-cache add \
 WORKDIR /usr/app
 COPY . .
 
-# Build for the TARGET arch, not the builder arch.
-# BuildKit provides TARGETOS/TARGETARCH automatically.
-ARG TARGETOS
-ARG TARGETARCH
-
-# Select a Rust target triple based on TARGETARCH (musl to match wolfi)
-# Produce the binary at a fixed path (/out/openzeppelin-relayer) so the final stage
-# doesn't need to know the triple.
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-      arm64) RUST_TARGET="aarch64-unknown-linux-musl" ;; \
-      amd64) RUST_TARGET="x86_64-unknown-linux-musl" ;; \
-      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    rustup target add "${RUST_TARGET}"; \
-    --mount=type=cache,target=/usr/local/cargo/registry \
+# Build natively for the TARGET platform.
+# NOTE: --mount flags MUST come immediately after RUN.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/app/target \
-    cargo build --release --locked --target "${RUST_TARGET}"; \
-    mkdir -p /out; \
-    cp "target/${RUST_TARGET}/release/openzeppelin-relayer" /out/openzeppelin-relayer; \
-    # Copy dynamic libs if the build links against OpenSSL at runtime (musl wolfi base compatible)
-    cp /usr/lib/libssl.so.3 /out/ || true; \
-    cp /usr/lib/libcrypto.so.3 /out/ || true
+    sh -lc 'set -eux; \
+      cargo build --release --locked; \
+      mkdir -p /out; \
+      cp target/release/openzeppelin-relayer /out/openzeppelin-relayer; \
+      # copy shared libs only if they exist (dynamic link); harmless if static
+      cp /usr/lib/libssl.so.3 /out/ 2>/dev/null || true; \
+      cp /usr/lib/libcrypto.so.3 /out/ 2>/dev/null || true \
+    '
 
 ############################
 # Final image (must match TARGETPLATFORM)
@@ -43,16 +34,15 @@ FROM --platform=${TARGETPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
 
-# App binary (built for TARGETARCH)
+# App binary (already built for TARGET arch)
 COPY --from=builder /out/openzeppelin-relayer /app/openzeppelin-relayer
-# If present, include these shared libs (harmless if not needed)
+# If present, include these shared libs (won’t fail if they weren’t copied)
 COPY --from=builder /out/libssl.so.3     /usr/lib/libssl.so.3
 COPY --from=builder /out/libcrypto.so.3  /usr/lib/libcrypto.so.3
 
 # ---- Plugin dependencies (Node + pnpm) ----
 USER root
 ARG NODE_VERSION=20.19
-# wolfi-base is apk-compatible
 RUN apk add --no-cache "nodejs~${NODE_VERSION}" npm && \
     npm install -g pnpm ts-node typescript
 
@@ -68,7 +58,6 @@ ENV APP_PORT=8080 \
     METRICS_PORT=8081
 EXPOSE 8080/tcp 8081/tcp
 
-# Ensure the binary is executable
 USER root
 RUN chmod +x /app/openzeppelin-relayer
 USER nonroot
