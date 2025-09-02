@@ -168,7 +168,7 @@ where
             extra_fee_calculator,
         }
     }
-    
+
     /// Helper method to build an EvmTransactionRequest from transaction data and price parameters
     fn build_request_from(
         tx_data: &EvmTransactionData,
@@ -1505,10 +1505,7 @@ mod tests {
         // Verify extra fee was properly included
         assert!(result.is_ok());
         let price_params = result.unwrap();
-        assert_eq!(
-            price_params.extra_fee,
-            Some(expected_extra_fee)
-        );
+        assert_eq!(price_params.extra_fee, Some(expected_extra_fee));
     }
 
     #[test]

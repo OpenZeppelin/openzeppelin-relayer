@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 /// Default value for gas price cache enabled flag
 fn default_gas_cache_enabled() -> bool {
-   false 
+    false
 }
 
 /// Default value for gas price cache stale after duration in milliseconds
@@ -892,11 +892,11 @@ mod tests {
     #[test]
     fn test_gas_price_cache_default_values() {
         let config = GasPriceCacheConfig::default();
-        
+
         assert_eq!(config.enabled, false);
         assert_eq!(config.stale_after_ms, 20_000);
         assert_eq!(config.expire_after_ms, 45_000);
-        
+
         // Validation should pass for default values
         assert!(config.validate().is_ok());
     }
