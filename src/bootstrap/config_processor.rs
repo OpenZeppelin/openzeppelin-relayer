@@ -6,9 +6,9 @@ use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
     jobs::JobProducerTrait,
     models::{
-        NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer, RelayerRepoModel,
-        Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel, ThinDataAppState,
-        TransactionRepoModel,
+        ApiKeyRepoModel, NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer,
+        RelayerRepoModel, Signer as SignerDomainModel, SignerFileConfig, SignerRepoModel,
+        ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -19,6 +19,37 @@ use crate::{
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
 use log::info;
+
+async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let api_key_model = ApiKeyRepoModel::new(
+        "default".to_string(),
+        server_config.api_key.clone(),
+        vec!["*".to_string()],
+        vec!["*".to_string()],
+    );
+
+    app_state
+        .api_key_repository
+        .create(api_key_model)
+        .await
+        .wrap_err("Failed to create api key repository entry")?;
+
+    Ok(())
+}
 
 /// Process all plugins from the config file and store them in the repository.
 async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
@@ -337,6 +368,7 @@ where
         app_state.notification_repository.drop_all_entries().await?;
         app_state.network_repository.drop_all_entries().await?;
         app_state.plugin_repository.drop_all_entries().await?;
+        app_state.api_key_repository.drop_all_entries().await?;
     }
 
     if should_process_config_file {
@@ -346,6 +378,7 @@ where
         process_notifications(&config_file, app_state).await?;
         process_networks(&config_file, app_state).await?;
         process_relayers(&config_file, app_state).await?;
+        process_api_key(&server_config, app_state).await?;
     }
     Ok(())
 }
@@ -361,8 +394,9 @@ mod tests {
             relayer::RelayerFileConfig, AppState, AwsKmsSignerFileConfig,
             GoogleCloudKmsKeyFileConfig, GoogleCloudKmsServiceAccountFileConfig,
             GoogleCloudKmsSignerFileConfig, LocalSignerFileConfig, NetworkType, NotificationConfig,
-            NotificationType, PlainOrEnvValue, SecretString, SignerConfigStorage, SignerFileConfig,
-            SignerFileConfigEnum, VaultSignerFileConfig, VaultTransitSignerFileConfig,
+            NotificationType, PaginationQuery, PlainOrEnvValue, SecretString, SignerConfigStorage,
+            SignerFileConfig, SignerFileConfigEnum, VaultSignerFileConfig,
+            VaultTransitSignerFileConfig,
         },
         repositories::{
             ApiKeyRepositoryStorage, InMemoryApiKeyRepository, InMemoryNetworkRepository,
@@ -1086,6 +1120,30 @@ mod tests {
             plugin_2.timeout.as_secs(),
             Duration::from_secs(12).as_secs()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_api_key() -> Result<()> {
+        let server_config = Arc::new(crate::utils::mocks::mockutils::create_test_server_config(
+            RepositoryStorageType::InMemory,
+        ));
+        let app_state = ThinData(create_test_app_state());
+
+        process_api_key(&server_config, &app_state).await?;
+
+        let pagination_query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let stored_api_keys = app_state
+            .api_key_repository
+            .list_paginated(pagination_query)
+            .await?;
+        assert_eq!(stored_api_keys.items.len(), 1);
+        assert_eq!(stored_api_keys.items[0].name, "default");
 
         Ok(())
     }
