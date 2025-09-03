@@ -13,10 +13,10 @@
 use crate::{
     models::{
         signer::{
-            AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-            GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
-            SignerValidationError, TurnkeySignerConfig, VaultSignerConfig,
-            VaultTransitSignerConfig,
+            AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
+            GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig,
+            LocalSignerConfig, Signer, SignerConfig, SignerValidationError, TurnkeySignerConfig,
+            VaultSignerConfig, VaultTransitSignerConfig,
         },
         SecretString,
     },
@@ -41,6 +41,7 @@ pub enum SignerConfigStorage {
     VaultTransit(VaultTransitSignerConfigStorage),
     AwsKms(AwsKmsSignerConfigStorage),
     Turnkey(TurnkeySignerConfigStorage),
+    Cdp(CdpSignerConfigStorage),
     GoogleCloudKms(GoogleCloudKmsSignerConfigStorage),
 }
 
@@ -125,6 +126,23 @@ pub struct TurnkeySignerConfigStorage {
     pub organization_id: String,
     pub private_key_id: String,
     pub public_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CdpSignerConfigStorage {
+    pub api_key_id: String,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub api_key_secret: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub wallet_secret: SecretString,
+    pub evm_account_address: Option<String>,
+    pub solana_account_address: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +301,30 @@ impl From<TurnkeySignerConfigStorage> for TurnkeySignerConfig {
     }
 }
 
+impl From<CdpSignerConfig> for CdpSignerConfigStorage {
+    fn from(config: CdpSignerConfig) -> Self {
+        Self {
+            api_key_id: config.api_key_id,
+            api_key_secret: config.api_key_secret,
+            wallet_secret: config.wallet_secret,
+            evm_account_address: config.evm_account_address,
+            solana_account_address: config.solana_account_address,
+        }
+    }
+}
+
+impl From<CdpSignerConfigStorage> for CdpSignerConfig {
+    fn from(storage: CdpSignerConfigStorage) -> Self {
+        Self {
+            api_key_id: storage.api_key_id,
+            api_key_secret: storage.api_key_secret,
+            wallet_secret: storage.wallet_secret,
+            evm_account_address: storage.evm_account_address,
+            solana_account_address: storage.solana_account_address,
+        }
+    }
+}
+
 impl From<GoogleCloudKmsSignerConfig> for GoogleCloudKmsSignerConfigStorage {
     fn from(config: GoogleCloudKmsSignerConfig) -> Self {
         Self {
@@ -379,6 +421,7 @@ impl From<SignerConfig> for SignerConfigStorage {
             }
             SignerConfig::AwsKms(aws_kms) => SignerConfigStorage::AwsKms(aws_kms.into()),
             SignerConfig::Turnkey(turnkey) => SignerConfigStorage::Turnkey(turnkey.into()),
+            SignerConfig::Cdp(cdp) => SignerConfigStorage::Cdp(cdp.into()),
             SignerConfig::GoogleCloudKms(gcp) => SignerConfigStorage::GoogleCloudKms(gcp.into()),
         }
     }
@@ -394,6 +437,7 @@ impl From<SignerConfigStorage> for SignerConfig {
             }
             SignerConfigStorage::AwsKms(aws_kms) => SignerConfig::AwsKms(aws_kms.into()),
             SignerConfigStorage::Turnkey(turnkey) => SignerConfig::Turnkey(turnkey.into()),
+            SignerConfigStorage::Cdp(cdp) => SignerConfig::Cdp(cdp.into()),
             SignerConfigStorage::GoogleCloudKms(gcp) => SignerConfig::GoogleCloudKms(gcp.into()),
         }
     }
@@ -428,6 +472,14 @@ impl SignerConfigStorage {
     pub fn get_turnkey(&self) -> Option<&TurnkeySignerConfigStorage> {
         match self {
             Self::Turnkey(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get CDP signer config, returns error if not a CDP signer
+    pub fn get_cdp(&self) -> Option<&CdpSignerConfigStorage> {
+        match self {
+            Self::Cdp(config) => Some(config),
             _ => None,
         }
     }

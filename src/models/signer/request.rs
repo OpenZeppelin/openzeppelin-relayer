@@ -10,9 +10,10 @@
 //! all input is properly validated before reaching the core business logic.
 
 use crate::models::{
-    ApiError, AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-    GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, SecretString, Signer,
-    SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
+    ApiError, AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
+    GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
+    SecretString, Signer, SignerConfig, TurnkeySignerConfig, VaultSignerConfig,
+    VaultTransitSignerConfig,
 };
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
@@ -108,6 +109,19 @@ pub struct GoogleCloudKmsSignerRequestConfig {
     pub key: GoogleCloudKmsSignerKeyRequestConfig,
 }
 
+/// CDP signer configuration for API requests
+#[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
+pub struct CdpSignerRequestConfig {
+    pub api_key_id: String,
+    pub api_key_secret: String,
+    pub wallet_secret: String,
+    #[schema(nullable = false)]
+    pub evm_account_address: Option<String>,
+    #[schema(nullable = false)]
+    pub solana_account_address: Option<String>,
+}
+
 /// Signer configuration enum for API requests (without type discriminator)
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
 #[serde(untagged)]
@@ -117,6 +131,7 @@ pub enum SignerConfigRequest {
     Vault(VaultSignerRequestConfig),
     VaultTransit(VaultTransitSignerRequestConfig),
     Turnkey(TurnkeySignerRequestConfig),
+    Cdp(CdpSignerRequestConfig),
     GoogleCloudKms(GoogleCloudKmsSignerRequestConfig),
 }
 
@@ -132,6 +147,7 @@ pub enum SignerTypeRequest {
     #[serde(rename = "vault_transit")]
     VaultTransit,
     Turnkey,
+    Cdp,
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms,
 }
@@ -242,6 +258,13 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                     public_key: turnkey_config.public_key,
                 })
             }
+            SignerConfigRequest::Cdp(cdp_config) => SignerConfig::Cdp(CdpSignerConfig {
+                api_key_id: cdp_config.api_key_id,
+                api_key_secret: SecretString::new(&cdp_config.api_key_secret),
+                wallet_secret: SecretString::new(&cdp_config.wallet_secret),
+                evm_account_address: cdp_config.evm_account_address,
+                solana_account_address: cdp_config.solana_account_address,
+            }),
             SignerConfigRequest::GoogleCloudKms(gcp_kms_config) => {
                 SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
                     service_account: gcp_kms_config.service_account.into(),
@@ -277,6 +300,7 @@ impl TryFrom<SignerCreateRequest> for Signer {
                     SignerConfigRequest::VaultTransit(_)
                 )
                 | (SignerTypeRequest::Turnkey, SignerConfigRequest::Turnkey(_))
+                | (SignerTypeRequest::Cdp, SignerConfigRequest::Cdp(_))
                 | (
                     SignerTypeRequest::GoogleCloudKms,
                     SignerConfigRequest::GoogleCloudKms(_)
@@ -858,6 +882,100 @@ mod tests {
         assert!(result.is_err());
         if let Err(ApiError::BadRequest(msg)) = result {
             assert!(msg.contains("API public key cannot be empty"));
+        }
+    }
+
+    #[test]
+    fn test_json_deserialization_cdp_signer() {
+        let json = r#"{
+            "id": "test-cdp-signer",
+            "type": "cdp",
+            "config": {
+                "api_key_id": "test-api-key-id",
+                "api_key_secret": "test-api-key-secret",
+                "wallet_secret": "test-wallet-secret",
+                "evm_account_address": "0x123456789abcdef",
+                "solana_account_address": null
+            }
+        }"#;
+
+        let result: Result<SignerCreateRequest, _> = serde_json::from_str(json);
+
+        assert!(
+            result.is_ok(),
+            "Failed to deserialize CDP signer: {:?}",
+            result.err()
+        );
+
+        let request = result.unwrap();
+        assert_eq!(request.id, Some("test-cdp-signer".to_string()));
+
+        match request.config {
+            SignerConfigRequest::Cdp(cdp_config) => {
+                assert_eq!(cdp_config.api_key_id, "test-api-key-id");
+                assert_eq!(cdp_config.api_key_secret, "test-api-key-secret");
+                assert_eq!(cdp_config.wallet_secret, "test-wallet-secret");
+                assert_eq!(
+                    cdp_config.evm_account_address,
+                    Some("0x123456789abcdef".to_string())
+                );
+                assert_eq!(cdp_config.solana_account_address, None);
+            }
+            _ => panic!("Expected CDP config variant"),
+        }
+    }
+
+    #[test]
+    fn test_valid_cdp_create_request() {
+        let request = SignerCreateRequest {
+            id: Some("test-cdp-signer".to_string()),
+            signer_type: SignerTypeRequest::Cdp,
+            config: SignerConfigRequest::Cdp(CdpSignerRequestConfig {
+                api_key_id: "test-api-key-id".to_string(),
+                api_key_secret: "test-api-key-secret".to_string(),
+                wallet_secret: "test-wallet-secret".to_string(),
+                evm_account_address: Some("0x123456789abcdef".to_string()),
+                solana_account_address: None,
+            }),
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_ok());
+
+        let signer = result.unwrap();
+        assert_eq!(signer.id, "test-cdp-signer");
+        assert_eq!(signer.signer_type(), SignerType::Cdp);
+
+        if let Some(cdp_config) = signer.config.get_cdp() {
+            assert_eq!(cdp_config.api_key_id, "test-api-key-id");
+            assert_eq!(
+                cdp_config.evm_account_address,
+                Some("0x123456789abcdef".to_string())
+            );
+            assert_eq!(cdp_config.solana_account_address, None);
+        } else {
+            panic!("Expected CDP config");
+        }
+    }
+
+    #[test]
+    fn test_invalid_cdp_empty_api_key_id() {
+        let request = SignerCreateRequest {
+            id: Some("test-signer".to_string()),
+            signer_type: SignerTypeRequest::Cdp,
+            config: SignerConfigRequest::Cdp(CdpSignerRequestConfig {
+                api_key_id: "".to_string(), // Empty
+                api_key_secret: "test-api-key-secret".to_string(),
+                wallet_secret: "test-wallet-secret".to_string(),
+                evm_account_address: None,
+                solana_account_address: None,
+            }),
+        };
+
+        let result = Signer::try_from(request);
+        assert!(result.is_err());
+        if let Err(ApiError::BadRequest(msg)) = result {
+            assert!(msg.contains("API Key ID cannot be empty"));
         }
     }
 }

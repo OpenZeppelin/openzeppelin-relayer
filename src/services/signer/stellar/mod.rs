@@ -134,6 +134,7 @@ impl StellarSignerFactory {
             SignerConfig::Turnkey(_) => {
                 return Err(SignerFactoryError::UnsupportedType("Turnkey".into()))
             }
+            SignerConfig::Cdp(_) => return Err(SignerFactoryError::UnsupportedType("CDP".into())),
             SignerConfig::GoogleCloudKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType(
                     "Google Cloud KMS".into(),

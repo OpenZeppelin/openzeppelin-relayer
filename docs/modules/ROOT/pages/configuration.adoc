@@ -231,6 +231,7 @@ For comprehensive details on configuring all supported signer types including:
 - HashiCorp Vault (secret and transit)
 - Cloud KMS providers (Google Cloud, AWS)
 - Turnkey signers
+- CDP signers
 - Security best practices and troubleshooting
 
 See the dedicated xref:signers.adoc[Signers Configuration] guide.
