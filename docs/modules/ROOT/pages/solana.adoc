@@ -64,6 +64,7 @@ For detailed network configuration options, see the xref:network_configuration.a
 - `google_cloud_kms` (hosted)
 - `local` (local)
 - `vault` (local)
+- `cdp` (hosted)
 
 [NOTE]
 ====
