@@ -16,7 +16,7 @@ overflow-checks = true
 panic = "unwind"
 
 [dependencies]
-aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
+aws-config = { version = "1.8.6", features = ["behavior-version-latest"] }
 aws-sdk-kms = "1.75.0"
 actix-web = "4"
 log = "0.4"
