@@ -3,6 +3,7 @@
 //! This module implements the notification handling worker that processes
 //! notification jobs from the queue.
 
+use crate::setup_job_tracing;
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
@@ -29,6 +30,8 @@ pub async fn notification_handler(
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
+    setup_job_tracing!(job, attempt);
+
     info!("handling notification: {:?}", job.data);
 
     let result = handle_request(job.data, context).await;

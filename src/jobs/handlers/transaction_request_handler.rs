@@ -2,6 +2,7 @@
 //!
 //! Handles the validation and preparation of transactions before they are
 //! submitted to the network
+use crate::setup_job_tracing;
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
 use apalis_redis::RedisContext;
@@ -23,6 +24,8 @@ pub async fn transaction_request_handler(
     task_id: TaskId,
     ctx: RedisContext,
 ) -> Result<(), Error> {
+    setup_job_tracing!(job, attempt);
+
     info!("Handling transaction request: {:?}", job.data);
     info!("Attempt: {:?}", attempt);
     info!("Worker: {:?}", worker);

@@ -5,6 +5,7 @@
 //! - Handles different submission commands (Submit, Cancel, Resubmit)
 //! - Updates transaction status after submission
 //! - Enqueues status monitoring jobs
+use crate::setup_job_tracing;
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
@@ -22,6 +23,8 @@ pub async fn transaction_submission_handler(
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
+    setup_job_tracing!(job, attempt);
+
     info!("handling transaction submission: {:?}", job.data);
 
     let result = handle_request(job.data, state).await;

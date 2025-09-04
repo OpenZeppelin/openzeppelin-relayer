@@ -7,6 +7,7 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 
+use crate::setup_job_tracing;
 use eyre::Result;
 use log::info;
 
@@ -22,6 +23,8 @@ pub async fn transaction_status_handler(
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
+    setup_job_tracing!(job, attempt);
+
     info!("Handling transaction status job: {:?}", job.data);
 
     let result = handle_request(job.data, state).await;
