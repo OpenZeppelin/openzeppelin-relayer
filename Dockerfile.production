@@ -35,22 +35,24 @@ RUN apk add --no-cache nodejs=~${NODE_VERSION} npm && \
 
 # Optional baking from /tmp/src into /app BEFORE installing deps
 ARG BAKE_CONFIGS=false
-RUN set -eux; \
-  if [ "${BAKE_CONFIGS}" = "true" ]; then \
-    if [ -d /tmp/src/examples/launchtube-plugin-example/config ]; then \
-      mkdir -p /app/config; \
-      cp -a /tmp/src/examples/launchtube-plugin-example/config/. /app/config/; \
-    fi; \
-    if [ -d /tmp/src/config/networks ]; then \
-      mkdir -p /app/config/networks; \
-      cp -a /tmp/src/config/networks/. /app/config/networks/; \
-    fi; \
-    if [ -d /tmp/src/examples/launchtube-plugin-example/launchtube ]; then \
-      mkdir -p /app/plugins/launchtube; \
-      cp -a /tmp/src/examples/launchtube-plugin-example/launchtube/. /app/plugins/launchtube/; \
-    fi; \
-    chown -R nonroot:nonroot /app/config /app/plugins || true; \
-  fi
+
+RUN --mount=type=bind,from=base,src=/usr/app,target=/mnt/src,ro \
+    set -eux; \
+    if [ "${BAKE_CONFIGS}" = "true" ]; then \
+      if [ -d /mnt/src/examples/launchtube-plugin-example/config ]; then \
+        mkdir -p /app/config; \
+        cp -a /mnt/src/examples/launchtube-plugin-example/config/. /app/config/; \
+      fi; \
+      if [ -d /mnt/src/config/networks ]; then \
+        mkdir -p /app/config/networks; \
+        cp -a /mnt/src/config/networks/. /app/config/networks/; \
+      fi; \
+      if [ -d /mnt/src/examples/launchtube-plugin-example/launchtube ]; then \
+        mkdir -p /app/plugins/launchtube; \
+        cp -a /mnt/src/examples/launchtube-plugin-example/launchtube/. /app/plugins/launchtube/; \
+      fi; \
+      chown -R nonroot:nonroot /app/config /app/plugins || true; \
+    fi
 
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
 
