@@ -21,7 +21,7 @@ jobs:
         with:
           egress-policy: audit
       - name: Get github app token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e  # v2.0.6
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b  # v2.1.1
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -40,7 +40,7 @@ jobs:
           message: Starting generating sbom for ${{ github.repository }} with tag ${{ inputs.tag }}......
         if: always()
       - name: Run SBOM
-        uses: anchore/sbom-action@7b36ad622f042cab6f59a75c2ac24ccb256e9b45  # v0.20.4
+        uses: anchore/sbom-action@da167eac915b4e86f08b264dbdbc867b61be6f0c  # v0.20.5
         with:
           upload-artifact-retention: 7
           upload-release-assets: false
