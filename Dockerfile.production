@@ -8,68 +8,66 @@ RUN apk update && apk --no-cache add \
     libsodium-dev
 
 WORKDIR /usr/app
-
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo install --root /usr/app --path . --debug --locked
 
-# Setting up build directories
+
+# ---------- Final stage ----------
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
-# COPY --chown=nonroot:nonroot ./config /app/config
+
+# Binary + libs
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-# Install plugin dependencies
-ARG TARGETARCH
-ARG NODE_VERSION=20.19
+# Bring source tree from base so we can optionally bake files
+COPY --from=base /usr/app /tmp/src
 
-# Install Node.js
+# Install Node + tooling (root needed here)
 USER root
-RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
-ENV PATH="/usr/local/bin:$PATH"
+ARG NODE_VERSION=20.19
+RUN apk add --no-cache nodejs=~${NODE_VERSION} npm && \
+    npm install -g pnpm ts-node typescript
 
-RUN npm install -g pnpm ts-node typescript
+# Optional baking from /tmp/src into /app BEFORE installing deps
+ARG BAKE_CONFIGS=false
+RUN set -eux; \
+  if [ "${BAKE_CONFIGS}" = "true" ]; then \
+    if [ -d /tmp/src/examples/launchtube-plugin-example/config ]; then \
+      mkdir -p /app/config; \
+      cp -a /tmp/src/examples/launchtube-plugin-example/config/. /app/config/; \
+    fi; \
+    if [ -d /tmp/src/config/networks ]; then \
+      mkdir -p /app/config/networks; \
+      cp -a /tmp/src/config/networks/. /app/config/networks/; \
+    fi; \
+    if [ -d /tmp/src/examples/launchtube-plugin-example/launchtube ]; then \
+      mkdir -p /app/plugins/launchtube; \
+      cp -a /tmp/src/examples/launchtube-plugin-example/launchtube/. /app/plugins/launchtube/; \
+    fi; \
+    chown -R nonroot:nonroot /app/config /app/plugins || true; \
+  fi
 
-# removes apk and unneeded wolfi-base tools.
-RUN apk del wolfi-base apk-tools
-
-# Copy plugins folder and install dependencies
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
 
+# Install plugin deps AFTER bake so launchtube deps are included
 USER nonroot
 WORKDIR /app/plugins
 RUN pnpm install --frozen-lockfile
 
-ARG BAKE_CONFIGS=false
+# Clean up build-only sources
+USER root
+RUN rm -rf /tmp/src && apk del apk-tools wolfi-base || true
+USER nonroot
 
-RUN set -eux; \
-  if [ "${BAKE_CONFIGS}" = "true" ]; then \
-    if [ -d /usr/app/examples/launchtube-plugin-example/config ]; then \
-      mkdir -p /app/config; \
-      cp -a /usr/app/examples/launchtube-plugin-example/config/. /app/config/; \
-    fi; \
-    if [ -d /usr/app/config/networks ]; then \
-      mkdir -p /app/config/networks; \
-      cp -a /usr/app/config/networks/. /app/config/networks/; \
-    fi; \
-    if [ -d /usr/app/examples/launchtube-plugin-example/launchtube ]; then \
-      mkdir -p /app/plugins/launchtube; \
-      cp -a /usr/app/examples/launchtube-plugin-example/launchtube/. /app/plugins/launchtube/; \
-    fi; \
-  fi
-
-
-# Return to app root
+# Back to app root
 WORKDIR /app
-
 ENV APP_PORT=8080
 ENV METRICS_PORT=8081
-
 EXPOSE ${APP_PORT}/tcp ${METRICS_PORT}/tcp
 
-# starting up
 ENTRYPOINT ["/app/openzeppelin-relayer"]
