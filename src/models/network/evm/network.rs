@@ -1,3 +1,4 @@
+use crate::config::GasPriceCacheConfig;
 use crate::constants::{
     ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, ROLLUP_TAG,
 };
@@ -27,6 +28,8 @@ pub struct EvmNetwork {
     pub features: Vec<String>,
     /// The symbol of the network's native currency (e.g., "ETH", "MATIC").
     pub symbol: String,
+    /// Gas price cache configuration
+    pub gas_price_cache: Option<GasPriceCacheConfig>,
 }
 
 impl TryFrom<NetworkRepoModel> for EvmNetwork {
@@ -84,6 +87,7 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     required_confirmations,
                     features: evm_config.features.clone().unwrap_or_default(),
                     symbol,
+                    gas_price_cache: evm_config.gas_price_cache.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(
@@ -176,6 +180,7 @@ mod tests {
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 
@@ -276,6 +281,7 @@ mod tests {
             required_confirmations: Some(1),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
 
         let repo_model = NetworkRepoModel {

@@ -47,6 +47,7 @@ pub fn create_evm_network(network: &str) -> EvmNetworkConfig {
         required_confirmations: Some(1),
         features: Some(vec!["eip1559".to_string()]),
         symbol: Some("ETH".to_string()),
+        gas_price_cache: None,
     }
 }
 
@@ -58,6 +59,7 @@ pub fn create_evm_network_with_parent(network: &str, parent: &str) -> EvmNetwork
         required_confirmations: Some(1), // Required field, but could be different from parent
         features: None,        // Will inherit from parent
         symbol: Some("ETH".to_string()), // Required field
+        gas_price_cache: None,
     }
 }
 
@@ -69,6 +71,7 @@ pub fn create_evm_network_for_inheritance_test(network: &str, parent: &str) -> E
         required_confirmations: None, // Will inherit from parent
         features: None,               // Will inherit from parent
         symbol: None,                 // Will inherit from parent
+        gas_price_cache: None,
     }
 }
 
@@ -88,6 +91,7 @@ pub fn create_invalid_evm_network(network: &str) -> EvmNetworkConfig {
         required_confirmations: None,
         features: None,
         symbol: None,
+        gas_price_cache: None,
     }
 }
 

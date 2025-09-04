@@ -158,6 +158,7 @@ mod tests {
             required_confirmations: Some(2), // Override parent value
             features: None,
             symbol: None, // Will inherit from parent
+            gas_price_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");
@@ -203,6 +204,7 @@ mod tests {
             required_confirmations: Some(3), // Override grandparent
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
         networks.insert(
             "parent".to_string(),
@@ -227,6 +229,7 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");
@@ -497,6 +500,7 @@ mod tests {
             required_confirmations: None,
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: None,
+            gas_price_cache: None,
         };
         networks.insert(
             "grandparent".to_string(),
@@ -517,6 +521,7 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
         networks.insert("parent".to_string(), NetworkFileConfig::Evm(parent_config));
 
@@ -537,6 +542,7 @@ mod tests {
             required_confirmations: Some(5),
             features: None,
             symbol: Some("CUSTOM".to_string()),
+            gas_price_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");
@@ -670,6 +676,7 @@ mod tests {
             required_confirmations: Some(1),
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
         networks.insert("parent".to_string(), NetworkFileConfig::Evm(parent_config));
 
@@ -691,6 +698,7 @@ mod tests {
             required_confirmations: None,               // Inherit
             features: Some(vec!["berlin".to_string()]), // Override (merge behavior depends on implementation)
             symbol: None,                               // Inherit
+            gas_price_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");

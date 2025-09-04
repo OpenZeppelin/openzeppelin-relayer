@@ -17,12 +17,11 @@ use crate::repositories::{
     NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
     TransactionCounterTrait, TransactionRepository,
 };
+use crate::services::plugins::PluginError;
 use actix_web::web;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use strum::Display;
-
-use super::PluginError;
 
 #[cfg(test)]
 use mockall::automock;
