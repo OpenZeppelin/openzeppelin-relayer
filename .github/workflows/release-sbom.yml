@@ -52,7 +52,7 @@ jobs:
           GH_TOKEN: ${{ steps.gh-app-token.outputs.token }}
         run: gh release upload ${{ inputs.tag }} openzeppelin-relayer-${{ inputs.tag }}-spdx.json
       - name: SBOM attestation
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # main
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # main
         with:
           subject-path: ./openzeppelin-relayer-${{ inputs.tag }}-spdx.json
           github-token: ${{ steps.gh-app-token.outputs.token }}
