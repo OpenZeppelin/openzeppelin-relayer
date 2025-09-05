@@ -50,6 +50,13 @@ pub enum SignerConfigResponse {
         public_key: String,
         // api_private_key: Option<String>, hidden from response due to security concerns
     },
+    Cdp {
+        api_key_id: String,
+        evm_account_address: Option<String>,
+        solana_account_address: Option<String>,
+        // api_key_secret: SecretString, hidden from response due to security concerns
+        // wallet_secret: SecretString, hidden from response due to security concerns
+    },
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms {
         service_account: GoogleCloudKmsSignerServiceAccountResponseConfig,
@@ -106,6 +113,11 @@ impl From<SignerConfig> for SignerConfigResponse {
                 organization_id: c.organization_id,
                 private_key_id: c.private_key_id,
                 public_key: c.public_key,
+            },
+            SignerConfig::Cdp(c) => SignerConfigResponse::Cdp {
+                api_key_id: c.api_key_id,
+                evm_account_address: c.evm_account_address,
+                solana_account_address: c.solana_account_address,
             },
             SignerConfig::GoogleCloudKms(c) => SignerConfigResponse::GoogleCloudKms {
                 service_account: GoogleCloudKmsSignerServiceAccountResponseConfig {
@@ -291,5 +303,86 @@ mod tests {
 
         let response: SignerResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.r#type, SignerType::GoogleCloudKms);
+    }
+
+    #[test]
+    fn test_cdp_signer_response_conversion() {
+        use crate::models::signer::{CdpSignerConfig, SignerConfig};
+        use crate::models::SecretString;
+
+        let cdp_config = CdpSignerConfig {
+            api_key_id: "test-api-key-id".to_string(),
+            api_key_secret: SecretString::new("secret"),
+            wallet_secret: SecretString::new("wallet-secret"),
+            evm_account_address: Some("0x123456789abcdef".to_string()),
+            solana_account_address: Some("So11111111111111111111111111111111111111112".to_string()),
+        };
+
+        let signer =
+            crate::models::Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(cdp_config));
+
+        let response = SignerResponse::from(signer);
+
+        assert_eq!(response.id, "cdp-signer");
+        assert_eq!(response.r#type, SignerType::Cdp);
+        assert_eq!(
+            response.config,
+            SignerConfigResponse::Cdp {
+                api_key_id: "test-api-key-id".to_string(),
+                evm_account_address: Some("0x123456789abcdef".to_string()),
+                solana_account_address: Some(
+                    "So11111111111111111111111111111111111111112".to_string()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn test_cdp_response_serialization() {
+        let response = SignerResponse {
+            id: "test-cdp-signer".to_string(),
+            r#type: SignerType::Cdp,
+            config: SignerConfigResponse::Cdp {
+                api_key_id: "test-api-key-id".to_string(),
+                evm_account_address: Some("0x123456789abcdef".to_string()),
+                solana_account_address: None,
+            },
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"id\":\"test-cdp-signer\""));
+        assert!(json.contains("\"type\":\"cdp\""));
+        assert!(json.contains("\"api_key_id\":\"test-api-key-id\""));
+        assert!(json.contains("\"evm_account_address\":\"0x123456789abcdef\""));
+        assert!(json.contains("\"solana_account_address\":null"));
+
+        // Verify that secrets are not included
+        assert!(!json.contains("api_key_secret"));
+        assert!(!json.contains("wallet_secret"));
+    }
+
+    #[test]
+    fn test_cdp_response_deserialization() {
+        let json = r#"{
+            "id": "test-cdp-signer",
+            "type": "cdp",
+            "config": {
+                "api_key_id": "test-api-key-id",
+                "evm_account_address": "0x123456789abcdef",
+                "solana_account_address": null
+            }
+        }"#;
+
+        let response: SignerResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.id, "test-cdp-signer");
+        assert_eq!(response.r#type, SignerType::Cdp);
+        assert_eq!(
+            response.config,
+            SignerConfigResponse::Cdp {
+                api_key_id: "test-api-key-id".to_string(),
+                evm_account_address: Some("0x123456789abcdef".to_string()),
+                solana_account_address: None,
+            }
+        );
     }
 }
