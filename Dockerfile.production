@@ -27,7 +27,7 @@ COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
 ARG INCLUDE_LAUNCHTUBE=false
 
-RUN --mount=type=bind,source=./examples/launchtube-plugin-example/launchtube,target=/tmp/launchtube,optional \
+RUN --mount=type=bind,source=./examples/launchtube-plugin-example/launchtube,target=/tmp/launchtube,optional=true \
     if [ "${INCLUDE_LAUNCHTUBE}" = "true" ] && [ -d /tmp/launchtube ]; then \
       mkdir -p /app/plugins/launchtube && \
       cp -a /tmp/launchtube/. /app/plugins/launchtube/; \
