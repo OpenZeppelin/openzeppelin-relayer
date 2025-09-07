@@ -19,11 +19,21 @@ FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
 COPY --chown=nonroot:nonroot ./config /app/config
-COPY --chown=nonroot:nonroot ./examples/launchtube-plugin-example/launchtube /app/plugins/launchtube
+# COPY --chown=nonroot:nonroot ./examples/launchtube-plugin-example/launchtube /app/plugins/launchtube
 COPY --chown=nonroot:nonroot ./config/networks /app/config/networks
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
+
+ARG INCLUDE_LAUNCHTUBE=false
+
+RUN --mount=type=bind,source=./examples/launchtube-plugin-example/launchtube,target=/tmp/launchtube,optional \
+    if [ "${INCLUDE_LAUNCHTUBE}" = "true" ] && [ -d /tmp/launchtube ]; then \
+      mkdir -p /app/plugins/launchtube && \
+      cp -a /tmp/launchtube/. /app/plugins/launchtube/; \
+    else \
+      echo "Skipping launchtube copy"; \
+    fi
 
 # Install plugin dependencies
 ARG TARGETARCH
