@@ -18,7 +18,7 @@ use crate::{
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
-use log::info;
+use tracing::info;
 
 /// Process all plugins from the config file and store them in the repository.
 async fn process_plugins<J, RR, TR, NR, NFR, SR, TCR, PR>(

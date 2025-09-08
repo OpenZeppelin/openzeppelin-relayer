@@ -7,7 +7,7 @@ use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
 use apalis_redis::RedisContext;
 use eyre::Result;
-use log::info;
+use tracing::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,

@@ -26,8 +26,8 @@
 
 use std::str::FromStr;
 
-use log::info;
 use solana_sdk::{hash::Hash, pubkey::Pubkey, transaction::Transaction};
+use tracing::info;
 
 use crate::{
     domain::relayer::solana::rpc::methods::utils::FeeQuote,

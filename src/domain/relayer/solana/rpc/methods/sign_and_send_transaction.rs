@@ -21,8 +21,8 @@ use std::str::FromStr;
 
 use chrono::Utc;
 use futures::try_join;
-use log::info;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use tracing::info;
 
 use crate::{
     models::{

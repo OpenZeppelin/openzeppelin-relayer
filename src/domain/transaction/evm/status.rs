@@ -5,7 +5,7 @@
 use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-use log::info;
+use tracing::info;
 
 use super::EvmRelayerTransaction;
 use super::{

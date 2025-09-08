@@ -48,7 +48,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     create_error_response, create_success_response, map_provider_error, EvmTransactionValidator,

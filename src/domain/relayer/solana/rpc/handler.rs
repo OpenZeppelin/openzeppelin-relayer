@@ -16,8 +16,8 @@ use crate::{
     },
 };
 use eyre::Result;
-use log::info;
 use std::sync::Arc;
+use tracing::info;
 
 pub type SolanaRpcHandlerType<SP, S, JS, J, TR> =
     Arc<SolanaRpcHandler<SolanaRpcMethodsImpl<SP, S, JS, J, TR>>>;

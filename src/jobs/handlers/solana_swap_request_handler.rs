@@ -7,7 +7,7 @@ use crate::setup_job_tracing;
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use log::info;
+use tracing::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
