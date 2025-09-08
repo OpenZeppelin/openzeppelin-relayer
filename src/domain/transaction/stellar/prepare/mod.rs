@@ -9,7 +9,7 @@ pub mod operations;
 pub mod unsigned_xdr;
 
 use eyre::Result;
-use log::{info, warn};
+use tracing::{info, warn};
 
 use super::{lane_gate, StellarRelayerTransaction};
 use crate::models::RelayerRepoModel;

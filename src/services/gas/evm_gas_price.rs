@@ -9,7 +9,7 @@ use crate::{
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use eyre::Result;
 use futures::try_join;
-use log::info;
+use tracing::info;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

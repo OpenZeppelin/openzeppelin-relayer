@@ -9,7 +9,7 @@ use apalis::prelude::{Attempt, Data, *};
 
 use crate::setup_job_tracing;
 use eyre::Result;
-use log::info;
+use tracing::info;
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,

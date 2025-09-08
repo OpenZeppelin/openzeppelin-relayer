@@ -23,12 +23,12 @@ use async_trait::async_trait;
 use google_cloud_auth::credentials::{service_account::Builder as GcpCredBuilder, Credentials};
 #[cfg_attr(test, allow(unused_imports))]
 use http::{Extensions, HeaderMap};
-use log::debug;
 use reqwest::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::debug;
 
 #[cfg(test)]
 use mockall::automock;

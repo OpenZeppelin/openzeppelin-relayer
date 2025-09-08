@@ -1,6 +1,6 @@
 //! This module contains the function to log service information at startup.
-use log::info;
 use std::env;
+use tracing::info;
 
 /// Logs service information at startup
 pub fn log_service_info() {

@@ -4,11 +4,11 @@ use crate::models::{RepositoryError, SignerRepoModel};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::*;
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, RedisError};
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const SIGNER_PREFIX: &str = "signer";
 const SIGNER_LIST_KEY: &str = "signer_list";

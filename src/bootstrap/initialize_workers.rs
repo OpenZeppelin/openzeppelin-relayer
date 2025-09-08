@@ -15,9 +15,9 @@ use actix_web::web::ThinData;
 use apalis::{layers::ErrorHandlingLayer, prelude::*};
 use apalis_cron::CronStream;
 use eyre::Result;
-use log::{error, info};
 use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
+use tracing::{error, info};
 
 // Review and fine tune configuration for the workers
 const DEFAULT_CONCURRENCY: usize = 2;

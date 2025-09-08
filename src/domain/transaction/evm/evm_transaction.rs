@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use log::{debug, error, info, warn};
 use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
