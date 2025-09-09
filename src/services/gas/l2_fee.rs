@@ -1,5 +1,11 @@
-//! This module defines a generic, zero-alloc framework for calculating L2-specific fees
-//! without using dynamic dispatch (`dyn`) or heap allocations (`Box`).
+//! Calculates L2-specific transaction fees.
+//!
+//! Layer 2 networks often have additional fee components beyond the standard gas fees.
+//! This module provides functionality to fetch and calculate these extra fees for
+//! supported L2 networks.
+//!
+//! Currently supports:
+//! - Optimism: Calculates L1 data availability fees in addition to L2 execution fees
 use crate::{
     models::{evm::EvmTransactionRequest, EvmNetwork, TransactionError, U256},
     services::{
@@ -36,7 +42,7 @@ impl<P: EvmProviderTrait + Clone> L2FeeService<P> {
     }
 }
 
-/// Factory function to create an L2-specific fee service using static dispatch.
+/// Creates an L2-specific fee service for the given network.
 pub fn l2_fee_service_factory<P: EvmProviderTrait + Clone>(
     network: &EvmNetwork,
     provider: P,
@@ -46,7 +52,6 @@ pub fn l2_fee_service_factory<P: EvmProviderTrait + Clone>(
             provider,
         )))
     } else {
-        // Future L2s like Arbitrum can be added here.
         None
     }
 }
