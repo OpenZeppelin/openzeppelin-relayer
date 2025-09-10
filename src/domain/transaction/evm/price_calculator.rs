@@ -221,14 +221,33 @@ where
         };
 
         // Use price params overrider if available for custom network pricing
+        let is_eip1559 = tx_data.is_eip1559();
+
+        let mut recompute_total_cost = true;
         if let Some(handler) = &self.price_params_handler {
             let req = Self::build_request_from(tx_data, &final_params);
             final_params = handler.handle_price_params(&req, final_params).await?;
-        } else {
-            // Default behavior: calculate total cost
+
+            // Re-apply cap after overrider in case it changed fee fields
+            let (gas_price_capped, max_fee_per_gas_capped, max_priority_fee_per_gas_capped) = self
+                .apply_gas_price_cap(
+                    final_params.gas_price.unwrap_or_default(),
+                    final_params.max_fee_per_gas,
+                    final_params.max_priority_fee_per_gas,
+                    relayer,
+                )?;
+            final_params.gas_price = gas_price_capped;
+            final_params.max_fee_per_gas = max_fee_per_gas_capped;
+            final_params.max_priority_fee_per_gas = max_priority_fee_per_gas_capped;
+
+            recompute_total_cost = final_params.total_cost == U256::ZERO;
+        }
+
+        // Only recompute total cost if it was not set by the overrider
+        if recompute_total_cost {
             final_params.total_cost = final_params.calculate_total_cost(
-                tx_data.is_eip1559(),
-                tx_data.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT), // Use default gas limit if not provided
+                is_eip1559,
+                tx_data.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
                 U256::from(tx_data.value),
             );
         }
@@ -311,11 +330,27 @@ where
         let is_eip1559 = tx_data.is_eip1559();
 
         // Use price params overrider if available for custom network pricing
+        let mut recompute_total_cost = true;
         if let Some(handler) = &self.price_params_handler {
             let req = Self::build_request_from(tx_data, &final_params);
             final_params = handler.handle_price_params(&req, final_params).await?;
-        } else {
-            // Default behavior: calculate total cost
+
+            let (gas_price_capped, max_fee_per_gas_capped, max_priority_fee_per_gas_capped) = self
+                .apply_gas_price_cap(
+                    final_params.gas_price.unwrap_or_default(),
+                    final_params.max_fee_per_gas,
+                    final_params.max_priority_fee_per_gas,
+                    relayer,
+                )?;
+            final_params.gas_price = gas_price_capped;
+            final_params.max_fee_per_gas = max_fee_per_gas_capped;
+            final_params.max_priority_fee_per_gas = max_priority_fee_per_gas_capped;
+
+            recompute_total_cost = final_params.total_cost == U256::ZERO;
+        }
+
+        // Only recompute total cost if it was not set by the overrider
+        if recompute_total_cost {
             final_params.total_cost = final_params.calculate_total_cost(
                 is_eip1559,
                 gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
@@ -713,6 +748,7 @@ mod tests {
     };
     use crate::services::{
         evm_gas_price::{EvmGasPriceService, GasPrices, MockEvmGasPriceServiceTrait, SpeedPrices},
+        gas::handlers::test_mock::MockPriceHandler,
         MockEvmProviderTrait,
     };
     use futures::FutureExt;
@@ -1433,6 +1469,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_total_cost_recomputed_without_overrider_legacy() {
+        let mut mock_service = MockEvmGasPriceServiceTrait::new();
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 10_000_000_000,
+                average: 12_000_000_000,
+                fast: 14_000_000_000,
+                fastest: 18_000_000_000,
+            },
+            max_priority_fee_per_gas: SpeedPrices::default(),
+            base_fee_per_gas: 0,
+        };
+        mock_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+        mock_service
+            .expect_network()
+            .return_const(create_mock_evm_network("mainnet"));
+
+        let pc = PriceCalculator::new(mock_service, None);
+        let relayer = create_mock_relayer();
+
+        let gas_limit = 21_000u64;
+        let tx_data = EvmTransactionData {
+            gas_price: Some(20_000_000_000),
+            gas_limit: Some(gas_limit),
+            value: U256::ZERO,
+            ..Default::default()
+        };
+
+        let params = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
+
+        // Total cost should be recomputed using final gas_price and provided gas_limit
+        let expected = U256::from(params.gas_price.unwrap()) * U256::from(gas_limit);
+        assert_eq!(params.total_cost, expected);
+    }
+
+    #[tokio::test]
+    async fn test_total_cost_respected_with_overrider_nonzero_total_legacy() {
+        let mut mock_service = MockEvmGasPriceServiceTrait::new();
+        let mock_prices = GasPrices {
+            legacy_prices: SpeedPrices {
+                safe_low: 10_000_000_000,
+                average: 12_000_000_000,
+                fast: 14_000_000_000,
+                fastest: 18_000_000_000,
+            },
+            max_priority_fee_per_gas: SpeedPrices::default(),
+            base_fee_per_gas: 0,
+        };
+        mock_service
+            .expect_get_prices_from_json_rpc()
+            .returning(move || {
+                let prices = mock_prices.clone();
+                Box::pin(async move { Ok(prices) })
+            });
+        mock_service
+            .expect_network()
+            .return_const(create_mock_evm_network("mainnet"));
+
+        let handler = Some(PriceParamsHandler::Mock(MockPriceHandler::new()));
+        let pc = PriceCalculator::new(mock_service, handler);
+        let relayer = create_mock_relayer();
+
+        let tx_data = EvmTransactionData {
+            gas_price: Some(20_000_000_000),
+            gas_limit: Some(21_000),
+            value: U256::ZERO,
+            ..Default::default()
+        };
+
+        let params = pc
+            .calculate_bumped_gas_price(&tx_data, &relayer)
+            .await
+            .unwrap();
+
+        // MockPriceHandler sets extra_fee = 42 and total_cost = 0 + 42.
+        // Since total_cost is non-zero after the overrider, the calculator must not recompute it.
+        assert_eq!(params.extra_fee, Some(U256::from(42u128)));
+        assert_eq!(params.total_cost, U256::from(42u128));
+    }
+
+    #[tokio::test]
     async fn test_get_transaction_price_params_with_mock_overrider_legacy() {
         use crate::services::gas::handlers::test_mock::MockPriceHandler;
 
@@ -1497,6 +1622,36 @@ mod tests {
             .unwrap();
         assert_eq!(params.extra_fee, Some(U256::from(42u128)));
         assert!(params.total_cost >= U256::from(42u128));
+    }
+
+    #[tokio::test]
+    async fn test_get_transaction_price_params_recompute_without_overrider_legacy() {
+        let mut mock_gas_service = MockEvmGasPriceServiceTrait::new();
+        mock_gas_service
+            .expect_get_legacy_prices_from_json_rpc()
+            .returning(|| Box::pin(async { Ok(SpeedPrices::default()) }));
+        mock_gas_service
+            .expect_network()
+            .return_const(create_mock_evm_network("mainnet"));
+
+        let pc = PriceCalculator::new(mock_gas_service, None);
+        let relayer = create_mock_relayer();
+
+        let gas_limit = 21_000u64;
+        let tx_data = EvmTransactionData {
+            gas_price: Some(20_000_000_000),
+            gas_limit: Some(gas_limit),
+            value: U256::ZERO,
+            ..Default::default()
+        };
+
+        let params = pc
+            .get_transaction_price_params(&tx_data, &relayer)
+            .await
+            .unwrap();
+
+        let expected = U256::from(params.gas_price.unwrap()) * U256::from(gas_limit);
+        assert_eq!(params.total_cost, expected);
     }
 
     #[test]
