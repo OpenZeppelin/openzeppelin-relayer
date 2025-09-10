@@ -3,9 +3,9 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::Utc;
-use log::{info, warn};
 use serde_json::{json, Value};
 use soroban_rs::xdr::{Error, Hash};
+use tracing::{info, warn};
 
 use super::StellarRelayerTransaction;
 use crate::{

@@ -34,8 +34,8 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
-use log::{error, info, warn};
 use solana_sdk::{account::Account, pubkey::Pubkey};
+use tracing::{error, info, warn};
 
 use super::{NetworkDex, SolanaRpcError, SolanaTokenProgram, SwapResult, TokenAccount};
 

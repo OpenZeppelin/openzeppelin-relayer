@@ -4,7 +4,7 @@ use apalis::prelude::{Attempt, Error};
 use eyre::Report;
 
 mod transaction_request_handler;
-use log::info;
+use tracing::info;
 pub use transaction_request_handler::*;
 
 mod transaction_submission_handler;

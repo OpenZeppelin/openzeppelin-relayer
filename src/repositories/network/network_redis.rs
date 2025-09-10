@@ -10,11 +10,11 @@ use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PaginationQuery, Repository};
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const NETWORK_PREFIX: &str = "network";
 const NETWORK_LIST_KEY: &str = "network_list";

@@ -19,9 +19,8 @@ panic = "unwind"
 aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
 aws-sdk-kms = "1.75.0"
 actix-web = "4"
-log = "0.4"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "tracing-log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-error = { version = "0.2" }
 tracing-appender = "0.2"
 tracing-actix-web = "0.7"

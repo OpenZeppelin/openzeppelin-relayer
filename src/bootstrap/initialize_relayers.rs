@@ -11,7 +11,7 @@ use actix_web::web::ThinData;
 
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
-use log::info;
+use tracing::info;
 
 async fn initialize_relayer(
     relayer_id: String,

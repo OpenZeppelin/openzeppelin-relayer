@@ -17,8 +17,8 @@ use crate::services::{
     UltraOrderRequest,
 };
 use async_trait::async_trait;
-use log::info;
 use solana_sdk::transaction::VersionedTransaction;
+use tracing::info;
 
 pub struct JupiterUltraDex<S, J>
 where

@@ -26,7 +26,6 @@
 use super::*;
 use std::str::FromStr;
 
-use log::debug;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     hash::Hash,
@@ -39,6 +38,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_system_interface::program;
+use tracing::debug;
 
 use spl_token::{amount_to_ui_amount, state::Account};
 

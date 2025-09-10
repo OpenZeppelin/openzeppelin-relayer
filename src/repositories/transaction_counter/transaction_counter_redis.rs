@@ -9,11 +9,11 @@ use super::TransactionCounterTrait;
 use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use async_trait::async_trait;
-use log::debug;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::debug;
 
 const COUNTER_PREFIX: &str = "transaction_counter";
 

@@ -3,7 +3,7 @@
 //! ensuring proper transaction state management on failure.
 
 use chrono::Utc;
-use log::{info, warn};
+use tracing::{info, warn};
 
 use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{

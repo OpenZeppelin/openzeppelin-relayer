@@ -24,7 +24,6 @@ use std::str::FromStr;
 use alloy::primitives::keccak256;
 use async_trait::async_trait;
 use chrono;
-use log::{debug, info};
 use p256::{
     ecdsa::{signature::Signer, Signature as P256Signature, SigningKey},
     FieldBytes,
@@ -33,6 +32,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::Transaction};
 use thiserror::Error;
+use tracing::{debug, info};
 
 use crate::models::{Address, SecretString, TurnkeySignerConfig};
 use crate::utils::base64_url_encode;

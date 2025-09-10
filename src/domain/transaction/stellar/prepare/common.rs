@@ -1,11 +1,11 @@
 //! Common functionality shared across preparation modules.
 
 use eyre::Result;
-use log::{info, warn};
 use soroban_rs::{
     stellar_rpc_client::SimulateTransactionResponse,
     xdr::{Limits, TransactionEnvelope, WriteXdr},
 };
+use tracing::{info, warn};
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,

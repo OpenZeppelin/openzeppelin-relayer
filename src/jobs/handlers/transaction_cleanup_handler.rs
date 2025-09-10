@@ -8,8 +8,8 @@ use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use chrono::{DateTime, Utc};
 use eyre::Result;
-use log::{debug, error, info, warn};
 use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     constants::{FINAL_TRANSACTION_STATUSES, WORKER_DEFAULT_MAXIMUM_RETRIES},

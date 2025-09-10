@@ -212,7 +212,7 @@ where
     let mut total_attempts = 0;
     let mut last_error = None;
 
-    log::debug!(
+    tracing::debug!(
         "Starting RPC call '{}' with max_retries={}, max_failovers={}, available_providers={}",
         operation_name,
         config.max_retries,
@@ -240,7 +240,7 @@ where
                 }
             };
 
-        log::debug!(
+        tracing::debug!(
             "Selected provider: {} for operation '{}'",
             provider_url,
             operation_name
@@ -259,7 +259,7 @@ where
         .await
         {
             Ok(result) => {
-                log::debug!(
+                tracing::debug!(
                     "RPC call '{}' succeeded with provider '{}' (total attempts: {})",
                     operation_name,
                     provider_url,
@@ -274,7 +274,7 @@ where
                         if should_mark_provider_failed(&original_err)
                             && selector.available_provider_count() > 1
                         {
-                            log::warn!(
+                            tracing::warn!(
                                 "Non-retriable error '{}' for provider '{}' on operation '{}' should mark provider as failed. Marking as failed and switching to next provider...",
                                 original_err,
                                 provider_url,
@@ -290,7 +290,7 @@ where
                         // If retries are exhausted, we always intend to mark the provider as failed,
                         // unless it's the last available one.
                         if selector.available_provider_count() > 1 {
-                            log::warn!(
+                            tracing::warn!(
                                 "All {} retry attempts failed for provider '{}' on operation '{}'. Error: {}. Marking as failed and switching to next provider (failover {}/{})...",
                                 config.max_retries,
                                 provider_url,
@@ -302,7 +302,7 @@ where
                             selector.mark_current_as_failed();
                             failover_count += 1;
                         } else {
-                            log::warn!(
+                            tracing::warn!(
                                 "All {} retry attempts failed for provider '{}' on operation '{}'. Error: {}. This is the last available provider, not marking as failed.",
                                 config.max_retries,
                                 provider_url,
@@ -333,7 +333,7 @@ where
         )
     };
 
-    log::error!("{}", error_message);
+    tracing::error!("{}", error_message);
 
     // If we're here, all retries with all attempted providers failed
     Err(last_error.unwrap_or_else(|| E::from(error_message)))
@@ -354,13 +354,13 @@ where
         .get_client(|url| Ok::<_, eyre::Report>(url.to_string()))
         .map_err(|e| {
             let err_msg = format!("Failed to get provider URL for {}: {}", operation_name, e);
-            log::warn!("{}", err_msg);
+            tracing::warn!("{}", err_msg);
             E::from(err_msg)
         })?;
 
     // Initialize the provider
     let provider = provider_initializer(&provider_url).map_err(|e| {
-        log::warn!(
+        tracing::warn!(
             "Failed to initialize provider '{}' for operation '{}': {}",
             provider_url,
             operation_name,
@@ -401,7 +401,7 @@ where
 
         match operation(provider.clone()).await {
             Ok(result) => {
-                log::debug!(
+                tracing::debug!(
                     "RPC call '{}' succeeded with provider '{}' (attempt {}/{}, total attempts: {})",
                     operation_name,
                     provider_url,
@@ -415,7 +415,7 @@ where
                 let is_retriable = is_retriable_error(&e);
                 let is_last_attempt = current_attempt_idx + 1 >= config.max_retries;
 
-                log::warn!(
+                tracing::warn!(
                     "RPC call '{}' failed with provider '{}' (attempt {}/{}): {} [{}]",
                     operation_name,
                     provider_url,
@@ -434,7 +434,7 @@ where
                 }
 
                 if is_last_attempt {
-                    log::warn!(
+                    tracing::warn!(
                         "All {} retries exhausted for RPC call '{}' with provider '{}'. Last error: {}",
                         config.max_retries, operation_name, provider_url, e
                     );
@@ -448,7 +448,7 @@ where
                     config.max_delay_ms,
                 );
 
-                log::debug!(
+                tracing::debug!(
                     "Retrying RPC call '{}' with provider '{}' after {:?} delay (attempt {}/{})",
                     operation_name,
                     provider_url,

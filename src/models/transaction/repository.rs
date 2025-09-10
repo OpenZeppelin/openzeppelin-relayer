@@ -759,7 +759,7 @@ impl StellarTransactionData {
         sim_response: soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
         operations_count: u64,
     ) -> Result<Self, SignerError> {
-        use log::info;
+        use tracing::info;
 
         // Update fee based on simulation (using soroban-helpers formula)
         let inclusion_fee = operations_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;

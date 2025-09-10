@@ -4,9 +4,9 @@
 //! implementations to reduce code duplication and ensure consistency.
 
 use crate::models::RepositoryError;
-use log::{error, warn};
 use redis::RedisError;
 use serde::{Deserialize, Serialize};
+use tracing::{error, warn};
 
 /// Base trait for Redis repositories providing common functionality
 pub trait RedisRepository {

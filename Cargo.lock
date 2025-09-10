@@ -5557,7 +5557,6 @@ dependencies = [
  "k256",
  "lazy_static",
  "libsodium-sys",
- "log",
  "mockall",
  "mockito",
  "mpl-token-metadata",

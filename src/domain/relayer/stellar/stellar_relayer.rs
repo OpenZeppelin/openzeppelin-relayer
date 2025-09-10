@@ -42,8 +42,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::{info, warn};
 use std::sync::Arc;
+use tracing::{info, warn};
 
 use crate::domain::relayer::{Relayer, RelayerError};
 

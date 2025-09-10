@@ -16,10 +16,10 @@ use crate::{
 use apalis::prelude::Storage;
 use apalis_redis::RedisError;
 use async_trait::async_trait;
-use log::{error, info};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
+use tracing::{error, info};
 
 use super::{JobType, SolanaTokenSwapRequest};
 

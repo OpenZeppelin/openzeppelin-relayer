@@ -5,11 +5,11 @@ use crate::models::{PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, Rep
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, RelayerRepository, Repository};
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const RELAYER_PREFIX: &str = "relayer";
 const RELAYER_LIST_KEY: &str = "relayer_list";

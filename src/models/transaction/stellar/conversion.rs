@@ -82,11 +82,13 @@ impl TryFrom<StellarTransactionData> for Transaction {
                         use soroban_rs::xdr::SorobanTransactionData;
                         match SorobanTransactionData::from_xdr_base64(xdr_data, Limits::none()) {
                             Ok(tx_data) => {
-                                log::info!("Applied transaction extension data from simulation");
+                                tracing::info!(
+                                    "Applied transaction extension data from simulation"
+                                );
                                 TransactionExt::V1(tx_data)
                             }
                             Err(e) => {
-                                log::warn!(
+                                tracing::warn!(
                                     "Failed to decode transaction data XDR: {}, using V0",
                                     e
                                 );

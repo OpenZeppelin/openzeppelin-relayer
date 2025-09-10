@@ -4,9 +4,9 @@
 //! including status updates, repository management, and webhook notifications.
 
 use chrono::Utc;
-use log::{debug, error, info, warn};
 use solana_sdk::signature::Signature;
 use std::str::FromStr;
+use tracing::{debug, error, info, warn};
 
 use super::SolanaRelayerTransaction;
 use crate::{

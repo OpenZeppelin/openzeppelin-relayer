@@ -9,11 +9,11 @@ use crate::repositories::{
     BatchRetrievalResult, PaginatedResult, Repository, TransactionRepository,
 };
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const RELAYER_PREFIX: &str = "relayer";
 const TX_PREFIX: &str = "tx";

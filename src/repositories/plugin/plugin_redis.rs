@@ -4,11 +4,11 @@ use crate::models::{PaginationQuery, PluginModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PluginRepositoryTrait};
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const PLUGIN_PREFIX: &str = "plugin";
 const PLUGIN_LIST_KEY: &str = "plugin_list";

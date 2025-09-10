@@ -18,8 +18,8 @@ use crate::services::{
     SolanaSigner, SwapRequest,
 };
 use async_trait::async_trait;
-use log::info;
 use solana_sdk::transaction::VersionedTransaction;
+use tracing::info;
 
 pub struct JupiterSwapDex<P, S, J>
 where
