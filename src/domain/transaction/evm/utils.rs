@@ -92,7 +92,7 @@ pub fn is_transaction_valid(created_at: &str, valid_until: &Option<String>) -> b
         match DateTime::parse_from_rfc3339(valid_until_str) {
             Ok(valid_until_time) => return Utc::now() < valid_until_time,
             Err(e) => {
-                tracing::warn!("Failed to parse valid_until timestamp: {}", e);
+                tracing::warn!(error = %e, "failed to parse valid_until timestamp");
                 return false;
             }
         }
@@ -104,7 +104,7 @@ pub fn is_transaction_valid(created_at: &str, valid_until: &Option<String>) -> b
             Utc::now() < default_valid_until
         }
         Err(e) => {
-            tracing::warn!("Failed to parse created_at timestamp: {}", e);
+            tracing::warn!(error = %e, "failed to parse created_at timestamp");
             false
         }
     }

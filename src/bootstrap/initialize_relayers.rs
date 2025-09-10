@@ -19,7 +19,7 @@ async fn initialize_relayer(
 ) -> Result<()> {
     let relayer_service = get_network_relayer(relayer_id.clone(), &app_state).await?;
 
-    info!("Initializing relayer: {}", relayer_id.clone());
+    info!(relayer_id = %relayer_id, "initializing relayer");
 
     relayer_service.initialize_relayer().await?;
 

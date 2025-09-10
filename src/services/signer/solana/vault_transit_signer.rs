@@ -99,7 +99,7 @@ impl<T: VaultServiceTrait> SolanaSignTrait for VaultTransitSigner<T> {
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         let vault_signature_str = self.vault_service.sign(&self.key_name, message).await?;
 
-        debug!("vault_signature_str: {}", vault_signature_str);
+        debug!(vault_signature_str = %vault_signature_str, "vault signature string");
 
         let base64_sig = vault_signature_str
             .strip_prefix("vault:v1:")

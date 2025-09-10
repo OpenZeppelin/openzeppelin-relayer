@@ -64,7 +64,7 @@ where
     J: JupiterServiceTrait + Send + Sync + 'static,
 {
     async fn execute_swap(&self, params: SwapParams) -> Result<SwapResult, RelayerError> {
-        info!("Executing Jupiter swap: {:?}", params);
+        info!(params = ?params, "executing Jupiter swap");
 
         let quote = self
             .jupiter_service
@@ -76,7 +76,7 @@ where
             })
             .await
             .map_err(|e| RelayerError::DexError(format!("Failed to get Jupiter quote: {}", e)))?;
-        info!("Received quote: {:?}", quote);
+        info!(quote = ?quote, "received quote");
 
         let swap_tx = self
             .jupiter_service
@@ -108,7 +108,7 @@ where
                 RelayerError::DexError(format!("Failed to get swap transaction: {}", e))
             })?;
 
-        info!("Received swap transaction: {:?}", swap_tx);
+        info!(swap_tx = ?swap_tx, "received swap transaction");
 
         let mut swap_tx = VersionedTransaction::try_from(EncodedSerializedTransaction::new(
             swap_tx.swap_transaction,
@@ -136,7 +136,7 @@ where
             })?;
 
         // Wait for transaction confirmation
-        info!("Waiting for transaction confirmation: {}", signature);
+        info!(signature = %signature, "waiting for transaction confirmation");
         self.provider
             .confirm_transaction(&signature)
             .await
@@ -144,7 +144,7 @@ where
                 RelayerError::ProviderError(format!("Transaction failed to confirm: {}", e))
             })?;
 
-        info!("Transaction confirmed: {}", signature);
+        info!(signature = %signature, "transaction confirmed");
 
         Ok(SwapResult {
             mint: params.source_mint,

@@ -193,7 +193,7 @@ impl SolanaTransactionValidator {
     ) -> Result<(), SolanaTransactionValidationError> {
         if let Some(allowed_accounts) = &policy.allowed_accounts {
             for account_key in &tx.message.account_keys {
-                info!("Checking account {}", account_key);
+                info!(account_key = %account_key, "checking account");
                 if !allowed_accounts.contains(&account_key.to_string()) {
                     return Err(SolanaTransactionValidationError::PolicyViolation(format!(
                         "Account {} not allowed",

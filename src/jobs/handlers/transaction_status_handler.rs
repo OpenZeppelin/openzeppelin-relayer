@@ -6,26 +6,40 @@
 //! - Triggering notifications on status changes
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
-
-use crate::setup_job_tracing;
 use eyre::Result;
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionStatusCheck},
     models::DefaultAppState,
+    observability::request_id::set_request_id,
 };
 
+#[instrument(
+    level = "info",
+    skip(job, state),
+    fields(
+        request_id = ?job.request_id,
+        job_id = %job.message_id,
+        job_type = %job.job_type.to_string(),
+        attempt = %attempt.current(),
+        tx_id = %job.data.transaction_id,
+        relayer_id = %job.data.relayer_id,
+    ),
+    err
+)]
 pub async fn transaction_status_handler(
     job: Job<TransactionStatusCheck>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
-    setup_job_tracing!(job, attempt);
+    if let Some(request_id) = job.request_id.clone() {
+        set_request_id(request_id);
+    }
 
-    info!("Handling transaction status job: {:?}", job.data);
+    info!("handling transaction status check");
 
     let result = handle_request(job.data, state).await;
 
@@ -50,7 +64,7 @@ async fn handle_request(
         .handle_transaction_status(transaction)
         .await?;
 
-    info!("Status check handled successfully");
+    info!("status check handled successfully");
 
     Ok(())
 }
