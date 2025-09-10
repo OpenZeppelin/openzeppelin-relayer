@@ -19,6 +19,7 @@ pub struct Job<T> {
     pub timestamp: String,
     pub job_type: JobType,
     pub data: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
 }
 
