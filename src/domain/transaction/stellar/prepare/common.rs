@@ -64,7 +64,7 @@ where
             .map_err(TransactionError::from)?;
 
         if let Some(err_msg) = resp.error.clone() {
-            warn!("Stellar simulation failed: {}", err_msg);
+            warn!(error = %err_msg, "stellar simulation failed");
             return Err(TransactionError::SimulationFailed(err_msg));
         }
 

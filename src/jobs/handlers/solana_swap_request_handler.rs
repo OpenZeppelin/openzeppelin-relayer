@@ -102,10 +102,7 @@ async fn handle_request(
     request: SolanaTokenSwapRequest,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    info!(
-        relayer_id = %request.relayer_id,
-        "processing solana token swap"
-    );
+    info!("processing solana token swap");
 
     let relayer_model = get_relayer_by_id(request.relayer_id.clone(), &context).await?;
     let signer_model = context

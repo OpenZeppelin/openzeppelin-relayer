@@ -99,7 +99,7 @@ where
         )
         .await
         .map_err(|e| {
-            error!("Insufficient funds: {}", e);
+            error!(error = %e, "insufficient funds");
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
 
@@ -127,7 +127,7 @@ where
                 .await;
 
             if let Err(e) = webhook_result {
-                error!("Failed to produce notification job: {}", e);
+                error!(error = %e, "failed to produce notification job");
             }
         }
 

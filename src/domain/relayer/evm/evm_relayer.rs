@@ -152,7 +152,7 @@ where
             self.relayer.id, on_chain_nonce, transaction_counter_nonce
         );
 
-        info!("Setting nonce: {} for relayer: {}", nonce, self.relayer.id);
+        info!(nonce = %nonce, "setting nonce for relayer");
 
         self.transaction_counter_service.set(nonce).await?;
 
@@ -395,8 +395,11 @@ where
 
         let total_processed = cancelled_transaction_ids.len() + failed_transaction_ids.len();
 
-        info!("Completed processing pending transactions for relayer {}: {} queued for cancellation, {} failed to queue",
-              self.relayer.id, cancelled_transaction_ids.len(), failed_transaction_ids.len());
+        info!(
+            queued_for_cancellation = %cancelled_transaction_ids.len(),
+            failed_to_queue = %failed_transaction_ids.len(),
+            "completed processing pending transactions for relayer"
+        );
 
         Ok(DeletePendingTransactionsResponse {
             queued_for_cancellation_transaction_ids: cancelled_transaction_ids,
@@ -510,7 +513,7 @@ where
     ///
     /// A `Result` indicating success or a `RelayerError` if any initialization step fails.
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        info!("Initializing relayer: {}", self.relayer.id);
+        info!("initializing relayer");
         let nonce_sync_result = self.sync_nonce().await;
         let validate_rpc_result = self.validate_rpc().await;
         let validate_min_balance_result = self.validate_min_balance().await;
@@ -536,7 +539,7 @@ where
             .collect::<Vec<String>>()
             .join(", ");
 
-            warn!("Disabling relayer: {} due to: {}", self.relayer.id, reason);
+            warn!(reason = %reason, "disabling relayer");
             let updated_relayer = self
                 .relayer_repository
                 .disable_relayer(self.relayer.id.clone())

@@ -66,7 +66,7 @@ impl<T: SolanaRpcMethods> SolanaRpcHandler<T> {
         &self,
         request: JsonRpcRequest<NetworkRpcRequest>,
     ) -> Result<JsonRpcResponse<NetworkRpcResult>, SolanaRpcError> {
-        info!("Received request params: {:?}", request.params);
+        info!(params = ?request.params, "received request params");
         // Extract Solana request or return error
         let solana_request = match request.params {
             NetworkRpcRequest::Solana(solana_params) => solana_params,

@@ -163,7 +163,7 @@ impl<P: EvmProviderTrait> EvmGasPriceServiceTrait for EvmGasPriceService<P> {
     type Provider = P;
 
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError> {
-        info!("Estimating gas for tx_data: {:?}", tx_data);
+        info!(tx_data = ?tx_data, "estimating gas");
         let gas_estimation = self.provider.estimate_gas(tx_data).await.map_err(|err| {
             let msg = format!("Failed to estimate gas: {err}");
             TransactionError::NetworkConfiguration(msg)

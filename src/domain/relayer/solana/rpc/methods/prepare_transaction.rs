@@ -91,7 +91,7 @@ where
         )
         .await
         .map_err(|e| {
-            error!("Insufficient funds: {}", e);
+            error!(error = %e, "insufficient funds");
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
 

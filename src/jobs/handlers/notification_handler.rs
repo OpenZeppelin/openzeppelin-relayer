@@ -33,6 +33,7 @@ use crate::{
         job_id = %job.message_id,
         job_type = %job.job_type.to_string(),
         attempt = %attempt.current(),
+        notification_id = %job.data.notification_id,
     ),
     err
 )]
@@ -45,10 +46,7 @@ pub async fn notification_handler(
         set_request_id(request_id);
     }
 
-    info!(
-        notification_id = %job.data.notification_id,
-        "handling notification"
-    );
+    info!("handling notification");
 
     let result = handle_request(job.data, context).await;
 
@@ -64,10 +62,7 @@ async fn handle_request(
     request: NotificationSend,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    info!(
-        notification_id = %request.notification_id,
-        "sending notification"
-    );
+    info!("sending notification");
     let notification = context
         .notification_repository
         .get_by_id(request.notification_id)

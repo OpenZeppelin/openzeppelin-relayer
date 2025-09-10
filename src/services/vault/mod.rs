@@ -275,7 +275,7 @@ impl VaultServiceTrait for VaultService {
 
         let vault_signature_str = &vault_signature.signature;
 
-        debug!("vault_signature_str: {}", vault_signature_str);
+        debug!(vault_signature_str = %vault_signature_str, "vault signature string");
 
         Ok(vault_signature_str.clone())
     }
