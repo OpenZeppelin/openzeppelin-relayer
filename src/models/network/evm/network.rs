@@ -1,7 +1,6 @@
 use crate::config::GasPriceCacheConfig;
 use crate::constants::{
-    ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG,
-    ROLLUP_TAG,
+    ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, ROLLUP_TAG,
 };
 use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError};
 use std::time::Duration;

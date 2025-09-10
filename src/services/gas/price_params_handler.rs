@@ -8,10 +8,7 @@ use crate::services::gas::handlers::MockPriceHandler;
 use crate::{
     domain::evm::PriceParams,
     models::{evm::EvmTransactionRequest, EvmNetwork, TransactionError},
-    services::{
-        gas::handlers::{OptimismPriceHandler},
-        EvmProvider,
-    },
+    services::{gas::handlers::OptimismPriceHandler, EvmProvider},
 };
 #[derive(Clone)]
 pub enum PriceParamsHandler {
@@ -59,7 +56,7 @@ impl PriceParamsHandler {
 mod tests {
     use super::*;
     use crate::{
-        constants::{OPTIMISM_BASED_TAG},
+        constants::OPTIMISM_BASED_TAG,
         models::{RpcConfig, U256},
     };
     use std::env;
