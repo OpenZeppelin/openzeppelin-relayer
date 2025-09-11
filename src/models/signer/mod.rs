@@ -28,7 +28,7 @@ pub use request::*;
 mod response;
 pub use response::*;
 
-use crate::{constants::ID_REGEX, models::SecretString};
+use crate::{constants::ID_REGEX, models::SecretString, utils::base64_decode};
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize, Serializer};
 use solana_sdk::pubkey::Pubkey;
@@ -264,6 +264,26 @@ fn validate_secret_string(secret: &SecretString) -> Result<(), validator::Valida
 
 /// Custom validator for CDP signer configuration
 fn validate_cdp_config(config: &CdpSignerConfig) -> Result<(), validator::ValidationError> {
+    // Validate api_key_secret is valid base64
+    let api_key_valid = config
+        .api_key_secret
+        .as_str(|secret_str| base64_decode(secret_str).is_ok());
+    if !api_key_valid {
+        let mut error = validator::ValidationError::new("invalid_base64_api_key_secret");
+        error.message = Some("API Key Secret is not valid base64".into());
+        return Err(error);
+    }
+
+    // Validate wallet_secret is valid base64
+    let wallet_secret_valid = config
+        .wallet_secret
+        .as_str(|secret_str| base64_decode(secret_str).is_ok());
+    if !wallet_secret_valid {
+        let mut error = validator::ValidationError::new("invalid_base64_wallet_secret");
+        error.message = Some("Wallet Secret is not valid base64".into());
+        return Err(error);
+    }
+
     let addr = &config.account_address;
 
     // Check if it's an EVM address (0x-prefixed hex)
@@ -941,8 +961,8 @@ mod tests {
     fn test_valid_cdp_signer_with_evm_address() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
+            api_key_secret: SecretString::new("c2VjcmV0"), // Valid base64: "secret"
+            wallet_secret: SecretString::new("d2FsbGV0LXNlY3JldA=="), // Valid base64: "wallet-secret"
             account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
@@ -954,8 +974,8 @@ mod tests {
     fn test_valid_cdp_signer_with_solana_address() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
+            api_key_secret: SecretString::new("c2VjcmV0"), // Valid base64: "secret"
+            wallet_secret: SecretString::new("d2FsbGV0LXNlY3JldA=="), // Valid base64: "wallet-secret"
             account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
@@ -967,8 +987,8 @@ mod tests {
     fn test_invalid_cdp_signer_empty_address() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
+            api_key_secret: SecretString::new("c2VjcmV0"), // Valid base64: "secret"
+            wallet_secret: SecretString::new("d2FsbGV0LXNlY3JldA=="), // Valid base64: "wallet-secret"
             account_address: "".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
@@ -985,8 +1005,8 @@ mod tests {
     fn test_invalid_cdp_signer_bad_evm_address() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
+            api_key_secret: SecretString::new("c2VjcmV0"), // Valid base64: "secret"
+            wallet_secret: SecretString::new("d2FsbGV0LXNlY3JldA=="), // Valid base64: "wallet-secret"
             account_address: "0xinvalid-address".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
@@ -1003,8 +1023,8 @@ mod tests {
     fn test_invalid_cdp_signer_bad_solana_address() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
+            api_key_secret: SecretString::new("c2VjcmV0"), // Valid base64: "secret"
+            wallet_secret: SecretString::new("d2FsbGV0LXNlY3JldA=="), // Valid base64: "wallet-secret"
             account_address: "invalid".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
@@ -1021,8 +1041,8 @@ mod tests {
     fn test_invalid_cdp_signer_evm_address_wrong_format() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
+            api_key_secret: SecretString::new("c2VjcmV0"), // Valid base64: "secret"
+            wallet_secret: SecretString::new("d2FsbGV0LXNlY3JldA=="), // Valid base64: "wallet-secret"
             account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44".to_string(), // Too short
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
@@ -1039,8 +1059,8 @@ mod tests {
     fn test_invalid_cdp_signer_solana_address_wrong_charset() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
+            api_key_secret: SecretString::new("c2VjcmV0"), // Valid base64: "secret"
+            wallet_secret: SecretString::new("d2FsbGV0LXNlY3JldA=="), // Valid base64: "wallet-secret"
             account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm0".to_string(), // Contains '0' which is invalid in Base58
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
@@ -1051,5 +1071,55 @@ mod tests {
         } else {
             panic!("Expected InvalidConfig error for wrong Solana address charset");
         }
+    }
+
+    #[test]
+    fn test_invalid_cdp_signer_invalid_base64_api_key_secret() {
+        let config = CdpSignerConfig {
+            api_key_id: "test-api-key".to_string(),
+            api_key_secret: SecretString::new("invalid-base64!@#"), // Invalid base64
+            wallet_secret: SecretString::new("dGVzdC13YWxsZXQtc2VjcmV0"), // Valid base64: "test-wallet-secret"
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
+        };
+        let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
+        let result = signer.validate();
+        assert!(result.is_err());
+        if let Err(SignerValidationError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("API Key Secret is not valid base64"));
+        } else {
+            panic!("Expected InvalidConfig error for invalid base64 API key secret");
+        }
+    }
+
+    #[test]
+    fn test_invalid_cdp_signer_invalid_base64_wallet_secret() {
+        let config = CdpSignerConfig {
+            api_key_id: "test-api-key".to_string(),
+            api_key_secret: SecretString::new("dGVzdC1hcGkta2V5LXNlY3JldA=="), // Valid base64: "test-api-key-secret"
+            wallet_secret: SecretString::new("invalid-base64!@#"),             // Invalid base64
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
+        };
+        let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
+        let result = signer.validate();
+        assert!(result.is_err());
+        if let Err(SignerValidationError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("Wallet Secret is not valid base64"));
+        } else {
+            panic!("Expected InvalidConfig error for invalid base64 wallet secret");
+        }
+    }
+
+    #[test]
+    fn test_valid_cdp_signer_with_valid_base64_secrets() {
+        let config = CdpSignerConfig {
+            api_key_id: "test-api-key".to_string(),
+            api_key_secret: SecretString::new("dGVzdC1hcGkta2V5LXNlY3JldA=="), // Valid base64: "test-api-key-secret"
+            wallet_secret: SecretString::new("dGVzdC13YWxsZXQtc2VjcmV0"), // Valid base64: "test-wallet-secret"
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
+        };
+        let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
+        let result = signer.validate();
+        assert!(result.is_ok());
+        assert_eq!(signer.signer_type(), SignerType::Cdp);
     }
 }

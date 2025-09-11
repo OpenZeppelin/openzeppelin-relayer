@@ -7273,7 +7273,8 @@
         "required": [
           "api_key_id",
           "api_key_secret",
-          "wallet_secret"
+          "wallet_secret",
+          "account_address"
         ],
         "properties": {
           "api_key_id": {

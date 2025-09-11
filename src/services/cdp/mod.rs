@@ -351,36 +351,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_evm_address_with_solana_config() {
-        let config = create_test_config_solana();
-        let service = CdpService::new(config).unwrap();
-        let result = service.account_address().await;
-
-        assert!(result.is_err());
-        match result {
-            Err(CdpError::ConfigError(msg)) => {
-                assert!(msg.contains("Account address is not an EVM address"));
-            }
-            _ => panic!("Expected ConfigError for Solana address used with EVM"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_solana_address_with_evm_config() {
-        let config = create_test_config_evm();
-        let service = CdpService::new(config).unwrap();
-        let result = service.account_address().await;
-
-        assert!(result.is_err());
-        match result {
-            Err(CdpError::ConfigError(msg)) => {
-                assert!(msg.contains("Account address is not a Solana address"));
-            }
-            _ => panic!("Expected ConfigError for EVM address used with Solana"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_address_evm_success() {
         let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();

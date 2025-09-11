@@ -888,8 +888,8 @@ mod tests {
             "type": "cdp",
             "config": {
                 "api_key_id": "test-api-key-id",
-                "api_key_secret": "test-api-key-secret",
-                "wallet_secret": "test-wallet-secret",
+                "api_key_secret": "dGVzdC1hcGkta2V5LXNlY3JldA==",
+                "wallet_secret": "dGVzdC13YWxsZXQtc2VjcmV0",
                 "account_address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44f"
             }
         }"#;
@@ -908,8 +908,8 @@ mod tests {
         match request.config {
             SignerConfigRequest::Cdp(cdp_config) => {
                 assert_eq!(cdp_config.api_key_id, "test-api-key-id");
-                assert_eq!(cdp_config.api_key_secret, "test-api-key-secret");
-                assert_eq!(cdp_config.wallet_secret, "test-wallet-secret");
+                assert_eq!(cdp_config.api_key_secret, "dGVzdC1hcGkta2V5LXNlY3JldA==");
+                assert_eq!(cdp_config.wallet_secret, "dGVzdC13YWxsZXQtc2VjcmV0");
                 assert_eq!(
                     cdp_config.account_address,
                     "0x742d35Cc6634C0532925a3b844Bc454e4438f44f"
@@ -926,8 +926,8 @@ mod tests {
             signer_type: SignerTypeRequest::Cdp,
             config: SignerConfigRequest::Cdp(CdpSignerRequestConfig {
                 api_key_id: "test-api-key-id".to_string(),
-                api_key_secret: "test-api-key-secret".to_string(),
-                wallet_secret: "test-wallet-secret".to_string(),
+                api_key_secret: "dGVzdC1hcGkta2V5LXNlY3JldA==".to_string(), // Valid base64: "test-api-key-secret"
+                wallet_secret: "dGVzdC13YWxsZXQtc2VjcmV0".to_string(), // Valid base64: "test-wallet-secret"
                 account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
             }),
         };
@@ -956,9 +956,9 @@ mod tests {
             id: Some("test-signer".to_string()),
             signer_type: SignerTypeRequest::Cdp,
             config: SignerConfigRequest::Cdp(CdpSignerRequestConfig {
-                api_key_id: "".to_string(), // Empty
-                api_key_secret: "test-api-key-secret".to_string(),
-                wallet_secret: "test-wallet-secret".to_string(),
+                api_key_id: "".to_string(),                                 // Empty
+                api_key_secret: "dGVzdC1hcGkta2V5LXNlY3JldA==".to_string(), // Valid base64: "test-api-key-secret"
+                wallet_secret: "dGVzdC13YWxsZXQtc2VjcmV0".to_string(), // Valid base64: "test-wallet-secret"
                 account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
             }),
         };
