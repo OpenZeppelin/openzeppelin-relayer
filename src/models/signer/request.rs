@@ -116,10 +116,7 @@ pub struct CdpSignerRequestConfig {
     pub api_key_id: String,
     pub api_key_secret: String,
     pub wallet_secret: String,
-    #[schema(nullable = false)]
-    pub evm_account_address: Option<String>,
-    #[schema(nullable = false)]
-    pub solana_account_address: Option<String>,
+    pub account_address: String,
 }
 
 /// Signer configuration enum for API requests (without type discriminator)
@@ -262,8 +259,7 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                 api_key_id: cdp_config.api_key_id,
                 api_key_secret: SecretString::new(&cdp_config.api_key_secret),
                 wallet_secret: SecretString::new(&cdp_config.wallet_secret),
-                evm_account_address: cdp_config.evm_account_address,
-                solana_account_address: cdp_config.solana_account_address,
+                account_address: cdp_config.account_address,
             }),
             SignerConfigRequest::GoogleCloudKms(gcp_kms_config) => {
                 SignerConfig::GoogleCloudKms(GoogleCloudKmsSignerConfig {
@@ -894,8 +890,7 @@ mod tests {
                 "api_key_id": "test-api-key-id",
                 "api_key_secret": "test-api-key-secret",
                 "wallet_secret": "test-wallet-secret",
-                "evm_account_address": "0x123456789abcdef",
-                "solana_account_address": null
+                "account_address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44f"
             }
         }"#;
 
@@ -916,10 +911,9 @@ mod tests {
                 assert_eq!(cdp_config.api_key_secret, "test-api-key-secret");
                 assert_eq!(cdp_config.wallet_secret, "test-wallet-secret");
                 assert_eq!(
-                    cdp_config.evm_account_address,
-                    Some("0x123456789abcdef".to_string())
+                    cdp_config.account_address,
+                    "0x742d35Cc6634C0532925a3b844Bc454e4438f44f"
                 );
-                assert_eq!(cdp_config.solana_account_address, None);
             }
             _ => panic!("Expected CDP config variant"),
         }
@@ -934,8 +928,7 @@ mod tests {
                 api_key_id: "test-api-key-id".to_string(),
                 api_key_secret: "test-api-key-secret".to_string(),
                 wallet_secret: "test-wallet-secret".to_string(),
-                evm_account_address: Some("0x123456789abcdef".to_string()),
-                solana_account_address: None,
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
             }),
         };
 
@@ -949,10 +942,9 @@ mod tests {
         if let Some(cdp_config) = signer.config.get_cdp() {
             assert_eq!(cdp_config.api_key_id, "test-api-key-id");
             assert_eq!(
-                cdp_config.evm_account_address,
-                Some("0x123456789abcdef".to_string())
+                cdp_config.account_address,
+                "0x742d35Cc6634C0532925a3b844Bc454e4438f44f"
             );
-            assert_eq!(cdp_config.solana_account_address, None);
         } else {
             panic!("Expected CDP config");
         }
@@ -967,8 +959,7 @@ mod tests {
                 api_key_id: "".to_string(), // Empty
                 api_key_secret: "test-api-key-secret".to_string(),
                 wallet_secret: "test-wallet-secret".to_string(),
-                evm_account_address: None,
-                solana_account_address: None,
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
             }),
         };
 

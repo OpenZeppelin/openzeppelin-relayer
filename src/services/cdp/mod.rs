@@ -61,11 +61,8 @@ use mockall::automock;
 #[async_trait]
 #[cfg_attr(test, automock)]
 pub trait CdpServiceTrait: Send + Sync {
-    /// Returns the EVM address for the configured account
-    async fn address_evm(&self) -> Result<Address, CdpError>;
-
-    /// Returns the Solana address for the configured account
-    async fn address_solana(&self) -> Result<Address, CdpError>;
+    /// Returns the EVM or Solana address for the configured account
+    async fn account_address(&self) -> Result<Address, CdpError>;
 
     /// Signs a message using the EVM signing scheme
     async fn sign_evm_message(&self, message: String) -> Result<Vec<u8>, CdpError>;
@@ -108,76 +105,70 @@ impl CdpService {
         Ok(Self { config, client })
     }
 
-    /// Get the configured EVM account address
-    fn get_evm_account_address(&self) -> Result<String, CdpError> {
-        self.config
-            .evm_account_address
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| {
-                CdpError::ConfigError(
-                    "EVM account address not configured for CDP signer".to_string(),
-                )
-            })
+    /// Get the configured account address
+    fn get_account_address(&self) -> &str {
+        &self.config.account_address
     }
 
-    /// Get the configured Solana account address
-    fn get_solana_account_address(&self) -> Result<String, CdpError> {
-        self.config
-            .solana_account_address
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| {
-                CdpError::ConfigError(
-                    "Solana account address not configured for CDP signer".to_string(),
-                )
-            })
+    /// Check if the configured address is an EVM address (0x-prefixed hex)
+    fn is_evm_address(&self) -> bool {
+        self.config.account_address.starts_with("0x")
     }
 
-    /// Converts a CDP EVM address to our Address type
+    /// Check if the configured address is a Solana address (Base58)
+    fn is_solana_address(&self) -> bool {
+        !self.config.account_address.starts_with("0x")
+    }
+
+    /// Converts a CDP address to our Address type, auto-detecting format
     fn address_from_string(&self, address_str: &str) -> Result<Address, CdpError> {
-        // Remove "0x" prefix if present
-        let hex_str = address_str.strip_prefix("0x").unwrap_or(address_str);
+        if address_str.starts_with("0x") {
+            // EVM address (hex)
+            let hex_str = address_str.strip_prefix("0x").unwrap();
 
-        // Decode hex string to bytes
-        let bytes = hex::decode(hex_str)
-            .map_err(|e| CdpError::ConfigError(format!("Invalid hex address: {}", e)))?;
+            // Decode hex string to bytes
+            let bytes = hex::decode(hex_str)
+                .map_err(|e| CdpError::ConfigError(format!("Invalid hex address: {}", e)))?;
 
-        if bytes.len() != 20 {
-            return Err(CdpError::ConfigError(format!(
-                "EVM address should be 20 bytes, got {} bytes",
-                bytes.len()
-            )));
+            if bytes.len() != 20 {
+                return Err(CdpError::ConfigError(format!(
+                    "EVM address should be 20 bytes, got {} bytes",
+                    bytes.len()
+                )));
+            }
+
+            let mut array = [0u8; 20];
+            array.copy_from_slice(&bytes);
+
+            Ok(Address::Evm(array))
+        } else {
+            // Solana address (Base58)
+            Ok(Address::Solana(address_str.to_string()))
         }
-
-        let mut array = [0u8; 20];
-        array.copy_from_slice(&bytes);
-
-        Ok(Address::Evm(array))
     }
 }
 
 #[async_trait]
 impl CdpServiceTrait for CdpService {
-    async fn address_evm(&self) -> Result<Address, CdpError> {
-        let address_str = self.get_evm_account_address()?;
-        self.address_from_string(&address_str)
-    }
-
-    async fn address_solana(&self) -> Result<Address, CdpError> {
-        let address_str = self.get_solana_account_address()?;
-        Ok(Address::Solana(address_str))
+    async fn account_address(&self) -> Result<Address, CdpError> {
+        let address_str = self.get_account_address();
+        self.address_from_string(address_str)
     }
 
     async fn sign_evm_message(&self, message: String) -> Result<Vec<u8>, CdpError> {
-        let address = self.get_evm_account_address()?;
+        if !self.is_evm_address() {
+            return Err(CdpError::ConfigError(
+                "Account address is not an EVM address (must start with 0x)".to_string(),
+            ));
+        }
+        let address = self.get_account_address();
 
         let message_body = types::SignEvmMessageBody::builder().message(message);
 
         let response = self
             .client
             .sign_evm_message()
-            .address(&address)
+            .address(address)
             .x_wallet_auth("") // Added by WalletAuth middleware.
             .body(message_body)
             .send()
@@ -199,7 +190,12 @@ impl CdpServiceTrait for CdpService {
     }
 
     async fn sign_evm_transaction(&self, message: &[u8]) -> Result<Vec<u8>, CdpError> {
-        let address = self.get_evm_account_address()?;
+        if !self.is_evm_address() {
+            return Err(CdpError::ConfigError(
+                "Account address is not an EVM address (must start with 0x)".to_string(),
+            ));
+        }
+        let address = self.get_account_address();
 
         // Convert transaction bytes to hex string for CDP API
         let hex_encoded = hex::encode(message);
@@ -210,7 +206,7 @@ impl CdpServiceTrait for CdpService {
         let response = self
             .client
             .sign_evm_transaction()
-            .address(&address)
+            .address(address)
             .x_wallet_auth("")
             .body(tx_body)
             .send()
@@ -232,7 +228,12 @@ impl CdpServiceTrait for CdpService {
     }
 
     async fn sign_solana_message(&self, message: &[u8]) -> Result<Vec<u8>, CdpError> {
-        let address = self.get_solana_account_address()?;
+        if !self.is_solana_address() {
+            return Err(CdpError::ConfigError(
+                "Account address is not a Solana address (must not start with 0x)".to_string(),
+            ));
+        }
+        let address = self.get_account_address();
         let encoded_message = str::from_utf8(message)
             .map_err(|e| CdpError::SerializationError(format!("Invalid UTF-8 message: {}", e)))?
             .to_string();
@@ -242,7 +243,7 @@ impl CdpServiceTrait for CdpService {
         let response = self
             .client
             .sign_solana_message()
-            .address(&address)
+            .address(address)
             .x_wallet_auth("") // Added by WalletAuth middleware.
             .body(message_body)
             .send()
@@ -260,14 +261,19 @@ impl CdpServiceTrait for CdpService {
     }
 
     async fn sign_solana_transaction(&self, transaction: String) -> Result<Vec<u8>, CdpError> {
-        let address = self.get_solana_account_address()?;
+        if !self.is_solana_address() {
+            return Err(CdpError::ConfigError(
+                "Account address is not a Solana address (must not start with 0x)".to_string(),
+            ));
+        }
+        let address = self.get_account_address();
 
         let message_body = types::SignSolanaTransactionBody::builder().transaction(transaction);
 
         let response = self
             .client
             .sign_solana_transaction()
-            .address(&address)
+            .address(address)
             .x_wallet_auth("") // Added by WalletAuth middleware.
             .body(message_body)
             .send()
@@ -292,43 +298,27 @@ mod tests {
     use super::*;
     use crate::models::SecretString;
 
-    fn create_test_config() -> CdpSignerConfig {
+    fn create_test_config_evm() -> CdpSignerConfig {
         CdpSignerConfig {
             api_key_id: "test-api-key-id".to_string(),
             api_key_secret: SecretString::new("test-api-key-secret"),
             wallet_secret: SecretString::new("test-wallet-secret"),
-            evm_account_address: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
-            solana_account_address: Some(
-                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-            ),
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
         }
     }
 
-    fn create_test_config_evm_only() -> CdpSignerConfig {
+    fn create_test_config_solana() -> CdpSignerConfig {
         CdpSignerConfig {
             api_key_id: "test-api-key-id".to_string(),
             api_key_secret: SecretString::new("test-api-key-secret"),
             wallet_secret: SecretString::new("test-wallet-secret"),
-            evm_account_address: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
-            solana_account_address: None,
-        }
-    }
-
-    fn create_test_config_solana_only() -> CdpSignerConfig {
-        CdpSignerConfig {
-            api_key_id: "test-api-key-id".to_string(),
-            api_key_secret: SecretString::new("test-api-key-secret"),
-            wallet_secret: SecretString::new("test-wallet-secret"),
-            evm_account_address: None,
-            solana_account_address: Some(
-                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-            ),
+            account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
         }
     }
 
     #[test]
     fn test_new_cdp_service_valid_config() {
-        let config = create_test_config();
+        let config = create_test_config_evm();
         let result = CdpService::new(config);
 
         // Service creation should succeed with valid config
@@ -336,67 +326,65 @@ mod tests {
     }
 
     #[test]
-    fn test_get_evm_account_address() {
-        let config = create_test_config_evm_only();
+    fn test_get_account_address() {
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
 
-        let address = service.get_evm_account_address().unwrap();
+        let address = service.get_account_address();
         assert_eq!(address, "0x742d35Cc6634C0532925a3b844Bc454e4438f44f");
     }
 
     #[test]
-    fn test_get_solana_account_address() {
-        let config = create_test_config_solana_only();
+    fn test_is_evm_address() {
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
+        assert!(service.is_evm_address());
+        assert!(!service.is_solana_address());
+    }
 
-        let address = service.get_solana_account_address().unwrap();
-        assert_eq!(address, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
+    #[test]
+    fn test_is_solana_address() {
+        let config = create_test_config_solana();
+        let service = CdpService::new(config).unwrap();
+        assert!(service.is_solana_address());
+        assert!(!service.is_evm_address());
     }
 
     #[tokio::test]
-    async fn test_missing_evm_account_address() {
-        let config = CdpSignerConfig {
-            api_key_id: "test-api-key-id".to_string(),
-            api_key_secret: SecretString::new("test-api-key-secret"),
-            wallet_secret: SecretString::new("test-wallet-secret"),
-            evm_account_address: None, // Missing EVM address
-            solana_account_address: Some(
-                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-            ),
-        };
-
+    async fn test_evm_address_with_solana_config() {
+        let config = create_test_config_solana();
         let service = CdpService::new(config).unwrap();
-        let result = service.address_evm().await;
+        let result = service.account_address().await;
 
         assert!(result.is_err());
         match result {
             Err(CdpError::ConfigError(msg)) => {
-                assert!(msg.contains("EVM account address not configured"));
+                assert!(msg.contains("Account address is not an EVM address"));
             }
-            _ => panic!("Expected ConfigError for missing EVM address"),
+            _ => panic!("Expected ConfigError for Solana address used with EVM"),
         }
     }
 
     #[tokio::test]
-    async fn test_missing_solana_account_address() {
-        let config = create_test_config_evm_only();
+    async fn test_solana_address_with_evm_config() {
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
-        let result = service.address_solana().await;
+        let result = service.account_address().await;
 
         assert!(result.is_err());
         match result {
             Err(CdpError::ConfigError(msg)) => {
-                assert!(msg.contains("Solana account address not configured"));
+                assert!(msg.contains("Account address is not a Solana address"));
             }
-            _ => panic!("Expected ConfigError for missing Solana address"),
+            _ => panic!("Expected ConfigError for EVM address used with Solana"),
         }
     }
 
     #[tokio::test]
     async fn test_address_evm_success() {
-        let config = create_test_config_evm_only();
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
-        let result = service.address_evm().await;
+        let result = service.account_address().await;
 
         assert!(result.is_ok());
         match result.unwrap() {
@@ -414,9 +402,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_solana_success() {
-        let config = create_test_config_solana_only();
+        let config = create_test_config_solana();
         let service = CdpService::new(config).unwrap();
-        let result = service.address_solana().await;
+        let result = service.account_address().await;
 
         assert!(result.is_ok());
         match result.unwrap() {
@@ -428,8 +416,8 @@ mod tests {
     }
 
     #[test]
-    fn test_address_from_string_valid_address() {
-        let config = create_test_config();
+    fn test_address_from_string_valid_evm_address() {
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
 
         let test_address = "0x742d35Cc6634C0532925a3b844Bc454e4438f44f";
@@ -449,19 +437,43 @@ mod tests {
     }
 
     #[test]
+    fn test_address_from_string_valid_solana_address() {
+        let config = create_test_config_solana();
+        let service = CdpService::new(config).unwrap();
+
+        let test_address = "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2";
+        let result = service.address_from_string(test_address);
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Address::Solana(addr) => {
+                assert_eq!(addr, "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2");
+            }
+            _ => panic!("Expected Solana address"),
+        }
+    }
+
+    #[test]
     fn test_address_from_string_without_0x_prefix() {
-        let config = create_test_config();
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
 
         let test_address = "742d35Cc6634C0532925a3b844Bc454e4438f44f";
         let result = service.address_from_string(test_address);
 
+        // Without 0x prefix, it should be treated as Solana address
         assert!(result.is_ok());
+        match result.unwrap() {
+            Address::Solana(addr) => {
+                assert_eq!(addr, "742d35Cc6634C0532925a3b844Bc454e4438f44f");
+            }
+            _ => panic!("Expected Solana address"),
+        }
     }
 
     #[test]
     fn test_address_from_string_invalid_hex() {
-        let config = create_test_config();
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
 
         let test_address = "0xnot_valid_hex";
@@ -478,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_address_from_string_wrong_length() {
-        let config = create_test_config();
+        let config = create_test_config_evm();
         let service = CdpService::new(config).unwrap();
 
         let test_address = "0x742d35Cc"; // Too short

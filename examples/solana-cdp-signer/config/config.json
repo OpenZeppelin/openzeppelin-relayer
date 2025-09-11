@@ -34,7 +34,7 @@
           "type": "env",
           "value": "CDP_WALLET_SECRET"
         },
-        "solana_account_address": ""
+        "account_address": ""
       }
     }
   ],

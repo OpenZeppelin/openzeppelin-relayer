@@ -6411,28 +6411,18 @@
           {
             "type": "object",
             "required": [
-              "api_key_id"
-            ],
-            "anyOf": [
-              {
-                "required": ["evm_account_address"]
-              },
-              {
-                "required": ["solana_account_address"]
-              }
+              "api_key_id",
+              "account_address"
             ],
             "properties": {
               "api_key_id": {
                 "type": "string"
               },
-              "evm_account_address": {
-                "type": "string"
-              },
-              "solana_account_address": {
+              "account_address": {
                 "type": "string"
               }
             },
-            "description": "Non-secret CDP signer details. At least one of evm_account_address or solana_account_address must be configured.",
+            "description": "Non-secret CDP signer details.",
             "additionalProperties": false
           },
           {
@@ -7302,13 +7292,9 @@
             "writeOnly": true,
             "minLength": 1
           },
-          "evm_account_address": {
+          "account_address": {
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
-          },
-          "solana_account_address": {
-            "type": "string",
-            "pattern": "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
+            "pattern": "^((0x[0-9a-fA-F]{40})|([1-9A-HJ-NP-Za-km-z]{32,44}))$"
           }
         },
         "additionalProperties": false

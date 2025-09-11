@@ -17,7 +17,7 @@
     {
       "id": "notification-example",
       "type": "webhook",
-      "url": "https://webhook.site/db57ae0f-15d0-4d2c-be1c-09c450008128",
+      "url": "",
       "signing_key": {
         "type": "env",
         "value": "WEBHOOK_SIGNING_KEY"
@@ -38,7 +38,7 @@
           "type": "env",
           "value": "CDP_WALLET_SECRET"
         },
-        "evm_account_address": "0x"
+        "account_address": ""
       }
     }
   ],

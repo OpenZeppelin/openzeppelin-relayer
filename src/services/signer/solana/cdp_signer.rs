@@ -61,7 +61,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
     async fn pubkey(&self) -> Result<Address, SignerError> {
         let address = self
             .cdp_service
-            .address_solana()
+            .account_address()
             .await
             .map_err(SignerError::CdpError)?;
 
@@ -106,7 +106,7 @@ impl<T: CdpServiceTrait> SolanaSignTrait for CdpSigner<T> {
         // Get the CDP signer's address to find the correct signature index
         let cdp_address = self
             .cdp_service
-            .address_solana()
+            .account_address()
             .await
             .map_err(SignerError::CdpError)?;
 
@@ -146,7 +146,7 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
     async fn address(&self) -> Result<Address, SignerError> {
         let address = self
             .cdp_service
-            .address_solana()
+            .account_address()
             .await
             .map_err(SignerError::CdpError)?;
 
@@ -174,7 +174,7 @@ mod tests {
     use super::*;
     use crate::{
         models::{CdpSignerConfig, SecretString, SolanaTransactionData},
-        services::{CdpError, MockCdpServiceTrait},
+        services::{signer::Signer as RelayerSigner, CdpError, MockCdpServiceTrait},
     };
     use mockall::predicate::*;
     use solana_sdk::signer::Signer;
@@ -183,13 +183,16 @@ mod tests {
     async fn test_address() {
         let mut mock_service = MockCdpServiceTrait::new();
 
-        mock_service.expect_address_solana().times(1).returning(|| {
-            Box::pin(async {
-                Ok(Address::Solana(
-                    "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-                ))
-            })
-        });
+        mock_service
+            .expect_account_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Ok(Address::Solana(
+                        "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
+                    ))
+                })
+            });
 
         let signer = CdpSigner::new_for_testing(mock_service);
         let result = signer.address().await.unwrap();
@@ -206,13 +209,16 @@ mod tests {
     async fn test_pubkey() {
         let mut mock_service = MockCdpServiceTrait::new();
 
-        mock_service.expect_address_solana().times(1).returning(|| {
-            Box::pin(async {
-                Ok(Address::Solana(
-                    "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-                ))
-            })
-        });
+        mock_service
+            .expect_account_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Ok(Address::Solana(
+                        "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
+                    ))
+                })
+            });
 
         let signer = CdpSigner::new_for_testing(mock_service);
         let result = signer.pubkey().await.unwrap();
@@ -250,7 +256,7 @@ mod tests {
         signed_transaction.signatures = vec![Signature::from([1u8; 64])]; // Mock signature
         let signed_tx_bytes = bincode::serialize(&signed_transaction).unwrap();
 
-        mock_service.expect_address_solana().returning(move || {
+        mock_service.expect_account_address().returning(move || {
             let addr = payer.pubkey().to_string();
             Box::pin(async move { Ok(Address::Solana(addr)) })
         });
@@ -423,9 +429,12 @@ mod tests {
     async fn test_address_error_handling() {
         let mut mock_service = MockCdpServiceTrait::new();
 
-        mock_service.expect_address_solana().times(1).returning(|| {
-            Box::pin(async { Err(CdpError::ConfigError("Invalid public key".to_string())) })
-        });
+        mock_service
+            .expect_account_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async { Err(CdpError::ConfigError("Invalid public key".to_string())) })
+            });
 
         let signer = CdpSigner::new_for_testing(mock_service);
         let result = signer.address().await;
@@ -452,10 +461,15 @@ mod tests {
         tx.signatures = vec![Signature::from([2u8; 64])];
         let tx_bytes = bincode::serialize(&tx).unwrap();
 
-        mock.expect_address_solana()
-            .returning(move || Box::pin(async { Ok(Address::Solana(other.to_string())) }));
-        mock.expect_sign_solana_transaction()
-            .returning(move |_| Box::pin(async { Ok(tx_bytes.clone()) }));
+        let other_str = other.to_string();
+        mock.expect_account_address().returning(move || {
+            let other_clone = other_str.clone();
+            Box::pin(async move { Ok(Address::Solana(other_clone)) })
+        });
+        mock.expect_sign_solana_transaction().returning(move |_| {
+            let tx_bytes_clone = tx_bytes.clone();
+            Box::pin(async move { Ok(tx_bytes_clone) })
+        });
 
         let signer = CdpSigner::new_for_testing(mock);
         let res = signer.sign(&msg_bytes).await;

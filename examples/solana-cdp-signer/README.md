@@ -79,7 +79,7 @@ Edit the `config.json` file and update the following variables:
           "type": "env",
           "value": "CDP_WALLET_SECRET"
         },
-        "solana_account_address": "YOUR_SOLANA_ACCOUNT_ADDRESS"
+        "account_address": "YOUR_SOLANA_ACCOUNT_ADDRESS"
       }
     }
   ]

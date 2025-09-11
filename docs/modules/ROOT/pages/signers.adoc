@@ -484,13 +484,10 @@ Uses CDP's secure key management infrastructure.
       "type": "env",
       "value": "CDP_WALLET_SECRET"
     },
-    "evm_account_address": "your-cdp-evm-account-address",
-    "solana_account_address": "your-cdp-solana-account-address"
+    "account_address": "your-cdp-evm-or-solana-account-address"
   }
 }
 ----
-
-Note: provide at least one of `evm_account_address` or `solana_account_address` to avoid runtime configuration errors.
 
 Configuration fields:
 [cols="1,1,2"]
@@ -517,13 +514,9 @@ Configuration fields:
 | String
 | The Wallet Secret or environment variable name containing it. Used to authorize API requests for signing operations.
 
-| evm_account_address
+| account_address
 | String
-| The address of the CDP EVM EOA used for EVM signing operations. Optional if only configuring for Solana signing. At least one of the EVM or Solana address must be set.
-
-| solana_account_address
-| String
-| The address of the CDP Solana account used for Solana signing operations. Optional if only configuring for EVM signing. At least one of the EVM or Solana address must be set.
+| The address of the CDP EVM EOA or CDP Solana Account used for signing operations.
 |===
 
 == Security Best Practices

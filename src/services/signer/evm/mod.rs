@@ -344,8 +344,7 @@ mod tests {
                 api_key_id: "test-api-key-id".to_string(),
                 api_key_secret: SecretString::new("test-api-key-secret"),
                 wallet_secret: SecretString::new("test-wallet-secret"),
-                evm_account_address: Some("0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a".to_string()),
-                solana_account_address: None,
+                account_address: "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a".to_string(),
             }),
         };
 
@@ -422,8 +421,7 @@ mod tests {
                 api_key_id: "test-api-key-id".to_string(),
                 api_key_secret: SecretString::new("test-api-key-secret"),
                 wallet_secret: SecretString::new("test-wallet-secret"),
-                evm_account_address: Some("0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a".to_string()),
-                solana_account_address: None,
+                account_address: "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a".to_string(),
             }),
         };
 

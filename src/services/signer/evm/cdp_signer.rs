@@ -70,7 +70,7 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
     async fn address(&self) -> Result<Address, SignerError> {
         let address = self
             .cdp_service
-            .address_evm()
+            .account_address()
             .await
             .map_err(SignerError::CdpError)?;
 
@@ -202,14 +202,17 @@ mod tests {
     async fn test_address() {
         let mut mock_service = MockCdpServiceTrait::new();
 
-        mock_service.expect_address_evm().times(1).returning(|| {
-            Box::pin(async {
-                Ok(Address::Evm([
-                    200, 52, 220, 220, 154, 7, 77, 187, 173, 204, 113, 88, 71, 137, 174, 75, 70,
-                    61, 177, 22,
-                ]))
-            })
-        });
+        mock_service
+            .expect_account_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Ok(Address::Evm([
+                        200, 52, 220, 220, 154, 7, 77, 187, 173, 204, 113, 88, 71, 137, 174, 75,
+                        70, 61, 177, 22,
+                    ]))
+                })
+            });
 
         let signer = CdpSigner::new_for_testing(mock_service);
         let result = signer.address().await.unwrap();

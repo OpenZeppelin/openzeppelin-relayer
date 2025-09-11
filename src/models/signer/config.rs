@@ -52,8 +52,7 @@ pub struct CdpSignerFileConfig {
     pub api_key_id: String,
     pub api_key_secret: PlainOrEnvValue,
     pub wallet_secret: PlainOrEnvValue,
-    pub evm_account_address: Option<String>,
-    pub solana_account_address: Option<String>,
+    pub account_address: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -301,8 +300,7 @@ impl TryFrom<CdpSignerFileConfig> for CdpSignerConfig {
             api_key_id: config.api_key_id,
             api_key_secret,
             wallet_secret,
-            evm_account_address: config.evm_account_address,
-            solana_account_address: config.solana_account_address,
+            account_address: config.account_address,
         })
     }
 }
@@ -683,17 +681,15 @@ mod tests {
             wallet_secret: PlainOrEnvValue::Plain {
                 value: SecretString::new("wsecret"),
             },
-            evm_account_address: Some("0x0000000000000000000000000000000000000000".into()),
-            solana_account_address: None,
+            account_address: "0x0000000000000000000000000000000000000000".into(),
         };
         let res = CdpSignerConfig::try_from(cfg);
         assert!(res.is_ok());
         let c = res.unwrap();
         assert_eq!(c.api_key_id, "id");
         assert_eq!(
-            c.evm_account_address,
-            Some("0x0000000000000000000000000000000000000000".into())
+            c.account_address,
+            "0x0000000000000000000000000000000000000000"
         );
-        assert_eq!(c.solana_account_address, None);
     }
 }

@@ -31,6 +31,8 @@ pub use response::*;
 use crate::{constants::ID_REGEX, models::SecretString};
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize, Serializer};
+use solana_sdk::pubkey::Pubkey;
+use std::str::FromStr;
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -195,8 +197,8 @@ pub struct CdpSignerConfig {
         message = "API Wallet Secret cannot be empty"
     ))]
     pub wallet_secret: SecretString,
-    pub evm_account_address: Option<String>,
-    pub solana_account_address: Option<String>,
+    #[validate(length(min = 1, message = "Account address cannot be empty"))]
+    pub account_address: String,
 }
 
 /// Google Cloud KMS service account configuration
@@ -262,47 +264,31 @@ fn validate_secret_string(secret: &SecretString) -> Result<(), validator::Valida
 
 /// Custom validator for CDP signer configuration
 fn validate_cdp_config(config: &CdpSignerConfig) -> Result<(), validator::ValidationError> {
-    // Check that at least one address is provided
-    if config.evm_account_address.is_none() && config.solana_account_address.is_none() {
-        let mut error = validator::ValidationError::new("missing_addresses");
-        error.message = Some("at least one CDP address (evm_account_address or solana_account_address) must be provided".into());
-        return Err(error);
-    }
+    let addr = &config.account_address;
 
-    // Validate EVM address format if provided
-    if let Some(ref evm_addr) = config.evm_account_address {
-        if !evm_addr.starts_with("0x") || evm_addr.len() != 42 {
+    // Check if it's an EVM address (0x-prefixed hex)
+    if addr.starts_with("0x") {
+        if addr.len() != 42 {
             let mut error = validator::ValidationError::new("invalid_evm_address_format");
             error.message = Some(
-                "evm_account_address must be a valid 0x-prefixed 40-character hex string".into(),
+                "EVM account address must be a valid 0x-prefixed 40-character hex string".into(),
             );
             return Err(error);
         }
-        // Check if the hex part is valid
-        if !evm_addr[2..].chars().all(|c| c.is_ascii_hexdigit()) {
-            let mut error = validator::ValidationError::new("invalid_evm_address_hex");
-            error.message = Some("evm_account_address contains invalid hex characters".into());
-            return Err(error);
-        }
-    }
 
-    // Validate Solana address format if provided (Base58, typically 32-44 chars)
-    if let Some(ref solana_addr) = config.solana_account_address {
-        // Basic length check for Solana addresses
-        if solana_addr.len() < 32 || solana_addr.len() > 44 {
-            let mut error = validator::ValidationError::new("invalid_solana_address_length");
-            error.message = Some("solana_account_address must be between 32-44 characters".into());
-            return Err(error);
+        // Check if the hex part is valid
+        if let Some(end) = addr.strip_prefix("0x") {
+            if !end.chars().all(|c| c.is_ascii_hexdigit()) {
+                let mut error = validator::ValidationError::new("invalid_evm_address_hex");
+                error.message = Some("EVM account address contains invalid hex characters".into());
+                return Err(error);
+            }
         }
-        // Check for Base58 character set (no 0, O, I, l)
-        if !solana_addr
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
-        {
-            let mut error = validator::ValidationError::new("invalid_solana_address_charset");
-            error.message = Some(
-                "solana_account_address contains invalid characters (must be valid Base58)".into(),
-            );
+    } else {
+        // Assume it's a Solana address - validate using Pubkey::from_str
+        if Pubkey::from_str(addr).is_err() {
+            let mut error = validator::ValidationError::new("invalid_solana_address");
+            error.message = Some("Invalid Solana account address format".into());
             return Err(error);
         }
     }
@@ -957,8 +943,7 @@ mod tests {
             api_key_id: "test-api-key".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
-            solana_account_address: None,
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
         assert!(signer.validate().is_ok());
@@ -971,10 +956,7 @@ mod tests {
             api_key_id: "test-api-key".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: None,
-            solana_account_address: Some(
-                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-            ),
+            account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
         assert!(signer.validate().is_ok());
@@ -982,37 +964,20 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_cdp_signer_with_both_addresses() {
+    fn test_invalid_cdp_signer_empty_address() {
         let config = CdpSignerConfig {
             api_key_id: "test-api-key".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string()),
-            solana_account_address: Some(
-                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-            ),
-        };
-        let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
-        assert!(signer.validate().is_ok());
-        assert_eq!(signer.signer_type(), SignerType::Cdp);
-    }
-
-    #[test]
-    fn test_invalid_cdp_signer_missing_addresses() {
-        let config = CdpSignerConfig {
-            api_key_id: "test-api-key".to_string(),
-            api_key_secret: SecretString::new("secret"),
-            wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: None,
-            solana_account_address: None,
+            account_address: "".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
         let result = signer.validate();
         assert!(result.is_err());
         if let Err(SignerValidationError::InvalidConfig(msg)) = result {
-            assert!(msg.contains("at least one CDP address"));
+            assert!(msg.contains("Account address cannot be empty"));
         } else {
-            panic!("Expected InvalidConfig error for missing addresses");
+            panic!("Expected InvalidConfig error for empty address");
         }
     }
 
@@ -1022,14 +987,13 @@ mod tests {
             api_key_id: "test-api-key".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: Some("invalid-address".to_string()),
-            solana_account_address: None,
+            account_address: "0xinvalid-address".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
         let result = signer.validate();
         assert!(result.is_err());
         if let Err(SignerValidationError::InvalidConfig(msg)) = result {
-            assert!(msg.contains("evm_account_address must be a valid 0x-prefixed"));
+            assert!(msg.contains("EVM account address must be a valid 0x-prefixed"));
         } else {
             panic!("Expected InvalidConfig error for bad EVM address");
         }
@@ -1041,14 +1005,13 @@ mod tests {
             api_key_id: "test-api-key".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: None,
-            solana_account_address: Some("invalid".to_string()),
+            account_address: "invalid".to_string(),
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
         let result = signer.validate();
         assert!(result.is_err());
         if let Err(SignerValidationError::InvalidConfig(msg)) = result {
-            assert!(msg.contains("solana_account_address must be between 32-44 characters"));
+            assert!(msg.contains("Invalid Solana account address format"));
         } else {
             panic!("Expected InvalidConfig error for bad Solana address");
         }
@@ -1060,14 +1023,13 @@ mod tests {
             api_key_id: "test-api-key".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44".to_string()), // Too short
-            solana_account_address: None,
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44".to_string(), // Too short
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
         let result = signer.validate();
         assert!(result.is_err());
         if let Err(SignerValidationError::InvalidConfig(msg)) = result {
-            assert!(msg.contains("evm_account_address must be a valid 0x-prefixed"));
+            assert!(msg.contains("EVM account address must be a valid 0x-prefixed"));
         } else {
             panic!("Expected InvalidConfig error for wrong EVM address format");
         }
@@ -1079,16 +1041,13 @@ mod tests {
             api_key_id: "test-api-key".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: None,
-            solana_account_address: Some(
-                "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm0".to_string(),
-            ), // Contains '0' which is invalid in Base58
+            account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm0".to_string(), // Contains '0' which is invalid in Base58
         };
         let signer = Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(config));
         let result = signer.validate();
         assert!(result.is_err());
         if let Err(SignerValidationError::InvalidConfig(msg)) = result {
-            assert!(msg.contains("solana_account_address contains invalid characters"));
+            assert!(msg.contains("Invalid Solana account address format"));
         } else {
             panic!("Expected InvalidConfig error for wrong Solana address charset");
         }

@@ -52,8 +52,7 @@ pub enum SignerConfigResponse {
     },
     Cdp {
         api_key_id: String,
-        evm_account_address: Option<String>,
-        solana_account_address: Option<String>,
+        account_address: String,
         // api_key_secret: SecretString, hidden from response due to security concerns
         // wallet_secret: SecretString, hidden from response due to security concerns
     },
@@ -116,8 +115,7 @@ impl From<SignerConfig> for SignerConfigResponse {
             },
             SignerConfig::Cdp(c) => SignerConfigResponse::Cdp {
                 api_key_id: c.api_key_id,
-                evm_account_address: c.evm_account_address,
-                solana_account_address: c.solana_account_address,
+                account_address: c.account_address,
             },
             SignerConfig::GoogleCloudKms(c) => SignerConfigResponse::GoogleCloudKms {
                 service_account: GoogleCloudKmsSignerServiceAccountResponseConfig {
@@ -314,8 +312,7 @@ mod tests {
             api_key_id: "test-api-key-id".to_string(),
             api_key_secret: SecretString::new("secret"),
             wallet_secret: SecretString::new("wallet-secret"),
-            evm_account_address: Some("0x123456789abcdef".to_string()),
-            solana_account_address: Some("So11111111111111111111111111111111111111112".to_string()),
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
         };
 
         let signer =
@@ -329,10 +326,7 @@ mod tests {
             response.config,
             SignerConfigResponse::Cdp {
                 api_key_id: "test-api-key-id".to_string(),
-                evm_account_address: Some("0x123456789abcdef".to_string()),
-                solana_account_address: Some(
-                    "So11111111111111111111111111111111111111112".to_string()
-                ),
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
             }
         );
     }
@@ -344,8 +338,7 @@ mod tests {
             r#type: SignerType::Cdp,
             config: SignerConfigResponse::Cdp {
                 api_key_id: "test-api-key-id".to_string(),
-                evm_account_address: Some("0x123456789abcdef".to_string()),
-                solana_account_address: None,
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
             },
         };
 
@@ -353,8 +346,7 @@ mod tests {
         assert!(json.contains("\"id\":\"test-cdp-signer\""));
         assert!(json.contains("\"type\":\"cdp\""));
         assert!(json.contains("\"api_key_id\":\"test-api-key-id\""));
-        assert!(json.contains("\"evm_account_address\":\"0x123456789abcdef\""));
-        assert!(json.contains("\"solana_account_address\":null"));
+        assert!(json.contains("\"account_address\":\"0x742d35Cc6634C0532925a3b844Bc454e4438f44f\""));
 
         // Verify that secrets are not included
         assert!(!json.contains("api_key_secret"));
@@ -368,8 +360,7 @@ mod tests {
             "type": "cdp",
             "config": {
                 "api_key_id": "test-api-key-id",
-                "evm_account_address": "0x123456789abcdef",
-                "solana_account_address": null
+                "account_address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44f"
             }
         }"#;
 
@@ -380,8 +371,7 @@ mod tests {
             response.config,
             SignerConfigResponse::Cdp {
                 api_key_id: "test-api-key-id".to_string(),
-                evm_account_address: Some("0x123456789abcdef".to_string()),
-                solana_account_address: None,
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
             }
         );
     }

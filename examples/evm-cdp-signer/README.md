@@ -79,7 +79,7 @@ Edit the `config.json` file and update the following variables:
           "type": "env",
           "value": "CDP_WALLET_SECRET"
         },
-        "evm_account_address": "0xYOUR_EVM_ACCOUNT_ADDRESS"
+        "account_address": "0xYOUR_EVM_ACCOUNT_ADDRESS"
       }
     }
   ]

@@ -350,10 +350,7 @@ mod solana_signer_factory_tests {
                 api_key_id: "test-api-key-id".to_string(),
                 api_key_secret: SecretString::new("test-api-key-secret"),
                 wallet_secret: SecretString::new("test-wallet-secret"),
-                evm_account_address: None,
-                solana_account_address: Some(
-                    "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-                ),
+                account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
             }),
         };
 
@@ -473,10 +470,7 @@ mod solana_signer_factory_tests {
                 api_key_id: "test-api-key-id".to_string(),
                 api_key_secret: SecretString::new("test-api-key-secret"),
                 wallet_secret: SecretString::new("test-wallet-secret"),
-                evm_account_address: None,
-                solana_account_address: Some(
-                    "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
-                ),
+                account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
             }),
         };
         let expected_pubkey =

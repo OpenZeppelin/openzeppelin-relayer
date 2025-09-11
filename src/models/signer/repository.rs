@@ -141,8 +141,7 @@ pub struct CdpSignerConfigStorage {
         deserialize_with = "deserialize_secret_string"
     )]
     pub wallet_secret: SecretString,
-    pub evm_account_address: Option<String>,
-    pub solana_account_address: Option<String>,
+    pub account_address: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,8 +306,7 @@ impl From<CdpSignerConfig> for CdpSignerConfigStorage {
             api_key_id: config.api_key_id,
             api_key_secret: config.api_key_secret,
             wallet_secret: config.wallet_secret,
-            evm_account_address: config.evm_account_address,
-            solana_account_address: config.solana_account_address,
+            account_address: config.account_address,
         }
     }
 }
@@ -319,8 +317,7 @@ impl From<CdpSignerConfigStorage> for CdpSignerConfig {
             api_key_id: storage.api_key_id,
             api_key_secret: storage.api_key_secret,
             wallet_secret: storage.wallet_secret,
-            evm_account_address: storage.evm_account_address,
-            solana_account_address: storage.solana_account_address,
+            account_address: storage.account_address,
         }
     }
 }
