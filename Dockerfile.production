@@ -18,24 +18,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM --platform=${BUILDPLATFORM} cgr.dev/chainguard/wolfi-base
 
 WORKDIR /app
-# COPY --chown=nonroot:nonroot ./config /app/config
-# # COPY --chown=nonroot:nonroot ./examples/launchtube-plugin-example/launchtube /app/plugins/launchtube
-# COPY --chown=nonroot:nonroot ./config/networks /app/config/networks
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
-
-# ARG INCLUDE_LAUNCHTUBE=false
-
-# RUN --mount=type=bind,source=examples/launchtube-plugin-example/launchtube,target=/mnt/launchtube,ro \
-#     set -eux; \
-#     if [ "${INCLUDE_LAUNCHTUBE}" = "true" ] && [ -d /mnt/launchtube ]; then \
-#       mkdir -p /app/plugins/launchtube; \
-#       cp -a /mnt/launchtube/. /app/plugins/launchtube/; \
-#       echo "✅ Launchtube copied"; \
-#     else \
-#       echo "⏭ Skipping launchtube"; \
-#     fi
 
 # Install plugin dependencies
 ARG TARGETARCH
@@ -57,27 +42,6 @@ COPY --chown=nonroot:nonroot ./plugins /app/plugins
 USER nonroot
 WORKDIR /app/plugins
 RUN pnpm install --frozen-lockfile
-
-# # Optional baking of config/networks/launchtube from the source tree
-# ARG BAKE_CONFIGS=false
-
-# # Paths inside the build stage (we copied the whole repo to /usr/app in the base stage)
-# # Adjust if your tree differs.
-# RUN set -eux; \
-#   if [ "${BAKE_CONFIGS}" = "true" ]; then \
-#     if [ -d /usr/app/examples/launchtube-plugin-example/config ]; then \
-#       mkdir -p /app/config; \
-#       cp -a /usr/app/examples/launchtube-plugin-example/config/. /app/config/; \
-#     fi; \
-#     if [ -d /usr/app/config/networks ]; then \
-#       mkdir -p /app/config/networks; \
-#       cp -a /usr/app/config/networks/. /app/config/networks/; \
-#     fi; \
-#     if [ -d /usr/app/examples/launchtube-plugin-example/launchtube ]; then \
-#       mkdir -p /app/plugins/launchtube; \
-#       cp -a /usr/app/examples/launchtube-plugin-example/launchtube/. /app/plugins/launchtube/; \
-#     fi; \
-#   fi
 
 # Return to app root
 WORKDIR /app
