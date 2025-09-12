@@ -572,4 +572,62 @@ mod tests {
         let converted_data = converted_back.raw_key.borrow();
         assert_eq!(*original_data, *converted_data);
     }
+
+    #[test]
+    fn test_cdp_config_storage_conversion() {
+        use crate::models::SecretString;
+
+        let domain_config = CdpSignerConfig {
+            api_key_id: "test-api-key-id".to_string(),
+            api_key_secret: SecretString::new("test-api-secret"),
+            wallet_secret: SecretString::new("test-wallet-secret"),
+            account_address: "0x1234567890123456789012345678901234567890".to_string(),
+        };
+
+        let storage_config = CdpSignerConfigStorage::from(domain_config.clone());
+        let converted_back = CdpSignerConfig::from(storage_config);
+
+        assert_eq!(domain_config.api_key_id, converted_back.api_key_id);
+        assert_eq!(
+            domain_config.account_address,
+            converted_back.account_address
+        );
+        assert_eq!(
+            domain_config.api_key_secret.to_str(),
+            converted_back.api_key_secret.to_str()
+        );
+        assert_eq!(
+            domain_config.wallet_secret.to_str(),
+            converted_back.wallet_secret.to_str()
+        );
+    }
+
+    #[test]
+    fn test_signer_config_storage_get_cdp() {
+        use crate::models::SecretString;
+
+        let cdp_storage = CdpSignerConfigStorage {
+            api_key_id: "test-id".to_string(),
+            api_key_secret: SecretString::new("secret"),
+            wallet_secret: SecretString::new("wallet-secret"),
+            account_address: "0x1234567890123456789012345678901234567890".to_string(),
+        };
+
+        let config_storage = SignerConfigStorage::Cdp(cdp_storage);
+        let retrieved_cdp = config_storage.get_cdp();
+        assert!(retrieved_cdp.is_some());
+        assert_eq!(retrieved_cdp.unwrap().api_key_id, "test-id");
+    }
+
+    #[test]
+    fn test_signer_config_storage_get_cdp_from_non_cdp() {
+        let aws_storage = AwsKmsSignerConfigStorage {
+            region: Some("us-east-1".to_string()),
+            key_id: "test-key".to_string(),
+        };
+
+        let config_storage = SignerConfigStorage::AwsKms(aws_storage);
+        let retrieved_cdp = config_storage.get_cdp();
+        assert!(retrieved_cdp.is_none());
+    }
 }

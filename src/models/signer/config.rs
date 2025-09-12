@@ -692,4 +692,46 @@ mod tests {
             "0x0000000000000000000000000000000000000000"
         );
     }
+
+    #[test]
+    fn test_cdp_file_config_conversion_api_key_secret_error() {
+        let cfg = CdpSignerFileConfig {
+            api_key_id: "id".into(),
+            api_key_secret: PlainOrEnvValue::Env {
+                value: "NONEXISTENT_ENV_VAR".into(),
+            },
+            wallet_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("wsecret"),
+            },
+            account_address: "0x0000000000000000000000000000000000000000".into(),
+        };
+        let res = CdpSignerConfig::try_from(cfg);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+        if let ConfigFileError::InvalidFormat(msg) = err {
+            assert!(msg.contains("Failed to get API key secret"));
+        }
+    }
+
+    #[test]
+    fn test_cdp_file_config_conversion_wallet_secret_error() {
+        let cfg = CdpSignerFileConfig {
+            api_key_id: "id".into(),
+            api_key_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("asecret"),
+            },
+            wallet_secret: PlainOrEnvValue::Env {
+                value: "NONEXISTENT_ENV_VAR".into(),
+            },
+            account_address: "0x0000000000000000000000000000000000000000".into(),
+        };
+        let res = CdpSignerConfig::try_from(cfg);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+        if let ConfigFileError::InvalidFormat(msg) = err {
+            assert!(msg.contains("Failed to get wallet secret"));
+        }
+    }
 }

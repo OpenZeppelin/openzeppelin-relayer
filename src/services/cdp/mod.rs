@@ -297,6 +297,8 @@ impl CdpServiceTrait for CdpService {
 mod tests {
     use super::*;
     use crate::models::SecretString;
+    use mockito;
+    use serde_json::json;
 
     fn create_test_config_evm() -> CdpSignerConfig {
         CdpSignerConfig {
@@ -314,6 +316,175 @@ mod tests {
             wallet_secret: SecretString::new("test-wallet-secret"),
             account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
         }
+    }
+
+    // Helper function to create a test client with middleware
+    fn create_test_client() -> reqwest_middleware::ClientWithMiddleware {
+        let inner = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        reqwest_middleware::ClientBuilder::new(inner).build()
+    }
+
+    // Setup mock for EVM message signing
+    async fn setup_mock_sign_evm_message(mock_server: &mut mockito::ServerGuard) -> mockito::Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(r".*/v2/evm/accounts/.*/sign/message".to_string()))
+            .match_header("Content-Type", "application/json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
+                "signature": "0x3045022100abcdef1234567890abcdef1234567890abcdef1234567890abcdef123456789002201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            })).unwrap())
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    // Setup mock for EVM transaction signing
+    async fn setup_mock_sign_evm_transaction(
+        mock_server: &mut mockito::ServerGuard,
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(r".*/v2/evm/accounts/.*/sign/transaction".to_string()))
+            .match_header("Content-Type", "application/json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
+                "signedTransaction": "0x02f87001020304050607080910111213141516171819202122232425262728293031"
+            })).unwrap())
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    // Setup mock for Solana message signing
+    async fn setup_mock_sign_solana_message(
+        mock_server: &mut mockito::ServerGuard,
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(r".*/v2/solana/accounts/.*/sign/message".to_string()))
+            .match_header("Content-Type", "application/json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&json!({
+                "signature": "5VERuXP42jC4Uxo1Rc3eLQgFaQGYdM9ZJvqK3JmZ6vxGz4s8FJ7KHkQpE3cN8RuQ2mW6tX9Y5K2P1VcZqL8TfABC3X"
+            })).unwrap())
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    // Setup mock for Solana transaction signing
+    async fn setup_mock_sign_solana_transaction(
+        mock_server: &mut mockito::ServerGuard,
+    ) -> mockito::Mock {
+        mock_server
+            .mock(
+                "POST",
+                mockito::Matcher::Regex(r".*/v2/solana/accounts/.*/sign/transaction".to_string()),
+            )
+            .match_header("Content-Type", "application/json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "signedTransaction": "SGVsbG8gV29ybGQh"  // Base64 encoded test data
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    // Setup mock for error responses - 400 Bad Request
+    async fn setup_mock_error_400_malformed_transaction(
+        mock_server: &mut mockito::ServerGuard,
+        path_pattern: &str,
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(path_pattern.to_string()))
+            .match_header("Content-Type", "application/json")
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "errorType": "malformed_transaction",
+                    "errorMessage": "Malformed unsigned transaction."
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    // Setup mock for error responses - 401 Unauthorized
+    async fn setup_mock_error_401_unauthorized(
+        mock_server: &mut mockito::ServerGuard,
+        path_pattern: &str,
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(path_pattern.to_string()))
+            .match_header("Content-Type", "application/json")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "errorType": "unauthorized",
+                    "errorMessage": "Invalid API credentials."
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    // Setup mock for error responses - 500 Internal Server Error
+    async fn setup_mock_error_500_internal_error(
+        mock_server: &mut mockito::ServerGuard,
+        path_pattern: &str,
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(path_pattern.to_string()))
+            .match_header("Content-Type", "application/json")
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "errorType": "internal_error",
+                    "errorMessage": "Internal server error occurred."
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    // Setup mock for error responses - 422 Unprocessable Entity
+    async fn setup_mock_error_422_invalid_signature(
+        mock_server: &mut mockito::ServerGuard,
+        path_pattern: &str,
+    ) -> mockito::Mock {
+        mock_server
+            .mock("POST", mockito::Matcher::Regex(path_pattern.to_string()))
+            .match_header("Content-Type", "application/json")
+            .with_status(422)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "errorType": "invalid_signature_request",
+                    "errorMessage": "Unable to process signature request."
+                }))
+                .unwrap(),
+            )
+            .expect(1)
+            .create_async()
+            .await
     }
 
     #[test]
@@ -490,6 +661,391 @@ mod tests {
         for error in errors {
             let error_str = error.to_string();
             assert!(!error_str.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_message_success() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_evm_message(&mut mock_server).await;
+
+        let config = create_test_config_evm();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+
+        let service = CdpService { config, client };
+
+        let message = "Hello World!".to_string();
+        let result = service.sign_evm_message(message).await;
+
+        match result {
+            Ok(signature) => {
+                assert!(!signature.is_empty());
+            }
+            Err(e) => {
+                panic!("Expected success but got error: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_message_wrong_address_type() {
+        let config = create_test_config_solana(); // Solana address for EVM signing
+        let client = Client::new_with_client("http://test", create_test_client());
+        let service = CdpService { config, client };
+
+        let message = "Hello World!".to_string();
+        let result = service.sign_evm_message(message).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::ConfigError(msg)) => {
+                assert!(msg.contains("Account address is not an EVM address"));
+            }
+            _ => panic!("Expected ConfigError for wrong address type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_transaction_success() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_evm_transaction(&mut mock_server).await;
+
+        let config = create_test_config_evm();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+
+        let service = CdpService { config, client };
+
+        let transaction_bytes = b"test transaction data";
+        let result = service.sign_evm_transaction(transaction_bytes).await;
+
+        match result {
+            Ok(signed_tx) => {
+                assert!(!signed_tx.is_empty());
+            }
+            Err(e) => {
+                panic!("Expected success but got error: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_transaction_wrong_address_type() {
+        let config = create_test_config_solana(); // Solana address for EVM signing
+        let client = Client::new_with_client("http://test", create_test_client());
+        let service = CdpService { config, client };
+
+        let transaction_bytes = b"test transaction data";
+        let result = service.sign_evm_transaction(transaction_bytes).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::ConfigError(msg)) => {
+                assert!(msg.contains("Account address is not an EVM address"));
+            }
+            _ => panic!("Expected ConfigError for wrong address type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_message_success() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_solana_message(&mut mock_server).await;
+
+        let config = create_test_config_solana();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+
+        let service = CdpService { config, client };
+
+        let message_bytes = b"Hello Solana!";
+        let result = service.sign_solana_message(message_bytes).await;
+
+        assert!(result.is_ok());
+        let signature = result.unwrap();
+        assert!(!signature.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_message_wrong_address_type() {
+        let config = create_test_config_evm(); // EVM address for Solana signing
+        let client = Client::new_with_client("http://test", create_test_client());
+        let service = CdpService { config, client };
+
+        let message_bytes = b"Hello Solana!";
+        let result = service.sign_solana_message(message_bytes).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::ConfigError(msg)) => {
+                assert!(msg.contains("Account address is not a Solana address"));
+            }
+            _ => panic!("Expected ConfigError for wrong address type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_transaction_success() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_sign_solana_transaction(&mut mock_server).await;
+
+        let config = create_test_config_solana();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+
+        let service = CdpService { config, client };
+
+        let transaction = "test-transaction-string".to_string();
+        let result = service.sign_solana_transaction(transaction).await;
+
+        match result {
+            Ok(signed_tx) => {
+                assert!(!signed_tx.is_empty());
+            }
+            Err(e) => {
+                panic!("Expected success but got error: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_transaction_wrong_address_type() {
+        let config = create_test_config_evm(); // EVM address for Solana signing
+        let client = Client::new_with_client("http://test", create_test_client());
+        let service = CdpService { config, client };
+
+        let transaction = "test-transaction-string".to_string();
+        let result = service.sign_solana_transaction(transaction).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::ConfigError(msg)) => {
+                assert!(msg.contains("Account address is not a Solana address"));
+            }
+            _ => panic!("Expected ConfigError for wrong address type"),
+        }
+    }
+
+    // Error handling tests
+    #[tokio::test]
+    async fn test_sign_evm_message_error_400_malformed_transaction() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_400_malformed_transaction(
+            &mut mock_server,
+            r".*/v2/evm/accounts/.*/sign/message",
+        )
+        .await;
+
+        let config = create_test_config_evm();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let message = "Hello World!".to_string();
+        let result = service.sign_evm_message(message).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign message"));
+            }
+            _ => panic!("Expected SigningError for malformed transaction"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_message_error_401_unauthorized() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_401_unauthorized(
+            &mut mock_server,
+            r".*/v2/evm/accounts/.*/sign/message",
+        )
+        .await;
+
+        let config = create_test_config_evm();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let message = "Hello World!".to_string();
+        let result = service.sign_evm_message(message).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign message"));
+            }
+            _ => panic!("Expected SigningError for unauthorized"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_message_error_500_internal_error() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_500_internal_error(
+            &mut mock_server,
+            r".*/v2/evm/accounts/.*/sign/message",
+        )
+        .await;
+
+        let config = create_test_config_evm();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let message = "Hello World!".to_string();
+        let result = service.sign_evm_message(message).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign message"));
+            }
+            _ => panic!("Expected SigningError for internal error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_transaction_error_400_malformed_transaction() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_400_malformed_transaction(
+            &mut mock_server,
+            r".*/v2/evm/accounts/.*/sign/transaction",
+        )
+        .await;
+
+        let config = create_test_config_evm();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let transaction_bytes = b"invalid transaction data";
+        let result = service.sign_evm_transaction(transaction_bytes).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign transaction"));
+            }
+            _ => panic!("Expected SigningError for malformed transaction"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_evm_transaction_error_422_invalid_signature() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_422_invalid_signature(
+            &mut mock_server,
+            r".*/v2/evm/accounts/.*/sign/transaction",
+        )
+        .await;
+
+        let config = create_test_config_evm();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let transaction_bytes = b"test transaction data";
+        let result = service.sign_evm_transaction(transaction_bytes).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign transaction"));
+            }
+            _ => panic!("Expected SigningError for invalid signature request"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_message_error_400_malformed_transaction() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_400_malformed_transaction(
+            &mut mock_server,
+            r".*/v2/solana/accounts/.*/sign/message",
+        )
+        .await;
+
+        let config = create_test_config_solana();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let message_bytes = b"Hello Solana!";
+        let result = service.sign_solana_message(message_bytes).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign Solana message"));
+            }
+            _ => panic!("Expected SigningError for malformed transaction"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_message_error_401_unauthorized() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_401_unauthorized(
+            &mut mock_server,
+            r".*/v2/solana/accounts/.*/sign/message",
+        )
+        .await;
+
+        let config = create_test_config_solana();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let message_bytes = b"Hello Solana!";
+        let result = service.sign_solana_message(message_bytes).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign Solana message"));
+            }
+            _ => panic!("Expected SigningError for unauthorized"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_transaction_error_400_malformed_transaction() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_400_malformed_transaction(
+            &mut mock_server,
+            r".*/v2/solana/accounts/.*/sign/transaction",
+        )
+        .await;
+
+        let config = create_test_config_solana();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let transaction = "invalid-transaction-string".to_string();
+        let result = service.sign_solana_transaction(transaction).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign Solana transaction"));
+            }
+            _ => panic!("Expected SigningError for malformed transaction"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_solana_transaction_error_500_internal_error() {
+        let mut mock_server = mockito::Server::new_async().await;
+        let _mock = setup_mock_error_500_internal_error(
+            &mut mock_server,
+            r".*/v2/solana/accounts/.*/sign/transaction",
+        )
+        .await;
+
+        let config = create_test_config_solana();
+        let client = Client::new_with_client(&mock_server.url(), create_test_client());
+        let service = CdpService { config, client };
+
+        let transaction = "test-transaction-string".to_string();
+        let result = service.sign_solana_transaction(transaction).await;
+
+        assert!(result.is_err());
+        match result {
+            Err(CdpError::SigningError(msg)) => {
+                assert!(msg.contains("Failed to sign Solana transaction"));
+            }
+            _ => panic!("Expected SigningError for internal error"),
         }
     }
 }
