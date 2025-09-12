@@ -6,7 +6,7 @@
       {
         "id": "notification-example",
         "type": "webhook",
-        "url": "https://webhook.site/1e822332-aae7-4aa0-b8e7-8493733953e9",
+        "url": "https://webhook.site/2e58dee6-eeed-4a94-b743-d958d50cc4d7",
         "signing_key": {
           "type": "env",
           "value": "WEBHOOK_SIGNING_KEY"
