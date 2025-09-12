@@ -145,6 +145,61 @@ pub trait EvmProviderTrait: Send + Sync {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ProviderError>;
+
+    /// zkEVM-specific method to estimate gas price using the native zkEVM endpoint.
+    ///
+    /// This method calls `zkevm_estimateGasPrice` which provides more accurate
+    /// gas price estimation for Polygon zkEVM networks.
+    async fn zkevm_estimate_gas_price(&self) -> Result<u128, ProviderError> {
+        let result = self
+            .raw_request_dyn("zkevm_estimateGasPrice", serde_json::Value::Array(vec![]))
+            .await?;
+
+        let gas_price_hex = result
+            .as_str()
+            .ok_or_else(|| ProviderError::Other("Invalid gas price response".to_string()))?;
+
+        let gas_price = u128::from_str_radix(gas_price_hex.trim_start_matches("0x"), 16)
+            .map_err(|e| ProviderError::Other(format!("Failed to parse gas price: {}", e)))?;
+
+        Ok(gas_price)
+    }
+
+    /// zkEVM-specific method to estimate fee for a transaction using the native zkEVM endpoint.
+    ///
+    /// This method calls `zkevm_estimateFee` which provides more accurate
+    /// fee estimation that includes L1 data availability costs for Polygon zkEVM networks.
+    ///
+    /// # Arguments
+    /// * `tx` - The transaction request to estimate fee for
+    async fn zkevm_estimate_fee(&self, tx: &EvmTransactionData) -> Result<U256, ProviderError> {
+        // TODO: We should use a proper request object instead of a json object
+        let tx_params = serde_json::json!({
+            "from": tx.from,
+            "to": tx.to.as_ref().unwrap_or(&"0x".to_string()),
+            "value": format!("0x{:x}", tx.value),
+            "data": tx.data.as_ref().map(|d| {
+                if d.starts_with("0x") { d.clone() } else { format!("0x{}", d) }
+            }).unwrap_or("0x".to_string()),
+            "gas": tx.gas_limit.map(|g| format!("0x{:x}", g)),
+            "gasPrice": tx.gas_price.map(|gp| format!("0x{:x}", gp)),
+            "maxFeePerGas": tx.max_fee_per_gas.map(|mfpg| format!("0x{:x}", mfpg)),
+            "maxPriorityFeePerGas": tx.max_priority_fee_per_gas.map(|mpfpg| format!("0x{:x}", mpfpg)),
+        });
+
+        let result = self
+            .raw_request_dyn("zkevm_estimateFee", serde_json::json!([tx_params]))
+            .await?;
+
+        let fee_hex = result
+            .as_str()
+            .ok_or_else(|| ProviderError::Other("Invalid fee response".to_string()))?;
+
+        let fee = U256::from_str_radix(fee_hex.trim_start_matches("0x"), 16)
+            .map_err(|e| ProviderError::Other(format!("Failed to parse fee: {}", e)))?;
+
+        Ok(fee)
+    }
 }
 
 impl EvmProvider {
