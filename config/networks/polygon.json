@@ -58,24 +58,26 @@
         "https://polygon-zkevm-public.nodies.app"
       ],
       "symbol": "ETH",
-      "type": "evm"
+      "type": "evm",
+      "tags": [
+        "polygon-zkevm"
+      ]
     },
     {
       "from": "polygon-zkevm",
       "type": "evm",
       "network": "polygon-zkevm-testnet",
-      "chain_id": 1442,
+      "chain_id": 2442,
       "explorer_urls": [
         "https://api-testnet-zkevm.polygonscan.com/api",
         "https://testnet-zkevm.polygonscan.com"
       ],
       "is_testnet": true,
       "rpc_urls": [
-        "https://rpc.cardona.zkevm-rpc.com",
-        "https://polygon-zkevm-cardona.drpc.org"
+        "https://rpc.cardona.zkevm-rpc.com"
       ],
       "tags": [
-        "deprecated"
+        "polygon-zkevm"
       ]
     }
   ]
