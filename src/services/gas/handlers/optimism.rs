@@ -1,7 +1,7 @@
 use crate::{
     constants::{DEFAULT_GAS_LIMIT, OPTIMISM_GAS_PRICE_ORACLE_ADDRESS},
     domain::evm::PriceParams,
-    models::{evm::EvmTransactionRequest, TransactionError, U256},
+    models::{EvmTransactionData, TransactionError, U256},
     services::provider::evm::EvmProviderTrait,
 };
 use alloy::{
@@ -69,7 +69,7 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
         Ok(U256::from_be_slice(bytes.as_ref()))
     }
 
-    fn calculate_compressed_tx_size(tx: &EvmTransactionRequest) -> U256 {
+    fn calculate_compressed_tx_size(tx: &EvmTransactionData) -> U256 {
         let data_bytes: Vec<u8> = tx
             .data
             .as_ref()
@@ -107,7 +107,7 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
     pub fn calculate_fee(
         &self,
         fee_data: &OptimismFeeData,
-        tx: &EvmTransactionRequest,
+        tx: &EvmTransactionData,
     ) -> Result<U256, TransactionError> {
         let tx_compressed_size = Self::calculate_compressed_tx_size(tx);
 
@@ -122,7 +122,7 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
 
     pub async fn handle_price_params(
         &self,
-        tx: &EvmTransactionRequest,
+        tx: &EvmTransactionData,
         mut original_params: PriceParams,
     ) -> Result<PriceParams, TransactionError> {
         // Fetch Optimism fee data and calculate L1 data cost
@@ -161,7 +161,8 @@ mod tests {
 
         let handler = OptimismPriceHandler::new(mock_provider);
 
-        let tx = EvmTransactionRequest {
+        let tx = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: U256::from(1_000_000_000_000_000_000u128),
             data: Some("0x1234567890abcdef".to_string()),
@@ -170,7 +171,11 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             speed: None,
-            valid_until: None,
+            nonce: None,
+            chain_id: 10, // Optimism chain ID
+            hash: None,
+            signature: None,
+            raw: None,
         };
 
         let original_params = PriceParams {
@@ -200,7 +205,8 @@ mod tests {
     #[test]
     fn test_calculate_compressed_tx_size() {
         // Test with empty data
-        let empty_tx = EvmTransactionRequest {
+        let empty_tx = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
             to: Some("0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string()),
             value: U256::from(1_000_000_000_000_000_000u128),
             data: None,
@@ -209,7 +215,11 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             speed: None,
-            valid_until: None,
+            nonce: None,
+            chain_id: 10,
+            hash: None,
+            signature: None,
+            raw: None,
         };
 
         let size =
@@ -217,7 +227,7 @@ mod tests {
         assert_eq!(size, U256::ZERO);
 
         // Test with data containing zeros and non-zeros
-        let data_tx = EvmTransactionRequest {
+        let data_tx = EvmTransactionData {
             data: Some("0x00001234".to_string()), // 2 zero bytes, 2 non-zero bytes
             ..empty_tx
         };
