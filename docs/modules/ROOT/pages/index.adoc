@@ -231,6 +231,8 @@ For quick setup with various configurations, check the https://github.com/OpenZe
 * `evm-gcp-kms-signer`: Using Google Cloud KMS for EVM secure signing
 * `evm-turnkey-signer`: Using Turnkey for EVM secure signing
 * `solana-turnkey-signer`:  Using Turnkey for Solana secure signing
+* `evm-cdp-signer`: Using CDP for EVM secure signing
+* `solana-cdp-signer`:  Using CDP for Solana secure signing
 * `redis-storage`: Using Redis for Storage
 * `network-configuration-config-file`: Using Custom network configuration via config file
 * `network-configuration-json-file`: Using Custom network configuration via JSON file

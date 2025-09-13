@@ -87,6 +87,8 @@ pem = { version = "3" }
 simple_asn1 = { version = "0.6" }
 k256 = { version = "0.13", features = ["ecdsa-core"]}
 solana-system-interface = { version = "1.0.0", features = ["bincode"] }
+cdp-sdk = "0.1.0"
+reqwest-middleware = { version = "0.4.2", default-features = false, features = ["json"] }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"

@@ -37,12 +37,13 @@ For detailed network configuration options, see the xref:network_configuration.a
 - `turnkey` (hosted Turnkey signer)
 - `google_cloud_kms` (Google Cloud KMS)
 - `aws_kms` (Amazon AWS KMS)
+- `cdp` (hosted Coinbase Developer Platform signer)
 
 For detailed signer configuration options, see the xref:signers.adoc[Signers] guide.
 
 [NOTE]
 ====
-In production systems, hosted signers (AWS KMS, Google Cloud KMS, Turnkey) are recommended for the best security model.
+In production systems, hosted signers (AWS KMS, Google Cloud KMS, Turnkey, CDP) are recommended for the best security model.
 ====
 
 == Quickstart
@@ -180,16 +181,14 @@ Common endpoints:
 
 [source,bash]
 ----
-curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/transactions' \
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
 --header 'Authorization: Bearer <api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
- {
     "value": 1,
     "data": "0x",
     "to": "0xd9b55a2ba539031e3c18c9528b0dc3a7f603a93b",
     "speed": "average"
-  }
 }'
 ----
 
@@ -197,17 +196,15 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-exa
 
 [source,bash]
 ----
-curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/transactions' \
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
 --header 'Authorization: Bearer <api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
- {
     "value": 1,
     "data": "0x",
     "to": "0xd9b55a2ba539031e3c18c9528b0dc3a7f603a93b",
     "speed": "average",
     "gas_limit": 21000
-  }
 }'
 ----
 
@@ -215,17 +212,15 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-exa
 
 [source,bash]
 ----
-curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/transactions' \
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
 --header 'Authorization: Bearer <api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
- {
     "value": 1,
     "data": "0x",
     "to": "0xd9b55a2ba539031e3c18c9528b0dc3a7f603a93b",
     "max_fee_per_gas": 30000000000,
     "max_priority_fee_per_gas": 20000000000,
-  }
 }'
 ----
 
@@ -233,16 +228,14 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-exa
 
 [source,bash]
 ----
-curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-example/transactions' \
+curl --location --request POST 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions' \
 --header 'Authorization: Bearer <api_key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
- {
     "value": 1,
     "data": "0x",
     "to": "0xd9b55a2ba539031e3c18c9528b0dc3a7f603a93b",
     "gas_price": "12312313123"
-  }
 }'
 ----
 
@@ -250,7 +243,7 @@ curl --location --request POST 'http://localhost:8080/api/v1/relayers/solana-exa
 
 [source,bash]
 ----
-curl --location --request GET 'http://localhost:8080/api/v1/relayers/solana-example/transactions/<transaction_id>' \
+curl --location --request GET 'http://localhost:8080/api/v1/relayers/sepolia-example/transactions/<transaction_id>' \
 --header 'Authorization: Bearer <api_key>'
 ----
 
