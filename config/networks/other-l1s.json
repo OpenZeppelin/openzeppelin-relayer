@@ -319,6 +319,40 @@
       "symbol": "SPARK",
       "tags": [],
       "type": "evm"
+    },
+    {
+      "type": "evm",
+      "network": "peaq-mainnet",
+      "chain_id": 3338,
+      "explorer_urls": [
+        "https://peaq.subscan.io/",
+        "https://polkadot.js.org/apps/?rpc=wss://peaq.api.onfinality.io/public-ws#/explorer"
+      ],
+      "is_testnet": false,
+      "required_confirmations": 3,
+      "rpc_urls": [
+        "https://quicknode1.peaq.xyz",
+        "https://quicknode2.peaq.xyz",
+        "https://quicknode3.peaq.xyz"
+      ],
+      "average_blocktime_ms": 6000,
+      "symbol": "PEAQ"
+    },
+    {
+      "type": "evm",
+      "network": "peaq-agung",
+      "chain_id": 9990,
+      "explorer_urls": [
+        "https://agung-testnet.subscan.io/",
+        "https://polkadot.js.org/apps/?rpc=wss://wss-async.agung.peaq.network#/explorer"
+      ],
+      "is_testnet": true,
+      "required_confirmations": 3,
+      "rpc_urls": [
+        "https://peaq-agung.api.onfinality.io/public"
+      ],
+      "average_blocktime_ms": 6000,
+      "symbol": "AGNG"
     }
   ]
 }
