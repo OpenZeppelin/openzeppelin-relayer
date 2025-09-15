@@ -12,9 +12,9 @@
 use crate::{
     config::ConfigFileError,
     models::signer::{
-        AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
-        TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
+        AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
+        GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
+        Signer, SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
     },
     models::PlainOrEnvValue,
 };
@@ -44,6 +44,15 @@ pub struct TurnkeySignerFileConfig {
     pub organization_id: String,
     pub private_key_id: String,
     pub public_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CdpSignerFileConfig {
+    pub api_key_id: String,
+    pub api_key_secret: PlainOrEnvValue,
+    pub wallet_secret: PlainOrEnvValue,
+    pub account_address: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -143,6 +152,7 @@ pub enum SignerFileConfigEnum {
     #[serde(rename = "aws_kms")]
     AwsKms(AwsKmsSignerFileConfig),
     Turnkey(TurnkeySignerFileConfig),
+    Cdp(CdpSignerFileConfig),
     Vault(VaultSignerFileConfig),
     #[serde(rename = "vault_transit")]
     VaultTransit(VaultTransitSignerFileConfig),
@@ -274,6 +284,27 @@ impl TryFrom<TurnkeySignerFileConfig> for TurnkeySignerConfig {
     }
 }
 
+impl TryFrom<CdpSignerFileConfig> for CdpSignerConfig {
+    type Error = ConfigFileError;
+
+    fn try_from(config: CdpSignerFileConfig) -> Result<Self, Self::Error> {
+        let api_key_secret = config.api_key_secret.get_value().map_err(|e| {
+            ConfigFileError::InvalidFormat(format!("Failed to get API key secret: {}", e))
+        })?;
+
+        let wallet_secret = config.wallet_secret.get_value().map_err(|e| {
+            ConfigFileError::InvalidFormat(format!("Failed to get wallet secret: {}", e))
+        })?;
+
+        Ok(CdpSignerConfig {
+            api_key_id: config.api_key_id,
+            api_key_secret,
+            wallet_secret,
+            account_address: config.account_address,
+        })
+    }
+}
+
 impl TryFrom<VaultSignerFileConfig> for VaultSignerConfig {
     type Error = ConfigFileError;
 
@@ -392,6 +423,9 @@ impl TryFrom<SignerFileConfigEnum> for SignerConfig {
             SignerFileConfigEnum::Turnkey(turnkey) => Ok(SignerConfig::Turnkey(
                 TurnkeySignerConfig::try_from(turnkey)?,
             )),
+            SignerFileConfigEnum::Cdp(cdp) => {
+                Ok(SignerConfig::Cdp(CdpSignerConfig::try_from(cdp)?))
+            }
             SignerFileConfigEnum::Vault(vault) => {
                 Ok(SignerConfig::Vault(VaultSignerConfig::try_from(vault)?))
             }
@@ -634,5 +668,70 @@ mod tests {
         let gcp_config = result.unwrap();
         assert_eq!(gcp_config.key.key_id, "test-key");
         assert_eq!(gcp_config.service_account.project_id, "test-project");
+    }
+
+    #[test]
+    fn test_cdp_file_config_conversion() {
+        use crate::models::SecretString;
+        let cfg = CdpSignerFileConfig {
+            api_key_id: "id".into(),
+            api_key_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("asecret"),
+            },
+            wallet_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("wsecret"),
+            },
+            account_address: "0x0000000000000000000000000000000000000000".into(),
+        };
+        let res = CdpSignerConfig::try_from(cfg);
+        assert!(res.is_ok());
+        let c = res.unwrap();
+        assert_eq!(c.api_key_id, "id");
+        assert_eq!(
+            c.account_address,
+            "0x0000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn test_cdp_file_config_conversion_api_key_secret_error() {
+        let cfg = CdpSignerFileConfig {
+            api_key_id: "id".into(),
+            api_key_secret: PlainOrEnvValue::Env {
+                value: "NONEXISTENT_ENV_VAR".into(),
+            },
+            wallet_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("wsecret"),
+            },
+            account_address: "0x0000000000000000000000000000000000000000".into(),
+        };
+        let res = CdpSignerConfig::try_from(cfg);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+        if let ConfigFileError::InvalidFormat(msg) = err {
+            assert!(msg.contains("Failed to get API key secret"));
+        }
+    }
+
+    #[test]
+    fn test_cdp_file_config_conversion_wallet_secret_error() {
+        let cfg = CdpSignerFileConfig {
+            api_key_id: "id".into(),
+            api_key_secret: PlainOrEnvValue::Plain {
+                value: SecretString::new("asecret"),
+            },
+            wallet_secret: PlainOrEnvValue::Env {
+                value: "NONEXISTENT_ENV_VAR".into(),
+            },
+            account_address: "0x0000000000000000000000000000000000000000".into(),
+        };
+        let res = CdpSignerConfig::try_from(cfg);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(matches!(err, ConfigFileError::InvalidFormat(_)));
+        if let ConfigFileError::InvalidFormat(msg) = err {
+            assert!(msg.contains("Failed to get wallet secret"));
+        }
     }
 }

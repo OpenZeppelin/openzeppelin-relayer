@@ -13,10 +13,10 @@
 use crate::{
     models::{
         signer::{
-            AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-            GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
-            SignerValidationError, TurnkeySignerConfig, VaultSignerConfig,
-            VaultTransitSignerConfig,
+            AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
+            GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig,
+            LocalSignerConfig, Signer, SignerConfig, SignerValidationError, TurnkeySignerConfig,
+            VaultSignerConfig, VaultTransitSignerConfig,
         },
         SecretString,
     },
@@ -41,6 +41,7 @@ pub enum SignerConfigStorage {
     VaultTransit(VaultTransitSignerConfigStorage),
     AwsKms(AwsKmsSignerConfigStorage),
     Turnkey(TurnkeySignerConfigStorage),
+    Cdp(CdpSignerConfigStorage),
     GoogleCloudKms(GoogleCloudKmsSignerConfigStorage),
 }
 
@@ -125,6 +126,22 @@ pub struct TurnkeySignerConfigStorage {
     pub organization_id: String,
     pub private_key_id: String,
     pub public_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CdpSignerConfigStorage {
+    pub api_key_id: String,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub api_key_secret: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub wallet_secret: SecretString,
+    pub account_address: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +300,28 @@ impl From<TurnkeySignerConfigStorage> for TurnkeySignerConfig {
     }
 }
 
+impl From<CdpSignerConfig> for CdpSignerConfigStorage {
+    fn from(config: CdpSignerConfig) -> Self {
+        Self {
+            api_key_id: config.api_key_id,
+            api_key_secret: config.api_key_secret,
+            wallet_secret: config.wallet_secret,
+            account_address: config.account_address,
+        }
+    }
+}
+
+impl From<CdpSignerConfigStorage> for CdpSignerConfig {
+    fn from(storage: CdpSignerConfigStorage) -> Self {
+        Self {
+            api_key_id: storage.api_key_id,
+            api_key_secret: storage.api_key_secret,
+            wallet_secret: storage.wallet_secret,
+            account_address: storage.account_address,
+        }
+    }
+}
+
 impl From<GoogleCloudKmsSignerConfig> for GoogleCloudKmsSignerConfigStorage {
     fn from(config: GoogleCloudKmsSignerConfig) -> Self {
         Self {
@@ -379,6 +418,7 @@ impl From<SignerConfig> for SignerConfigStorage {
             }
             SignerConfig::AwsKms(aws_kms) => SignerConfigStorage::AwsKms(aws_kms.into()),
             SignerConfig::Turnkey(turnkey) => SignerConfigStorage::Turnkey(turnkey.into()),
+            SignerConfig::Cdp(cdp) => SignerConfigStorage::Cdp(cdp.into()),
             SignerConfig::GoogleCloudKms(gcp) => SignerConfigStorage::GoogleCloudKms(gcp.into()),
         }
     }
@@ -394,6 +434,7 @@ impl From<SignerConfigStorage> for SignerConfig {
             }
             SignerConfigStorage::AwsKms(aws_kms) => SignerConfig::AwsKms(aws_kms.into()),
             SignerConfigStorage::Turnkey(turnkey) => SignerConfig::Turnkey(turnkey.into()),
+            SignerConfigStorage::Cdp(cdp) => SignerConfig::Cdp(cdp.into()),
             SignerConfigStorage::GoogleCloudKms(gcp) => SignerConfig::GoogleCloudKms(gcp.into()),
         }
     }
@@ -428,6 +469,14 @@ impl SignerConfigStorage {
     pub fn get_turnkey(&self) -> Option<&TurnkeySignerConfigStorage> {
         match self {
             Self::Turnkey(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get CDP signer config, returns error if not a CDP signer
+    pub fn get_cdp(&self) -> Option<&CdpSignerConfigStorage> {
+        match self {
+            Self::Cdp(config) => Some(config),
             _ => None,
         }
     }
@@ -522,5 +571,63 @@ mod tests {
         let original_data = domain_config.raw_key.borrow();
         let converted_data = converted_back.raw_key.borrow();
         assert_eq!(*original_data, *converted_data);
+    }
+
+    #[test]
+    fn test_cdp_config_storage_conversion() {
+        use crate::models::SecretString;
+
+        let domain_config = CdpSignerConfig {
+            api_key_id: "test-api-key-id".to_string(),
+            api_key_secret: SecretString::new("test-api-secret"),
+            wallet_secret: SecretString::new("test-wallet-secret"),
+            account_address: "0x1234567890123456789012345678901234567890".to_string(),
+        };
+
+        let storage_config = CdpSignerConfigStorage::from(domain_config.clone());
+        let converted_back = CdpSignerConfig::from(storage_config);
+
+        assert_eq!(domain_config.api_key_id, converted_back.api_key_id);
+        assert_eq!(
+            domain_config.account_address,
+            converted_back.account_address
+        );
+        assert_eq!(
+            domain_config.api_key_secret.to_str(),
+            converted_back.api_key_secret.to_str()
+        );
+        assert_eq!(
+            domain_config.wallet_secret.to_str(),
+            converted_back.wallet_secret.to_str()
+        );
+    }
+
+    #[test]
+    fn test_signer_config_storage_get_cdp() {
+        use crate::models::SecretString;
+
+        let cdp_storage = CdpSignerConfigStorage {
+            api_key_id: "test-id".to_string(),
+            api_key_secret: SecretString::new("secret"),
+            wallet_secret: SecretString::new("wallet-secret"),
+            account_address: "0x1234567890123456789012345678901234567890".to_string(),
+        };
+
+        let config_storage = SignerConfigStorage::Cdp(cdp_storage);
+        let retrieved_cdp = config_storage.get_cdp();
+        assert!(retrieved_cdp.is_some());
+        assert_eq!(retrieved_cdp.unwrap().api_key_id, "test-id");
+    }
+
+    #[test]
+    fn test_signer_config_storage_get_cdp_from_non_cdp() {
+        let aws_storage = AwsKmsSignerConfigStorage {
+            region: Some("us-east-1".to_string()),
+            key_id: "test-key".to_string(),
+        };
+
+        let config_storage = SignerConfigStorage::AwsKms(aws_storage);
+        let retrieved_cdp = config_storage.get_cdp();
+        assert!(retrieved_cdp.is_none());
     }
 }

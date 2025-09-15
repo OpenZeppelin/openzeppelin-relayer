@@ -50,6 +50,12 @@ pub enum SignerConfigResponse {
         public_key: String,
         // api_private_key: Option<String>, hidden from response due to security concerns
     },
+    Cdp {
+        api_key_id: String,
+        account_address: String,
+        // api_key_secret: SecretString, hidden from response due to security concerns
+        // wallet_secret: SecretString, hidden from response due to security concerns
+    },
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms {
         service_account: GoogleCloudKmsSignerServiceAccountResponseConfig,
@@ -106,6 +112,10 @@ impl From<SignerConfig> for SignerConfigResponse {
                 organization_id: c.organization_id,
                 private_key_id: c.private_key_id,
                 public_key: c.public_key,
+            },
+            SignerConfig::Cdp(c) => SignerConfigResponse::Cdp {
+                api_key_id: c.api_key_id,
+                account_address: c.account_address,
             },
             SignerConfig::GoogleCloudKms(c) => SignerConfigResponse::GoogleCloudKms {
                 service_account: GoogleCloudKmsSignerServiceAccountResponseConfig {
@@ -291,5 +301,78 @@ mod tests {
 
         let response: SignerResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.r#type, SignerType::GoogleCloudKms);
+    }
+
+    #[test]
+    fn test_cdp_signer_response_conversion() {
+        use crate::models::signer::{CdpSignerConfig, SignerConfig};
+        use crate::models::SecretString;
+
+        let cdp_config = CdpSignerConfig {
+            api_key_id: "test-api-key-id".to_string(),
+            api_key_secret: SecretString::new("secret"),
+            wallet_secret: SecretString::new("wallet-secret"),
+            account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
+        };
+
+        let signer =
+            crate::models::Signer::new("cdp-signer".to_string(), SignerConfig::Cdp(cdp_config));
+
+        let response = SignerResponse::from(signer);
+
+        assert_eq!(response.id, "cdp-signer");
+        assert_eq!(response.r#type, SignerType::Cdp);
+        assert_eq!(
+            response.config,
+            SignerConfigResponse::Cdp {
+                api_key_id: "test-api-key-id".to_string(),
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_cdp_response_serialization() {
+        let response = SignerResponse {
+            id: "test-cdp-signer".to_string(),
+            r#type: SignerType::Cdp,
+            config: SignerConfigResponse::Cdp {
+                api_key_id: "test-api-key-id".to_string(),
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"id\":\"test-cdp-signer\""));
+        assert!(json.contains("\"type\":\"cdp\""));
+        assert!(json.contains("\"api_key_id\":\"test-api-key-id\""));
+        assert!(json.contains("\"account_address\":\"0x742d35Cc6634C0532925a3b844Bc454e4438f44f\""));
+
+        // Verify that secrets are not included
+        assert!(!json.contains("api_key_secret"));
+        assert!(!json.contains("wallet_secret"));
+    }
+
+    #[test]
+    fn test_cdp_response_deserialization() {
+        let json = r#"{
+            "id": "test-cdp-signer",
+            "type": "cdp",
+            "config": {
+                "api_key_id": "test-api-key-id",
+                "account_address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44f"
+            }
+        }"#;
+
+        let response: SignerResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.id, "test-cdp-signer");
+        assert_eq!(response.r#type, SignerType::Cdp);
+        assert_eq!(
+            response.config,
+            SignerConfigResponse::Cdp {
+                api_key_id: "test-api-key-id".to_string(),
+                account_address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44f".to_string(),
+            }
+        );
     }
 }
