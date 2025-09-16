@@ -3,6 +3,7 @@
 //! This module implements the solana token swap request handling worker that processes
 //! notification jobs from the queue.
 
+use crate::setup_job_tracing;
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
@@ -29,6 +30,8 @@ pub async fn solana_token_swap_request_handler(
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
+    setup_job_tracing!(job, attempt);
+
     info!("handling solana token swap request: {:?}", job.data);
 
     let result = handle_request(job.data, context).await;
