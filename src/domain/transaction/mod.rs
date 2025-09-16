@@ -22,8 +22,11 @@ use crate::{
         TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
     },
     services::{
-        get_network_extra_fee_calculator_service, get_network_provider, EvmGasPriceService,
-        EvmSignerFactory, StellarSignerFactory,
+        gas::{
+            cache::GasPriceCache, evm_gas_price::EvmGasPriceService,
+            price_params_handler::PriceParamsHandler,
+        },
+        get_network_provider, EvmSignerFactory, StellarSignerFactory,
     },
 };
 use async_trait::async_trait;
@@ -412,12 +415,27 @@ impl RelayerTransactionFactory {
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(signer.into()).await?;
-                let network_extra_fee_calculator =
-                    get_network_extra_fee_calculator_service(network.clone(), evm_provider.clone());
-                let price_calculator = evm::PriceCalculator::new(
-                    EvmGasPriceService::new(evm_provider.clone(), network),
-                    network_extra_fee_calculator,
-                );
+                let price_params_handler =
+                    PriceParamsHandler::for_network(&network, evm_provider.clone());
+
+                let evm_gas_cache = GasPriceCache::global();
+
+                // Use the global cache if gas price caching is enabled
+                let cache = if let Some(cfg) = &network.gas_price_cache {
+                    evm_gas_cache.configure_network(network.chain_id, cfg.clone());
+                    Some(evm_gas_cache.clone())
+                } else {
+                    if evm_gas_cache.has_configuration_for_network(network.chain_id) {
+                        evm_gas_cache.remove_network(network.chain_id);
+                    }
+                    None
+                };
+
+                let gas_price_service =
+                    EvmGasPriceService::new(evm_provider.clone(), network.clone(), cache);
+
+                let price_calculator =
+                    evm::PriceCalculator::new(gas_price_service, price_params_handler);
 
                 Ok(NetworkTransaction::Evm(Box::new(
                     DefaultEvmTransaction::new(

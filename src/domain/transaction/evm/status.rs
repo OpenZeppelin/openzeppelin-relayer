@@ -463,6 +463,7 @@ mod tests {
             required_confirmations: Some(12),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
         NetworkRepoModel {
             id: "evm:mainnet".to_string(),
@@ -488,6 +489,7 @@ mod tests {
             required_confirmations: Some(12),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
         };
         NetworkRepoModel {
             id: "evm:arbitrum".to_string(),
@@ -863,6 +865,7 @@ mod tests {
                 required_confirmations: Some(12),
                 features: Some(vec!["eip1559".to_string()]),
                 symbol: Some("ETH".to_string()),
+                gas_price_cache: None,
             };
             let invalid_network = NetworkRepoModel {
                 id: "evm:invalid".to_string(),

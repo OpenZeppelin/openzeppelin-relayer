@@ -636,7 +636,7 @@ mod tests {
             signer_type: SignerTypeRequest::GoogleCloudKms,
             config: SignerConfigRequest::GoogleCloudKms(GoogleCloudKmsSignerRequestConfig {
                 service_account: GoogleCloudKmsSignerServiceAccountRequestConfig {
-                    private_key: "-----BEGIN PRIVATE KEY-----\nSDFGSDFGSDGSDFGSDFGSDFGSDFGSDFGSAFAS...\n-----END PRIVATE KEY-----\n".to_string(), // noboost
+                    private_key: "-----BEGIN EXAMPLE PRIVATE KEY-----\nSDFGSDFGSDGSDFGSDFGSDFGSDFGSDFGSAFAS...\n-----END EXAMPLE PRIVATE KEY-----\n".to_string(), // noboost
                     private_key_id: "gcp-private-key-id-12345".to_string(),
                     project_id: "my-gcp-project".to_string(),
                     client_email: "service-account@my-gcp-project.iam.gserviceaccount.com".to_string(),

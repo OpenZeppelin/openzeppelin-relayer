@@ -125,6 +125,7 @@ pub fn setup_logging() {
                     .with(
                         fmt::layer()
                             .with_writer(non_blocking_writer)
+                            .with_ansi(false)
                             .pretty()
                             .with_thread_ids(true)
                             .with_file(true)
@@ -139,6 +140,7 @@ pub fn setup_logging() {
                     .with(
                         fmt::layer()
                             .with_writer(non_blocking_writer)
+                            .with_ansi(false)
                             .json()
                             .with_current_span(true)
                             .with_span_list(true)
@@ -156,6 +158,7 @@ pub fn setup_logging() {
                     .with(
                         fmt::layer()
                             .with_writer(non_blocking_writer)
+                            .with_ansi(false)
                             .compact()
                             .with_target(false),
                     )

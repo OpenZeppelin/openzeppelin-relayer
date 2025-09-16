@@ -105,6 +105,7 @@ pub mod mockutils {
                 features: None,
                 symbol: Some("testETH".to_string()),
                 chain_id: Some(1),
+                gas_price_cache: None,
             }),
         }
     }

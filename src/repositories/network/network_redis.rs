@@ -721,6 +721,7 @@ mod tests {
                     required_confirmations: Some(1),
                     features: None,
                     symbol: Some("ETH".to_string()),
+                    gas_price_cache: None,
                 };
                 NetworkRepoModel::new_evm(evm_config)
             }
@@ -1003,6 +1004,7 @@ mod tests {
                     required_confirmations: Some(1),
                     features: None,
                     symbol: Some("ETH".to_string()),
+                    gas_price_cache: None,
                 }),
             })
             .await;
