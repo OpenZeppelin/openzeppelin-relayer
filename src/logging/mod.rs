@@ -98,10 +98,12 @@ pub fn setup_logging() {
         }
 
         let time_based_path = time_based_rolling(&base_file_path, &date_str, 1);
-        let max_size = env::var("LOG_MAX_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_MAX_LOG_FILE_SIZE);
+        let max_size = match env::var("LOG_MAX_SIZE") {
+            Ok(value) => value.parse().unwrap_or_else(|_| {
+                panic!("LOG_MAX_SIZE must be a valid u64 if set");
+            }),
+            Err(_) => DEFAULT_MAX_LOG_FILE_SIZE,
+        };
         let final_path =
             space_based_rolling(&time_based_path, &base_file_path, &date_str, max_size);
 
