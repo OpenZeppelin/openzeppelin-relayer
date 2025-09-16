@@ -1,18 +1,96 @@
+/**
+ * Key-value storage for plugins backed by Redis.
+ *
+ * This module exposes the `PluginKVStore` interface and a default
+ * implementation `DefaultPluginKVStore` backed by Redis.
+ *
+ * Keys are validated against the pattern /^[A-Za-z0-9:_-]{1,512}$/.
+ * Values are JSON-serialized and deserialized transparently.
+ * All keys are namespaced per plugin and use a Redis hash-tag to co-locate
+ * data in the same cluster slot.
+ *
+ * Features:
+ * - get/set with optional TTL
+ * - del/exists
+ * - scan with pattern and batching
+ * - clear namespace efficiently using pipelined UNLINK
+ * - withLock: distributed mutex using SET NX PX and token-verified unlock
+ *
+ * Configuration:
+ * - Uses REDIS_URL if set, otherwise defaults to redis://localhost:6379
+ */
 import IORedis, { Redis } from 'ioredis';
 import { randomUUID } from 'crypto';
 
+/**
+ * Minimal async key-value store used by plugins.
+ */
 export interface PluginKVStore {
+  /**
+   * Establish the connection. Call once before using the store.
+   * @returns Promise that resolves when the connection is established.
+   */
   connect(): Promise<void>;
+  /**
+   * Close the connection gracefully. Safe to call multiple times.
+   * @returns Promise that resolves when the connection is closed.
+   */
   disconnect(): Promise<void>;
 
+  /**
+   * Get and JSON-parse a value by key.
+   * @typeParam T - Expected value type after JSON parse.
+   * @param key - The key to retrieve.
+   * @returns Resolves to the parsed value, or null if missing.
+   */
   get<T = unknown>(key: string): Promise<T | null>;
+  /**
+   * Set a JSON-encoded value.
+   * @param key - The key to set.
+   * @param value - Serializable value; must not be undefined.
+   * @param opts - Optional settings.
+   * @param opts.ttlSec - Time-to-live in seconds; if > 0, sets expiry.
+   * @returns True on success.
+   * @throws Error if `value` is undefined or the key is invalid.
+   */
   set(key: string, value: unknown, opts?: { ttlSec?: number }): Promise<boolean>;
+  /**
+   * Delete a key.
+   * @param key - The key to remove.
+   * @returns True if exactly one key was removed.
+   */
   del(key: string): Promise<boolean>;
+  /**
+   * Check whether a key exists.
+   * @param key - The key to check.
+   * @returns True if the key exists.
+   */
   exists(key: string): Promise<boolean>;
 
+  /**
+   * Scan this namespace for keys matching `pattern`.
+   * @param pattern - Glob-like match pattern (default '*').
+   * @param batch - SCAN COUNT per iteration (default 500).
+   * @returns Array of bare keys (without the namespace prefix).
+   */
   scan(pattern?: string, batch?: number): Promise<string[]>;
+  /**
+   * Remove all keys in this namespace.
+   * @returns The number of keys deleted.
+   */
   clear(): Promise<number>;
 
+  /**
+   * Execute `fn` under a distributed lock for `key`.
+   * @typeParam T - The return type of `fn`.
+   * @param key - The lock key.
+   * @param fn - Async function to execute while holding the lock.
+   * @param opts - Lock options.
+   * @param opts.ttlSec - Lock expiry in seconds (default 30).
+   * @param opts.onBusy - Behavior when the lock is busy: 'throw' or 'skip'.
+   * @returns The result of `fn`, or null when skipped due to a busy lock.
+   * @throws Error if the lock is busy and `onBusy` is 'throw'.
+   */
   withLock<T>(
     key: string,
     fn: () => Promise<T>,
@@ -20,6 +98,12 @@ export interface PluginKVStore {
   ): Promise<T | null>;
 }
 
+/**
+ * Default Redis-backed implementation of `PluginKVStore`.
+ *
+ * Create one instance per plugin. The `pluginId` is used to namespace
+ * keys and to set a descriptive Redis connection name.
+ */
 export class DefaultPluginKVStore implements PluginKVStore {
   private client: Redis;
   private ns: string;
@@ -27,6 +111,12 @@ export class DefaultPluginKVStore implements PluginKVStore {
   private readonly UNLOCK_SCRIPT =
     'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("UNLINK", KEYS[1]) else return 0 end';
 
+  /**
+   * Create a store bound to a plugin namespace.
+   * - pluginId: used for the namespace and Redis connection name.
+   *   Curly braces are stripped to avoid nested hash-tags.
+   * - Uses REDIS_URL if provided; enables lazyConnect and auto pipelining.
+   */
   constructor(pluginId: string) {
     const url = process.env.REDIS_URL ?? 'redis://localhost:6379';
 
@@ -43,10 +133,19 @@ export class DefaultPluginKVStore implements PluginKVStore {
     this.ns = `plugin_kv:{${pid}}`;
   }
 
+  /**
+   * Connect the underlying Redis client. Call before any operation.
+   * @returns Promise that resolves when the Redis connection is established.
+   */
   async connect(): Promise<void> {
     await this.client.connect();
   }
 
+  /**
+   * Close the Redis connection. Falls back to hard disconnect if graceful
+   * quit fails (e.g., when the connection is not fully established).
+   * @returns Promise that resolves when the connection is closed.
+   */
   async disconnect(): Promise<void> {
     try {
       await this.client.quit();
@@ -55,18 +154,44 @@ export class DefaultPluginKVStore implements PluginKVStore {
     }
   }
 
-  // Key builder
+  /**
+   * Build a namespaced Redis key for the given segment and user key.
+   * Validates the user-provided key and throws on invalid input.
+   * @param seg - The key segment: 'data' or 'lock'.
+   * @param key - The user-provided key to namespace.
+   * @returns The fully-qualified Redis key.
+   * @throws Error if the key does not match the allowed pattern.
+   */
   private key(seg: 'data' | 'lock', key: string): string {
     if (!this.KEY_REGEX.test(key)) throw new Error('invalid key');
     return `${this.ns}:${seg}:${key}`;
   }
 
+  /**
+   * Retrieve and JSON-parse the value for a key.
+   * Returns null if the key is not present.
+   * @typeParam T - Expected value type after JSON parse.
+   * @param key - The key to retrieve.
+   * @returns Resolves to the parsed value, or null if missing.
+   */
   async get<T = unknown>(key: string): Promise<T | null> {
     const v = await this.client.get(this.key('data', key));
     if (v == null) return null;
     return JSON.parse(v) as T;
   }
 
+  /**
+   * Store a JSON-encoded value under the key.
+   * - If opts.ttlSec > 0, sets an expiry in seconds; otherwise no expiry.
+   * - Throws if value is undefined.
+   * Returns true on success.
+   * @param key - The key to set.
+   * @param value - Serializable value; must not be undefined.
+   * @param opts - Optional settings.
+   * @param opts.ttlSec - Time-to-live in seconds; if > 0, sets expiry.
+   * @returns True on success.
+   * @throws Error if `value` is undefined or the key is invalid.
+   */
   async set(key: string, value: unknown, opts?: { ttlSec?: number }): Promise<boolean> {
     if (value === undefined) throw new Error('value must not be undefined');
     const payload = JSON.stringify(value);
@@ -76,16 +201,33 @@ export class DefaultPluginKVStore implements PluginKVStore {
     return res === 'OK';
   }
 
+  /**
+   * Remove the key.
+   * @param key - The key to remove.
+   * @returns True if exactly one key was unlinked.
+   */
   async del(key: string): Promise<boolean> {
     const k = this.key('data', key);
     const n = await this.client.unlink(k);
     return n === 1;
   }
 
+  /**
+   * Check whether a key exists.
+   * @param key - The key to check.
+   * @returns True if the key exists.
+   */
   async exists(key: string): Promise<boolean> {
     return (await this.client.exists(this.key('data', key))) === 1;
   }
 
+  /**
+   * Iterate over keys in this store, matching `pattern` (glob-like, default '*').
+   * Returns bare keys (without namespace). Uses SCAN with COUNT=`batch`.
+   * @param pattern - Glob-like match pattern (default '*').
+   * @param batch - SCAN COUNT per iteration (default 500).
+   * @returns Array of bare keys (without the namespace prefix).
+   */
   async scan(pattern = '*', batch = 500): Promise<string[]> {
     const out: string[] = [];
     let cursor = '0';
@@ -98,6 +240,11 @@ export class DefaultPluginKVStore implements PluginKVStore {
     return out;
   }
 
+  /**
+   * Delete all keys in this plugin namespace.
+   * Returns the number of keys removed.
+   * @returns The number of keys deleted.
+   */
   async clear(): Promise<number> {
     let cursor = '0';
     let deleted = 0;
@@ -123,6 +270,21 @@ export class DefaultPluginKVStore implements PluginKVStore {
     return deleted;
   }
 
+  /**
+   * Run `fn` while holding a distributed lock for `key`.
+   * The lock is acquired with SET NX PX and released via a token-checked
+   * Lua script to avoid unlocking another client's lock.
+   * - opts.ttlSec: lock expiry in seconds (default 30)
+   * - opts.onBusy: 'throw' (default) or 'skip' to return null when busy
+   * @typeParam T - The return type of `fn`.
+   * @param key - The lock key.
+   * @param fn - Async function to execute while holding the lock.
+   * @param opts - Lock options.
+   * @param opts.ttlSec - Lock expiry in seconds (default 30).
+   * @param opts.onBusy - Behavior when the lock is busy: 'throw' or 'skip'.
+   * @returns The result of `fn`, or null when skipped due to a busy lock.
+   * @throws Error if the lock is busy and `onBusy` is 'throw'.
+   */
   async withLock<T>(
     key: string,
     fn: () => Promise<T>,
