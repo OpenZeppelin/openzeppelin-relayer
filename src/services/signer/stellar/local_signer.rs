@@ -29,13 +29,13 @@ use async_trait::async_trait;
 use ed25519_dalek::Signer as Ed25519Signer;
 use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use eyre::Result;
-use log::info;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{
     DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
     TransactionEnvelope, TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
     Uint256, VecM, WriteXdr,
 };
+use tracing::info;
 
 use soroban_rs::Signer as SorobanSigner;
 use std::{convert::TryInto, sync::Arc};

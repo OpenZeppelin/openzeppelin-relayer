@@ -13,11 +13,13 @@
 //!   └── Turnkey (Turnkey backend)
 //! ```
 mod aws_kms_signer;
+mod cdp_signer;
 mod google_cloud_kms_signer;
 mod local_signer;
 mod turnkey_signer;
 mod vault_signer;
 use aws_kms_signer::*;
+use cdp_signer::*;
 use google_cloud_kms_signer::*;
 use local_signer::*;
 use oz_keystore::HashicorpCloudClient;
@@ -43,7 +45,7 @@ use crate::{
         signer::SignerFactoryError,
         turnkey::TurnkeyService,
         vault::{VaultConfig, VaultService, VaultServiceTrait},
-        AwsKmsService, GoogleCloudKmsService, TurnkeyServiceTrait,
+        AwsKmsService, CdpService, GoogleCloudKmsService, TurnkeyServiceTrait,
     },
 };
 use eyre::Result;
@@ -64,6 +66,7 @@ pub enum EvmSigner {
     Local(LocalSigner),
     Vault(VaultSigner<VaultService>),
     Turnkey(TurnkeySigner),
+    Cdp(CdpSigner),
     AwsKms(AwsKmsSigner),
     GoogleCloudKms(GoogleCloudKmsSigner),
 }
@@ -75,6 +78,7 @@ impl Signer for EvmSigner {
             Self::Local(signer) => signer.address().await,
             Self::Vault(signer) => signer.address().await,
             Self::Turnkey(signer) => signer.address().await,
+            Self::Cdp(signer) => signer.address().await,
             Self::AwsKms(signer) => signer.address().await,
             Self::GoogleCloudKms(signer) => signer.address().await,
         }
@@ -88,6 +92,7 @@ impl Signer for EvmSigner {
             Self::Local(signer) => signer.sign_transaction(transaction).await,
             Self::Vault(signer) => signer.sign_transaction(transaction).await,
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
+            Self::Cdp(signer) => signer.sign_transaction(transaction).await,
             Self::AwsKms(signer) => signer.sign_transaction(transaction).await,
             Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
         }
@@ -101,6 +106,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Local(signer) => signer.sign_data(request).await,
             Self::Vault(signer) => signer.sign_data(request).await,
             Self::Turnkey(signer) => signer.sign_data(request).await,
+            Self::Cdp(signer) => signer.sign_data(request).await,
             Self::AwsKms(signer) => signer.sign_data(request).await,
             Self::GoogleCloudKms(signer) => signer.sign_data(request).await,
         }
@@ -114,6 +120,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Local(signer) => signer.sign_typed_data(request).await,
             Self::Vault(signer) => signer.sign_typed_data(request).await,
             Self::Turnkey(signer) => signer.sign_typed_data(request).await,
+            Self::Cdp(signer) => signer.sign_typed_data(request).await,
             Self::AwsKms(signer) => signer.sign_typed_data(request).await,
             Self::GoogleCloudKms(signer) => signer.sign_typed_data(request).await,
         }
@@ -163,6 +170,12 @@ impl EvmSignerFactory {
                 })?;
                 EvmSigner::Turnkey(TurnkeySigner::new(turnkey_service))
             }
+            SignerConfig::Cdp(config) => {
+                let cdp_signer = CdpSigner::new(config.clone()).map_err(|e| {
+                    SignerFactoryError::CreationFailed(format!("CDP service error: {}", e))
+                })?;
+                EvmSigner::Cdp(cdp_signer)
+            }
             SignerConfig::GoogleCloudKms(config) => {
                 let gcp_service = GoogleCloudKmsService::new(config).map_err(|e| {
                     SignerFactoryError::CreationFailed(format!(
@@ -182,7 +195,7 @@ impl EvmSignerFactory {
 mod tests {
     use super::*;
     use crate::models::{
-        AwsKmsSignerConfig, EvmTransactionData, GoogleCloudKmsSignerConfig,
+        AwsKmsSignerConfig, CdpSignerConfig, EvmTransactionData, GoogleCloudKmsSignerConfig,
         GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
         SecretString, SignerConfig, SignerRepoModel, TurnkeySignerConfig, VaultTransitSignerConfig,
         U256,
@@ -324,6 +337,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_evm_signer_cdp() {
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Cdp(CdpSignerConfig {
+                api_key_id: "test-api-key-id".to_string(),
+                api_key_secret: SecretString::new("test-api-key-secret"),
+                wallet_secret: SecretString::new("test-wallet-secret"),
+                account_address: "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a".to_string(),
+            }),
+        };
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        assert!(matches!(signer, EvmSigner::Cdp(_)));
+    }
+
+    #[tokio::test]
     async fn test_address_evm_signer_local() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
@@ -367,6 +399,29 @@ mod tests {
                 organization_id: "organization_id".to_string(),
                 private_key_id: "private_key_id".to_string(),
                 public_key: "047d3bb8e0317927700cf19fed34e0627367be1390ec247dddf8c239e4b4321a49aea80090e49b206b6a3e577a4f11d721ab063482001ee10db40d6f2963233eec".to_string(),
+            }),
+        };
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+        let signer_address = signer.address().await.unwrap();
+
+        assert_eq!(
+            "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a",
+            signer_address.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_address_evm_signer_cdp() {
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Cdp(CdpSignerConfig {
+                api_key_id: "test-api-key-id".to_string(),
+                api_key_secret: SecretString::new("test-api-key-secret"),
+                wallet_secret: SecretString::new("test-wallet-secret"),
+                account_address: "0xb726167dc2ef2ac582f0a3de4c08ac4abb90626a".to_string(),
             }),
         };
 

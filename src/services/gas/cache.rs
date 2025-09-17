@@ -8,16 +8,16 @@ use crate::{
     config::GasPriceCacheConfig,
     constants::{GAS_PRICE_CACHE_REFRESH_TIMEOUT_SECS, HISTORICAL_BLOCKS},
     models::{EvmNetwork, TransactionError},
-    services::{gas::l2_fee::L2FeeData, EvmProviderTrait},
+    services::EvmProviderTrait,
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use dashmap::DashMap;
-use log::info;
 use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct GasPriceSnapshot {
@@ -33,7 +33,7 @@ pub struct GasPriceCacheEntry {
     pub gas_price: u128,
     pub base_fee_per_gas: u128,
     pub fee_history: FeeHistory,
-    pub l2_fee_data: Option<L2FeeData>,
+
     pub fetched_at: Instant,
     pub stale_after: Duration,
     pub expire_after: Duration,
@@ -45,7 +45,6 @@ impl GasPriceCacheEntry {
         gas_price: u128,
         base_fee_per_gas: u128,
         fee_history: FeeHistory,
-        l2_fee_data: Option<L2FeeData>,
         stale_after: Duration,
         expire_after: Duration,
     ) -> Self {
@@ -53,7 +52,6 @@ impl GasPriceCacheEntry {
             gas_price,
             base_fee_per_gas,
             fee_history,
-            l2_fee_data,
             fetched_at: Instant::now(),
             stale_after,
             expire_after,
@@ -168,7 +166,6 @@ impl GasPriceCache {
             gas_price,
             base_fee_per_gas,
             fee_history,
-            None,
             Duration::from_millis(cfg.stale_after_ms),
             Duration::from_millis(cfg.expire_after_ms),
         );
@@ -285,7 +282,6 @@ impl GasPriceCache {
                     fresh_gas_price,
                     fresh_base_fee,
                     fee_hist,
-                    None,
                     Duration::from_millis(cfg.stale_after_ms),
                     Duration::from_millis(cfg.expire_after_ms),
                 );
@@ -340,7 +336,6 @@ mod tests {
             gas_price,
             base_fee,
             fee_history,
-            None,
             Duration::from_secs(30),
             Duration::from_secs(120),
         );
@@ -365,7 +360,6 @@ mod tests {
             gas_price,
             base_fee,
             fee_history,
-            None,
             Duration::from_secs(30),
             Duration::from_secs(120),
         );
@@ -387,7 +381,6 @@ mod tests {
             gas_price,
             base_fee,
             fee_history,
-            None,
             Duration::from_secs(30),
             Duration::from_secs(120),
         );
@@ -417,7 +410,6 @@ mod tests {
                 gas_price,
                 base_fee,
                 fee_history,
-                None,
                 Duration::from_secs(30),
                 Duration::from_secs(120),
             );
@@ -457,7 +449,6 @@ mod tests {
             gas_price,
             base_fee,
             fee_history,
-            None,
             Duration::from_secs(30),
             Duration::from_secs(120),
         );

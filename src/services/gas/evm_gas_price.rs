@@ -9,7 +9,7 @@ use crate::{
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use eyre::Result;
 use futures::try_join;
-use log::info;
+use tracing::info;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -269,7 +269,7 @@ impl<P: EvmProviderTrait + Send + Sync + 'static> EvmGasPriceServiceTrait
     type Provider = P;
 
     async fn estimate_gas(&self, tx_data: &EvmTransactionData) -> Result<u64, TransactionError> {
-        info!("Estimating gas for tx_data: {:?}", tx_data);
+        info!(tx_data = ?tx_data, "estimating gas");
         let gas_estimation = self.provider.estimate_gas(tx_data).await.map_err(|err| {
             let msg = format!("Failed to estimate gas: {err}");
             TransactionError::NetworkConfiguration(msg)

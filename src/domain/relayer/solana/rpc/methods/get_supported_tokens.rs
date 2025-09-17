@@ -9,7 +9,7 @@
 //! # Returns
 //!
 //! On success, returns a vector of [`GetSupportedTokensItem`] structures.
-use log::info;
+use tracing::info;
 
 use crate::{
     constants::DEFAULT_CONVERSION_SLIPPAGE_PERCENTAGE,

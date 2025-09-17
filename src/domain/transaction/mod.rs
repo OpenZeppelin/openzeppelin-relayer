@@ -24,7 +24,7 @@ use crate::{
     services::{
         gas::{
             cache::GasPriceCache, evm_gas_price::EvmGasPriceService,
-            network_extra_fee::NetworkExtraFeeCalculatorService,
+            price_params_handler::PriceParamsHandler,
         },
         get_network_provider, EvmSignerFactory, StellarSignerFactory,
     },
@@ -415,8 +415,8 @@ impl RelayerTransactionFactory {
 
                 let evm_provider = get_network_provider(&network, relayer.custom_rpc_urls.clone())?;
                 let signer_service = EvmSignerFactory::create_evm_signer(signer.into()).await?;
-                let network_extra_fee_calculator =
-                    NetworkExtraFeeCalculatorService::new(network.clone(), evm_provider.clone());
+                let price_params_handler =
+                    PriceParamsHandler::for_network(&network, evm_provider.clone());
 
                 let evm_gas_cache = GasPriceCache::global();
 
@@ -434,10 +434,8 @@ impl RelayerTransactionFactory {
                 let gas_price_service =
                     EvmGasPriceService::new(evm_provider.clone(), network.clone(), cache);
 
-                let price_calculator = evm::PriceCalculator::new(
-                    gas_price_service,
-                    Some(network_extra_fee_calculator),
-                );
+                let price_calculator =
+                    evm::PriceCalculator::new(gas_price_service, price_params_handler);
 
                 Ok(NetworkTransaction::Evm(Box::new(
                     DefaultEvmTransaction::new(

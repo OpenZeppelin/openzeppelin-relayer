@@ -11,14 +11,15 @@ use crate::{
         Job, NotificationSend, Queue, TransactionRequest, TransactionSend, TransactionStatusCheck,
     },
     models::RelayerError,
+    observability::request_id::get_request_id,
 };
 use apalis::prelude::Storage;
 use apalis_redis::RedisError;
 use async_trait::async_trait;
-use log::{error, info};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
+use tracing::{error, info};
 
 use super::{JobType, SolanaTokenSwapRequest};
 
@@ -124,7 +125,8 @@ impl JobProducerTrait for JobProducer {
             transaction_process_job
         );
         let mut queue = self.queue.lock().await;
-        let job = Job::new(JobType::TransactionRequest, transaction_process_job);
+        let job = Job::new(JobType::TransactionRequest, transaction_process_job)
+            .with_request_id(get_request_id());
 
         match scheduled_on {
             Some(scheduled_on) => {
@@ -148,7 +150,8 @@ impl JobProducerTrait for JobProducer {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
-        let job = Job::new(JobType::TransactionSend, transaction_submit_job);
+        let job = Job::new(JobType::TransactionSend, transaction_submit_job)
+            .with_request_id(get_request_id());
 
         match scheduled_on {
             Some(on) => {
@@ -172,7 +175,8 @@ impl JobProducerTrait for JobProducer {
         let job = Job::new(
             JobType::TransactionStatusCheck,
             transaction_status_check_job,
-        );
+        )
+        .with_request_id(get_request_id());
         match scheduled_on {
             Some(on) => {
                 queue.transaction_status_queue.schedule(job, on).await?;
@@ -191,7 +195,8 @@ impl JobProducerTrait for JobProducer {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
-        let job = Job::new(JobType::NotificationSend, notification_send_job);
+        let job = Job::new(JobType::NotificationSend, notification_send_job)
+            .with_request_id(get_request_id());
 
         match scheduled_on {
             Some(on) => {
@@ -212,7 +217,8 @@ impl JobProducerTrait for JobProducer {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let mut queue = self.queue.lock().await;
-        let job = Job::new(JobType::SolanaTokenSwapRequest, solana_swap_request_job);
+        let job = Job::new(JobType::SolanaTokenSwapRequest, solana_swap_request_job)
+            .with_request_id(get_request_id());
 
         match scheduled_on {
             Some(on) => {
