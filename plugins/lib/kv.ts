@@ -27,17 +27,6 @@ import { randomUUID } from 'crypto';
  */
 export interface PluginKVStore {
   /**
-   * Establish the connection. Call once before using the store.
-   * @returns Promise that resolves when the connection is established.
-   */
-  connect(): Promise<void>;
-  /**
-   * Close the connection gracefully. Safe to call multiple times.
-   * @returns Promise that resolves when the connection is closed.
-   */
-  disconnect(): Promise<void>;
-
-  /**
    * Get and JSON-parse a value by key.
    * @typeParam T - Expected value type after JSON parse.
    * @param key - The key to retrieve.
@@ -68,12 +57,12 @@ export interface PluginKVStore {
   exists(key: string): Promise<boolean>;
 
   /**
-   * Scan this namespace for keys matching `pattern`.
+   * List keys in this namespace matching `pattern`.
    * @param pattern - Glob-like match pattern (default '*').
    * @param batch - SCAN COUNT per iteration (default 500).
    * @returns Array of bare keys (without the namespace prefix).
    */
-  scan(pattern?: string, batch?: number): Promise<string[]>;
+  listKeys(pattern?: string, batch?: number): Promise<string[]>;
   /**
    * Remove all keys in this namespace.
    * @returns The number of keys deleted.
@@ -131,27 +120,6 @@ export class DefaultPluginKVStore implements PluginKVStore {
 
     const pid = pluginId.replace(/[{}]/g, '');
     this.ns = `plugin_kv:{${pid}}`;
-  }
-
-  /**
-   * Connect the underlying Redis client. Call before any operation.
-   * @returns Promise that resolves when the Redis connection is established.
-   */
-  async connect(): Promise<void> {
-    await this.client.connect();
-  }
-
-  /**
-   * Close the Redis connection. Falls back to hard disconnect if graceful
-   * quit fails (e.g., when the connection is not fully established).
-   * @returns Promise that resolves when the connection is closed.
-   */
-  async disconnect(): Promise<void> {
-    try {
-      await this.client.quit();
-    } catch {
-      this.client.disconnect();
-    }
   }
 
   /**
@@ -222,13 +190,13 @@ export class DefaultPluginKVStore implements PluginKVStore {
   }
 
   /**
-   * Iterate over keys in this store, matching `pattern` (glob-like, default '*').
+   * List keys in this store matching `pattern` (glob-like, default '*').
    * Returns bare keys (without namespace). Uses SCAN with COUNT=`batch`.
    * @param pattern - Glob-like match pattern (default '*').
    * @param batch - SCAN COUNT per iteration (default 500).
    * @returns Array of bare keys (without the namespace prefix).
    */
-  async scan(pattern = '*', batch = 500): Promise<string[]> {
+  async listKeys(pattern = '*', batch = 500): Promise<string[]> {
     const out: string[] = [];
     let cursor = '0';
     const prefix = `${this.ns}:data:`;

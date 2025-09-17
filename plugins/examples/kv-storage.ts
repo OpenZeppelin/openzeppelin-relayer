@@ -54,7 +54,7 @@ export async function handler({ kv, params }: PluginContext) {
 
     case 'scan': {
       const { pattern, batch } = params ?? {};
-      const keys = await kv.scan(pattern ?? '*', toInt(batch, 500));
+      const keys = await kv.listKeys(pattern ?? '*', toInt(batch, 500));
       return { keys };
     }
 
@@ -95,7 +95,7 @@ export async function handler({ kv, params }: PluginContext) {
       const deleted = await kv.del('example:to-delete');
 
       // 4) Scan keys under example:*
-      const list = await kv.scan('example:*');
+      const list = await kv.listKeys('example:*');
 
       // 5) Use a lock to protect an update
       const lockResult = await kv.withLock(

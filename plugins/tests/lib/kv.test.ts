@@ -75,13 +75,13 @@ describe('PluginKV', () => {
       await kv.set('user:2', { name: 'Bob' });
       // Hold a lock during scan to ensure lock keys are not included
       await kv.withLock('some-resource', async () => {
-        const userKeys = await kv.scan('user:*');
+        const userKeys = await kv.listKeys('user:*');
         expect(userKeys).toHaveLength(2);
         expect(userKeys).toContain('user:1');
         expect(userKeys).toContain('user:2');
       });
 
-      const allKeys = await kv.scan();
+      const allKeys = await kv.listKeys();
       expect(allKeys).toHaveLength(2);
     });
 
@@ -92,7 +92,7 @@ describe('PluginKV', () => {
       }
       const deleted = await kv.clear();
       expect(deleted).toBeGreaterThanOrEqual(n);
-      const keys = await kv.scan();
+      const keys = await kv.listKeys();
       expect(keys).toHaveLength(0);
     });
   });

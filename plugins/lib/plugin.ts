@@ -496,21 +496,14 @@ export async function runUserPlugin<T = any, R = any>(
   pluginParams: T,
   userScriptPath: string
 ): Promise<R> {
-  // Create both resources at the same level
   const plugin = new DefaultPluginAPI(socketPath);
   const kv = new DefaultPluginKVStore(pluginId);
 
   try {
-    // Connect KV before execution
-    await kv.connect();
-
-    // Pass both API and KV to loader
     const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams);
 
     return result;
   } finally {
-    // Clean up both resources at the same level
-    await kv.disconnect();
     plugin.close();
   }
 }
