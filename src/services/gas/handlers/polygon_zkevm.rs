@@ -85,7 +85,7 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::provider::evm::MockEvmProviderTrait;
+    use crate::{models::U256, services::provider::evm::MockEvmProviderTrait};
     use futures::FutureExt;
 
     #[tokio::test]
