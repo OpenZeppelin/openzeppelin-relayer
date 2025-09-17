@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
 use solana_sdk::{account::Account, pubkey::Pubkey};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{NetworkDex, SolanaRpcError, SolanaTokenProgram, SwapResult, TokenAccount};
 
@@ -327,7 +327,7 @@ where
         &self,
         relayer_id: String,
     ) -> Result<Vec<SwapResult>, RelayerError> {
-        info!("handling token swap request for relayer");
+        debug!("handling token swap request for relayer");
         let relayer = self
             .relayer_repository
             .get_by_id(relayer_id.clone())
@@ -391,7 +391,7 @@ where
                         .unwrap_or(0);
 
                     if swap_amount > 0 {
-                        info!(token = ?token, "token swap eligible for token");
+                        debug!(token = ?token, "token swap eligible for token");
 
                         // Add the token to the list of eligible tokens for swapping
                         eligible_tokens.push(TokenSwapCandidate {
@@ -655,7 +655,7 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
 
-        info!(balance = %balance, "balance for relayer");
+        debug!(balance = %balance, "balance for relayer");
 
         let policy = self.relayer.policies.get_solana_policy();
 

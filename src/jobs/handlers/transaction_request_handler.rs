@@ -6,7 +6,7 @@ use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Context, Data, TaskId, Worker, *};
 use apalis_redis::RedisContext;
 use eyre::Result;
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
@@ -42,7 +42,7 @@ pub async fn transaction_request_handler(
         set_request_id(request_id);
     }
 
-    info!("handling transaction request");
+    debug!("handling transaction request");
 
     let result = handle_request(job.data, state).await;
 
@@ -64,7 +64,7 @@ async fn handle_request(
 
     relayer_transaction.prepare_transaction(transaction).await?;
 
-    info!("transaction request handled successfully");
+    debug!("transaction request handled successfully");
 
     Ok(())
 }

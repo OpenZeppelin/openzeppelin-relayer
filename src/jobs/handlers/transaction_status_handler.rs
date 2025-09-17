@@ -7,7 +7,7 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
@@ -39,7 +39,7 @@ pub async fn transaction_status_handler(
         set_request_id(request_id);
     }
 
-    info!("handling transaction status check");
+    debug!("handling transaction status check");
 
     let result = handle_request(job.data, state).await;
 
@@ -64,7 +64,7 @@ async fn handle_request(
         .handle_transaction_status(transaction)
         .await?;
 
-    info!("status check handled successfully");
+    debug!("status check handled successfully");
 
     Ok(())
 }

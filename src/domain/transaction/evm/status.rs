@@ -5,7 +5,7 @@
 use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-use tracing::info;
+use tracing::{debug, info};
 
 use super::EvmRelayerTransaction;
 use super::{
@@ -91,12 +91,12 @@ where
                 last_block_number,
                 network.required_confirmations,
             ) {
-                info!(tx_hash = %tx_hash, "transaction mined but not confirmed");
+                debug!(tx_hash = %tx_hash, "transaction mined but not confirmed");
                 return Ok(TransactionStatus::Mined);
             }
             Ok(TransactionStatus::Confirmed)
         } else {
-            info!(tx_hash = %tx_hash, "transaction not yet mined");
+            debug!(tx_hash = %tx_hash, "transaction not yet mined");
             Ok(TransactionStatus::Submitted)
         }
     }
@@ -279,7 +279,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("scheduling resubmit job for transaction");
+        debug!("scheduling resubmit job for transaction");
 
         let tx_to_process = if self.should_noop(&tx).await? {
             self.process_noop_transaction(&tx).await?
@@ -296,7 +296,7 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("preparing transaction NOOP before resubmission");
+        debug!("preparing transaction NOOP before resubmission");
         let update = self.prepare_noop_update_request(tx, false).await?;
         let updated_tx = self
             .transaction_repository()
@@ -314,7 +314,7 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         if self.should_noop(&tx).await? {
-            info!("preparing NOOP for pending transaction");
+            debug!("preparing NOOP for pending transaction");
             let update = self.prepare_noop_update_request(&tx, false).await?;
             let updated_tx = self
                 .transaction_repository()
@@ -358,10 +358,10 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("checking transaction status");
+        debug!("checking transaction status");
 
         let status = self.check_transaction_status(&tx).await?;
-        info!(status = ?status, "transaction status");
+        debug!(status = ?status, "transaction status");
 
         match status {
             TransactionStatus::Submitted => self.handle_submitted_state(tx).await,

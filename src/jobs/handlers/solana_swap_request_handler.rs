@@ -6,7 +6,7 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
@@ -46,7 +46,7 @@ pub async fn solana_token_swap_request_handler(
         set_request_id(request_id);
     }
 
-    info!("handling solana token swap request");
+    debug!("handling solana token swap request");
 
     let result = handle_request(job.data, context).await;
 
@@ -102,7 +102,7 @@ async fn handle_request(
     request: SolanaTokenSwapRequest,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    info!("processing solana token swap");
+    debug!("processing solana token swap");
 
     let relayer_model = get_relayer_by_id(request.relayer_id.clone(), &context).await?;
     let signer_model = context

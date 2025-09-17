@@ -313,7 +313,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("preparing transaction");
+        debug!("preparing transaction");
 
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
         let relayer = self.relayer();
@@ -330,7 +330,7 @@ where
                     error!(error = ?estimation_error, "failed to estimate gas limit");
 
                     let default_gas_limit = get_evm_default_gas_limit_for_tx(&evm_data);
-                    info!(gas_limit = %default_gas_limit, "fallback to default gas limit");
+                    debug!(gas_limit = %default_gas_limit, "fallback to default gas limit");
                     evm_data.gas_limit = Some(default_gas_limit);
                 }
             }
@@ -435,7 +435,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("submitting transaction");
+        debug!("submitting transaction");
 
         let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
         let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
@@ -497,7 +497,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("resubmitting transaction");
+        debug!("resubmitting transaction");
 
         // Calculate bumped gas price
         let bumped_price_params = self
@@ -573,7 +573,7 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!("cancelling transaction");
-        info!(status = ?tx.status, "transaction status");
+        debug!(status = ?tx.status, "transaction status");
         // Check if the transaction can be cancelled
         if !is_pending_transaction(&tx.status) {
             return Err(TransactionError::ValidationError(format!(
@@ -584,7 +584,7 @@ where
 
         // If the transaction is in Pending state, we can just update its status
         if tx.status == TransactionStatus::Pending {
-            info!("transaction is in pending state, updating status to canceled");
+            debug!("transaction is in pending state, updating status to canceled");
             return self
                 .update_transaction_status(tx, TransactionStatus::Canceled)
                 .await;
@@ -603,7 +603,7 @@ where
         self.send_transaction_update_notification(&updated_tx)
             .await?;
 
-        info!("original transaction updated with cancellation data");
+        debug!("original transaction updated with cancellation data");
         Ok(updated_tx)
     }
 
@@ -622,7 +622,7 @@ where
         old_tx: TransactionRepoModel,
         new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("replacing transaction");
+        debug!("replacing transaction");
 
         // Check if the transaction can be replaced
         if !is_pending_transaction(&old_tx.status) {
@@ -680,7 +680,7 @@ where
         )
         .await?;
 
-        info!(price_params = ?price_params, "replacement price params");
+        debug!(price_params = ?price_params, "replacement price params");
 
         // Apply the calculated price parameters to the updated EVM data
         let evm_data_with_price_params = updated_evm_data.with_price_params(price_params.clone());

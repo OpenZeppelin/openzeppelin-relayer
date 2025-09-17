@@ -176,7 +176,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
     let mut workers = Vec::new();
 
     for relayer in solena_relayers_with_swap_enabled {
-        info!(relayer = ?relayer, "found solana relayer with swap enabled");
+        debug!(relayer = ?relayer, "found solana relayer with swap enabled");
 
         let policy = relayer.policies.get_solana_policy();
         let swap_config = match policy.get_swap_config() {
@@ -190,7 +190,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
         let calendar_schedule = match swap_config.cron_schedule {
             Some(schedule) => apalis_cron::Schedule::from_str(&schedule).unwrap(),
             None => {
-                info!(relayer = ?relayer, "no swap cron schedule found for relayer");
+                debug!(relayer = ?relayer, "no swap cron schedule found for relayer");
                 continue;
             }
         };
@@ -256,7 +256,7 @@ fn monitor_handle_event(e: Worker<Event>) {
             debug!(worker_id = %worker_id, task_id = %task_id, "worker got a job");
         }
         Event::Error(e) => {
-            debug!(worker_id = %worker_id, error = %e, "worker encountered an error");
+            error!(worker_id = %worker_id, error = %e, "worker encountered an error");
         }
         Event::Exit => {
             debug!(worker_id = %worker_id, "worker exited");

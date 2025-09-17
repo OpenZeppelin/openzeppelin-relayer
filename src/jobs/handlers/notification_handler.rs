@@ -6,7 +6,7 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
@@ -46,7 +46,7 @@ pub async fn notification_handler(
         set_request_id(request_id);
     }
 
-    info!("handling notification");
+    debug!("handling notification");
 
     let result = handle_request(job.data, context).await;
 
@@ -62,7 +62,7 @@ async fn handle_request(
     request: NotificationSend,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    info!("sending notification");
+    debug!("sending notification");
     let notification = context
         .notification_repository
         .get_by_id(request.notification_id)

@@ -8,7 +8,7 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
@@ -41,7 +41,7 @@ pub async fn transaction_submission_handler(
         set_request_id(request_id);
     }
 
-    info!("handling transaction submission");
+    debug!("handling transaction submission");
 
     let result = handle_request(job.data, state).await;
 
@@ -74,18 +74,18 @@ async fn handle_request(
             relayer_transaction.submit_transaction(transaction).await?;
         }
         TransactionCommand::Resubmit => {
-            info!("resubmitting transaction with updated parameters");
+            debug!("resubmitting transaction with updated parameters");
             relayer_transaction
                 .resubmit_transaction(transaction)
                 .await?;
         }
         TransactionCommand::Resend => {
-            info!("resending transaction");
+            debug!("resending transaction");
             relayer_transaction.submit_transaction(transaction).await?;
         }
     };
 
-    info!("transaction handled successfully");
+    debug!("transaction handled successfully");
 
     Ok(())
 }

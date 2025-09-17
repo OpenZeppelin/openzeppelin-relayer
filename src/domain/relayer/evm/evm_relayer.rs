@@ -152,7 +152,7 @@ where
             self.relayer.id, on_chain_nonce, transaction_counter_nonce
         );
 
-        info!(nonce = %nonce, "setting nonce for relayer");
+        debug!(nonce = %nonce, "setting nonce for relayer");
 
         self.transaction_counter_service.set(nonce).await?;
 
@@ -395,7 +395,7 @@ where
 
         let total_processed = cancelled_transaction_ids.len() + failed_transaction_ids.len();
 
-        info!(
+        debug!(
             queued_for_cancellation = %cancelled_transaction_ids.len(),
             failed_to_queue = %failed_transaction_ids.len(),
             "completed processing pending transactions for relayer"
