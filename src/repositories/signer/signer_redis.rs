@@ -4,11 +4,11 @@ use crate::models::{RepositoryError, SignerRepoModel};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::*;
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, RedisError};
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const SIGNER_PREFIX: &str = "signer";
 const SIGNER_LIST_KEY: &str = "signer_list";
@@ -52,11 +52,11 @@ impl RedisSignerRepository {
 
         let result: Result<i64, RedisError> = conn.sadd(&key, id).await;
         result.map_err(|e| {
-            error!("Failed to add signer {} to list: {}", id, e);
+            error!(signer_id = %id, error = %e, "failed to add signer to list");
             RepositoryError::Other(format!("Failed to add signer to list: {}", e))
         })?;
 
-        debug!("Added signer {} to list", id);
+        debug!(signer_id = %id, "added signer to list");
         Ok(())
     }
 
@@ -66,11 +66,11 @@ impl RedisSignerRepository {
 
         let result: Result<i64, RedisError> = conn.srem(&key, id).await;
         result.map_err(|e| {
-            error!("Failed to remove signer {} from list: {}", id, e);
+            error!(signer_id = %id, error = %e, "failed to remove signer from list");
             RepositoryError::Other(format!("Failed to remove signer from list: {}", e))
         })?;
 
-        debug!("Removed signer {} from list", id);
+        debug!(signer_id = %id, "removed signer from list");
         Ok(())
     }
 
@@ -80,7 +80,7 @@ impl RedisSignerRepository {
 
         let result: Result<Vec<String>, RedisError> = conn.smembers(&key).await;
         result.map_err(|e| {
-            error!("Failed to get signer IDs: {}", e);
+            error!(error = %e, "failed to get signer IDs");
             RepositoryError::Other(format!("Failed to get signer IDs: {}", e))
         })
     }
@@ -101,7 +101,7 @@ impl RedisSignerRepository {
         let mut conn = self.client.as_ref().clone();
         let keys: Vec<String> = ids.iter().map(|id| self.signer_key(id)).collect();
 
-        debug!("Batch fetching {} signers", ids.len());
+        debug!(count = ids.len(), "batch fetching signers");
 
         let values: Vec<Option<String>> = conn
             .mget(&keys)
@@ -119,13 +119,13 @@ impl RedisSignerRepository {
                         Ok(signer) => signers.push(signer),
                         Err(e) => {
                             failed_count += 1;
-                            error!("Failed to deserialize signer {}: {}", ids[i], e);
+                            error!(signer_id = %ids[i], error = %e, "failed to deserialize signer");
                             failed_ids.push(ids[i].clone());
                         }
                     }
                 }
                 None => {
-                    warn!("Signer {} not found in batch fetch", ids[i]);
+                    warn!(signer_id = %ids[i], "signer not found in batch fetch");
                 }
             }
         }
@@ -136,10 +136,10 @@ impl RedisSignerRepository {
                 failed_count,
                 ids.len()
             );
-            warn!("Failed to deserialize signers: {:?}", failed_ids);
+            warn!(failed_ids = ?failed_ids, "failed to deserialize signers");
         }
 
-        debug!("Successfully fetched {} signers", signers.len());
+        debug!(count = signers.len(), "successfully fetched signers");
         Ok(BatchRetrievalResult {
             results: signers,
             failed_ids,
@@ -180,7 +180,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
                 // Continue with creation
             }
             Err(e) => {
-                error!("Failed to check if signer exists: {}", e);
+                error!(error = %e, "failed to check if signer exists");
                 return Err(RepositoryError::Other(format!(
                     "Failed to check signer existence: {}",
                     e
@@ -194,14 +194,14 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         // Store signer
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
         result.map_err(|e| {
-            error!("Failed to store signer {}: {}", signer.id, e);
+            error!(signer_id = %signer.id, error = %e, "failed to store signer");
             RepositoryError::Other(format!("Failed to store signer: {}", e))
         })?;
 
         // Add to list
         self.add_to_list(&signer.id).await?;
 
-        debug!("Created signer with ID: {}", signer.id);
+        debug!(signer_id = %signer.id, "created signer");
         Ok(signer)
     }
 
@@ -220,18 +220,18 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             Ok(Some(data)) => {
                 // Deserialize signer (decryption happens automatically)
                 let signer = self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")?;
-                debug!("Retrieved signer with ID: {}", id);
+                debug!(signer_id = %id, "retrieved signer");
                 Ok(signer)
             }
             Ok(None) => {
-                debug!("Signer with ID {} not found", id);
+                debug!(signer_id = %id, "signer not found");
                 Err(RepositoryError::NotFound(format!(
                     "Signer with ID {} not found",
                     id
                 )))
             }
             Err(e) => {
-                error!("Failed to retrieve signer {}: {}", id, e);
+                error!(signer_id = %id, error = %e, "failed to retrieve signer");
                 Err(RepositoryError::Other(format!(
                     "Failed to retrieve signer: {}",
                     e
@@ -273,7 +273,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
                 // Continue with update
             }
             Err(e) => {
-                error!("Failed to check if signer exists: {}", e);
+                error!(error = %e, "failed to check if signer exists");
                 return Err(RepositoryError::Other(format!(
                     "Failed to check signer existence: {}",
                     e
@@ -287,11 +287,11 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         // Update signer
         let result: Result<(), RedisError> = conn.set(&key, &serialized).await;
         result.map_err(|e| {
-            error!("Failed to update signer {}: {}", id, e);
+            error!(signer_id = %id, error = %e, "failed to update signer");
             RepositoryError::Other(format!("Failed to update signer: {}", e))
         })?;
 
-        debug!("Updated signer with ID: {}", id);
+        debug!(signer_id = %id, "updated signer");
         Ok(signer)
     }
 
@@ -318,7 +318,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
                 // Continue with deletion
             }
             Err(e) => {
-                error!("Failed to check if signer exists: {}", e);
+                error!(error = %e, "failed to check if signer exists");
                 return Err(RepositoryError::Other(format!(
                     "Failed to check signer existence: {}",
                     e
@@ -329,14 +329,14 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         // Delete signer
         let result: Result<i64, RedisError> = conn.del(&key).await;
         result.map_err(|e| {
-            error!("Failed to delete signer {}: {}", id, e);
+            error!(signer_id = %id, error = %e, "failed to delete signer");
             RepositoryError::Other(format!("Failed to delete signer: {}", e))
         })?;
 
         // Remove from list
         self.remove_from_list(&id).await?;
 
-        debug!("Deleted signer with ID: {}", id);
+        debug!(signer_id = %id, "deleted signer");
         Ok(())
     }
 
@@ -349,7 +349,10 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
         }
 
         let signers = self.get_signers_by_ids(&ids).await?;
-        debug!("Successfully fetched {} signers", signers.results.len());
+        debug!(
+            count = signers.results.len(),
+            "successfully fetched signers"
+        );
         Ok(signers.results)
     }
 
@@ -422,7 +425,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
 
-        debug!("Signer entries exist: {}", exists);
+        debug!(exists = %exists, "signer entries exist");
         Ok(exists)
     }
 
@@ -460,7 +463,7 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
 
-        debug!("Dropped {} signer entries", signer_ids.len());
+        debug!(count = %signer_ids.len(), "dropped signer entries");
         Ok(())
     }
 }

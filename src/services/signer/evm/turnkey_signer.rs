@@ -20,7 +20,7 @@ use alloy::{
     primitives::{eip191_hash_message, keccak256},
 };
 use async_trait::async_trait;
-use log::{debug, info}; // Import FutureExt to enable the `boxed` method
+use tracing::{debug, info}; // Import FutureExt to enable the `boxed` method
 
 use crate::{
     domain::{

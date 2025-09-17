@@ -2,8 +2,8 @@
 //! It includes XDR parsing, validation, sequence updating, and fee updating.
 
 use eyre::Result;
-use log::info;
 use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope, WriteXdr};
+use tracing::info;
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,

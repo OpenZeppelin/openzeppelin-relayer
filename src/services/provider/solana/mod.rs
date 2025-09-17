@@ -294,7 +294,7 @@ impl SolanaProvider {
             _ => false,
         };
 
-        log::debug!(
+        tracing::debug!(
             "Starting RPC operation '{}' with timeout: {}s",
             operation_name,
             self.timeout_seconds.as_secs()

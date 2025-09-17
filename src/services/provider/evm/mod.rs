@@ -256,7 +256,7 @@ impl EvmProvider {
     {
         // Classify which errors should be retried
 
-        log::debug!(
+        tracing::debug!(
             "Starting RPC operation '{}' with timeout: {}s",
             operation_name,
             self.timeout_seconds

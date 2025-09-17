@@ -1,4 +1,3 @@
-pub mod job_tracing;
 pub mod middleware;
 pub mod request_id;
 

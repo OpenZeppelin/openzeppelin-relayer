@@ -41,8 +41,8 @@ use metrics::middleware::MetricsMiddleware;
 
 use config::ApiKeyRateLimit;
 use dotenvy::dotenv;
-use log::info;
 use std::env;
+use tracing::info;
 
 use openzeppelin_relayer::{
     api,
@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
         .finish()
         .unwrap();
 
-    info!("Starting server on {}:{}", config.host, config.port);
+    info!(host = %config.host, port = %config.port, "starting server");
     let app_server = HttpServer::new({
         // Clone the config for use within the closure.
         let server_config_clone = Arc::clone(&server_config);
@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
     .run();
 
     let metrics_server_future = if metrics_enabled {
-        log::info!("Metrics server enabled, starting metrics server...");
+        tracing::info!("metrics server enabled, starting metrics server");
         Some(
             HttpServer::new(|| {
                 App::new()
@@ -168,7 +168,7 @@ async fn main() -> Result<()> {
             .run(),
         )
     } else {
-        log::info!("Metrics server disabled");
+        tracing::info!("metrics server disabled");
         None
     };
 

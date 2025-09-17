@@ -15,7 +15,6 @@ use crate::{
     models::RelayerSolanaPolicy,
     services::SolanaProviderTrait,
 };
-use log::info;
 use solana_client::rpc_response::RpcSimulateTransactionResult;
 use solana_sdk::{
     commitment_config::CommitmentConfig, pubkey::Pubkey, system_instruction::SystemInstruction,
@@ -23,6 +22,7 @@ use solana_sdk::{
 };
 use solana_system_interface::program;
 use thiserror::Error;
+use tracing::info;
 
 #[derive(Debug, Error)]
 #[allow(dead_code)]
@@ -193,7 +193,7 @@ impl SolanaTransactionValidator {
     ) -> Result<(), SolanaTransactionValidationError> {
         if let Some(allowed_accounts) = &policy.allowed_accounts {
             for account_key in &tx.message.account_keys {
-                info!("Checking account {}", account_key);
+                info!(account_key = %account_key, "checking account");
                 if !allowed_accounts.contains(&account_key.to_string()) {
                     return Err(SolanaTransactionValidationError::PolicyViolation(format!(
                         "Account {} not allowed",

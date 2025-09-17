@@ -10,11 +10,11 @@ use crate::models::{NetworkRepoModel, NetworkType, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PaginationQuery, Repository};
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const NETWORK_PREFIX: &str = "network";
 const NETWORK_LIST_KEY: &str = "network_list";
@@ -90,7 +90,7 @@ impl RedisNetworkRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
 
-        debug!("Updating indexes for network {}", network.id);
+        debug!(network_id = %network.id, "updating indexes for network");
 
         // Add name index
         let name_key = self.network_name_index_key(&network.network_type, &network.name);
@@ -100,10 +100,7 @@ impl RedisNetworkRepository {
         if let Some(chain_id) = self.extract_chain_id(network) {
             let chain_id_key = self.network_chain_id_index_key(&network.network_type, chain_id);
             pipe.set(&chain_id_key, &network.id);
-            debug!(
-                "Added chain ID index for network {} with chain_id {}",
-                network.id, chain_id
-            );
+            debug!(network_id = %network.id, chain_id = %chain_id, "added chain ID index for network");
         }
 
         // Remove old indexes if updating
@@ -112,10 +109,7 @@ impl RedisNetworkRepository {
             if old.name != network.name || old.network_type != network.network_type {
                 let old_name_key = self.network_name_index_key(&old.network_type, &old.name);
                 pipe.del(&old_name_key);
-                debug!(
-                    "Removing old name index for network {} (name: {} -> {})",
-                    network.id, old.name, network.name
-                );
+                debug!(network_id = %network.id, old_name = %old.name, new_name = %network.name, "removing old name index for network");
             }
 
             // Handle chain ID index cleanup
@@ -127,24 +121,18 @@ impl RedisNetworkRepository {
                     let old_chain_id_key =
                         self.network_chain_id_index_key(&old.network_type, old_chain_id);
                     pipe.del(&old_chain_id_key);
-                    debug!(
-                        "Removing old chain ID index for network {} (chain_id: {} -> {:?})",
-                        network.id, old_chain_id, new_chain_id
-                    );
+                    debug!(network_id = %network.id, old_chain_id = %old_chain_id, new_chain_id = ?new_chain_id, "removing old chain ID index for network");
                 }
             }
         }
 
         // Execute all operations in a single pipeline
         pipe.exec_async(&mut conn).await.map_err(|e| {
-            error!(
-                "Index update pipeline failed for network {}: {}",
-                network.id, e
-            );
+            error!(network_id = %network.id, error = %e, "index update pipeline failed for network");
             self.map_redis_error(e, &format!("update_indexes_for_network_{}", network.id))
         })?;
 
-        debug!("Successfully updated indexes for network {}", network.id);
+        debug!(network_id = %network.id, "successfully updated indexes for network");
         Ok(())
     }
 
@@ -154,7 +142,7 @@ impl RedisNetworkRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
 
-        debug!("Removing all indexes for network {}", network.id);
+        debug!(network_id = %network.id, "removing all indexes for network");
 
         // Remove name index
         let name_key = self.network_name_index_key(&network.network_type, &network.name);
@@ -164,21 +152,15 @@ impl RedisNetworkRepository {
         if let Some(chain_id) = self.extract_chain_id(network) {
             let chain_id_key = self.network_chain_id_index_key(&network.network_type, chain_id);
             pipe.del(&chain_id_key);
-            debug!(
-                "Removing chain ID index for network {} with chain_id {}",
-                network.id, chain_id
-            );
+            debug!(network_id = %network.id, chain_id = %chain_id, "removing chain ID index for network");
         }
 
         pipe.exec_async(&mut conn).await.map_err(|e| {
-            error!("Index removal failed for network {}: {}", network.id, e);
+            error!(network_id = %network.id, error = %e, "index removal failed for network");
             self.map_redis_error(e, &format!("remove_indexes_for_network_{}", network.id))
         })?;
 
-        debug!(
-            "Successfully removed all indexes for network {}",
-            network.id
-        );
+        debug!(network_id = %network.id, "successfully removed all indexes for network");
         Ok(())
     }
 
@@ -188,7 +170,7 @@ impl RedisNetworkRepository {
         ids: &[String],
     ) -> Result<BatchRetrievalResult<NetworkRepoModel>, RepositoryError> {
         if ids.is_empty() {
-            debug!("No network IDs provided for batch fetch");
+            debug!("no network IDs provided for batch fetch");
             return Ok(BatchRetrievalResult {
                 results: vec![],
                 failed_ids: vec![],
@@ -198,7 +180,7 @@ impl RedisNetworkRepository {
         let mut conn = self.client.as_ref().clone();
         let keys: Vec<String> = ids.iter().map(|id| self.network_key(id)).collect();
 
-        debug!("Batch fetching {} networks", ids.len());
+        debug!(count = %ids.len(), "batch fetching networks");
 
         let values: Vec<Option<String>> = conn
             .mget(&keys)
@@ -216,27 +198,23 @@ impl RedisNetworkRepository {
                         Ok(network) => networks.push(network),
                         Err(e) => {
                             failed_count += 1;
-                            error!("Failed to deserialize network {}: {}", ids[i], e);
+                            error!(network_id = %ids[i], error = %e, "failed to deserialize network");
                             failed_ids.push(ids[i].clone());
                         }
                     }
                 }
                 None => {
-                    warn!("Network {} not found in batch fetch", ids[i]);
+                    warn!(network_id = %ids[i], "network not found in batch fetch");
                 }
             }
         }
 
         if failed_count > 0 {
-            warn!(
-                "Failed to deserialize {} out of {} networks in batch",
-                failed_count,
-                ids.len()
-            );
-            warn!("Failed to deserialize networks: {:?}", failed_ids);
+            warn!(failed_count = %failed_count, total_count = %ids.len(), "failed to deserialize networks in batch");
+            warn!(failed_ids = ?failed_ids, "failed to deserialize networks");
         }
 
-        debug!("Successfully fetched {} networks", networks.len());
+        debug!(count = %networks.len(), "successfully fetched networks");
         Ok(BatchRetrievalResult {
             results: networks,
             failed_ids,
@@ -270,7 +248,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let network_list_key = self.network_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Creating network with ID: {}", entity.id);
+        debug!(network_id = %entity.id, "creating network");
 
         let value = self.serialize_entity(&entity, |n| &n.id, "network")?;
 
@@ -281,10 +259,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             .map_err(|e| self.map_redis_error(e, "create_network_check_existing"))?;
 
         if existing.is_some() {
-            warn!(
-                "Attempted to create network {} that already exists",
-                entity.id
-            );
+            warn!(network_id = %entity.id, "attempted to create network that already exists");
             return Err(RepositoryError::ConstraintViolation(format!(
                 "Network with ID {} already exists",
                 entity.id
@@ -303,7 +278,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         // Update indexes
         self.update_indexes(&entity, None).await?;
 
-        debug!("Successfully created network with ID: {}", entity.id);
+        debug!(network_id = %entity.id, "successfully created network");
         Ok(entity)
     }
 
@@ -317,7 +292,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let key = self.network_key(&id);
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Retrieving network with ID: {}", id);
+        debug!(network_id = %id, "retrieving network");
 
         let network_data: Option<String> = conn
             .get(&key)
@@ -327,11 +302,11 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         match network_data {
             Some(data) => {
                 let network = self.deserialize_entity::<NetworkRepoModel>(&data, &id, "network")?;
-                debug!("Successfully retrieved network with ID: {}", id);
+                debug!(network_id = %id, "successfully retrieved network");
                 Ok(network)
             }
             None => {
-                debug!("Network with ID {} not found", id);
+                debug!(network_id = %id, "network not found");
                 Err(RepositoryError::NotFound(format!(
                     "Network with ID {} not found",
                     id
@@ -344,7 +319,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let network_list_key = self.network_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Listing all networks");
+        debug!("listing all networks");
 
         let ids: Vec<String> = conn
             .smembers(&network_list_key)
@@ -352,12 +327,12 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             .map_err(|e| self.map_redis_error(e, "list_all_networks"))?;
 
         if ids.is_empty() {
-            debug!("No networks found");
+            debug!("no networks found");
             return Ok(Vec::new());
         }
 
         let networks = self.get_networks_by_ids(&ids).await?;
-        debug!("Successfully retrieved {} networks", networks.results.len());
+        debug!(count = %networks.results.len(), "successfully retrieved networks");
         Ok(networks.results)
     }
 
@@ -374,10 +349,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let network_list_key = self.network_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!(
-            "Listing paginated networks: page {}, per_page {}",
-            query.page, query.per_page
-        );
+        debug!(page = %query.page, per_page = %query.per_page, "listing paginated networks");
 
         let all_ids: Vec<String> = conn
             .smembers(&network_list_key)
@@ -390,10 +362,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let total_pages = all_ids.len().div_ceil(per_page);
 
         if page > total_pages && !all_ids.is_empty() {
-            debug!(
-                "Requested page {} exceeds total pages {}",
-                page, total_pages
-            );
+            debug!(requested_page = %page, total_pages = %total_pages, "requested page exceeds total pages");
             return Ok(PaginatedResult {
                 items: Vec::new(),
                 total,
@@ -408,11 +377,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let page_ids = all_ids[start_idx..end_idx].to_vec();
         let networks = self.get_networks_by_ids(&page_ids).await?;
 
-        debug!(
-            "Successfully retrieved {} networks for page {}",
-            networks.results.len(),
-            query.page
-        );
+        debug!(count = %networks.results.len(), page = %query.page, "successfully retrieved networks for page");
         Ok(PaginatedResult {
             items: networks.results.clone(),
             total,
@@ -442,7 +407,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let key = self.network_key(&id);
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Updating network with ID: {}", id);
+        debug!(network_id = %id, "updating network");
 
         // Get the old network for index cleanup
         let old_network = self.get_by_id(id.clone()).await?;
@@ -457,7 +422,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         // Update indexes
         self.update_indexes(&entity, Some(&old_network)).await?;
 
-        debug!("Successfully updated network with ID: {}", id);
+        debug!(network_id = %id, "successfully updated network");
         Ok(entity)
     }
 
@@ -472,7 +437,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let network_list_key = self.network_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Deleting network with ID: {}", id);
+        debug!(network_id = %id, "deleting network");
 
         // Get network for index cleanup
         let network = self.get_by_id(id.clone()).await?;
@@ -488,10 +453,10 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         // Remove indexes (log errors but don't fail the delete)
         if let Err(e) = self.remove_all_indexes(&network).await {
-            error!("Failed to remove indexes for deleted network {}: {}", id, e);
+            error!(network_id = %id, error = %e, "failed to remove indexes for deleted network");
         }
 
-        debug!("Successfully deleted network with ID: {}", id);
+        debug!(network_id = %id, "successfully deleted network");
         Ok(())
     }
 
@@ -499,14 +464,14 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let network_list_key = self.network_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Counting networks");
+        debug!("counting networks");
 
         let count: usize = conn
             .scard(&network_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "count_networks"))?;
 
-        debug!("Total networks count: {}", count);
+        debug!(count = %count, "total networks count");
         Ok(count)
     }
 
@@ -516,14 +481,14 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         let network_list_key = self.network_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Checking if network storage has entries");
+        debug!("checking if network storage has entries");
 
         let exists: bool = conn
             .exists(&network_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "check_network_entries_exist"))?;
 
-        debug!("Network storage has entries: {}", exists);
+        debug!(exists = %exists, "network storage has entries");
         Ok(exists)
     }
 
@@ -533,7 +498,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Starting to drop all network entries from Redis storage");
+        debug!("starting to drop all network entries from Redis storage");
 
         // First, get all network IDs to clean up their data and indexes
         let network_list_key = self.network_list_key();
@@ -543,11 +508,11 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             .map_err(|e| self.map_redis_error(e, "get_network_ids_for_cleanup"))?;
 
         if network_ids.is_empty() {
-            debug!("No network entries found to clean up");
+            debug!("no network entries found to clean up");
             return Ok(());
         }
 
-        debug!("Found {} networks to clean up", network_ids.len());
+        debug!(count = %network_ids.len(), "found networks to clean up");
 
         // Get all networks to clean up their indexes properly
         let networks_result = self.get_networks_by_ids(&network_ids).await?;
@@ -581,11 +546,11 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         // Execute all deletions
         pipe.exec_async(&mut conn).await.map_err(|e| {
-            error!("Failed to execute cleanup pipeline: {}", e);
+            error!(error = %e, "failed to execute cleanup pipeline");
             self.map_redis_error(e, "drop_all_network_entries_pipeline")
         })?;
 
-        debug!("Successfully dropped all network entries from Redis storage");
+        debug!("successfully dropped all network entries from Redis storage");
         Ok(())
     }
 }
@@ -605,10 +570,7 @@ impl NetworkRepository for RedisNetworkRepository {
 
         let mut conn = self.client.as_ref().clone();
 
-        debug!(
-            "Getting network by name: {} (type: {:?})",
-            name, network_type
-        );
+        debug!(name = %name, network_type = ?network_type, "getting network by name");
 
         // Use name index for O(1) lookup
         let name_index_key = self.network_name_index_key(&network_type, name);
@@ -621,22 +583,19 @@ impl NetworkRepository for RedisNetworkRepository {
             Some(id) => {
                 match self.get_by_id(id.clone()).await {
                     Ok(network) => {
-                        debug!("Found network by name: {}", name);
+                        debug!(name = %name, "found network by name");
                         Ok(Some(network))
                     }
                     Err(RepositoryError::NotFound(_)) => {
                         // Network was deleted but index wasn't cleaned up
-                        warn!(
-                            "Stale name index found for network type {:?} name {}",
-                            network_type, name
-                        );
+                        warn!(network_type = ?network_type, name = %name, "stale name index found for network");
                         Ok(None)
                     }
                     Err(e) => Err(e),
                 }
             }
             None => {
-                debug!("Network not found by name: {}", name);
+                debug!(name = %name, "network not found by name");
                 Ok(None)
             }
         }
@@ -654,10 +613,7 @@ impl NetworkRepository for RedisNetworkRepository {
 
         let mut conn = self.client.as_ref().clone();
 
-        debug!(
-            "Getting network by chain ID: {} (type: {:?})",
-            chain_id, network_type
-        );
+        debug!(chain_id = %chain_id, network_type = ?network_type, "getting network by chain ID");
 
         // Use chain ID index for O(1) lookup
         let chain_id_index_key = self.network_chain_id_index_key(&network_type, chain_id);
@@ -670,22 +626,19 @@ impl NetworkRepository for RedisNetworkRepository {
             Some(id) => {
                 match self.get_by_id(id.clone()).await {
                     Ok(network) => {
-                        debug!("Found network by chain ID: {}", chain_id);
+                        debug!(chain_id = %chain_id, "found network by chain ID");
                         Ok(Some(network))
                     }
                     Err(RepositoryError::NotFound(_)) => {
                         // Network was deleted but index wasn't cleaned up
-                        warn!(
-                            "Stale chain ID index found for network type {:?} chain_id {}",
-                            network_type, chain_id
-                        );
+                        warn!(network_type = ?network_type, chain_id = %chain_id, "stale chain ID index found for network");
                         Ok(None)
                     }
                     Err(e) => Err(e),
                 }
             }
             None => {
-                debug!("Network not found by chain ID: {}", chain_id);
+                debug!(chain_id = %chain_id, "network not found by chain ID");
                 Ok(None)
             }
         }

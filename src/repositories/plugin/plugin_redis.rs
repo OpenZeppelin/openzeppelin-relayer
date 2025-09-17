@@ -4,11 +4,11 @@ use crate::models::{PaginationQuery, PluginModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PluginRepositoryTrait};
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const PLUGIN_PREFIX: &str = "plugin";
 const PLUGIN_LIST_KEY: &str = "plugin_list";
@@ -68,7 +68,7 @@ impl RedisPluginRepository {
         }
         let key = self.plugin_key(id);
 
-        debug!("Fetching plugin data for ID: {}", id);
+        debug!(plugin_id = %id, "fetching plugin data");
 
         let json: Option<String> = conn
             .get(&key)
@@ -77,12 +77,12 @@ impl RedisPluginRepository {
 
         match json {
             Some(json) => {
-                debug!("Found plugin data for ID: {}", id);
+                debug!(plugin_id = %id, "found plugin data");
                 let plugin = self.deserialize_entity::<PluginModel>(&json, id, "plugin")?;
                 Ok(Some(plugin))
             }
             None => {
-                debug!("No plugin found for ID: {}", id);
+                debug!(plugin_id = %id, "no plugin found");
                 Ok(None)
             }
         }
@@ -93,7 +93,7 @@ impl RedisPluginRepository {
         ids: &[String],
     ) -> Result<BatchRetrievalResult<PluginModel>, RepositoryError> {
         if ids.is_empty() {
-            debug!("No plugin IDs provided for batch fetch");
+            debug!("no plugin IDs provided for batch fetch");
             return Ok(BatchRetrievalResult {
                 results: vec![],
                 failed_ids: vec![],
@@ -117,22 +117,18 @@ impl RedisPluginRepository {
                     Ok(plugin) => plugins.push(plugin),
                     Err(e) => {
                         failed_count += 1;
-                        error!("Failed to deserialize plugin {}: {}", ids[i], e);
+                        error!(plugin_id = %ids[i], error = %e, "failed to deserialize plugin");
                         failed_ids.push(ids[i].clone());
                     }
                 },
                 None => {
-                    warn!("Plugin {} not found in batch fetch", ids[i]);
+                    warn!(plugin_id = %ids[i], "plugin not found in batch fetch");
                 }
             }
         }
 
         if failed_count > 0 {
-            warn!(
-                "Failed to deserialize {} out of {} plugins in batch",
-                failed_count,
-                ids.len()
-            );
+            warn!(failed_count = %failed_count, total_count = %ids.len(), "failed to deserialize plugins in batch");
         }
 
         Ok(BatchRetrievalResult {
@@ -175,7 +171,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         let key = self.plugin_key(&plugin.id);
         let list_key = self.plugin_list_key();
 
-        debug!("Adding plugin with ID: {}", plugin.id);
+        debug!(plugin_id = %plugin.id, "adding plugin");
 
         // Check if plugin already exists
         let exists: bool = conn
@@ -200,11 +196,11 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         pipe.sadd(&list_key, &plugin.id);
 
         pipe.exec_async(&mut conn).await.map_err(|e| {
-            error!("Failed to add plugin {}: {}", plugin.id, e);
+            error!(plugin_id = %plugin.id, error = %e, "failed to add plugin");
             self.map_redis_error(e, &format!("add_plugin_{}", plugin.id))
         })?;
 
-        debug!("Successfully added plugin with ID: {}", plugin.id);
+        debug!(plugin_id = %plugin.id, "successfully added plugin");
         Ok(())
     }
 
@@ -278,14 +274,14 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         let mut conn = self.client.as_ref().clone();
         let plugin_list_key = self.plugin_list_key();
 
-        debug!("Checking if plugin entries exist");
+        debug!("checking if plugin entries exist");
 
         let exists: bool = conn
             .exists(&plugin_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
 
-        debug!("Plugin entries exist: {}", exists);
+        debug!(exists = %exists, "plugin entries exist");
         Ok(exists)
     }
 
@@ -293,7 +289,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         let mut conn = self.client.as_ref().clone();
         let plugin_list_key = self.plugin_list_key();
 
-        debug!("Dropping all plugin entries");
+        debug!("dropping all plugin entries");
 
         // Get all plugin IDs first
         let plugin_ids: Vec<String> = conn
@@ -302,7 +298,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
 
         if plugin_ids.is_empty() {
-            debug!("No plugin entries to drop");
+            debug!("no plugin entries to drop");
             return Ok(());
         }
 
@@ -323,7 +319,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
 
-        debug!("Dropped {} plugin entries", plugin_ids.len());
+        debug!(count = %plugin_ids.len(), "dropped plugin entries");
         Ok(())
     }
 }
