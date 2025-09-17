@@ -600,18 +600,14 @@ where
         let is_eip1559 = tx_data.is_eip1559();
 
         // Apply price params handler if available
-        let mut recompute_total_cost = true;
         if let Some(handler) = &self.price_params_handler {
             price_params = handler.handle_price_params(tx_data, price_params).await?;
 
             // Re-apply cap after handler in case it changed fee fields
             self.apply_gas_price_cap_and_constraints(&mut price_params, relayer)?;
-
-            recompute_total_cost = price_params.total_cost == U256::ZERO;
         }
 
-        // Only recompute total cost if it was not set by the handler
-        if recompute_total_cost {
+        if price_params.total_cost == U256::ZERO {
             price_params.total_cost = price_params.calculate_total_cost(
                 is_eip1559,
                 tx_data.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
