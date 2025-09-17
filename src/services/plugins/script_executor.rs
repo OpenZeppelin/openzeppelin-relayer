@@ -229,11 +229,10 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
-        assert_eq!(result.error, "");
-
-        assert!(!result.logs.is_empty());
-        assert_eq!(result.logs[0].level, LogLevel::Error);
-        assert!(result.logs[0].message.contains("logger"));
+        // TypeScript compilation errors are now returned in the error field
+        assert!(!result.error.is_empty());
+        assert!(result.error.contains("Plugin executor failed"));
+        assert!(result.error.contains("logger"));
     }
 
     #[tokio::test]
