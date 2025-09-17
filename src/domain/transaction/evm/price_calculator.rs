@@ -187,11 +187,6 @@ where
         // Apply gas price caps and constraints
         self.apply_gas_price_cap_and_constraints(&mut final_params, relayer)?;
 
-        // Reset fields that will be computed later
-        final_params.is_min_bumped = None;
-        final_params.extra_fee = None;
-        final_params.total_cost = U256::ZERO;
-
         // Use price params handler if available for custom network pricing and finalize
         self.finalize_price_params(relayer, tx_data, final_params)
             .await
