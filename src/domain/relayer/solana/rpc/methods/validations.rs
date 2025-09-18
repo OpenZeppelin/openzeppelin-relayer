@@ -58,6 +58,18 @@ impl SolanaTransactionValidator {
         token_mint: &str,
         policy: &RelayerSolanaPolicy,
     ) -> Result<(), SolanaTransactionValidationError> {
+        // Check if allowed tokens are configured
+        let no_tokens_configured = match &policy.allowed_tokens {
+            None => true,                      // No tokens configured
+            Some(tokens) => tokens.is_empty(), // Tokens configured but empty
+        };
+
+        // If no allowed tokens are configured or empty, allow all tokens
+        if no_tokens_configured {
+            return Ok(());
+        }
+
+        // If allowed tokens are configured, check if the token is in the list
         let allowed_token = policy.get_allowed_token_entry(token_mint);
         if allowed_token.is_none() {
             return Err(SolanaTransactionValidationError::PolicyViolation(format!(
@@ -1261,5 +1273,148 @@ mod tests {
             }
             other => panic!("Expected PolicyViolation error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_validate_allowed_token_no_tokens_configured() {
+        let token_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: None, // No tokens configured
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_token(token_mint, &policy);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_token_empty_tokens_list() {
+        let token_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![]), // Empty tokens list
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_token(token_mint, &policy);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_token_success() {
+        let token_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![
+                SolanaAllowedTokensPolicy {
+                    mint: token_mint.to_string(),
+                    decimals: Some(6),
+                    symbol: Some("USDC".to_string()),
+                    max_allowed_fee: Some(1000),
+                    swap_config: None,
+                },
+                SolanaAllowedTokensPolicy {
+                    mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // USDT mint
+                    decimals: Some(6),
+                    symbol: Some("USDT".to_string()),
+                    max_allowed_fee: Some(2000),
+                    swap_config: None,
+                },
+            ]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_token(token_mint, &policy);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_allowed_token_not_allowed() {
+        let token_mint = "11111111111111111111111111111112"; // System Program (not a valid token mint)
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![
+                SolanaAllowedTokensPolicy {
+                    mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC mint
+                    decimals: Some(6),
+                    symbol: Some("USDC".to_string()),
+                    max_allowed_fee: Some(1000),
+                    swap_config: None,
+                },
+                SolanaAllowedTokensPolicy {
+                    mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".to_string(), // USDT mint
+                    decimals: Some(6),
+                    symbol: Some("USDT".to_string()),
+                    max_allowed_fee: Some(2000),
+                    swap_config: None,
+                },
+            ]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_token(token_mint, &policy);
+
+        match result {
+            Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
+                assert_eq!(
+                    msg,
+                    format!("Token {} not allowed for transfers", token_mint),
+                    "Error message should match expected format"
+                );
+            }
+            other => panic!("Expected PolicyViolation error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_allowed_token_case_sensitive() {
+        let token_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+        let uppercase_mint = token_mint.to_uppercase();
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: token_mint.to_string(), // lowercase version
+                decimals: Some(6),
+                symbol: Some("USDC".to_string()),
+                max_allowed_fee: Some(1000),
+                swap_config: None,
+            }]),
+            ..Default::default()
+        };
+
+        // Test with exact case - should succeed
+        let result = SolanaTransactionValidator::validate_allowed_token(token_mint, &policy);
+        assert!(result.is_ok());
+
+        // Test with different case - should fail (case sensitive)
+        let result = SolanaTransactionValidator::validate_allowed_token(&uppercase_mint, &policy);
+        assert!(matches!(
+            result.unwrap_err(),
+            SolanaTransactionValidationError::PolicyViolation(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_allowed_token_with_minimal_config() {
+        let token_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+
+        let policy = RelayerSolanaPolicy {
+            allowed_tokens: Some(vec![SolanaAllowedTokensPolicy {
+                mint: token_mint.to_string(),
+                decimals: None,
+                symbol: None,
+                max_allowed_fee: None,
+                swap_config: None,
+            }]),
+            ..Default::default()
+        };
+
+        let result = SolanaTransactionValidator::validate_allowed_token(token_mint, &policy);
+
+        assert!(result.is_ok());
     }
 }
