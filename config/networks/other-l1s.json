@@ -270,7 +270,7 @@
         "https://polkadot.js.org/apps/?rpc=wss://peaq.api.onfinality.io/public-ws#/explorer"
       ],
       "is_testnet": false,
-      "required_confirmations": 3,
+      "required_confirmations": 1,
       "rpc_urls": [
         "https://quicknode1.peaq.xyz",
         "https://quicknode2.peaq.xyz",
