@@ -426,7 +426,7 @@ export async function handler(context: PluginContext) {
 - `set(key: string, value: unknown, opts?: { ttlSec?: number }): Promise<boolean>`
 - `del(key: string): Promise<boolean>`
 - `exists(key: string): Promise<boolean>`
-- `scan(pattern?: string, batch?: number): Promise<string[]>`
+- `listKeys(pattern?: string, batch?: number): Promise<string[]>`
 - `clear(): Promise<number>`
 - `withLock<T>(key: string, fn: () => Promise<T>, opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }): Promise<T | null>`
 

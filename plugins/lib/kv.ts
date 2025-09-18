@@ -112,7 +112,7 @@ export class DefaultPluginKVStore implements PluginKVStore {
     this.client = new IORedis(url, {
       connectionName: `plugin_kv:${pluginId}`,
       lazyConnect: true,
-      enableOfflineQueue: false,
+      enableOfflineQueue: true,
       enableAutoPipelining: true,
       maxRetriesPerRequest: 1,
       retryStrategy: (n) => Math.min(n * 50, 1000),
