@@ -19,6 +19,8 @@ pub struct Job<T> {
     pub timestamp: String,
     pub job_type: JobType,
     pub data: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl<T> Job<T> {
@@ -29,7 +31,12 @@ impl<T> Job<T> {
             timestamp: Utc::now().timestamp().to_string(),
             job_type,
             data,
+            request_id: None,
         }
+    }
+    pub fn with_request_id(mut self, id: Option<String>) -> Self {
+        self.request_id = id;
+        self
     }
 }
 

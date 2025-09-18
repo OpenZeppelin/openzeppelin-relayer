@@ -19,8 +19,11 @@ panic = "unwind"
 aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
 aws-sdk-kms = "1.75.0"
 actix-web = "4"
-log = "0.4"
-simplelog = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-error = { version = "0.2" }
+tracing-appender = "0.2"
+tracing-actix-web = "0.7"
 prometheus = "0.14"
 lazy_static = "1.5"
 dotenvy = "0.15"
@@ -87,6 +90,8 @@ pem = { version = "3" }
 simple_asn1 = { version = "0.6" }
 k256 = { version = "0.13", features = ["ecdsa-core"]}
 solana-system-interface = { version = "1.0.0", features = ["bincode"] }
+cdp-sdk = "0.1.0"
+reqwest-middleware = { version = "0.4.2", default-features = false, features = ["json"] }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"

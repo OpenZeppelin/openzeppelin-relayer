@@ -256,10 +256,39 @@
       "is_testnet": true,
       "network": "fuse-spark",
       "required_confirmations": 6,
-      "rpc_urls": [" https://rpc.fusespark.io"],
+      "rpc_urls": ["https://rpc.fusespark.io"],
       "symbol": "SPARK",
       "tags": [],
       "type": "evm"
+    },
+    {
+      "type": "evm",
+      "network": "japan-open-chain",
+      "chain_id": 81,
+      "explorer_urls": ["https://explorer.japanopenchain.org"],
+      "is_testnet": false,
+      "required_confirmations": 1,
+      "rpc_urls": [
+        "https://rpc-1.japanopenchain.org:8545",
+        "https://rpc-2.japanopenchain.org:8545",
+        "https://rpc-3.japanopenchain.org"
+      ],
+      "average_blocktime_ms": 5000,
+      "features": ["eip1559"],
+      "symbol": "JOC"
+    },
+    {
+      "from": "japan-open-chain",
+      "type": "evm",
+      "network": "japan-open-chain-testnet",
+      "chain_id": 10081,
+      "explorer_urls": ["https://explorer.testnet.japanopenchain.org/"],
+      "is_testnet": true,
+      "rpc_urls": [
+        "https://rpc-1.testnet.japanopenchain.org:8545",
+        "https://rpc-2.testnet.japanopenchain.org:8545"
+      ],
+      "symbol": "JOCT"
     },
     {
       "type": "evm",

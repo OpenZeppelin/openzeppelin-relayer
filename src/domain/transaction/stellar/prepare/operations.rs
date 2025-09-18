@@ -1,7 +1,7 @@
 //! Operations-based transaction preparation logic.
 
 use eyre::Result;
-use log::info;
+use tracing::info;
 
 use super::common::{get_next_sequence, sign_stellar_transaction, simulate_if_needed};
 use crate::{

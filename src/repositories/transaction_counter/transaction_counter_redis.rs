@@ -9,11 +9,11 @@ use super::TransactionCounterTrait;
 use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use async_trait::async_trait;
-use log::debug;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::debug;
 
 const COUNTER_PREFIX: &str = "transaction_counter";
 
@@ -75,10 +75,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Getting counter for relayer {} and address {}",
-            relayer_id, address
-        );
+        debug!(relayer_id = %relayer_id, address = %address, "getting counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
@@ -87,7 +84,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             .await
             .map_err(|e| self.map_redis_error(e, "get_counter"))?;
 
-        debug!("Retrieved counter value: {:?}", value);
+        debug!(value = ?value, "retrieved counter value");
         Ok(value)
     }
 
@@ -109,10 +106,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Getting and incrementing counter for relayer {} and address {}",
-            relayer_id, address
-        );
+        debug!(relayer_id = %relayer_id, address = %address, "getting and incrementing counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
@@ -133,7 +127,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             .await
             .map_err(|e| self.map_redis_error(e, "get_and_increment"))?;
 
-        debug!("Counter incremented from {} to {}", current, current + 1);
+        debug!(from = %current, to = %(current + 1), "counter incremented");
         Ok(current)
     }
 
@@ -151,10 +145,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Decrementing counter for relayer {} and address {}",
-            relayer_id, address
-        );
+        debug!(relayer_id = %relayer_id, address = %address, "decrementing counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
@@ -179,7 +170,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             .await
             .map_err(|e| self.map_redis_error(e, "decrement_counter"))?;
 
-        debug!("Counter decremented from {} to {}", current, new_value);
+        debug!(from = %current, to = %new_value, "counter decremented");
         Ok(new_value)
     }
 
@@ -202,10 +193,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         }
 
         let key = self.counter_key(relayer_id, address);
-        debug!(
-            "Setting counter for relayer {} and address {} to {}",
-            relayer_id, address, value
-        );
+        debug!(relayer_id = %relayer_id, address = %address, value = %value, "setting counter for relayer and address");
 
         let mut conn = self.client.as_ref().clone();
 
@@ -214,7 +202,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             .await
             .map_err(|e| self.map_redis_error(e, "set_counter"))?;
 
-        debug!("Counter set to {}", value);
+        debug!(value = %value, "counter set");
         Ok(())
     }
 }

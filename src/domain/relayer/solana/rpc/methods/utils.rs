@@ -26,7 +26,6 @@
 use super::*;
 use std::str::FromStr;
 
-use log::debug;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     hash::Hash,
@@ -39,6 +38,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_system_interface::program;
+use tracing::debug;
 
 use spl_token::{amount_to_ui_amount, state::Account};
 
@@ -502,11 +502,11 @@ where
             .estimate_fee_payer_total_fee(transaction)
             .await
             .map_err(|e| {
-                error!("Failed to estimate total fee: {}", e);
+                error!(error = %e, "failed to estimate total fee");
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
-        debug!("Estimated SOL fee: {} lamports", total_fee);
+        debug!(total_fee = %total_fee, "estimated sol fee in lamports");
 
         // Apply buffer if specified
         let buffered_fee = if let Some(factor) = fee_margin_percentage {
@@ -534,7 +534,7 @@ where
             .get_fee_token_quote(fee_token, fee_with_margin)
             .await
             .map_err(|e| {
-                error!("Failed to fee quote: {}", e);
+                error!(error = %e, "failed to fee quote");
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
@@ -802,7 +802,7 @@ where
                             ) {
                                 Ok(account) => account,
                                 Err(e) => {
-                                    error!("Failed to unpack destination token account: {}", e);
+                                    error!(error = %e, "failed to unpack destination token account");
                                     continue;
                                 }
                             };
@@ -863,13 +863,13 @@ where
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to get source token account: {}", e);
+                                    error!(error = %e, "failed to get source token account");
                                     continue;
                                 }
                             }
                         }
                         Err(e) => {
-                            error!("Failed to get destination token account: {}", e);
+                            error!(error = %e, "failed to get destination token account");
                             continue;
                         }
                     }
@@ -894,7 +894,7 @@ where
             )
             .await
             .map_err(|e| {
-                error!("Failed to schedule status check: {}", e);
+                error!(error = %e, "failed to schedule status check");
                 SolanaRpcError::Internal(e.to_string())
             })?;
         Ok(())

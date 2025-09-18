@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use eyre::Result;
-use log::{debug, error, info, warn};
 use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
@@ -274,17 +274,14 @@ where
             .gas_limit_estimation
             .unwrap_or(DEFAULT_EVM_GAS_LIMIT_ESTIMATION)
         {
-            warn!(
-                "Gas limit estimation is disabled for relayer: {:?}",
-                self.relayer().id
-            );
+            warn!("gas limit estimation is disabled for relayer");
             return Err(TransactionError::UnexpectedError(
                 "Gas limit estimation is disabled".to_string(),
             ));
         }
 
         let estimated_gas = self.provider.estimate_gas(evm_data).await.map_err(|e| {
-            warn!("Failed to estimate gas: {:?} for tx: {:?}", e, evm_data);
+            warn!(error = ?e, tx_data = ?evm_data, "failed to estimate gas");
             TransactionError::UnexpectedError(format!("Failed to estimate gas: {}", e))
         })?;
 
@@ -318,7 +315,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Preparing transaction: {:?}", tx.id);
+        debug!("preparing transaction");
 
         let mut evm_data = tx.network_data.get_evm_transaction_data()?;
         let relayer = self.relayer();
@@ -332,16 +329,10 @@ where
                     evm_data.gas_limit = Some(estimated_gas_limit);
                 }
                 Err(estimation_error) => {
-                    error!(
-                        "Failed to estimate gas limit for tx: {} : {:?}",
-                        tx.id, estimation_error
-                    );
+                    error!(error = ?estimation_error, "failed to estimate gas limit");
 
                     let default_gas_limit = get_evm_default_gas_limit_for_tx(&evm_data);
-                    info!(
-                        "Fallback to default gas limit: {} for tx: {}",
-                        default_gas_limit, tx.id
-                    );
+                    debug!(gas_limit = %default_gas_limit, "fallback to default gas limit");
                     evm_data.gas_limit = Some(default_gas_limit);
                 }
             }
@@ -353,7 +344,7 @@ where
             .get_transaction_price_params(&evm_data, relayer)
             .await?;
 
-        debug!("Gas price: {:?}", price_params.gas_price);
+        debug!(gas_price = ?price_params.gas_price, "gas price");
         // increment the nonce
         let nonce = self
             .transaction_counter_service
@@ -381,10 +372,7 @@ where
         {
             Ok(()) => {}
             Err(balance_error) => {
-                info!(
-                    "Insufficient balance for transaction {}: {}",
-                    tx.id, balance_error
-                );
+                info!(error = %balance_error, "insufficient balance for transaction");
 
                 let update = TransactionUpdateRequest {
                     status: Some(TransactionStatus::Failed),
@@ -449,7 +437,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("submitting transaction for tx: {:?}", tx.id);
+        debug!("submitting transaction");
 
         let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
         let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
@@ -511,7 +499,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Resubmitting transaction: {:?}", tx.id);
+        debug!("resubmitting transaction");
 
         // Calculate bumped gas price
         let bumped_price_params = self
@@ -523,10 +511,7 @@ where
             .await?;
 
         if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
-            warn!(
-                "Bumped gas price does not meet minimum requirement, skipping resubmission: {:?}",
-                bumped_price_params
-            );
+            warn!(price_params = ?bumped_price_params, "bumped gas price does not meet minimum requirement, skipping resubmission");
             return Ok(tx);
         }
 
@@ -589,8 +574,8 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Cancelling transaction: {:?}", tx.id);
-        info!("Transaction status: {:?}", tx.status);
+        info!("cancelling transaction");
+        debug!(status = ?tx.status, "transaction status");
         // Check if the transaction can be cancelled
         if !is_pending_transaction(&tx.status) {
             return Err(TransactionError::ValidationError(format!(
@@ -601,7 +586,7 @@ where
 
         // If the transaction is in Pending state, we can just update its status
         if tx.status == TransactionStatus::Pending {
-            info!("Transaction is in Pending state, updating status to Canceled");
+            debug!("transaction is in pending state, updating status to canceled");
             return self
                 .update_transaction_status(tx, TransactionStatus::Canceled)
                 .await;
@@ -620,10 +605,7 @@ where
         self.send_transaction_update_notification(&updated_tx)
             .await?;
 
-        info!(
-            "Original transaction updated with cancellation data: {:?}",
-            updated_tx.id
-        );
+        debug!("original transaction updated with cancellation data");
         Ok(updated_tx)
     }
 
@@ -642,7 +624,7 @@ where
         old_tx: TransactionRepoModel,
         new_tx_request: NetworkTransactionRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Replacing transaction: {:?}", old_tx.id);
+        debug!("replacing transaction");
 
         // Check if the transaction can be replaced
         if !is_pending_transaction(&old_tx.status) {
@@ -700,7 +682,7 @@ where
         )
         .await?;
 
-        info!("Replacement price params: {:?}", price_params);
+        debug!(price_params = ?price_params, "replacement price params");
 
         // Apply the calculated price parameters to the updated EVM data
         let evm_data_with_price_params = updated_evm_data.with_price_params(price_params.clone());
