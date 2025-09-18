@@ -11,6 +11,7 @@ use utoipa::{
     Modify, OpenApi,
 };
 
+const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
@@ -38,7 +39,7 @@ impl Modify for SecurityAddon {
       (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
       (name = "Health", description = "Health is responsible for showing the health of the relayers.")
     ),
-    info(description = "OpenZeppelin Relayer API", version = "1.0.0", title = "OpenZeppelin Relayer API",  license(
+    info(description = "OpenZeppelin Relayer API", version = API_VERSION, title = "OpenZeppelin Relayer API",  license(
         name = "AGPL-3.0 license",
         url = "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     ),
