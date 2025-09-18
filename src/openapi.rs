@@ -12,6 +12,14 @@ use utoipa::{
 };
 
 const API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+struct VersionFromEnv;
+
+impl Modify for VersionFromEnv {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.info.version = API_VERSION.to_string();
+    }
+}
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
@@ -30,7 +38,7 @@ impl Modify for SecurityAddon {
 /// OpenZeppelin Relayer API definitions.
 #[derive(OpenApi)]
 #[openapi(
-    modifiers(&SecurityAddon),
+    modifiers(&SecurityAddon, &VersionFromEnv),
     tags(
       (name = "Relayers", description = "Relayers are the core components of the OpenZeppelin Relayer API. They are responsible for executing transactions on behalf of users and providing a secure and reliable way to interact with the blockchain."),
       (name = "Plugins", description = "Plugins are TypeScript functions that can be used to extend the OpenZeppelin Relayer API functionality."),
@@ -39,7 +47,7 @@ impl Modify for SecurityAddon {
       (name = "Metrics", description = "Metrics are responsible for showing the metrics related to the relayers."),
       (name = "Health", description = "Health is responsible for showing the health of the relayers.")
     ),
-    info(description = "OpenZeppelin Relayer API", version = API_VERSION, title = "OpenZeppelin Relayer API",  license(
+    info(description = "OpenZeppelin Relayer API", version = "0.0.0", title = "OpenZeppelin Relayer API",  license(
         name = "AGPL-3.0 license",
         url = "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     ),
