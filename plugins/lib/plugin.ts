@@ -356,10 +356,12 @@ export class DefaultPluginAPI implements PluginAPI {
   pending: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }>;
   private _connectionPromise: Promise<void> | null = null;
   private _connected: boolean = false;
+  private _httpRequestId?: string;
 
-  constructor(socketPath: string) {
+  constructor(socketPath: string, httpRequestId?: string) {
     this.socket = net.createConnection(socketPath);
     this.pending = new Map();
+    this._httpRequestId = httpRequestId;
 
     this._connectionPromise = new Promise((resolve, reject) => {
       this.socket.on('connect', () => {
@@ -449,7 +451,11 @@ export class DefaultPluginAPI implements PluginAPI {
 
   async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
     const requestId = uuidv4();
-    const message = JSON.stringify({ requestId, relayerId, method, payload }) + '\n';
+    const msg: any = { requestId, relayerId, method, payload };
+    if (this._httpRequestId) {
+      msg.httpRequestId = this._httpRequestId;
+    }
+    const message = JSON.stringify(msg) + '\n';
 
     if (!this._connected) {
       await this._connectionPromise;
@@ -494,9 +500,10 @@ export async function runUserPlugin<T = any, R = any>(
   socketPath: string,
   pluginId: string,
   pluginParams: T,
-  userScriptPath: string
+  userScriptPath: string,
+  httpRequestId?: string
 ): Promise<R> {
-  const plugin = new DefaultPluginAPI(socketPath);
+  const plugin = new DefaultPluginAPI(socketPath, httpRequestId);
   const kv = new DefaultPluginKVStore(pluginId);
 
   try {
