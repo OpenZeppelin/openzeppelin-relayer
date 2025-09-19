@@ -159,12 +159,12 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::from(0),
         };
 
         let result = handler.handle_price_params(&tx, original).await.unwrap();
-        assert_eq!(result.extra_fee, Some(U256::from(42u128)));
+        assert_eq!(result.l1_fee, Some(U256::from(42u128)));
         assert_eq!(result.total_cost, U256::from(42u128));
     }
 }

@@ -36,12 +36,6 @@ fn build_zkevm_transaction_params(tx: &EvmTransactionData) -> serde_json::Value 
 /// the gas estimation accuracy problem. As documented in Polygon's blog post
 /// (https://polygon.technology/blog/new-custom-endpoint-for-dapps-on-polygon-zkevm),
 /// these endpoints provide up to 20% more accurate fee estimation compared to standard methods.
-///
-/// Key features:
-/// - Uses `zkevm_estimateGasPrice` for precise gas price estimation based on transaction type and calldata
-/// - Uses `zkevm_estimateFee` for comprehensive fee estimation including L1 data availability costs
-/// - Accounts for both L2 execution costs and L1 data availability costs specific to zkEVM rollups
-/// - Directly leverages the accurate pricing data from the gas price service (no fallbacks needed)
 #[derive(Debug, Clone)]
 pub struct PolygonZKEvmPriceHandler<P> {
     provider: P,
@@ -50,26 +44,6 @@ pub struct PolygonZKEvmPriceHandler<P> {
 impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
     pub fn new(provider: P) -> Self {
         Self { provider }
-    }
-
-    /// zkEVM-specific method to estimate gas price using the native zkEVM endpoint.
-    ///
-    /// This method calls `zkevm_estimateGasPrice` which provides more accurate
-    /// gas price estimation for Polygon zkEVM networks.
-    async fn zkevm_estimate_gas_price(&self) -> Result<u128, ProviderError> {
-        let result = self
-            .provider
-            .raw_request_dyn("zkevm_estimateGasPrice", serde_json::Value::Array(vec![]))
-            .await?;
-
-        let gas_price_hex = result
-            .as_str()
-            .ok_or_else(|| ProviderError::Other("Invalid gas price response".to_string()))?;
-
-        let gas_price = u128::from_str_radix(gas_price_hex.trim_start_matches("0x"), 16)
-            .map_err(|e| ProviderError::Other(format!("Failed to parse gas price: {}", e)))?;
-
-        Ok(gas_price)
     }
 
     /// zkEVM-specific method to estimate fee for a transaction using the native zkEVM endpoint.
@@ -103,25 +77,16 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
         mut original_params: PriceParams,
     ) -> Result<PriceParams, TransactionError> {
         // Use zkEVM-specific endpoints for accurate pricing (recommended by Polygon)
-        let zkevm_gas_price = self.zkevm_estimate_gas_price().await;
         let zkevm_fee_estimate = self.zkevm_estimate_fee(tx).await;
 
         // Handle case where zkEVM methods are not available on this rpc or network
-        // If either method returns MethodNotAvailable, return original params unchanged
-        let (zkevm_gas_price, zkevm_fee_estimate) = match (zkevm_gas_price, zkevm_fee_estimate) {
-            (Err(ProviderError::MethodNotAvailable(_)), _)
-            | (_, Err(ProviderError::MethodNotAvailable(_))) => {
+        let zkevm_fee_estimate = match zkevm_fee_estimate {
+            Err(ProviderError::MethodNotAvailable(_)) => {
                 // zkEVM methods not supported on this rpc or network, return original params
                 return Ok(original_params);
             }
-            (Ok(gas_price), Ok(fee_estimate)) => (gas_price, fee_estimate),
-            (Err(e), _) => {
-                return Err(TransactionError::UnexpectedError(format!(
-                    "Failed to get zkEVM gas price: {}",
-                    e
-                )))
-            }
-            (_, Err(e)) => {
+            Ok(fee_estimate) => fee_estimate,
+            Err(e) => {
                 return Err(TransactionError::UnexpectedError(format!(
                     "Failed to estimate zkEVM fee: {}",
                     e
@@ -129,25 +94,9 @@ impl<P: EvmProviderTrait> PolygonZKEvmPriceHandler<P> {
             }
         };
 
-        // Only set gas price parameters if they weren't already provided
-        let is_eip1559 = original_params.max_fee_per_gas.is_some()
-            || original_params.max_priority_fee_per_gas.is_some();
-
-        if is_eip1559 {
-            // For EIP1559 transactions, use zkEVM gas price only if not already set
-            if original_params.max_fee_per_gas.is_none() {
-                original_params.max_fee_per_gas = Some(zkevm_gas_price);
-            }
-        } else {
-            // For legacy transactions, use zkEVM gas price only if not already set
-            if original_params.gas_price.is_none() {
-                original_params.gas_price = Some(zkevm_gas_price);
-            }
-        }
-
-        // The zkEVM fee estimate includes L1 data availability costs
-        // Set this as the extra fee to account for the total zkEVM-specific costs
-        original_params.extra_fee = Some(zkevm_fee_estimate);
+        // The zkEVM fee estimate provides a more accurate total cost calculation
+        // that includes both L2 execution costs and L1 data availability costs
+        original_params.total_cost = zkevm_fee_estimate;
 
         Ok(original_params)
     }
@@ -159,58 +108,27 @@ mod tests {
     use crate::models::U256;
 
     // Mock implementation for testing zkEVM methods
-    enum MockGasPriceResult {
-        Success(u128),
-        MethodNotAvailable(String),
-        Other(String),
-    }
-
     enum MockFeeEstimateResult {
         Success(U256),
         MethodNotAvailable(String),
-        Other(String),
     }
 
     struct MockZkEvmHandler {
-        gas_price_result: MockGasPriceResult,
         fee_estimate_result: MockFeeEstimateResult,
     }
 
     impl MockZkEvmHandler {
-        fn new_success(gas_price: u128, fee_estimate: U256) -> Self {
+        fn new_success(fee_estimate: U256) -> Self {
             Self {
-                gas_price_result: MockGasPriceResult::Success(gas_price),
                 fee_estimate_result: MockFeeEstimateResult::Success(fee_estimate),
             }
         }
 
         fn new_method_not_available() -> Self {
             Self {
-                gas_price_result: MockGasPriceResult::MethodNotAvailable(
-                    "zkevm_estimateGasPrice method not available".to_string(),
-                ),
                 fee_estimate_result: MockFeeEstimateResult::MethodNotAvailable(
                     "zkevm_estimateFee method not available".to_string(),
                 ),
-            }
-        }
-
-        fn new_partial_method_not_available(gas_price: u128) -> Self {
-            Self {
-                gas_price_result: MockGasPriceResult::Success(gas_price),
-                fee_estimate_result: MockFeeEstimateResult::MethodNotAvailable(
-                    "zkevm_estimateFee method not available".to_string(),
-                ),
-            }
-        }
-
-        async fn zkevm_estimate_gas_price(&self) -> Result<u128, ProviderError> {
-            match &self.gas_price_result {
-                MockGasPriceResult::Success(price) => Ok(*price),
-                MockGasPriceResult::MethodNotAvailable(msg) => {
-                    Err(ProviderError::MethodNotAvailable(msg.clone()))
-                }
-                MockGasPriceResult::Other(msg) => Err(ProviderError::Other(msg.clone())),
             }
         }
 
@@ -223,7 +141,6 @@ mod tests {
                 MockFeeEstimateResult::MethodNotAvailable(msg) => {
                     Err(ProviderError::MethodNotAvailable(msg.clone()))
                 }
-                MockFeeEstimateResult::Other(msg) => Err(ProviderError::Other(msg.clone())),
             }
         }
 
@@ -233,26 +150,16 @@ mod tests {
             mut original_params: PriceParams,
         ) -> Result<PriceParams, TransactionError> {
             // Use zkEVM-specific endpoints for accurate pricing (recommended by Polygon)
-            let zkevm_gas_price = self.zkevm_estimate_gas_price().await;
             let zkevm_fee_estimate = self.zkevm_estimate_fee(tx).await;
 
             // Handle case where zkEVM methods are not available on this rpc or network
-            // If either method returns MethodNotAvailable, return original params unchanged
-            let (zkevm_gas_price, zkevm_fee_estimate) = match (zkevm_gas_price, zkevm_fee_estimate)
-            {
-                (Err(ProviderError::MethodNotAvailable(_)), _)
-                | (_, Err(ProviderError::MethodNotAvailable(_))) => {
+            let zkevm_fee_estimate = match zkevm_fee_estimate {
+                Err(ProviderError::MethodNotAvailable(_)) => {
                     // zkEVM methods not supported on this rpc or network, return original params
                     return Ok(original_params);
                 }
-                (Ok(gas_price), Ok(fee_estimate)) => (gas_price, fee_estimate),
-                (Err(e), _) => {
-                    return Err(TransactionError::UnexpectedError(format!(
-                        "Failed to get zkEVM gas price: {}",
-                        e
-                    )))
-                }
-                (_, Err(e)) => {
+                Ok(fee_estimate) => fee_estimate,
+                Err(e) => {
                     return Err(TransactionError::UnexpectedError(format!(
                         "Failed to estimate zkEVM fee: {}",
                         e
@@ -260,25 +167,9 @@ mod tests {
                 }
             };
 
-            // Only set gas price parameters if they weren't already provided
-            let is_eip1559 = original_params.max_fee_per_gas.is_some()
-                || original_params.max_priority_fee_per_gas.is_some();
-
-            if is_eip1559 {
-                // For EIP1559 transactions, use zkEVM gas price only if not already set
-                if original_params.max_fee_per_gas.is_none() {
-                    original_params.max_fee_per_gas = Some(zkevm_gas_price);
-                }
-            } else {
-                // For legacy transactions, use zkEVM gas price only if not already set
-                if original_params.gas_price.is_none() {
-                    original_params.gas_price = Some(zkevm_gas_price);
-                }
-            }
-
-            // The zkEVM fee estimate includes L1 data availability costs
-            // Set this as the extra fee to account for the total zkEVM-specific costs
-            original_params.extra_fee = Some(zkevm_fee_estimate);
+            // The zkEVM fee estimate provides a more accurate total cost calculation
+            // that includes both L2 execution costs and L1 data availability costs
+            original_params.total_cost = zkevm_fee_estimate;
 
             Ok(original_params)
         }
@@ -288,7 +179,6 @@ mod tests {
     async fn test_polygon_zkevm_price_handler_legacy() {
         // Create the mock handler with predefined responses
         let handler = MockZkEvmHandler::new_success(
-            25_000_000_000u128,                  // 25 Gwei gas price
             U256::from(500_000_000_000_000u128), // 0.0005 ETH fee
         );
 
@@ -316,7 +206,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -329,10 +219,9 @@ mod tests {
         // Verify that the original gas price remains unchanged
         assert_eq!(handled_params.gas_price.unwrap(), 20_000_000_000); // Should remain original
 
-        // Verify that extra fee was added from zkEVM fee estimate
-        assert!(handled_params.extra_fee.is_some());
+        // Verify that total cost was set from zkEVM fee estimate
         assert_eq!(
-            handled_params.extra_fee.unwrap(),
+            handled_params.total_cost,
             U256::from(500_000_000_000_000u128)
         );
     }
@@ -341,7 +230,6 @@ mod tests {
     async fn test_polygon_zkevm_price_handler_eip1559() {
         // Create the mock handler with predefined responses
         let handler = MockZkEvmHandler::new_success(
-            35_000_000_000u128,                  // 35 Gwei gas price
             U256::from(750_000_000_000_000u128), // 0.00075 ETH fee
         );
 
@@ -369,7 +257,7 @@ mod tests {
             max_fee_per_gas: Some(30_000_000_000), // 30 Gwei
             max_priority_fee_per_gas: Some(2_000_000_000), // 2 Gwei
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -386,10 +274,9 @@ mod tests {
             2_000_000_000
         ); // Should remain original
 
-        // Verify that extra fee was added from zkEVM fee estimate
-        assert!(handled_params.extra_fee.is_some());
+        // Verify that total cost was set from zkEVM fee estimate
         assert_eq!(
-            handled_params.extra_fee.unwrap(),
+            handled_params.total_cost,
             U256::from(750_000_000_000_000u128)
         );
     }
@@ -400,7 +287,6 @@ mod tests {
 
         // Test with empty data - create handler for no data scenario
         let handler_no_data = MockZkEvmHandler::new_success(
-            20_000_000_000u128,                  // 20 Gwei gas price
             U256::from(210_000_000_000_000u128), // 0.00021 ETH without data
         );
 
@@ -426,7 +312,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -439,13 +325,12 @@ mod tests {
         // Gas price should remain unchanged (already set)
         assert_eq!(handled_params.gas_price.unwrap(), 15_000_000_000);
         assert_eq!(
-            handled_params.extra_fee.unwrap(),
+            handled_params.total_cost,
             U256::from(210_000_000_000_000u128)
         );
 
         // Test with data - create handler for data scenario
         let handler_with_data = MockZkEvmHandler::new_success(
-            20_000_000_000u128,                  // 20 Gwei gas price
             U256::from(400_000_000_000_000u128), // 0.0004 ETH with data
         );
 
@@ -459,7 +344,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -469,10 +354,10 @@ mod tests {
         assert!(result_with_data.is_ok());
         let handled_params_with_data = result_with_data.unwrap();
 
-        // Should have higher fee due to data
-        assert!(handled_params_with_data.extra_fee.unwrap() > handled_params.extra_fee.unwrap());
+        // Should have higher total cost due to data
+        assert!(handled_params_with_data.total_cost > handled_params.total_cost);
         assert_eq!(
-            handled_params_with_data.extra_fee.unwrap(),
+            handled_params_with_data.total_cost,
             U256::from(400_000_000_000_000u128)
         );
     }
@@ -481,7 +366,6 @@ mod tests {
     async fn test_polygon_zkevm_uses_gas_price_when_not_set() {
         // Create the mock handler with predefined responses
         let handler = MockZkEvmHandler::new_success(
-            30_000_000_000u128,                  // 30 Gwei gas price
             U256::from(600_000_000_000_000u128), // 0.0006 ETH fee
         );
 
@@ -508,7 +392,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -516,10 +400,10 @@ mod tests {
         assert!(result.is_ok());
         let handled_params = result.unwrap();
 
-        // Should use zkEVM gas price since none was provided
-        assert_eq!(handled_params.gas_price.unwrap(), 30_000_000_000);
+        // Gas price should remain None since handler no longer sets it
+        assert!(handled_params.gas_price.is_none());
         assert_eq!(
-            handled_params.extra_fee.unwrap(),
+            handled_params.total_cost,
             U256::from(600_000_000_000_000u128)
         );
     }
@@ -551,7 +435,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::from(100_000),
         };
 
@@ -572,14 +456,13 @@ mod tests {
             handled_params.max_priority_fee_per_gas,
             original_params.max_priority_fee_per_gas
         );
-        assert_eq!(handled_params.extra_fee, original_params.extra_fee);
         assert_eq!(handled_params.total_cost, original_params.total_cost);
     }
 
     #[tokio::test]
     async fn test_polygon_zkevm_partial_method_not_available() {
-        // Create the mock handler with one success and one MethodNotAvailable error
-        let handler = MockZkEvmHandler::new_partial_method_not_available(25_000_000_000u128);
+        // Create the mock handler with MethodNotAvailable error
+        let handler = MockZkEvmHandler::new_method_not_available();
 
         let tx = EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
@@ -603,7 +486,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::from(100_000),
         };
 
@@ -624,7 +507,6 @@ mod tests {
             handled_params.max_priority_fee_per_gas,
             original_params.max_priority_fee_per_gas
         );
-        assert_eq!(handled_params.extra_fee, original_params.extra_fee);
         assert_eq!(handled_params.total_cost, original_params.total_cost);
     }
 
