@@ -38,25 +38,26 @@ function extractCliArguments() {
   const pluginId = process.argv[3]; // NEW: Plugin ID as separate arg
   const paramsJson = process.argv[4]; // Shifted from argv[3]
   const userScriptPath = process.argv[5]; // Shifted from argv[4]
+  const httpRequestId = process.argv[6]; // original HTTP request id
 
-  // Validate required arguments
+  // Validate   required arguments
   if (!socketPath) {
-    throw new Error("Socket path is required (argument 1)");
+    throw new Error('Socket path is required (argument 1)');
   }
 
   if (!pluginId) {
-    throw new Error("Plugin ID is required (argument 2)");
+    throw new Error('Plugin ID is required (argument 2)');
   }
 
   if (!paramsJson) {
-    throw new Error("Plugin parameters JSON is required (argument 3)");
+    throw new Error('Plugin parameters JSON is required (argument 3)');
   }
 
   if (!userScriptPath) {
-    throw new Error("User script path is required (argument 4)");
+    throw new Error('User script path is required (argument 4)');
   }
 
-  return { socketPath, pluginId, paramsJson, userScriptPath };
+  return { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId };
 }
 
 /**
@@ -82,13 +83,13 @@ async function main(): Promise<void> {
     logInterceptor.start();
 
     // Extract and validate CLI arguments including plugin ID
-    const { socketPath, pluginId, paramsJson, userScriptPath } = extractCliArguments();
+    const { socketPath, pluginId, paramsJson, userScriptPath, httpRequestId } = extractCliArguments();
 
     // Parse plugin parameters
     const pluginParams = parsePluginParameters(paramsJson);
 
     // Pass plugin ID as separate argument
-    const result = await runUserPlugin(socketPath, pluginId, pluginParams, userScriptPath);
+    const result = await runUserPlugin(socketPath, pluginId, pluginParams, userScriptPath, httpRequestId);
 
     // Add the result to LogInterceptor output
     logInterceptor.addResult(serializeResult(result));
