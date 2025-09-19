@@ -8,6 +8,7 @@ use crate::{
     models::EvmNetwork,
     services::provider::{evm::EvmProviderTrait, ProviderError},
 };
+use log::{debug, error, info, warn};
 
 /// Specialized fetcher for Polygon zkEVM networks.
 #[derive(Debug, Clone)]
@@ -39,17 +40,16 @@ impl PolygonZkEvmGasPriceFetcher {
         match result {
             Ok(response) => self.parse_zkevm_response(response, network.chain_id),
             Err(ProviderError::MethodNotAvailable(_)) => {
-                log::debug!(
+                debug!(
                     "zkEVM gas price method not available for chain_id {}",
                     network.chain_id
                 );
                 Ok(None)
             }
             Err(e) => {
-                log::debug!(
+                debug!(
                     "zkEVM gas price estimation failed for chain_id {}: {}",
-                    network.chain_id,
-                    e
+                    network.chain_id, e
                 );
                 Ok(None)
             }
@@ -63,7 +63,7 @@ impl PolygonZkEvmGasPriceFetcher {
         chain_id: u64,
     ) -> Result<Option<u128>, ProviderError> {
         let Some(gas_price_hex) = response.as_str() else {
-            log::warn!(
+            warn!(
                 "Invalid zkEVM gas price response format for chain_id {}",
                 chain_id
             );
@@ -72,18 +72,16 @@ impl PolygonZkEvmGasPriceFetcher {
 
         match u128::from_str_radix(gas_price_hex.trim_start_matches("0x"), 16) {
             Ok(gas_price) => {
-                log::info!(
+                info!(
                     "zkEVM gas price estimated for chain_id {}: {} wei",
-                    chain_id,
-                    gas_price
+                    chain_id, gas_price
                 );
                 Ok(Some(gas_price))
             }
             Err(e) => {
-                log::warn!(
+                warn!(
                     "Failed to parse zkEVM gas price response for chain_id {}: {}",
-                    chain_id,
-                    e
+                    chain_id, e
                 );
                 Ok(None)
             }
@@ -98,15 +96,14 @@ impl PolygonZkEvmGasPriceFetcher {
     ) -> Result<Option<u128>, ProviderError> {
         match provider.get_gas_price().await {
             Ok(standard_price) => {
-                log::info!(
+                info!(
                     "Using standard gas price fallback for zkEVM chain_id {}: {} wei",
-                    network.chain_id,
-                    standard_price
+                    network.chain_id, standard_price
                 );
                 Ok(Some(standard_price))
             }
             Err(e) => {
-                log::error!(
+                error!(
                     "Both zkEVM and standard gas price methods failed for chain_id {}",
                     network.chain_id
                 );
