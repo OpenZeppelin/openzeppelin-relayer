@@ -76,7 +76,7 @@ pub struct PriceParams {
     pub max_fee_per_gas: Option<u128>,
     pub max_priority_fee_per_gas: Option<u128>,
     pub is_min_bumped: Option<bool>,
-    pub extra_fee: Option<U256>,
+    pub l1_fee: Option<U256>,
     pub total_cost: U256,
 }
 
@@ -86,12 +86,12 @@ impl PriceParams {
             true => {
                 U256::from(self.max_fee_per_gas.unwrap_or(0)) * U256::from(gas_limit)
                     + value
-                    + self.extra_fee.unwrap_or(U256::ZERO)
+                    + self.l1_fee.unwrap_or(U256::ZERO)
             }
             false => {
                 U256::from(self.gas_price.unwrap_or(0)) * U256::from(gas_limit)
                     + value
-                    + self.extra_fee.unwrap_or(U256::ZERO)
+                    + self.l1_fee.unwrap_or(U256::ZERO)
             }
         }
     }
@@ -341,7 +341,7 @@ where
             max_priority_fee_per_gas: Some(capped_priority),
             max_fee_per_gas: Some(capped_max_fee),
             is_min_bumped: Some(is_min_bumped),
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         })
     }
@@ -383,7 +383,7 @@ where
             max_priority_fee_per_gas: None,
             max_fee_per_gas: None,
             is_min_bumped: Some(is_min_bumped),
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         })
     }
@@ -425,7 +425,7 @@ where
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         })
     }
@@ -450,7 +450,7 @@ where
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(max_priority_fee),
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         })
     }
@@ -504,7 +504,7 @@ where
             max_fee_per_gas: Some(max_fee),
             max_priority_fee_per_gas: Some(priority_fee),
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         })
     }
@@ -531,7 +531,7 @@ where
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         })
     }
@@ -1428,7 +1428,7 @@ mod tests {
         // Verify no extra fee when no overrider is used
         assert!(result.is_ok());
         let price_params = result.unwrap();
-        assert_eq!(price_params.extra_fee, None);
+        assert_eq!(price_params.l1_fee, None);
     }
 
     #[tokio::test]
@@ -1516,7 +1516,7 @@ mod tests {
 
         // MockPriceHandler sets extra_fee = 42 and total_cost = 0 + 42.
         // Since total_cost is non-zero after the overrider, the calculator must not recompute it.
-        assert_eq!(params.extra_fee, Some(U256::from(42u128)));
+        assert_eq!(params.l1_fee, Some(U256::from(42u128)));
         assert_eq!(params.total_cost, U256::from(42u128));
     }
 
@@ -1545,7 +1545,7 @@ mod tests {
             .get_transaction_price_params(&tx_data, &relayer)
             .await
             .unwrap();
-        assert_eq!(params.extra_fee, Some(U256::from(42u128)));
+        assert_eq!(params.l1_fee, Some(U256::from(42u128)));
         assert!(params.total_cost >= U256::from(42u128));
     }
 
@@ -1583,7 +1583,7 @@ mod tests {
             .get_transaction_price_params(&tx_data, &relayer)
             .await
             .unwrap();
-        assert_eq!(params.extra_fee, Some(U256::from(42u128)));
+        assert_eq!(params.l1_fee, Some(U256::from(42u128)));
         assert!(params.total_cost >= U256::from(42u128));
     }
 
@@ -1624,7 +1624,7 @@ mod tests {
             max_fee_per_gas: Some(30_000_000_000),
             max_priority_fee_per_gas: Some(2_000_000_000),
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -1646,7 +1646,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -1668,7 +1668,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: Some(U256::from(5_000_000_000u128)),
+            l1_fee: Some(U256::from(5_000_000_000u128)),
             total_cost: U256::ZERO,
         };
 
@@ -1691,7 +1691,7 @@ mod tests {
             max_fee_per_gas: Some(0),
             max_priority_fee_per_gas: Some(0),
             is_min_bumped: None,
-            extra_fee: Some(U256::ZERO),
+            l1_fee: Some(U256::ZERO),
             total_cost: U256::ZERO,
         };
 
@@ -1712,7 +1712,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 

@@ -148,7 +148,7 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
         let l1_data_cost = self.calculate_fee(&fee_data, tx)?;
 
         // Add the L1 data cost as extra fee
-        original_params.extra_fee = Some(l1_data_cost);
+        original_params.l1_fee = Some(l1_data_cost);
 
         // Recalculate total cost with the extra fee
         let gas_limit = tx.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT);
@@ -201,7 +201,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             is_min_bumped: None,
-            extra_fee: None,
+            l1_fee: None,
             total_cost: U256::ZERO,
         };
 
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(handled_params.gas_price, Some(20_000_000_000));
 
         // Extra fee should be added
-        assert!(handled_params.extra_fee.is_some());
+        assert!(handled_params.l1_fee.is_some());
 
         // Total cost should be recalculated
         assert!(handled_params.total_cost > U256::ZERO);

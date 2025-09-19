@@ -129,7 +129,7 @@ pub fn validate_explicit_price_bump(
         max_fee_per_gas: new_evm_data.max_fee_per_gas,
         max_priority_fee_per_gas: new_evm_data.max_priority_fee_per_gas,
         is_min_bumped: None,
-        extra_fee: None,
+        l1_fee: None,
         total_cost: U256::ZERO,
     };
 
@@ -398,7 +398,7 @@ mod tests {
                 max_fee_per_gas: self.max_fee_per_gas,
                 max_priority_fee_per_gas: self.max_priority_fee_per_gas,
                 is_min_bumped: Some(false),
-                extra_fee: None,
+                l1_fee: None,
                 total_cost: U256::ZERO,
             })
         }
@@ -417,7 +417,7 @@ mod tests {
                 max_fee_per_gas: self.max_fee_per_gas,
                 max_priority_fee_per_gas: self.max_priority_fee_per_gas,
                 is_min_bumped: Some(true),
-                extra_fee: None,
+                l1_fee: None,
                 total_cost: U256::ZERO,
             })
         }
