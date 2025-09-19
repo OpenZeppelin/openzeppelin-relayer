@@ -222,15 +222,16 @@ mod tests {
         config::{EvmNetworkConfig, NetworkConfigCommon},
         jobs::MockJobProducerTrait,
         models::{
-            AppState, EvmTransactionData, LocalSignerConfigStorage, NetworkConfigData,
-            NetworkRepoModel, NetworkTransactionData, NetworkType, RelayerEvmPolicy,
-            RelayerNetworkPolicy, RelayerRepoModel, SignerConfigStorage, SignerRepoModel,
-            TransactionRepoModel, TransactionStatus, U256,
+            ApiKeyRepoModel, AppState, EvmTransactionData, LocalSignerConfigStorage,
+            NetworkConfigData, NetworkRepoModel, NetworkTransactionData, NetworkType,
+            RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, SecretString,
+            SignerConfigStorage, SignerRepoModel, TransactionRepoModel, TransactionStatus, U256,
         },
         repositories::{
-            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-            RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
-            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+            ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
+            NotificationRepositoryStorage, PluginRepositoryStorage, RelayerRepositoryStorage,
+            Repository, SignerRepositoryStorage, TransactionCounterRepositoryStorage,
+            TransactionRepositoryStorage,
         },
     };
     use actix_web::{http::StatusCode, test, App};
@@ -246,11 +247,13 @@ mod tests {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
+        ApiKeyRepositoryStorage,
     > {
         let relayer_repo = Arc::new(RelayerRepositoryStorage::new_in_memory());
         let transaction_repo = Arc::new(TransactionRepositoryStorage::new_in_memory());
         let signer_repo = Arc::new(SignerRepositoryStorage::new_in_memory());
         let network_repo = Arc::new(NetworkRepositoryStorage::new_in_memory());
+        let api_key_repo = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
 
         // Create test entities so routes don't return 404
 
@@ -338,6 +341,17 @@ mod tests {
         };
         transaction_repo.create(test_transaction).await.unwrap();
 
+        // Create test api key
+        let test_api_key = ApiKeyRepoModel {
+            id: "test-api-key".to_string(),
+            name: "Test API Key".to_string(),
+            value: SecretString::new("test-value"),
+            permissions: vec!["test-permission".to_string()],
+            created_at: chrono::Utc::now().to_rfc3339(),
+            allowed_origins: vec!["*".to_string()],
+        };
+        api_key_repo.create(test_api_key).await.unwrap();
+
         AppState {
             relayer_repository: relayer_repo,
             transaction_repository: transaction_repo,
@@ -349,6 +363,7 @@ mod tests {
             ),
             job_producer: Arc::new(MockJobProducerTrait::new()),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
+            api_key_repository: api_key_repo,
         }
     }
 
