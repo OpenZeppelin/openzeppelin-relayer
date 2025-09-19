@@ -1,7 +1,5 @@
 {
-    "relayers": [
-      
-    ],
+    "relayers": [],
     "notifications": [
       {
         "id": "notification-example",
@@ -13,8 +11,7 @@
         }
       }
     ],
-    "signers": [
-    ],
+    "signers": [],
     "networks": "./config/networks",
     "plugins": [
       {
