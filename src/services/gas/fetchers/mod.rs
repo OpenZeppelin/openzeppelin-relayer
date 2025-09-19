@@ -9,6 +9,7 @@ use crate::{
     models::EvmNetwork,
     services::provider::{evm::EvmProviderTrait, ProviderError},
 };
+use log::{debug, warn};
 
 pub mod default;
 pub mod polygon_zkevm;
@@ -62,15 +63,14 @@ impl GasPriceFetcherFactory {
 
         match gas_price_fetcher.fetch_gas_price(provider, network).await {
             Ok(Some(gas_price)) => {
-                log::debug!(
+                debug!(
                     "Gas price fetched for chain_id {}: {} wei",
-                    network.chain_id,
-                    gas_price
+                    network.chain_id, gas_price
                 );
                 Ok(gas_price)
             }
             Ok(None) => {
-                log::warn!(
+                warn!(
                     "Fetcher returned None for supported network chain_id {}",
                     network.chain_id
                 );
@@ -79,10 +79,9 @@ impl GasPriceFetcherFactory {
                 ))
             }
             Err(e) => {
-                log::debug!(
+                debug!(
                     "Gas price fetch failed for chain_id {}: {}",
-                    network.chain_id,
-                    e
+                    network.chain_id, e
                 );
                 Err(e)
             }
