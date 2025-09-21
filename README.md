@@ -252,8 +252,10 @@ Run the following commands to install pre-commit hooks:
 - Install stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
 - Follow steps to install libsodium from the [libsodium installation guide](https://doc.libsodium.org/installation).
 
-  > **Note**: To compile On Debian/ Ubuntu, you must install the `build-essential` by running `sudo apt-get install build-essential` if it's missing.
-
+  > Note (Debian/Ubuntu): If you're compiling libsodium from source, install build-essential first.
+  ```bash
+  sudo apt-get update && sudo apt-get install -y build-essential
+  ```
 ### Install Node.js
 
 - Install Node.js from [here](https://nodejs.org/).
@@ -326,8 +328,11 @@ cargo run --example create_key -- \
     --force
 ```
 
-> :warning: On Ubuntu/ Debian, if you encounter OpenSSL errors, install the `libssl-dev` and `pkg-config` packages: `sudo apt-get install libssl-dev pkg-config`
+> :warning: Debian/Ubuntu: If you encounter OpenSSL build errors, install the required packages:
 
+```bash
+sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+```
 ### Configure Webhook URL
 
 `/config/config.json` file is partially pre-configured. You need to specify the webhook URL that will receive updates from the relayer service.
