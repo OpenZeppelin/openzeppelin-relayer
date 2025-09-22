@@ -12,15 +12,22 @@ services:
       - keystore_fund_passphrase
       - keystore_seq_001_passphrase
       - keystore_seq_002_passphrase
+      - launchtube_admin_secret
     environment:
       REDIS_URL: redis://redis:6379
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 50
+      LOG_LEVEL: ${LOG_LEVEL}
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
       KEYSTORE_PASSPHRASE_FUND: ${KEYSTORE_PASSPHRASE_FUND}
       KEYSTORE_PASSPHRASE_SEQ_001: ${KEYSTORE_PASSPHRASE_SEQ_001}
       KEYSTORE_PASSPHRASE_SEQ_002: ${KEYSTORE_PASSPHRASE_SEQ_002}
+      STELLAR_NETWORK: ${STELLAR_NETWORK}
+      LAUNCHTUBE_ADMIN_SECRET: ${LAUNCHTUBE_ADMIN_SECRET}
+      SOROBAN_RPC_URL: ${SOROBAN_RPC_URL}
+      FUND_RELAYER_ID: ${FUND_RELAYER_ID}
+      LOCK_TTL_SECONDS: ${LOCK_TTL_SECONDS}
     security_opt:
       - no-new-privileges
     networks:
@@ -71,3 +78,5 @@ secrets:
     environment: KEYSTORE_PASSPHRASE_SEQ_001
   keystore_seq_002_passphrase:
     environment: KEYSTORE_PASSPHRASE_SEQ_002
+  launchtube_admin_secret:
+    environment: LAUNCHTUBE_ADMIN_SECRET
