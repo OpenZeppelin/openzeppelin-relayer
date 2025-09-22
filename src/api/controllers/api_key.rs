@@ -159,4 +159,114 @@ where
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::{
+        models::{ApiKeyRepoModel, PaginationQuery, SecretString},
+        utils::mocks::mockutils::create_mock_app_state,
+    };
+    use actix_web::web::ThinData;
+
+    /// Helper function to create a test api key model
+    fn create_test_api_key_model(id: &str) -> ApiKeyRepoModel {
+        ApiKeyRepoModel {
+            id: id.to_string(),
+            value: SecretString::new("test-api-key-value"),
+            name: "Test API Key".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: "2023-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    /// Helper function to create a test api key create request
+    fn create_test_api_key_create_request(name: &str) -> ApiKeyRequest {
+        ApiKeyRequest {
+            name: name.to_string(),
+            permissions: vec!["relayer:all:execute".to_string()],
+            allowed_origins: Some(vec!["*".to_string()]),
+        }
+    }
+
+    #[actix_web::test]
+    async fn test_create_api_key() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+        let api_key_request = create_test_api_key_create_request("Test API Key");
+
+        let result = create_api_key(api_key_request, ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 201);
+    }
+
+    #[actix_web::test]
+    async fn test_list_api_keys_empty() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let result = list_api_keys(query, ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_list_api_keys_with_data() {
+        let api_key = create_test_api_key_model("test-api-key-1");
+        let app_state =
+            create_mock_app_state(Some(vec![api_key]), None, None, None, None, None).await;
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        let result = list_api_keys(query, ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_get_api_key_permissions() {
+        let api_key = create_test_api_key_model("test-api-key-1");
+        let api_key_id = api_key.id.clone();
+        let app_state =
+            create_mock_app_state(Some(vec![api_key]), None, None, None, None, None).await;
+
+        let result = get_api_key_permissions(api_key_id, ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_delete_api_key() {
+        let api_key = create_test_api_key_model("test-api-key-1");
+        let api_key_id = api_key.id.clone();
+        let app_state =
+            create_mock_app_state(Some(vec![api_key]), None, None, None, None, None).await;
+
+        let result = delete_api_key(api_key_id, ThinData(app_state)).await;
+
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[actix_web::test]
+    async fn test_get_permissions_nonexistent_api_key() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        let result =
+            get_api_key_permissions("nonexistent-id".to_string(), ThinData(app_state)).await;
+
+        assert!(result.is_err());
+    }
+}
