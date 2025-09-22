@@ -42,8 +42,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use log::{info, warn};
 use std::sync::Arc;
+use tracing::{info, warn};
 
 use crate::domain::relayer::{Relayer, RelayerError};
 
@@ -208,7 +208,7 @@ where
 
     async fn disable_relayer(&self, reasons: &[String]) -> Result<(), RelayerError> {
         let reason = reasons.join(", ");
-        warn!("Disabling relayer {} due to: {}", self.relayer.id, reason);
+        warn!(reason = %reason, "disabling relayer");
 
         let updated = self
             .relayer_repository
@@ -377,7 +377,7 @@ where
     }
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        info!("Initializing Stellar relayer: {}", self.relayer.id);
+        info!("initializing Stellar relayer");
 
         let seq_res = self.sync_sequence().await.err();
 

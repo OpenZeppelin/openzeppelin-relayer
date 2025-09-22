@@ -22,7 +22,6 @@
 //! ```
 use async_trait::async_trait;
 use core::fmt;
-use log::debug;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -31,6 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::RwLock;
+use tracing::debug;
 use vaultrs::{
     auth::approle::login,
     client::{VaultClient, VaultClientSettingsBuilder},
@@ -275,7 +275,7 @@ impl VaultServiceTrait for VaultService {
 
         let vault_signature_str = &vault_signature.signature;
 
-        debug!("vault_signature_str: {}", vault_signature_str);
+        debug!(vault_signature_str = %vault_signature_str, "vault signature string");
 
         Ok(vault_signature_str.clone())
     }

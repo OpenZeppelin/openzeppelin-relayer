@@ -6,7 +6,6 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use base64::Engine;
-use log::{debug, info};
 use solana_sdk::{
     instruction::Instruction,
     message::Message,
@@ -15,6 +14,7 @@ use solana_sdk::{
     signer::{SeedDerivable, Signer as SolanaSigner},
     transaction::Transaction,
 };
+use tracing::{debug, info};
 
 use crate::{
     domain::{

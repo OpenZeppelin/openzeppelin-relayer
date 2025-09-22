@@ -19,8 +19,8 @@
 use std::str::FromStr;
 
 use futures::try_join;
-use log::info;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use tracing::info;
 
 use crate::{
     models::{
@@ -56,7 +56,7 @@ where
             .estimate_fee_with_margin(&transaction_request, policy.fee_margin_percentage)
             .await
             .map_err(|e| {
-                error!("Failed to estimate total fee: {}", e);
+                error!(error = %e, "failed to estimate total fee");
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
@@ -81,7 +81,7 @@ where
         )
         .await
         .map_err(|e| {
-            error!("Insufficient funds: {}", e);
+            error!(error = %e, "insufficient funds");
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
 
@@ -109,7 +109,7 @@ where
                 .await;
 
             if let Err(e) = webhook_result {
-                error!("Failed to produce notification job: {}", e);
+                error!(error = %e, "failed to produce notification job");
             }
         }
         info!(

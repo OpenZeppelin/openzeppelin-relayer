@@ -4,11 +4,11 @@ use crate::models::{NotificationRepoModel, PaginationQuery, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, Repository};
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const NOTIFICATION_PREFIX: &str = "notification";
 const NOTIFICATION_LIST_KEY: &str = "notification_list";
@@ -57,7 +57,7 @@ impl RedisNotificationRepository {
         ids: &[String],
     ) -> Result<BatchRetrievalResult<NotificationRepoModel>, RepositoryError> {
         if ids.is_empty() {
-            debug!("No notification IDs provided for batch fetch");
+            debug!("no notification IDs provided for batch fetch");
             return Ok(BatchRetrievalResult {
                 results: vec![],
                 failed_ids: vec![],
@@ -67,7 +67,7 @@ impl RedisNotificationRepository {
         let mut conn = self.client.as_ref().clone();
         let keys: Vec<String> = ids.iter().map(|id| self.notification_key(id)).collect();
 
-        debug!("Batch fetching {} notification data", keys.len());
+        debug!(count = %keys.len(), "batch fetching notification data");
 
         let values: Vec<Option<String>> = conn
             .mget(&keys)
@@ -88,29 +88,25 @@ impl RedisNotificationRepository {
                         Ok(notification) => notifications.push(notification),
                         Err(e) => {
                             failed_count += 1;
-                            error!("Failed to deserialize notification {}: {}", ids[i], e);
+                            error!(error = %e, "failed to deserialize notification");
                             failed_ids.push(ids[i].clone());
                             // Continue processing other notifications
                         }
                     }
                 }
                 None => {
-                    warn!("Notification {} not found in batch fetch", ids[i]);
+                    warn!("notification not found in batch fetch");
                 }
             }
         }
 
         if failed_count > 0 {
-            warn!(
-                "Failed to deserialize {} out of {} notifications in batch",
-                failed_count,
-                ids.len()
-            );
+            warn!(failed_count = %failed_count, total_count = %ids.len(), "failed to deserialize notifications in batch");
         }
 
-        warn!("Failed to deserialize notifications: {:?}", failed_ids);
+        warn!(failed_ids = ?failed_ids, "failed to deserialize notifications");
 
-        debug!("Successfully fetched {} notifications", notifications.len());
+        debug!(count = %notifications.len(), "successfully fetched notifications");
         Ok(BatchRetrievalResult {
             results: notifications,
             failed_ids,
@@ -149,7 +145,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let notification_list_key = self.notification_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Creating notification with ID: {}", entity.id);
+        debug!("creating notification");
 
         let value = self.serialize_entity(&entity, |n| &n.id, "notification")?;
 
@@ -176,7 +172,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "create_notification"))?;
 
-        debug!("Successfully created notification {}", entity.id);
+        debug!("successfully created notification");
         Ok(entity)
     }
 
@@ -190,7 +186,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let mut conn = self.client.as_ref().clone();
         let key = self.notification_key(&id);
 
-        debug!("Fetching notification with ID: {}", id);
+        debug!("fetching notification");
 
         let value: Option<String> = conn
             .get(&key)
@@ -201,11 +197,11 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             Some(json) => {
                 let notification =
                     self.deserialize_entity::<NotificationRepoModel>(&json, &id, "notification")?;
-                debug!("Successfully fetched notification {}", id);
+                debug!("successfully fetched notification");
                 Ok(notification)
             }
             None => {
-                debug!("Notification {} not found", id);
+                debug!("notification not found");
                 Err(RepositoryError::NotFound(format!(
                     "Notification with ID '{}' not found",
                     id
@@ -218,14 +214,14 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let mut conn = self.client.as_ref().clone();
         let notification_list_key = self.notification_list_key();
 
-        debug!("Fetching all notification IDs");
+        debug!("fetching all notification IDs");
 
         let notification_ids: Vec<String> = conn
             .smembers(&notification_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "list_all_notification_ids"))?;
 
-        debug!("Found {} notification IDs", notification_ids.len());
+        debug!(count = %notification_ids.len(), "found notification IDs");
 
         let notifications = self.get_notifications_by_ids(&notification_ids).await?;
         Ok(notifications.results)
@@ -244,10 +240,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let mut conn = self.client.as_ref().clone();
         let notification_list_key = self.notification_list_key();
 
-        debug!(
-            "Fetching paginated notifications (page: {}, per_page: {})",
-            query.page, query.per_page
-        );
+        debug!(page = %query.page, per_page = %query.per_page, "fetching paginated notifications");
 
         let all_notification_ids: Vec<String> = conn
             .smembers(&notification_list_key)
@@ -259,10 +252,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let end = (start + query.per_page as usize).min(all_notification_ids.len());
 
         if start >= all_notification_ids.len() {
-            debug!(
-                "Page {} is beyond available data (total: {})",
-                query.page, total
-            );
+            debug!(page = %query.page, total = %total, "page is beyond available data");
             return Ok(PaginatedResult {
                 items: vec![],
                 total,
@@ -274,11 +264,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let page_ids = &all_notification_ids[start..end];
         let items = self.get_notifications_by_ids(page_ids).await?;
 
-        debug!(
-            "Successfully fetched {} notifications for page {}",
-            items.results.len(),
-            query.page
-        );
+        debug!(count = %items.results.len(), page = %query.page, "successfully fetched notifications for page");
 
         Ok(PaginatedResult {
             items: items.results.clone(),
@@ -308,7 +294,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let key = self.notification_key(&id);
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Updating notification with ID: {}", id);
+        debug!("updating notification");
 
         // Check if notification exists
         let existing: Option<String> = conn
@@ -331,7 +317,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "update_notification"))?;
 
-        debug!("Successfully updated notification {}", id);
+        debug!("successfully updated notification");
         Ok(entity)
     }
 
@@ -346,7 +332,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let notification_list_key = self.notification_list_key();
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Deleting notification with ID: {}", id);
+        debug!("deleting notification");
 
         // Check if notification exists
         let existing: Option<String> = conn
@@ -371,7 +357,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "delete_notification"))?;
 
-        debug!("Successfully deleted notification {}", id);
+        debug!("successfully deleted notification");
         Ok(())
     }
 
@@ -379,14 +365,14 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let mut conn = self.client.as_ref().clone();
         let notification_list_key = self.notification_list_key();
 
-        debug!("Counting notifications");
+        debug!("counting notifications");
 
         let count: u64 = conn
             .scard(&notification_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "count_notifications"))?;
 
-        debug!("Notification count: {}", count);
+        debug!(count = %count, "notification count");
         Ok(count as usize)
     }
 
@@ -394,14 +380,14 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let mut conn = self.client.as_ref().clone();
         let notification_list_key = self.notification_list_key();
 
-        debug!("Checking if notification entries exist");
+        debug!("checking if notification entries exist");
 
         let exists: bool = conn
             .exists(&notification_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
 
-        debug!("Notification entries exist: {}", exists);
+        debug!(exists = %exists, "notification entries exist");
         Ok(exists)
     }
 
@@ -409,7 +395,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
         let mut conn = self.client.as_ref().clone();
         let notification_list_key = self.notification_list_key();
 
-        debug!("Dropping all notification entries");
+        debug!("dropping all notification entries");
 
         // Get all notification IDs first
         let notification_ids: Vec<String> = conn
@@ -418,7 +404,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
 
         if notification_ids.is_empty() {
-            debug!("No notification entries to drop");
+            debug!("no notification entries to drop");
             return Ok(());
         }
 
@@ -439,7 +425,7 @@ impl Repository<NotificationRepoModel, String> for RedisNotificationRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
 
-        debug!("Dropped {} notification entries", notification_ids.len());
+        debug!(count = %notification_ids.len(), "dropped notification entries");
         Ok(())
     }
 }

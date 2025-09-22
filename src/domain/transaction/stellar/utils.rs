@@ -2,7 +2,7 @@
 use crate::models::OperationSpec;
 use crate::models::RelayerError;
 use crate::services::StellarProviderTrait;
-use log::info;
+use tracing::info;
 
 /// Returns true if any operation needs simulation (contract invocation, creation, or wasm upload).
 pub fn needs_simulation(operations: &[OperationSpec]) -> bool {

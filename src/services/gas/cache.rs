@@ -12,12 +12,12 @@ use crate::{
 };
 use alloy::rpc::types::{BlockNumberOrTag, FeeHistory};
 use dashmap::DashMap;
-use log::info;
 use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct GasPriceSnapshot {

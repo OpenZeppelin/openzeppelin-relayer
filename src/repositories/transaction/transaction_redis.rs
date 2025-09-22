@@ -9,11 +9,11 @@ use crate::repositories::{
     BatchRetrievalResult, PaginatedResult, Repository, TransactionRepository,
 };
 use async_trait::async_trait;
-use log::{debug, error, warn};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 const RELAYER_PREFIX: &str = "relayer";
 const TX_PREFIX: &str = "tx";
@@ -90,7 +90,7 @@ impl RedisTransactionRepository {
         ids: &[String],
     ) -> Result<BatchRetrievalResult<TransactionRepoModel>, RepositoryError> {
         if ids.is_empty() {
-            debug!("No transaction IDs provided for batch fetch");
+            debug!("no transaction IDs provided for batch fetch");
             return Ok(BatchRetrievalResult {
                 results: vec![],
                 failed_ids: vec![],
@@ -101,7 +101,7 @@ impl RedisTransactionRepository {
 
         let reverse_keys: Vec<String> = ids.iter().map(|id| self.tx_to_relayer_key(id)).collect();
 
-        debug!("Fetching relayer IDs for {} transactions", ids.len());
+        debug!(count = %ids.len(), "fetching relayer IDs for transactions");
 
         let relayer_ids: Vec<Option<String>> = conn
             .mget(&reverse_keys)
@@ -118,21 +118,21 @@ impl RedisTransactionRepository {
                     valid_ids.push(ids[i].clone());
                 }
                 None => {
-                    warn!("No relayer found for transaction {}", ids[i]);
+                    warn!(tx_id = %ids[i], "no relayer found for transaction");
                     failed_ids.push(ids[i].clone());
                 }
             }
         }
 
         if tx_keys.is_empty() {
-            debug!("No valid transactions found for batch fetch");
+            debug!("no valid transactions found for batch fetch");
             return Ok(BatchRetrievalResult {
                 results: vec![],
                 failed_ids,
             });
         }
 
-        debug!("Batch fetching {} transaction data", tx_keys.len());
+        debug!(count = %tx_keys.len(), "batch fetching transaction data");
 
         let values: Vec<Option<String>> = conn
             .mget(&tx_keys)
@@ -153,27 +153,23 @@ impl RedisTransactionRepository {
                         Ok(tx) => transactions.push(tx),
                         Err(e) => {
                             failed_count += 1;
-                            error!("Failed to deserialize transaction {}: {}", valid_ids[i], e);
+                            error!(tx_id = %valid_ids[i], error = %e, "failed to deserialize transaction");
                             // Continue processing other transactions
                         }
                     }
                 }
                 None => {
-                    warn!("Transaction {} not found in batch fetch", valid_ids[i]);
+                    warn!(tx_id = %valid_ids[i], "transaction not found in batch fetch");
                     failed_ids.push(valid_ids[i].clone());
                 }
             }
         }
 
         if failed_count > 0 {
-            warn!(
-                "Failed to deserialize {} out of {} transactions in batch",
-                failed_count,
-                valid_ids.len()
-            );
+            warn!(failed_count = %failed_count, total_count = %valid_ids.len(), "failed to deserialize transactions in batch");
         }
 
-        debug!("Successfully fetched {} transactions", transactions.len());
+        debug!(count = %transactions.len(), "successfully fetched transactions");
         Ok(BatchRetrievalResult {
             results: transactions,
             failed_ids,
@@ -185,7 +181,7 @@ impl RedisTransactionRepository {
         match network_data.get_evm_transaction_data() {
             Ok(tx_data) => tx_data.nonce,
             Err(_) => {
-                debug!("No EVM transaction data available for nonce extraction");
+                debug!("no EVM transaction data available for nonce extraction");
                 None
             }
         }
@@ -201,7 +197,7 @@ impl RedisTransactionRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
 
-        debug!("Updating indexes for transaction {}", tx.id);
+        debug!(tx_id = %tx.id, "updating indexes for transaction");
 
         // Add relayer to the global relayer list
         let relayer_list_key = self.relayer_list_key();
@@ -214,7 +210,7 @@ impl RedisTransactionRepository {
         if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.set(&nonce_key, &tx.id);
-            debug!("Added nonce index for tx {} with nonce {}", tx.id, nonce);
+            debug!(tx_id = %tx.id, nonce = %nonce, "added nonce index for transaction");
         }
 
         // Remove old indexes if updating
@@ -222,10 +218,7 @@ impl RedisTransactionRepository {
             if old.status != tx.status {
                 let old_status_key = self.relayer_status_key(&old.relayer_id, &old.status);
                 pipe.srem(&old_status_key, &tx.id);
-                debug!(
-                    "Removing old status index for tx {} (status: {} -> {})",
-                    tx.id, old.status, tx.status
-                );
+                debug!(tx_id = %tx.id, old_status = %old.status, new_status = %tx.status, "removing old status index for transaction");
             }
 
             // Handle nonce index cleanup
@@ -234,24 +227,18 @@ impl RedisTransactionRepository {
                 if Some(old_nonce) != new_nonce {
                     let old_nonce_key = self.relayer_nonce_key(&old.relayer_id, old_nonce);
                     pipe.del(&old_nonce_key);
-                    debug!(
-                        "Removing old nonce index for tx {} (nonce: {} -> {:?})",
-                        tx.id, old_nonce, new_nonce
-                    );
+                    debug!(tx_id = %tx.id, old_nonce = %old_nonce, new_nonce = ?new_nonce, "removing old nonce index for transaction");
                 }
             }
         }
 
         // Execute all operations in a single pipeline
         pipe.exec_async(&mut conn).await.map_err(|e| {
-            error!(
-                "Index update pipeline failed for transaction {}: {}",
-                tx.id, e
-            );
+            error!(tx_id = %tx.id, error = %e, "index update pipeline failed for transaction");
             self.map_redis_error(e, &format!("update_indexes_for_tx_{}", tx.id))
         })?;
 
-        debug!("Successfully updated indexes for transaction {}", tx.id);
+        debug!(tx_id = %tx.id, "successfully updated indexes for transaction");
         Ok(())
     }
 
@@ -261,7 +248,7 @@ impl RedisTransactionRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
 
-        debug!("Removing all indexes for transaction {}", tx.id);
+        debug!(tx_id = %tx.id, "removing all indexes for transaction");
 
         // Remove from status index
         let status_key = self.relayer_status_key(&tx.relayer_id, &tx.status);
@@ -271,7 +258,7 @@ impl RedisTransactionRepository {
         if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.del(&nonce_key);
-            debug!("Removing nonce index for tx {} with nonce {}", tx.id, nonce);
+            debug!(tx_id = %tx.id, nonce = %nonce, "removing nonce index for transaction");
         }
 
         // Remove reverse lookup
@@ -279,11 +266,11 @@ impl RedisTransactionRepository {
         pipe.del(&reverse_key);
 
         pipe.exec_async(&mut conn).await.map_err(|e| {
-            error!("Index removal failed for transaction {}: {}", tx.id, e);
+            error!(tx_id = %tx.id, error = %e, "index removal failed for transaction");
             self.map_redis_error(e, &format!("remove_indexes_for_tx_{}", tx.id))
         })?;
 
-        debug!("Successfully removed all indexes for transaction {}", tx.id);
+        debug!(tx_id = %tx.id, "successfully removed all indexes for transaction");
         Ok(())
     }
 }
@@ -313,7 +300,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let reverse_key = self.tx_to_relayer_key(&entity.id);
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Creating transaction with ID: {}", entity.id);
+        debug!(tx_id = %entity.id, "creating transaction");
 
         let value = self.serialize_entity(&entity, |t| &t.id, "transaction")?;
 
@@ -342,14 +329,11 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         // Update indexes separately to handle partial failures gracefully
         if let Err(e) = self.update_indexes(&entity, None).await {
-            error!(
-                "Failed to update indexes for new transaction {}: {}",
-                entity.id, e
-            );
+            error!(tx_id = %entity.id, error = %e, "failed to update indexes for new transaction");
             return Err(e);
         }
 
-        debug!("Successfully created transaction {}", entity.id);
+        debug!(tx_id = %entity.id, "successfully created transaction");
         Ok(entity)
     }
 
@@ -362,7 +346,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Fetching transaction with ID: {}", id);
+        debug!(tx_id = %id, "fetching transaction");
 
         let reverse_key = self.tx_to_relayer_key(&id);
         let relayer_id: Option<String> = conn
@@ -373,7 +357,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let relayer_id = match relayer_id {
             Some(relayer_id) => relayer_id,
             None => {
-                debug!("Transaction {} not found (no reverse lookup)", id);
+                debug!(tx_id = %id, "transaction not found (no reverse lookup)");
                 return Err(RepositoryError::NotFound(format!(
                     "Transaction with ID {} not found",
                     id
@@ -391,11 +375,11 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             Some(json) => {
                 let tx =
                     self.deserialize_entity::<TransactionRepoModel>(&json, &id, "transaction")?;
-                debug!("Successfully fetched transaction {}", id);
+                debug!(tx_id = %id, "successfully fetched transaction");
                 Ok(tx)
             }
             None => {
-                debug!("Transaction {} not found", id);
+                debug!(tx_id = %id, "transaction not found");
                 Err(RepositoryError::NotFound(format!(
                     "Transaction with ID {} not found",
                     id
@@ -407,7 +391,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     async fn list_all(&self) -> Result<Vec<TransactionRepoModel>, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Fetching all transaction IDs");
+        debug!("fetching all transaction IDs");
 
         // Get all relayer IDs
         let relayer_list_key = self.relayer_list_key();
@@ -416,7 +400,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "list_all_relayer_ids"))?;
 
-        debug!("Found {} relayers", relayer_ids.len());
+        debug!(count = %relayer_ids.len(), "found relayers");
 
         // Collect all transaction IDs from all relayers
         let mut all_tx_ids = Vec::new();
@@ -449,7 +433,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             }
         }
 
-        debug!("Found {} transaction IDs", all_tx_ids.len());
+        debug!(count = %all_tx_ids.len(), "found transaction IDs");
 
         let transactions = self.get_transactions_by_ids(&all_tx_ids).await?;
         Ok(transactions.results)
@@ -467,10 +451,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         let mut conn = self.client.as_ref().clone();
 
-        debug!(
-            "Fetching paginated transactions (page: {}, per_page: {})",
-            query.page, query.per_page
-        );
+        debug!(page = %query.page, per_page = %query.per_page, "fetching paginated transactions");
 
         // Get all relayer IDs
         let relayer_list_key = self.relayer_list_key();
@@ -515,10 +496,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let end = (start + query.per_page as usize).min(all_tx_ids.len());
 
         if start >= all_tx_ids.len() {
-            debug!(
-                "Page {} is beyond available data (total: {})",
-                query.page, total
-            );
+            debug!(page = %query.page, total = %total, "page is beyond available data");
             return Ok(PaginatedResult {
                 items: vec![],
                 total,
@@ -530,11 +508,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let page_ids = &all_tx_ids[start..end];
         let items = self.get_transactions_by_ids(page_ids).await?;
 
-        debug!(
-            "Successfully fetched {} transactions for page {}",
-            items.results.len(),
-            query.page
-        );
+        debug!(count = %items.results.len(), page = %query.page, "successfully fetched transactions for page");
 
         Ok(PaginatedResult {
             items: items.results.clone(),
@@ -555,7 +529,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        debug!("Updating transaction with ID: {}", id);
+        debug!(tx_id = %id, "updating transaction");
 
         // Get the old transaction for index cleanup
         let old_tx = self.get_by_id(id.clone()).await?;
@@ -574,7 +548,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         // Update indexes
         self.update_indexes(&entity, Some(&old_tx)).await?;
 
-        debug!("Successfully updated transaction {}", id);
+        debug!(tx_id = %id, "successfully updated transaction");
         Ok(entity)
     }
 
@@ -585,7 +559,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             ));
         }
 
-        debug!("Deleting transaction with ID: {}", id);
+        debug!(tx_id = %id, "deleting transaction");
 
         // Get transaction first for index cleanup
         let tx = self.get_by_id(id.clone()).await?;
@@ -605,20 +579,17 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
         // Remove indexes (log errors but don't fail the delete)
         if let Err(e) = self.remove_all_indexes(&tx).await {
-            error!(
-                "Failed to remove indexes for deleted transaction {}: {}",
-                id, e
-            );
+            error!(tx_id = %id, error = %e, "failed to remove indexes for deleted transaction");
         }
 
-        debug!("Successfully deleted transaction {}", id);
+        debug!(tx_id = %id, "successfully deleted transaction");
         Ok(())
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
         let mut conn = self.client.as_ref().clone();
 
-        debug!("Counting transactions");
+        debug!("counting transactions");
 
         // Get all relayer IDs
         let relayer_list_key = self.relayer_list_key();
@@ -653,7 +624,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             }
         }
 
-        debug!("Transaction count: {}", total_count);
+        debug!(count = %total_count, "transaction count");
         Ok(total_count)
     }
 
@@ -661,14 +632,14 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_list_key = self.relayer_list_key();
 
-        debug!("Checking if transaction entries exist");
+        debug!("checking if transaction entries exist");
 
         let exists: bool = conn
             .exists(&relayer_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
 
-        debug!("Transaction entries exist: {}", exists);
+        debug!(exists = %exists, "transaction entries exist");
         Ok(exists)
     }
 
@@ -676,7 +647,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
         let mut conn = self.client.as_ref().clone();
         let relayer_list_key = self.relayer_list_key();
 
-        debug!("Dropping all transaction entries");
+        debug!("dropping all transaction entries");
 
         // Get all relayer IDs first
         let relayer_ids: Vec<String> = conn
@@ -685,7 +656,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_relayer_ids"))?;
 
         if relayer_ids.is_empty() {
-            debug!("No transaction entries to drop");
+            debug!("no transaction entries to drop");
             return Ok(());
         }
 
@@ -752,10 +723,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
 
-        debug!(
-            "Dropped all transaction entries for {} relayers",
-            relayer_ids.len()
-        );
+        debug!(count = %relayer_ids.len(), "dropped all transaction entries for relayers");
         Ok(())
     }
 }
@@ -861,10 +829,7 @@ impl TransactionRepository for RedisTransactionRepository {
                     Ok(tx) => Ok(Some(tx)),
                     Err(RepositoryError::NotFound(_)) => {
                         // Transaction was deleted but index wasn't cleaned up
-                        warn!(
-                            "Stale nonce index found for relayer {} nonce {}",
-                            relayer_id, nonce
-                        );
+                        warn!(relayer_id = %relayer_id, nonce = %nonce, "stale nonce index found for relayer");
                         Ok(None)
                     }
                     Err(e) => Err(e),

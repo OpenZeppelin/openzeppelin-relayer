@@ -24,7 +24,6 @@ use std::str::FromStr;
 use alloy::primitives::keccak256;
 use async_trait::async_trait;
 use chrono;
-use log::{debug, info};
 use p256::{
     ecdsa::{signature::Signer, Signature as P256Signature, SigningKey},
     FieldBytes,
@@ -33,6 +32,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::Transaction};
 use thiserror::Error;
+use tracing::{debug, info};
 
 use crate::models::{Address, SecretString, TurnkeySignerConfig};
 use crate::utils::base64_url_encode;
@@ -305,7 +305,7 @@ impl TurnkeyService {
         // Create the authentication stamp
         let x_stamp = self.stamp(&body)?;
 
-        debug!("Sending request to Turnkey API: {}", endpoint);
+        debug!(endpoint = %endpoint, "sending request to turnkey api");
         let response = self
             .client
             .post(format!("{}/public/v1/submit/{}", self.base_url, endpoint))
@@ -375,7 +375,7 @@ impl TurnkeyService {
         let result = self
             .sign_raw_payload(bytes, "HASH_FUNCTION_NO_OP", true)
             .await?;
-        debug!("EVM signature length: {}", result.len());
+        debug!(signature_length = %result.len(), "evm signature length");
         Ok(result)
     }
 
@@ -438,13 +438,13 @@ impl TurnkeyService {
                     // For error responses, try to get the body text first
                     match res.text().await {
                         Ok(body_text) => {
-                            debug!("Error response ({}): {}", status, body_text);
+                            debug!(status = %status, body_text = %body_text, "error response");
 
                             if content_type.contains("application/json") {
                                 match serde_json::from_str::<TurnkeyResponseError>(&body_text) {
                                     Ok(error) => Err(TurnkeyError::MethodError(error)),
                                     Err(e) => {
-                                        debug!("Failed to parse error response as JSON: {}", e);
+                                        debug!(error = %e, "failed to parse error response as json");
                                         Err(TurnkeyError::HttpError(format!(
                                             "HTTP {} error: {}",
                                             status, body_text
@@ -459,7 +459,7 @@ impl TurnkeyService {
                             }
                         }
                         Err(e) => {
-                            info!("Failed to read error response body: {}", e);
+                            info!(error = %e, "failed to read error response body");
                             Err(TurnkeyError::HttpError(format!(
                                 "HTTP {} error (failed to read body): {}",
                                 status, e
@@ -469,7 +469,7 @@ impl TurnkeyService {
                 }
             }
             Err(e) => {
-                debug!("Turnkey API request error: {:?}", e);
+                debug!(error = ?e, "turnkey api request error");
                 // On a reqwest error, convert it into a TurnkeyError::HttpError
                 Err(TurnkeyError::HttpError(e.to_string()))
             }

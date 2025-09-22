@@ -37,6 +37,7 @@ OpenZeppelin Relayer supports the following signer types:
 - `turnkey`: Turnkey signer
 - `google_cloud_kms`: Google Cloud KMS signer
 - `aws_kms`: Amazon AWS KMS signer
+- `cdp`: Coinbase Developer Platform signer
 
 == Network Compatibility Matrix
 
@@ -74,6 +75,11 @@ The following table shows which signer types are compatible with each network ty
 |`aws_kms`
 |✅ Supported
 |❌ Not supported
+|❌ Not supported
+
+|`cdp`
+|✅ Supported
+|✅ Supported
 |❌ Not supported
 |===
 
@@ -457,6 +463,60 @@ Configuration fields:
 | key_id
 | String
 | ID of the key in AWS KMS (can be key ID, key ARN, alias name, or alias ARN)
+|===
+
+== CDP Signer Configuration
+
+Uses CDP's secure key management infrastructure.
+
+[source,json]
+----
+{
+  "id": "cdp-signer",
+  "type": "cdp",
+  "config": {
+    "api_key_id": "your-cdp-api-key-id",
+    "api_key_secret": {
+      "type": "env",
+      "value": "CDP_API_KEY_SECRET"
+    },
+    "wallet_secret": {
+      "type": "env",
+      "value": "CDP_WALLET_SECRET"
+    },
+    "account_address": "your-cdp-evm-or-solana-account-address"
+  }
+}
+----
+
+Configuration fields:
+[cols="1,1,2"]
+|===
+|Field |Type |Description
+
+| api_key_id
+| String
+| The Key ID of a Secret API Key. Used for authentication to the CDP signing service
+
+| api_key_secret.type
+| String
+| Type of value source (`env` or `plain`)
+
+| api_key_secret.value
+| String
+| The API key secret or environment variable name containing it. Used with the Key ID to authenticate API requests
+
+| wallet_secret.type
+| String
+| Type of value source (`env` or `plain`)
+
+| wallet_secret.value
+| String
+| The Wallet Secret or environment variable name containing it. Used to authorize API requests for signing operations.
+
+| account_address
+| String
+| The address of the CDP EVM EOA or CDP Solana Account used for signing operations.
 |===
 
 == Security Best Practices

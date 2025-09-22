@@ -5,8 +5,8 @@
 
 use async_trait::async_trait;
 use eyre::Result;
-use log::info;
 use std::sync::Arc;
+use tracing::info;
 
 use crate::{
     domain::transaction::Transaction,

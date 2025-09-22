@@ -1,6 +1,6 @@
 //! This module contains the function to log service information at startup.
-use log::info;
 use std::env;
+use tracing::info;
 
 /// Logs service information at startup
 pub fn log_service_info() {
@@ -8,36 +8,36 @@ pub fn log_service_info() {
     let service_version = env!("CARGO_PKG_VERSION");
 
     info!("=== OpenZeppelin Relayer Service Starting ===");
-    info!("🚀 Service: {} v{}", service_name, service_version);
-    info!("🦀 Rust Version: {}", env!("CARGO_PKG_RUST_VERSION"));
+    info!(service_name = %service_name, service_version = %service_version, "🚀 service");
+    info!(rust_version = %env!("CARGO_PKG_RUST_VERSION"), "🦀 rust version");
 
     // Log environment information
     if let Ok(profile) = env::var("CARGO_PKG_PROFILE") {
-        info!("🔧 Build Profile: {}", profile);
+        info!(profile = %profile, "🔧 build profile");
     }
 
     // Log system information
-    info!("💻 Platform: {}", env::consts::OS);
-    info!("💻 Architecture: {}", env::consts::ARCH);
+    info!(platform = %env::consts::OS, "💻 platform");
+    info!(architecture = %env::consts::ARCH, "💻 architecture");
 
     // Log current working directory
     if let Ok(cwd) = env::current_dir() {
-        info!("📁 Working Directory: {}", cwd.display());
+        info!(working_directory = %cwd.display(), "📁 working directory");
     }
 
     // Log important environment variables if present
     if let Ok(rust_log) = env::var("RUST_LOG") {
-        info!("🔧 Log Level: {}", rust_log);
+        info!(log_level = %rust_log, "🔧 log level");
     }
 
     if let Ok(config_path) = env::var("CONFIG_PATH") {
-        info!("🔧 Config Path: {}", config_path);
+        info!(config_path = %config_path, "🔧 config path");
     }
 
     // Log startup timestamp
     info!(
-        "🕒 Started at: {}",
-        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        started_at = %chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+        "🕒 started at"
     );
 
     // log docs url

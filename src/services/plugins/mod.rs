@@ -114,6 +114,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         let result = self
             .runner
             .run(
+                plugin.id.clone(),
                 &socket_path,
                 script_path,
                 plugin.timeout,
@@ -243,7 +244,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage>()
-            .returning(|_, _, _, _, _| {
+            .returning(|_, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,

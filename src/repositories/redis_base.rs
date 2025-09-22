@@ -4,9 +4,9 @@
 //! implementations to reduce code duplication and ensure consistency.
 
 use crate::models::RepositoryError;
-use log::{error, warn};
 use redis::RedisError;
 use serde::{Deserialize, Serialize};
+use tracing::{error, warn};
 
 /// Base trait for Redis repositories providing common functionality
 pub trait RedisRepository {
@@ -22,7 +22,7 @@ pub trait RedisRepository {
     {
         serde_json::to_string(entity).map_err(|e| {
             let id = id_extractor(entity);
-            error!("Serialization failed for {} {}: {}", entity_type, id, e);
+            error!(entity_type = %entity_type, id = %id, error = %e, "serialization failed");
             RepositoryError::InvalidData(format!(
                 "Failed to serialize {} {}: {}",
                 entity_type, id, e
@@ -42,10 +42,7 @@ pub trait RedisRepository {
         T: for<'de> Deserialize<'de>,
     {
         serde_json::from_str(json).map_err(|e| {
-            error!(
-                "Deserialization failed for {} {}: {}",
-                entity_type, entity_id, e
-            );
+            error!(entity_type = %entity_type, entity_id = %entity_id, error = %e, "deserialization failed");
             RepositoryError::InvalidData(format!(
                 "Failed to deserialize {} {}: {} (JSON length: {})",
                 entity_type,
@@ -58,7 +55,7 @@ pub trait RedisRepository {
 
     /// Convert Redis errors to appropriate RepositoryError types
     fn map_redis_error(&self, error: RedisError, context: &str) -> RepositoryError {
-        warn!("Redis operation failed in context '{}': {}", context, error);
+        warn!(context = %context, error = %error, "redis operation failed");
 
         match error.kind() {
             redis::ErrorKind::TypeError => RepositoryError::InvalidData(format!(

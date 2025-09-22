@@ -8,8 +8,8 @@ use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use chrono::{DateTime, Utc};
 use eyre::Result;
-use log::{debug, error, info, warn};
 use std::sync::Arc;
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     constants::{FINAL_TRANSACTION_STATUSES, WORKER_DEFAULT_MAXIMUM_RETRIES},
@@ -40,6 +40,15 @@ const MAX_CONCURRENT_TRANSACTIONS_PER_RELAYER: usize = 50;
 ///
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of cleanup processing
+#[instrument(
+    level = "info",
+    skip(job, data),
+    fields(
+        job_type = "transaction_cleanup",
+        attempt = %attempt.current(),
+    ),
+    err
+)]
 pub async fn transaction_cleanup_handler(
     job: TransactionCleanupCronReminder,
     data: Data<ThinData<DefaultAppState>>,
@@ -75,8 +84,8 @@ async fn handle_request(
 ) -> Result<()> {
     let now = Utc::now();
     info!(
-        "Executing transaction cleanup from storage at: {}",
-        now.to_rfc3339()
+        timestamp = %now.to_rfc3339(),
+        "executing transaction cleanup from storage"
     );
 
     let transaction_repo = data.transaction_repository();
@@ -84,11 +93,17 @@ async fn handle_request(
 
     // Fetch all relayers
     let relayers = relayer_repo.list_all().await.map_err(|e| {
-        error!("Failed to fetch relayers for cleanup: {}", e);
+        error!(
+            error = %e,
+            "failed to fetch relayers for cleanup"
+        );
         eyre::eyre!("Failed to fetch relayers: {}", e)
     })?;
 
-    info!("Found {} relayers to process for cleanup", relayers.len());
+    info!(
+        relayer_count = relayers.len(),
+        "found relayers to process for cleanup"
+    );
 
     // Process relayers in parallel batches
     let cleanup_results = process_relayers_in_batches(relayers, transaction_repo, now).await;
@@ -148,14 +163,17 @@ async fn process_single_relayer(
     transaction_repo: Arc<impl TransactionRepository>,
     now: DateTime<Utc>,
 ) -> RelayerCleanupResult {
-    debug!("Processing cleanup for relayer: {}", relayer.id);
+    debug!(
+        relayer_id = %relayer.id,
+        "processing cleanup for relayer"
+    );
 
     match fetch_final_transactions(&relayer.id, &transaction_repo).await {
         Ok(final_transactions) => {
             debug!(
-                "Found {} transactions with final statuses for relayer: {}",
-                final_transactions.len(),
-                relayer.id
+                transaction_count = final_transactions.len(),
+                relayer_id = %relayer.id,
+                "found transactions with final statuses"
             );
 
             let cleaned_count = process_transactions_for_cleanup(
@@ -168,8 +186,9 @@ async fn process_single_relayer(
 
             if cleaned_count > 0 {
                 info!(
-                    "Cleaned up {} expired transactions for relayer: {}",
-                    cleaned_count, relayer.id
+                    cleaned_count,
+                    relayer_id = %relayer.id,
+                    "cleaned up expired transactions"
                 );
             }
 
@@ -181,8 +200,9 @@ async fn process_single_relayer(
         }
         Err(e) => {
             error!(
-                "Failed to fetch final transactions for relayer {}: {}",
-                relayer.id, e
+                error = %e,
+                relayer_id = %relayer.id,
+                "failed to fetch final transactions"
             );
             RelayerCleanupResult {
                 relayer_id: relayer.id,
@@ -243,9 +263,9 @@ async fn process_transactions_for_cleanup(
     }
 
     debug!(
-        "Processing {} transactions in parallel for relayer: {}",
-        transactions.len(),
-        relayer_id
+        transaction_count = transactions.len(),
+        relayer_id = %relayer_id,
+        "processing transactions in parallel"
     );
 
     // Filter expired transactions first (this is fast and synchronous)
@@ -255,14 +275,17 @@ async fn process_transactions_for_cleanup(
         .collect();
 
     if expired_transactions.is_empty() {
-        debug!("No expired transactions found for relayer: {}", relayer_id);
+        debug!(
+            relayer_id = %relayer_id,
+            "no expired transactions found"
+        );
         return 0;
     }
 
     debug!(
-        "Found {} expired transactions to delete for relayer: {}",
-        expired_transactions.len(),
-        relayer_id
+        expired_count = expired_transactions.len(),
+        relayer_id = %relayer_id,
+        "found expired transactions to delete"
     );
 
     // Process deletions in parallel with limited concurrency
@@ -275,8 +298,9 @@ async fn process_transactions_for_cleanup(
                     Ok(()) => true,
                     Err(e) => {
                         error!(
-                            "Failed to delete expired transaction {}: {}",
-                            transaction.id, e
+                            tx_id = %transaction.id,
+                            error = %e,
+                            "failed to delete expired transaction"
                         );
                         false
                     }
@@ -291,10 +315,10 @@ async fn process_transactions_for_cleanup(
     let cleaned_count = deletion_results.iter().filter(|&&success| success).count();
 
     debug!(
-        "Successfully deleted {}/{} expired transactions for relayer: {}",
         cleaned_count,
-        deletion_results.len(),
-        relayer_id
+        total_attempted = deletion_results.len(),
+        relayer_id = %relayer_id,
+        "successfully deleted expired transactions"
     );
 
     cleaned_count
@@ -317,9 +341,9 @@ fn should_delete_transaction(transaction: &TransactionRepoModel, now: DateTime<U
             let is_expired = now >= delete_at.with_timezone(&Utc);
             if is_expired {
                 debug!(
-                    "Transaction {} is expired (expired at: {})",
-                    transaction.id,
-                    delete_at.to_rfc3339()
+                    tx_id = %transaction.id,
+                    expired_at = %delete_at.to_rfc3339(),
+                    "transaction is expired"
                 );
             }
             is_expired
@@ -327,8 +351,8 @@ fn should_delete_transaction(transaction: &TransactionRepoModel, now: DateTime<U
         .unwrap_or_else(|| {
             if transaction.delete_at.is_some() {
                 warn!(
-                    "Transaction {} has invalid delete_at timestamp",
-                    transaction.id
+                    tx_id = %transaction.id,
+                    "transaction has invalid delete_at timestamp"
                 );
             }
             false
@@ -359,8 +383,10 @@ async fn delete_expired_transaction(
     }
 
     debug!(
-        "Deleting expired transaction {} (status: {:?}) for relayer: {}",
-        transaction.id, transaction.status, relayer_id
+        tx_id = %transaction.id,
+        status = ?transaction.status,
+        relayer_id = %relayer_id,
+        "deleting expired transaction"
     );
 
     transaction_repo
@@ -369,8 +395,10 @@ async fn delete_expired_transaction(
         .map_err(|e| eyre::eyre!("Failed to delete transaction {}: {}", transaction.id, e))?;
 
     info!(
-        "Successfully deleted expired transaction: {} (status: {:?}) for relayer: {}",
-        transaction.id, transaction.status, relayer_id
+        tx_id = %transaction.id,
+        status = ?transaction.status,
+        relayer_id = %relayer_id,
+        "successfully deleted expired transaction"
     );
 
     Ok(())
@@ -392,16 +420,17 @@ async fn report_cleanup_results(cleanup_results: Vec<RelayerCleanupResult>) -> R
     for result in &cleanup_results {
         if let Some(error) = &result.error {
             error!(
-                "Failed to cleanup transactions for relayer {}: {}",
-                result.relayer_id, error
+                relayer_id = %result.relayer_id,
+                error = %error,
+                "failed to cleanup transactions for relayer"
             );
         }
     }
 
     if total_errors > 0 {
         warn!(
-            "Transaction cleanup completed with {} errors out of {} relayers. Successfully cleaned {} transactions.",
-            total_errors, total_relayers, total_cleaned
+            total_errors,
+            total_relayers, total_cleaned, "transaction cleanup completed with errors"
         );
 
         // Return error if there were failures, but don't fail the entire job
@@ -413,8 +442,8 @@ async fn report_cleanup_results(cleanup_results: Vec<RelayerCleanupResult>) -> R
         ))
     } else {
         info!(
-            "Transaction cleanup completed successfully. Cleaned {} transactions from {} relayers.",
-            total_cleaned, total_relayers
+            total_cleaned,
+            total_relayers, "transaction cleanup completed successfully"
         );
         Ok(())
     }

@@ -39,6 +39,7 @@ pub struct ScriptExecutor;
 
 impl ScriptExecutor {
     pub async fn execute_typescript(
+        plugin_id: String,
         script_path: String,
         socket_path: String,
         script_params: String,
@@ -63,8 +64,9 @@ impl ScriptExecutor {
         let output = Command::new("ts-node")
             .arg(executor_path)       // Execute executor script
             .arg(socket_path)         // Socket path (argv[2])
-            .arg(script_params)       // Plugin parameters (argv[3])
-            .arg(script_path)         // User script path (argv[4])
+            .arg(plugin_id)           // Plugin ID (argv[3])
+            .arg(script_params)       // Plugin parameters (argv[4])
+            .arg(script_path)         // User script path (argv[5])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -145,6 +147,7 @@ mod tests {
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
         let result = ScriptExecutor::execute_typescript(
+            "test-plugin-1".to_string(),
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
@@ -185,6 +188,7 @@ mod tests {
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
         let result = ScriptExecutor::execute_typescript(
+            "test-plugin-1".to_string(),
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
@@ -215,6 +219,7 @@ mod tests {
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
         let result = ScriptExecutor::execute_typescript(
+            "test-plugin-1".to_string(),
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
@@ -224,11 +229,10 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
-        assert_eq!(result.error, "");
-
-        assert!(!result.logs.is_empty());
-        assert_eq!(result.logs[0].level, LogLevel::Error);
-        assert!(result.logs[0].message.contains("logger"));
+        // TypeScript compilation errors are now returned in the error field
+        assert!(!result.error.is_empty());
+        assert!(result.error.contains("Plugin executor failed"));
+        assert!(result.error.contains("logger"));
     }
 
     #[tokio::test]
@@ -251,6 +255,7 @@ mod tests {
         fs::write(ts_config.clone(), TS_CONFIG.as_bytes()).unwrap();
 
         let result = ScriptExecutor::execute_typescript(
+            "test-plugin-1".to_string(),
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),

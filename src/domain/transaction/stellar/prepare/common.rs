@@ -1,11 +1,11 @@
 //! Common functionality shared across preparation modules.
 
 use eyre::Result;
-use log::{info, warn};
 use soroban_rs::{
     stellar_rpc_client::SimulateTransactionResponse,
     xdr::{Limits, TransactionEnvelope, WriteXdr},
 };
+use tracing::{info, warn};
 
 use crate::{
     constants::STELLAR_DEFAULT_TRANSACTION_FEE,
@@ -64,7 +64,7 @@ where
             .map_err(TransactionError::from)?;
 
         if let Some(err_msg) = resp.error.clone() {
-            warn!("Stellar simulation failed: {}", err_msg);
+            warn!(error = %err_msg, "stellar simulation failed");
             return Err(TransactionError::SimulationFailed(err_msg));
         }
 

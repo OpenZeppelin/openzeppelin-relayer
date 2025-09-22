@@ -34,8 +34,8 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::try_join_all;
-use log::{error, info, warn};
 use solana_sdk::{account::Account, pubkey::Pubkey};
+use tracing::{debug, error, info, warn};
 
 use super::{NetworkDex, SolanaRpcError, SolanaTokenProgram, SwapResult, TokenAccount};
 
@@ -327,7 +327,7 @@ where
         &self,
         relayer_id: String,
     ) -> Result<Vec<SwapResult>, RelayerError> {
-        info!("Handling token swap request for relayer: {}", relayer_id);
+        debug!("handling token swap request for relayer");
         let relayer = self
             .relayer_repository
             .get_by_id(relayer_id.clone())
@@ -391,7 +391,7 @@ where
                         .unwrap_or(0);
 
                     if swap_amount > 0 {
-                        info!("Token swap eligible for token: {:?}", token);
+                        debug!(token = ?token, "token swap eligible for token");
 
                         // Add the token to the list of eligible tokens for swapping
                         eligible_tokens.push(TokenSwapCandidate {
@@ -493,7 +493,7 @@ where
                     .await;
 
                 if let Err(e) = webhook_result {
-                    error!("Failed to produce notification job: {}", e);
+                    error!(error = %e, "failed to produce notification job");
                 }
             }
         }
@@ -532,7 +532,7 @@ where
         match response {
             Ok(response) => Ok(response),
             Err(e) => {
-                error!("Error while processing RPC request: {}", e);
+                error!(error = %e, "error while processing RPC request");
                 let error_response = match e {
                     SolanaRpcError::UnsupportedMethod(msg) => {
                         JsonRpcResponse::error(32000, "UNSUPPORTED_METHOD", &msg)
@@ -655,7 +655,7 @@ where
             .await
             .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
 
-        info!("Balance : {} for relayer: {}", balance, self.relayer.id);
+        debug!(balance = %balance, "balance for relayer");
 
         let policy = self.relayer.policies.get_solana_policy();
 
@@ -669,7 +669,7 @@ where
     }
 
     async fn initialize_relayer(&self) -> Result<(), RelayerError> {
-        info!("Initializing relayer: {}", self.relayer.id);
+        info!("initializing relayer");
 
         // Populate model with allowed token metadata and update DB entry
         // Error will be thrown if any of the tokens are not found
@@ -706,7 +706,7 @@ where
             .collect::<Vec<String>>()
             .join(", ");
 
-            warn!("Disabling relayer: {} due to: {}", self.relayer.id, reason);
+            warn!(reason = %reason, "disabling relayer");
             let updated_relayer = self
                 .relayer_repository
                 .disable_relayer(self.relayer.id.clone())

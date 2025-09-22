@@ -3,9 +3,9 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::Utc;
-use log::{info, warn};
 use serde_json::{json, Value};
 use soroban_rs::xdr::{Error, Hash};
+use tracing::{info, warn};
 
 use super::StellarRelayerTransaction;
 use crate::{
@@ -34,7 +34,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Handling transaction status for: {:?}", tx.id);
+        info!("handling transaction status");
 
         // Call core status checking logic with error handling
         match self.status_core(tx.clone()).await {
@@ -70,10 +70,7 @@ where
                 // Check if this is an XDR parsing error (common with fee bump transactions)
                 if error_str.contains("Xdr(Invalid)") || error_str.contains("xdr processing error")
                 {
-                    warn!(
-                        "XDR parsing error for transaction {}, using raw RPC fallback",
-                        tx.id
-                    );
+                    warn!("xdr parsing error, using raw rpc fallback");
 
                     // Fallback: Get transaction status via raw RPC request
                     // TODO: This is a temporary solution to handle XDR parsing errors.
@@ -89,12 +86,12 @@ where
                             }
                         }
                         Err(raw_err) => {
-                            warn!("Raw RPC fallback also failed for {}: {:?}", tx.id, raw_err);
+                            warn!(error = ?raw_err, "raw RPC fallback also failed");
                             return Err(TransactionError::from(e));
                         }
                     }
                 } else {
-                    warn!("Provider get_transaction failed for {}: {:?}", tx.id, e);
+                    warn!(error = ?e, "provider get_transaction failed");
                     return Err(TransactionError::from(e));
                 }
             }
@@ -117,25 +114,16 @@ where
         tx: TransactionRepoModel,
         error: TransactionError,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        warn!(
-            "Failed to get Stellar transaction status for {}: {}. Re-queueing check.",
-            tx.id, error
-        );
+        warn!(error = %error, "failed to get stellar transaction status, re-queueing check");
 
         // Step 1: Re-queue status check for retry
         if let Err(requeue_error) = self.requeue_status_check(&tx).await {
-            warn!(
-                "Failed to requeue status check for transaction {}: {}",
-                tx.id, requeue_error
-            );
+            warn!(error = %requeue_error, "failed to requeue status check for transaction");
             // Continue with original error even if requeue fails
         }
 
         // Step 2: Log failure for monitoring (status_check_fail_total metric would go here)
-        info!(
-            "Transaction {} status check failure handled. Will retry later. Error: {}",
-            tx.id, error
-        );
+        info!(error = %error, "transaction status check failure handled, will retry later");
 
         // Step 3: Return original transaction unchanged (will be retried)
         Ok(tx)
@@ -231,7 +219,7 @@ where
             format!("{} No detailed XDR result available.", base_reason)
         };
 
-        warn!("Stellar transaction {} failed: {}", tx.id, detailed_reason);
+        warn!(reason = %detailed_reason, "stellar transaction failed");
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
@@ -254,10 +242,7 @@ where
         tx: TransactionRepoModel,
         original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!(
-            "Stellar transaction {} status is still '{}'. Re-queueing check.",
-            tx.id, original_status_str
-        );
+        info!(status = %original_status_str, "stellar transaction status is still pending, re-queueing check");
         self.requeue_status_check(&tx).await?;
         Ok(tx)
     }

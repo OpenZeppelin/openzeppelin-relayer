@@ -33,7 +33,7 @@ pub struct EvmTransactionResponse {
         deserialize_with = "deserialize_optional_u128",
         default
     )]
-    #[schema(nullable = false)]
+    #[schema(nullable = false, value_type = String)]
     pub gas_price: Option<u128>,
     #[serde(deserialize_with = "deserialize_optional_u64", default)]
     pub gas_limit: Option<u64>,
@@ -53,14 +53,14 @@ pub struct EvmTransactionResponse {
         deserialize_with = "deserialize_optional_u128",
         default
     )]
-    #[schema(nullable = false)]
+    #[schema(nullable = false, value_type = String)]
     pub max_fee_per_gas: Option<u128>,
     #[serde(
         serialize_with = "serialize_optional_u128",
         deserialize_with = "deserialize_optional_u128",
         default
     )]
-    #[schema(nullable = false)]
+    #[schema(nullable = false, value_type = String)]
     pub max_priority_fee_per_gas: Option<u128>,
     pub signature: Option<EvmTransactionDataSignature>,
     pub speed: Option<Speed>,

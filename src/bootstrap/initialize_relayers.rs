@@ -11,7 +11,7 @@ use actix_web::web::ThinData;
 
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
-use log::info;
+use tracing::debug;
 
 async fn initialize_relayer(
     relayer_id: String,
@@ -19,7 +19,7 @@ async fn initialize_relayer(
 ) -> Result<()> {
     let relayer_service = get_network_relayer(relayer_id.clone(), &app_state).await?;
 
-    info!("Initializing relayer: {}", relayer_id.clone());
+    debug!(relayer_id = %relayer_id, "initializing relayer");
 
     relayer_service.initialize_relayer().await?;
 

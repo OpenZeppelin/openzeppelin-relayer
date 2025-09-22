@@ -27,6 +27,9 @@ use vault_transit_signer::*;
 mod turnkey_signer;
 use turnkey_signer::*;
 
+mod cdp_signer;
+use cdp_signer::*;
+
 mod google_cloud_kms_signer;
 use google_cloud_kms_signer::*;
 
@@ -41,7 +44,7 @@ use crate::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerConfig,
         SignerRepoModel, SignerType, TransactionRepoModel, VaultSignerConfig,
     },
-    services::{GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
+    services::{CdpService, GoogleCloudKmsService, TurnkeyService, VaultConfig, VaultService},
 };
 use eyre::Result;
 
@@ -54,6 +57,7 @@ pub enum SolanaSigner {
     Vault(VaultSigner<VaultService>),
     VaultTransit(VaultTransitSigner),
     Turnkey(TurnkeySigner),
+    Cdp(CdpSigner),
     GoogleCloudKms(GoogleCloudKmsSigner),
 }
 
@@ -65,6 +69,7 @@ impl Signer for SolanaSigner {
             Self::Vault(signer) => signer.address().await,
             Self::VaultTransit(signer) => signer.address().await,
             Self::Turnkey(signer) => signer.address().await,
+            Self::Cdp(signer) => signer.address().await,
             Self::GoogleCloudKms(signer) => signer.address().await,
         }
     }
@@ -78,6 +83,7 @@ impl Signer for SolanaSigner {
             Self::Vault(signer) => signer.sign_transaction(transaction).await,
             Self::VaultTransit(signer) => signer.sign_transaction(transaction).await,
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
+            Self::Cdp(signer) => signer.sign_transaction(transaction).await,
             Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
         }
     }
@@ -113,6 +119,7 @@ impl SolanaSignTrait for SolanaSigner {
             Self::Vault(signer) => signer.pubkey().await,
             Self::VaultTransit(signer) => signer.pubkey().await,
             Self::Turnkey(signer) => signer.pubkey().await,
+            Self::Cdp(signer) => signer.pubkey().await,
             Self::GoogleCloudKms(signer) => signer.pubkey().await,
         }
     }
@@ -123,6 +130,7 @@ impl SolanaSignTrait for SolanaSigner {
             Self::Vault(signer) => Ok(signer.sign(message).await?),
             Self::VaultTransit(signer) => Ok(signer.sign(message).await?),
             Self::Turnkey(signer) => Ok(signer.sign(message).await?),
+            Self::Cdp(signer) => Ok(signer.sign(message).await?),
             Self::GoogleCloudKms(signer) => Ok(signer.sign(message).await?),
         }
     }
@@ -174,6 +182,12 @@ impl SolanaSignerFactory {
             SignerConfig::AwsKms(_) => {
                 return Err(SignerFactoryError::UnsupportedType("AWS KMS".into()));
             }
+            SignerConfig::Cdp(config) => {
+                let cdp_signer = CdpSigner::new(config.clone()).map_err(|e| {
+                    SignerFactoryError::CreationFailed(format!("CDP service error: {}", e))
+                })?;
+                return Ok(SolanaSigner::Cdp(cdp_signer));
+            }
             SignerConfig::Turnkey(turnkey_signer_config) => {
                 let turnkey_service =
                     TurnkeyService::new(turnkey_signer_config.clone()).map_err(|e| {
@@ -207,10 +221,10 @@ impl SolanaSignerFactory {
 mod solana_signer_factory_tests {
     use super::*;
     use crate::models::{
-        AwsKmsSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, SecretString, SignerConfig,
-        SignerRepoModel, SolanaTransactionData, TurnkeySignerConfig, VaultSignerConfig,
-        VaultTransitSignerConfig,
+        AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
+        GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
+        SecretString, SignerConfig, SignerRepoModel, SolanaTransactionData, TurnkeySignerConfig,
+        VaultSignerConfig, VaultTransitSignerConfig,
     };
     use mockall::predicate::*;
     use secrets::SecretVec;
@@ -328,6 +342,26 @@ mod solana_signer_factory_tests {
         }
     }
 
+    #[test]
+    fn test_create_solana_signer_cdp() {
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Cdp(CdpSignerConfig {
+                api_key_id: "test-api-key-id".to_string(),
+                api_key_secret: SecretString::new("test-api-key-secret"),
+                wallet_secret: SecretString::new("test-wallet-secret"),
+                account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
+            }),
+        };
+
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+
+        match signer {
+            SolanaSigner::Cdp(_) => {}
+            _ => panic!("Expected CDP signer"),
+        }
+    }
+
     #[tokio::test]
     async fn test_create_solana_signer_google_cloud_kms() {
         let signer_model = SignerDomainModel {
@@ -415,6 +449,28 @@ mod solana_signer_factory_tests {
                 private_key_id: "private_key_id".to_string(),
                 public_key: "5720be8aa9d2bb4be8e91f31d2c44c8629e42da16981c2cebabd55cafa0b76bd"
                     .to_string(),
+            }),
+        };
+        let expected_pubkey =
+            Address::Solana("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string());
+
+        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer_address = signer.address().await.unwrap();
+        let signer_pubkey = signer.pubkey().await.unwrap();
+
+        assert_eq!(expected_pubkey, signer_address);
+        assert_eq!(expected_pubkey, signer_pubkey);
+    }
+
+    #[tokio::test]
+    async fn test_address_solana_signer_cdp() {
+        let signer_model = SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::Cdp(CdpSignerConfig {
+                api_key_id: "test-api-key-id".to_string(),
+                api_key_secret: SecretString::new("test-api-key-secret"),
+                wallet_secret: SecretString::new("test-wallet-secret"),
+                account_address: "6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string(),
             }),
         };
         let expected_pubkey =

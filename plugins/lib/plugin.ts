@@ -38,6 +38,8 @@ import {
 } from '@openzeppelin/relayer-sdk';
 
 import { LogInterceptor } from './logger';
+import { DefaultPluginKVStore } from './kv';
+import type { PluginKVStore } from './kv';
 import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -182,6 +184,22 @@ export interface PluginAPI {
   transactionWait(transaction: SendTransactionResult, options?: TransactionWaitOptions): Promise<TransactionResponse>;
 }
 
+/**
+ * Plugin context with KV always available for modern plugins
+ */
+export interface PluginContext {
+  api: PluginAPI;
+  params: any;
+  kv: PluginKVStore;
+}
+
+/**
+ * Handler can accept two styles for backward compatibility
+ */
+export type PluginHandler =
+  | ((api: PluginAPI, params: any) => Promise<any>) // Legacy 2-param - NO KV access
+  | ((context: PluginContext) => Promise<any>); // Modern context - HAS KV access
+
 type Plugin<T, R> = (plugin: PluginAPI, pluginParams: T) => Promise<R>;
 
 // Global variable to capture legacy plugin function
@@ -252,9 +270,15 @@ export async function runPlugin<T, R>(main: Plugin<T, R>): Promise<void> {
  * Helper function that loads and executes a user plugin script
  * @param userScriptPath - Path to the user's plugin script
  * @param api - Plugin API instance
+ * @param kv - KV store instance for plugins
  * @param params - Plugin parameters
  */
-export async function loadAndExecutePlugin<T, R>(userScriptPath: string, api: PluginAPI, params: T): Promise<R> {
+export async function loadAndExecutePlugin<T, R>(
+  userScriptPath: string,
+  api: PluginAPI,
+  kv: PluginKVStore,
+  params: T
+): Promise<R> {
   try {
     // IMPORTANT: Path normalization required because executor is in plugins/lib/
     // but user scripts are in plugins/ (and config paths are relative to plugins/)
@@ -288,9 +312,16 @@ export async function loadAndExecutePlugin<T, R>(userScriptPath: string, api: Pl
     const handler = userModule.handler;
 
     if (handler && typeof handler === 'function') {
-      // Modern pattern: call the exported handler
-      const result = await handler(api, params);
-      return result;
+      // Detect handler signature by parameter count
+      if (handler.length === 1) {
+        // Modern context handler - ONLY these get KV access
+        const context: PluginContext = { api, params, kv };
+        return await handler(context);
+      } else {
+        // Legacy handler - NO KV access, just (api, params)
+        // This keeps PluginAPI interface unchanged
+        return await handler(api, params);
+      }
     }
 
     // Try legacy pattern: check if runPlugin was called during module loading
@@ -455,25 +486,24 @@ export class DefaultPluginAPI implements PluginAPI {
  * It receives validated parameters from the wrapper script and focuses purely on plugin execution logic.
  *
  * @param socketPath - Unix socket path for communication with relayer
+ * @param pluginId - Plugin ID for namespacing KV storage
  * @param pluginParams - Parsed plugin parameters object
  * @param userScriptPath - Path to the user's plugin file to execute
  */
 export async function runUserPlugin<T = any, R = any>(
   socketPath: string,
+  pluginId: string,
   pluginParams: T,
   userScriptPath: string
 ): Promise<R> {
+  const plugin = new DefaultPluginAPI(socketPath);
+  const kv = new DefaultPluginKVStore(pluginId);
+
   try {
-    // Create plugin API instance
-    const plugin = new DefaultPluginAPI(socketPath);
+    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams);
 
-    // Use helper function to load and execute the plugin
-    const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, pluginParams);
-
-    plugin.close();
     return result;
-  } catch (error) {
-    console.error(error);
-    process.exit(1);
+  } finally {
+    plugin.close();
   }
 }

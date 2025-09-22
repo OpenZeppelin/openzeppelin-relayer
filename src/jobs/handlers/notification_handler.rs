@@ -6,12 +6,13 @@
 use actix_web::web::ThinData;
 use apalis::prelude::{Attempt, Data, *};
 use eyre::Result;
-use log::info;
+use tracing::{debug, instrument};
 
 use crate::{
     constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
     jobs::{handle_result, Job, NotificationSend},
     models::DefaultAppState,
+    observability::request_id::set_request_id,
     repositories::Repository,
     services::WebhookNotificationService,
 };
@@ -24,12 +25,28 @@ use crate::{
 ///
 /// # Returns
 /// * `Result<(), Error>` - Success or failure of notification processing
+#[instrument(
+    level = "info",
+    skip(job, context),
+    fields(
+        request_id = ?job.request_id,
+        job_id = %job.message_id,
+        job_type = %job.job_type.to_string(),
+        attempt = %attempt.current(),
+        notification_id = %job.data.notification_id,
+    ),
+    err
+)]
 pub async fn notification_handler(
     job: Job<NotificationSend>,
     context: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
 ) -> Result<(), Error> {
-    info!("handling notification: {:?}", job.data);
+    if let Some(request_id) = job.request_id.clone() {
+        set_request_id(request_id);
+    }
+
+    debug!("handling notification");
 
     let result = handle_request(job.data, context).await;
 
@@ -45,7 +62,7 @@ async fn handle_request(
     request: NotificationSend,
     context: Data<ThinData<DefaultAppState>>,
 ) -> Result<()> {
-    info!("sending notification: {:?}", request);
+    debug!("sending notification");
     let notification = context
         .notification_repository
         .get_by_id(request.notification_id)

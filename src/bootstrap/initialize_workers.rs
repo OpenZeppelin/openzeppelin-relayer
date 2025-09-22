@@ -15,9 +15,9 @@ use actix_web::web::ThinData;
 use apalis::{layers::ErrorHandlingLayer, prelude::*};
 use apalis_cron::CronStream;
 use eyre::Result;
-use log::{error, info};
 use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
+use tracing::{debug, error, info};
 
 // Review and fine tune configuration for the workers
 const DEFAULT_CONCURRENCY: usize = 2;
@@ -132,7 +132,7 @@ pub async fn initialize_workers(app_state: ThinData<DefaultAppState>) -> Result<
     });
     tokio::spawn(async move {
         if let Err(e) = monitor_future.await {
-            error!("Monitor error: {}", e);
+            error!(error = %e, "monitor error");
         }
     });
     info!("Monitor shutdown complete");
@@ -176,7 +176,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
     let mut workers = Vec::new();
 
     for relayer in solena_relayers_with_swap_enabled {
-        info!("Found solana relayer with swap enabled: {:?}", relayer);
+        debug!(relayer = ?relayer, "found solana relayer with swap enabled");
 
         let policy = relayer.policies.get_solana_policy();
         let swap_config = match policy.get_swap_config() {
@@ -190,7 +190,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
         let calendar_schedule = match swap_config.cron_schedule {
             Some(schedule) => apalis_cron::Schedule::from_str(&schedule).unwrap(),
             None => {
-                info!("No swap cron schedule found for relayer: {:?}", relayer);
+                debug!(relayer = ?relayer, "no swap cron schedule found for relayer");
                 continue;
             }
         };
@@ -243,7 +243,7 @@ pub async fn initialize_solana_swap_workers(app_state: ThinData<DefaultAppState>
     });
     tokio::spawn(async move {
         if let Err(e) = monitor_future.await {
-            error!("Monitor error: {}", e);
+            error!(error = %e, "monitor error");
         }
     });
     Ok(())
@@ -253,22 +253,22 @@ fn monitor_handle_event(e: Worker<Event>) {
     let worker_id = e.id();
     match e.inner() {
         Event::Engage(task_id) => {
-            info!("Worker [{worker_id}] got a job with id: {task_id}");
+            debug!(worker_id = %worker_id, task_id = %task_id, "worker got a job");
         }
         Event::Error(e) => {
-            error!("Worker [{worker_id}] encountered an error: {e}");
+            error!(worker_id = %worker_id, error = %e, "worker encountered an error");
         }
         Event::Exit => {
-            info!("Worker [{worker_id}] exited");
+            debug!(worker_id = %worker_id, "worker exited");
         }
         Event::Idle => {
-            info!("Worker [{worker_id}] is idle");
+            debug!(worker_id = %worker_id, "worker is idle");
         }
         Event::Start => {
-            info!("Worker [{worker_id}] started");
+            debug!(worker_id = %worker_id, "worker started");
         }
         Event::Stop => {
-            info!("Worker [{worker_id}] stopped");
+            debug!(worker_id = %worker_id, "worker stopped");
         }
         _ => {}
     }

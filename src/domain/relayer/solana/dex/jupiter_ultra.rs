@@ -17,8 +17,8 @@ use crate::services::{
     UltraOrderRequest,
 };
 use async_trait::async_trait;
-use log::info;
 use solana_sdk::transaction::VersionedTransaction;
+use tracing::{debug, info};
 
 pub struct JupiterUltraDex<S, J>
 where
@@ -51,7 +51,7 @@ where
     J: JupiterServiceTrait + Send + Sync + 'static,
 {
     async fn execute_swap(&self, params: SwapParams) -> Result<SwapResult, RelayerError> {
-        info!("Executing Jupiter swap using ultra api: {:?}", params);
+        debug!(params = ?params, "executing Jupiter swap using ultra api");
 
         let order = self
             .jupiter_service
@@ -66,7 +66,7 @@ where
                 RelayerError::DexError(format!("Failed to get Jupiter Ultra order: {}", e))
             })?;
 
-        info!("Received order: {:?}", order);
+        debug!(order = ?order, "received order");
 
         let encoded_transaction = order.transaction.ok_or_else(|| {
             RelayerError::DexError("Failed to get transaction from Jupiter order".to_string())
@@ -101,7 +101,7 @@ where
             })
             .await
             .map_err(|e| RelayerError::DexError(format!("Failed to execute order: {}", e)))?;
-        info!("Order executed successfully, response: {:?}", response);
+        debug!(response = ?response, "order executed successfully");
 
         Ok(SwapResult {
             mint: params.source_mint,
