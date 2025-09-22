@@ -8,7 +8,7 @@ use crate::{
     models::EvmNetwork,
     services::provider::{evm::EvmProviderTrait, ProviderError},
 };
-use log::{debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Specialized fetcher for Polygon zkEVM networks.
 #[derive(Debug, Clone)]

@@ -9,7 +9,7 @@ use crate::{
     models::EvmNetwork,
     services::provider::{evm::EvmProviderTrait, ProviderError},
 };
-use log::{debug, warn};
+use tracing::{debug, warn};
 
 pub mod default;
 pub mod polygon_zkevm;
