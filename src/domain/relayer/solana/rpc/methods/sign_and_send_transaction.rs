@@ -21,8 +21,8 @@ use std::str::FromStr;
 
 use chrono::Utc;
 use futures::try_join;
-use log::info;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use tracing::info;
 
 use crate::{
     models::{
@@ -61,7 +61,7 @@ where
             .estimate_fee_with_margin(&transaction_request, policy.fee_margin_percentage)
             .await
             .map_err(|e| {
-                error!("Failed to estimate total fee: {}", e);
+                error!(error = %e, "failed to estimate total fee");
                 SolanaRpcError::Estimation(e.to_string())
             })?;
 
@@ -86,7 +86,7 @@ where
         )
         .await
         .map_err(|e| {
-            error!("Insufficient funds: {}", e);
+            error!(error = %e, "insufficient funds");
             SolanaRpcError::InsufficientFunds(e.to_string())
         })?;
 
@@ -99,7 +99,7 @@ where
         let transaction =
             TransactionRepoModel::try_from((&network_transaction, &self.relayer, &self.network))
                 .map_err(|e| {
-                    error!("Failed to create transaction repo model: {}", e);
+                    error!(error = %e, "failed to create transaction repo model");
                     SolanaRpcError::Internal(e.to_string())
                 })?;
 
@@ -108,7 +108,7 @@ where
             .create(transaction.clone())
             .await
             .map_err(|e| {
-                error!("Failed to create transaction repo model: {}", e);
+                error!(error = %e, "failed to create transaction repo model");
                 SolanaRpcError::Internal(e.to_string())
             })?;
 
@@ -117,7 +117,7 @@ where
             .send_transaction(&signed_transaction)
             .await
             .map_err(|e| {
-                error!("Failed to send transaction: {}", e);
+                error!(error = %e, "failed to send transaction");
                 SolanaRpcError::Send(e.to_string())
             })?;
 
@@ -136,7 +136,7 @@ where
             .partial_update(tx_repo_model.id.clone(), update)
             .await
             .map_err(|e| {
-                error!("Failed to update transaction status: {}", e);
+                error!(error = %e, "failed to update transaction status");
                 SolanaRpcError::Internal(e.to_string())
             })?;
 
@@ -162,7 +162,7 @@ where
                 .await;
 
             if let Err(e) = webhook_result {
-                error!("Failed to produce notification job: {}", e);
+                error!(error = %e, "failed to produce notification job");
             }
         }
 

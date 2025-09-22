@@ -23,12 +23,12 @@ use async_trait::async_trait;
 use google_cloud_auth::credentials::{service_account::Builder as GcpCredBuilder, Credentials};
 #[cfg_attr(test, allow(unused_imports))]
 use http::{Extensions, HeaderMap};
-use log::debug;
 use reqwest::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::debug;
 
 #[cfg(test)]
 use mockall::automock;
@@ -243,7 +243,7 @@ impl GoogleCloudKmsService {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
         let url = format!("{}/v1/{}/publicKey", base_url, key_path,);
-        debug!("KMS publicKey URL: {}", url);
+        debug!(url = %url, "kms public key url");
 
         let body = self.kms_get(&url).await?;
         let pem_str = body
@@ -325,7 +325,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn get_solana_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
-        debug!("PEM solana: {}", pem_str);
+        debug!(pem_str = %pem_str, "pem solana");
 
         utils::derive_solana_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)
     }
@@ -333,7 +333,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
     async fn get_evm_address(&self) -> GoogleCloudKmsResult<String> {
         let pem_str = self.get_pem().await?;
 
-        debug!("PEM evm: {}", pem_str);
+        debug!(pem_str = %pem_str, "pem evm");
 
         let address_bytes =
             utils::derive_ethereum_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)?;
@@ -345,14 +345,14 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let key_path = self.get_key_path();
 
         let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
-        debug!("KMS asymmetricSign URL: {}", url);
+        debug!(url = %url, "kms asymmetric sign url");
 
         let body = serde_json::json!({
             "name": key_path,
             "data": base64_encode(message)
         });
 
-        print!("KMS asymmetricSign body: {}", body);
+        debug!(body = ?body, "kms asymmetric sign body");
 
         let resp = self.kms_post(&url, &body).await?;
         let signature_b64 = resp
@@ -360,7 +360,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
 
-        debug!("KMS asymmetricSign response: {}", resp);
+        debug!(resp = ?resp, "kms asymmetric sign response");
 
         let signature = base64_decode(signature_b64)
             .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
@@ -372,7 +372,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
         let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
-        debug!("KMS asymmetricSign URL: {}", url);
+        debug!(url = %url, "kms asymmetric sign url");
 
         let hash = Sha256::digest(message);
         let digest = base64_encode(&hash);
@@ -384,7 +384,7 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
             }
         });
 
-        print!("KMS asymmetricSign body: {}", body);
+        debug!(body = ?body, "kms asymmetric sign body");
 
         let resp = self.kms_post(&url, &body).await?;
         let signature = resp
@@ -392,10 +392,10 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
 
-        debug!("KMS asymmetricSign response: {}", resp);
+        debug!(resp = ?resp, "kms asymmetric sign response");
         let signature_b64 =
             base64_decode(signature).map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
-        debug!("Signature b64 decoded: {:?}", signature_b64);
+        debug!(signature_b64 = ?signature_b64, "signature b64 decoded");
         Ok(signature_b64)
     }
 }

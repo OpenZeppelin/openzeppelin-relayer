@@ -34,7 +34,7 @@ pub async fn make_noop<P: EvmProviderTrait>(
                 }
                 Err(e) => {
                     // If estimation fails, fall back to a conservative estimate
-                    log::warn!(
+                    tracing::warn!(
                         "Failed to estimate gas for Arbitrum noop transaction: {:?}",
                         e
                     );
@@ -92,7 +92,7 @@ pub fn is_transaction_valid(created_at: &str, valid_until: &Option<String>) -> b
         match DateTime::parse_from_rfc3339(valid_until_str) {
             Ok(valid_until_time) => return Utc::now() < valid_until_time,
             Err(e) => {
-                log::warn!("Failed to parse valid_until timestamp: {}", e);
+                tracing::warn!(error = %e, "failed to parse valid_until timestamp");
                 return false;
             }
         }
@@ -104,7 +104,7 @@ pub fn is_transaction_valid(created_at: &str, valid_until: &Option<String>) -> b
             Utc::now() < default_valid_until
         }
         Err(e) => {
-            log::warn!("Failed to parse created_at timestamp: {}", e);
+            tracing::warn!(error = %e, "failed to parse created_at timestamp");
             false
         }
     }
@@ -141,6 +141,7 @@ mod tests {
             required_confirmations: 12,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 
@@ -156,6 +157,7 @@ mod tests {
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 
@@ -171,6 +173,7 @@ mod tests {
             required_confirmations: 1,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
+            gas_price_cache: None,
         }
     }
 

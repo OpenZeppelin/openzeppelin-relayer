@@ -18,7 +18,7 @@ use crate::{
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
 use futures::future::try_join_all;
-use log::info;
+use tracing::info;
 
 async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     server_config: &ServerConfig,

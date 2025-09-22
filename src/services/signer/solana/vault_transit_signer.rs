@@ -6,7 +6,6 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use base64::Engine;
-use log::{debug, info};
 use solana_sdk::{
     instruction::Instruction,
     message::Message,
@@ -15,6 +14,7 @@ use solana_sdk::{
     signer::{SeedDerivable, Signer as SolanaSigner},
     transaction::Transaction,
 };
+use tracing::{debug, info};
 use vaultrs::client::VaultClient;
 use vaultrs::client::VaultClientSettingsBuilder;
 use vaultrs::error::ClientError;
@@ -99,7 +99,7 @@ impl<T: VaultServiceTrait> SolanaSignTrait for VaultTransitSigner<T> {
     async fn sign(&self, message: &[u8]) -> Result<Signature, SignerError> {
         let vault_signature_str = self.vault_service.sign(&self.key_name, message).await?;
 
-        debug!("vault_signature_str: {}", vault_signature_str);
+        debug!(vault_signature_str = %vault_signature_str, "vault signature string");
 
         let base64_sig = vault_signature_str
             .strip_prefix("vault:v1:")

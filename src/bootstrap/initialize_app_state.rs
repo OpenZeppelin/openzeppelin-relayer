@@ -15,8 +15,8 @@ use crate::{
 };
 use actix_web::web;
 use color_eyre::Result;
-use log::warn;
 use std::sync::Arc;
+use tracing::warn;
 
 pub struct RepositoryCollection {
     pub relayer: Arc<RelayerRepositoryStorage>,

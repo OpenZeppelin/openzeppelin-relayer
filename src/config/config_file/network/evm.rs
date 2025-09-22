@@ -13,6 +13,79 @@ use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
 use serde::{Deserialize, Serialize};
 
+/// Default value for gas price cache enabled flag
+fn default_gas_cache_enabled() -> bool {
+    false
+}
+
+/// Default value for gas price cache stale after duration in milliseconds
+fn default_gas_cache_stale_after_ms() -> u64 {
+    20_000 // 20 seconds
+}
+
+/// Default value for gas price cache expire after duration in milliseconds
+fn default_gas_cache_expire_after_ms() -> u64 {
+    45_000 // 45 seconds
+}
+
+/// Configuration for gas price caching
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct GasPriceCacheConfig {
+    /// Enable gas price caching for this network
+    #[serde(default = "default_gas_cache_enabled")]
+    pub enabled: bool,
+
+    /// When data becomes stale (milliseconds)
+    #[serde(default = "default_gas_cache_stale_after_ms")]
+    pub stale_after_ms: u64,
+
+    /// When to expire and force refresh (milliseconds)
+    #[serde(default = "default_gas_cache_expire_after_ms")]
+    pub expire_after_ms: u64,
+}
+
+impl Default for GasPriceCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_gas_cache_enabled(),
+            stale_after_ms: default_gas_cache_stale_after_ms(),
+            expire_after_ms: default_gas_cache_expire_after_ms(),
+        }
+    }
+}
+
+impl GasPriceCacheConfig {
+    /// Validates the gas price cache configuration
+    ///
+    /// # Returns
+    /// - `Ok(())` if the configuration is valid
+    /// - `Err(ConfigFileError)` if validation fails
+    pub fn validate(&self) -> Result<(), ConfigFileError> {
+        // Check that durations are non-zero
+        if self.stale_after_ms == 0 {
+            return Err(ConfigFileError::InvalidFormat(
+                "Gas price cache stale_after_ms must be greater than zero".into(),
+            ));
+        }
+
+        if self.expire_after_ms == 0 {
+            return Err(ConfigFileError::InvalidFormat(
+                "Gas price cache expire_after_ms must be greater than zero".into(),
+            ));
+        }
+
+        // Check that expire_after_ms > stale_after_ms
+        if self.expire_after_ms <= self.stale_after_ms {
+            return Err(ConfigFileError::InvalidFormat(
+                "Gas price cache expire_after_ms must be greater than stale_after_ms".into(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 /// Configuration specific to EVM-compatible networks.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +102,8 @@ pub struct EvmNetworkConfig {
     pub features: Option<Vec<String>>,
     /// The symbol of the network's native currency (e.g., "ETH", "MATIC").
     pub symbol: Option<String>,
+    /// Gas price cache configuration
+    pub gas_price_cache: Option<GasPriceCacheConfig>,
 }
 
 impl EvmNetworkConfig {
@@ -55,6 +130,11 @@ impl EvmNetworkConfig {
             return Err(ConfigFileError::MissingField("symbol".into()));
         }
 
+        // Validate gas price cache configuration if present
+        if let Some(gas_price_cache) = &self.gas_price_cache {
+            gas_price_cache.validate()?;
+        }
+
         Ok(())
     }
 
@@ -74,6 +154,10 @@ impl EvmNetworkConfig {
                 .or(parent.required_confirmations),
             features: merge_optional_string_vecs(&self.features, &parent.features),
             symbol: self.symbol.clone().or_else(|| parent.symbol.clone()),
+            gas_price_cache: self
+                .gas_price_cache
+                .clone()
+                .or_else(|| parent.gas_price_cache.clone()),
         }
     }
 }
@@ -213,7 +297,7 @@ mod tests {
         let parent = EvmNetworkConfig {
             common: NetworkConfigCommon {
                 network: "parent".to_string(),
-                from: None,
+                from: Some("parent".to_string()),
                 rpc_urls: Some(vec!["https://parent-rpc.example.com".to_string()]),
                 explorer_urls: Some(vec!["https://parent-explorer.example.com".to_string()]),
                 average_blocktime_ms: Some(10000),
@@ -224,6 +308,11 @@ mod tests {
             required_confirmations: Some(6),
             features: Some(vec!["legacy".to_string()]),
             symbol: Some("PETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -240,6 +329,11 @@ mod tests {
             required_confirmations: Some(1),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("CETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: false,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            }),
         };
 
         let result = child.merge_with_parent(&parent);
@@ -268,6 +362,14 @@ mod tests {
             Some(vec!["legacy".to_string(), "eip1559".to_string()])
         );
         assert_eq!(result.symbol, Some("CETH".to_string()));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: false,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            })
+        );
     }
 
     #[test]
@@ -286,6 +388,11 @@ mod tests {
             required_confirmations: Some(6),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = create_evm_network_for_inheritance_test("ethereum-testnet", "ethereum-mainnet");
@@ -310,6 +417,14 @@ mod tests {
         assert_eq!(result.required_confirmations, Some(6));
         assert_eq!(result.features, Some(vec!["eip1559".to_string()]));
         assert_eq!(result.symbol, Some("ETH".to_string()));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -328,6 +443,11 @@ mod tests {
             required_confirmations: Some(6),
             features: Some(vec!["eip155".to_string(), "eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -344,6 +464,11 @@ mod tests {
             required_confirmations: None,                // Inherit
             features: Some(vec!["eip2930".to_string()]), // Merge
             symbol: None,                                // Inherit
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: false,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            }),
         };
 
         let result = child.merge_with_parent(&parent);
@@ -378,6 +503,14 @@ mod tests {
             ])
         ); // Merged
         assert_eq!(result.symbol, Some("ETH".to_string())); // Inherited
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: false,
+                stale_after_ms: 40_000,
+                expire_after_ms: 200_000,
+            })
+        );
     }
 
     #[test]
@@ -396,6 +529,7 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -412,6 +546,7 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -426,6 +561,7 @@ mod tests {
         assert_eq!(result.required_confirmations, None);
         assert_eq!(result.features, None);
         assert_eq!(result.symbol, None);
+        assert_eq!(result.gas_price_cache, None);
     }
 
     #[test]
@@ -448,6 +584,11 @@ mod tests {
                 "shared".to_string(),
             ]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -468,6 +609,7 @@ mod tests {
                 "custom".to_string(),
             ]),
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -481,6 +623,14 @@ mod tests {
             "custom".to_string(),
         ];
         assert_eq!(result.features, Some(expected_features));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -512,6 +662,11 @@ mod tests {
             required_confirmations: Some(6),
             features: None,
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -528,12 +683,21 @@ mod tests {
             required_confirmations: None,
             features: None,
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
 
         // Child's 'from' field should be preserved, not inherited from parent
         assert_eq!(result.common.from, Some("parent".to_string()));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -570,6 +734,11 @@ mod tests {
             required_confirmations: Some(12),
             features: Some(vec![]),
             symbol: Some("ETH".to_string()),
+            gas_price_cache: Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            }),
         };
 
         let child = EvmNetworkConfig {
@@ -586,12 +755,21 @@ mod tests {
             required_confirmations: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: None,
+            gas_price_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
 
         // Should merge empty parent features with child features
         assert_eq!(result.features, Some(vec!["eip1559".to_string()]));
+        assert_eq!(
+            result.gas_price_cache,
+            Some(GasPriceCacheConfig {
+                enabled: true,
+                stale_after_ms: 20_000,
+                expire_after_ms: 100_000,
+            })
+        );
     }
 
     #[test]
@@ -614,6 +792,7 @@ mod tests {
         assert_eq!(result.required_confirmations, config.required_confirmations);
         assert_eq!(result.features, config.features);
         assert_eq!(result.symbol, config.symbol);
+        assert_eq!(result.gas_price_cache, config.gas_price_cache);
     }
 
     #[test]
@@ -627,5 +806,98 @@ mod tests {
             result.unwrap_err(),
             ConfigFileError::MissingField(_)
         ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_zero_stale_after() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 0, // Invalid: zero value
+            expire_after_ms: 45_000,
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_zero_expire_after() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 20_000,
+            expire_after_ms: 0, // Invalid: zero value
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_expire_less_than_stale() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 45_000,
+            expire_after_ms: 20_000, // Invalid: less than stale_after_ms
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_expire_equal_to_stale() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 20_000,
+            expire_after_ms: 20_000, // Invalid: equal to stale_after_ms
+        });
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigFileError::InvalidFormat(_)
+        ));
+    }
+
+    #[test]
+    fn test_gas_price_cache_validation_valid_config() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.gas_price_cache = Some(GasPriceCacheConfig {
+            enabled: true,
+            stale_after_ms: 20_000,
+            expire_after_ms: 45_000, // Valid: greater than stale_after_ms
+        });
+
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_gas_price_cache_default_values() {
+        let config = GasPriceCacheConfig::default();
+
+        assert_eq!(config.enabled, false);
+        assert_eq!(config.stale_after_ms, 20_000);
+        assert_eq!(config.expire_after_ms, 45_000);
+
+        // Validation should pass for default values
+        assert!(config.validate().is_ok());
     }
 }

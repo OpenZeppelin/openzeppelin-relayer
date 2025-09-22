@@ -34,6 +34,7 @@ pub trait PluginRunnerTrait {
     #[allow(clippy::type_complexity)]
     async fn run<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
+        plugin_id: String,
         socket_path: &str,
         script_path: String,
         timeout_duration: Duration,
@@ -59,10 +60,11 @@ pub trait PluginRunnerTrait {
 #[derive(Default)]
 pub struct PluginRunner;
 
-#[allow(clippy::type_complexity)]
-impl PluginRunner {
+#[async_trait]
+impl PluginRunnerTrait for PluginRunner {
     async fn run<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
+        plugin_id: String,
         socket_path: &str,
         script_path: String,
         timeout_duration: Duration,
@@ -70,7 +72,7 @@ impl PluginRunner {
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
     ) -> Result<ScriptResult, PluginError>
     where
-        J: JobProducerTrait + 'static,
+        J: JobProducerTrait + Send + Sync + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
         TR: TransactionRepository
             + Repository<TransactionRepoModel, String>
@@ -96,7 +98,12 @@ impl PluginRunner {
 
         let mut script_result = match timeout(
             timeout_duration,
-            ScriptExecutor::execute_typescript(script_path, socket_path_clone, script_params),
+            ScriptExecutor::execute_typescript(
+                plugin_id,
+                script_path,
+                socket_path_clone,
+                script_params,
+            ),
         )
         .await
         {
@@ -124,42 +131,6 @@ impl PluginRunner {
         }
 
         Ok(script_result)
-    }
-}
-
-#[async_trait]
-impl PluginRunnerTrait for PluginRunner {
-    async fn run<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-        &self,
-        socket_path: &str,
-        script_path: String,
-        timeout_duration: Duration,
-        script_params: String,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
-    ) -> Result<ScriptResult, PluginError>
-    where
-        J: JobProducerTrait + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        TR: TransactionRepository
-            + Repository<TransactionRepoModel, String>
-            + Send
-            + Sync
-            + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-    {
-        self.run(
-            socket_path,
-            script_path,
-            timeout_duration,
-            script_params,
-            state,
-        )
-        .await
     }
 }
 
@@ -215,10 +186,14 @@ mod tests {
         let state = create_mock_app_state(None, None, None, None, None, None).await;
 
         let plugin_runner = PluginRunner;
+        let plugin_id = "test-plugin".to_string();
+        let socket_path_str = socket_path.display().to_string();
+        let script_path_str = script_path.display().to_string();
         let result = plugin_runner
             .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
-                &socket_path.display().to_string(),
-                script_path.display().to_string(),
+                plugin_id,
+                &socket_path_str,
+                script_path_str,
                 Duration::from_secs(10),
                 "{ \"test\": \"test\" }".to_string(),
                 Arc::new(web::ThinData(state)),
@@ -262,10 +237,14 @@ mod tests {
         let plugin_runner = PluginRunner;
 
         // Use 100ms timeout for a 200ms script
+        let plugin_id = "test-plugin".to_string();
+        let socket_path_str = socket_path.display().to_string();
+        let script_path_str = script_path.display().to_string();
         let result = plugin_runner
-        .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
-            &socket_path.display().to_string(),
-                script_path.display().to_string(),
+            .run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>(
+                plugin_id,
+                &socket_path_str,
+                script_path_str,
                 Duration::from_millis(100), // 100ms timeout
                 "{}".to_string(),
                 Arc::new(web::ThinData(state)),

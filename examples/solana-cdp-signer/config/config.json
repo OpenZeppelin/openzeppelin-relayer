@@ -1,0 +1,43 @@
+{
+  "relayers": [
+    {
+      "id": "solana-example",
+      "name": "Solana Example",
+      "network": "devnet",
+      "paused": false,
+      "signer_id": "cdp-signer-solana",
+      "network_type": "solana"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "cdp-signer-solana",
+      "type": "cdp",
+      "config": {
+        "api_key_id": "",
+        "api_key_secret": {
+          "type": "env",
+          "value": "CDP_API_KEY_SECRET"
+        },
+        "wallet_secret": {
+          "type": "env",
+          "value": "CDP_WALLET_SECRET"
+        },
+        "account_address": ""
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}

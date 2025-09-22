@@ -64,6 +64,7 @@ For detailed network configuration options, see the xref:network_configuration.a
 - `google_cloud_kms` (hosted)
 - `local` (local)
 - `vault` (local)
+- `cdp` (hosted)
 
 [NOTE]
 ====
@@ -124,10 +125,15 @@ For more configuration examples, visit the link:https://github.com/OpenZeppelin/
 
 In addition to standard relayer configuration and policies, Solana relayers support additional options:
 
-- `fee_payment_strategy`: `"user"` or `"relayer"` (who pays transaction fees)
-- `allowed_tokens`: List of SPL tokens supported for swaps and fee payments
+- `fee_payment_strategy`: `"user"` or `"relayer"` (who pays transaction fees). "user" is default value.
+  * `"user"`: Users pay transaction fees in tokens (relayer receives fee payment from user)
+  * `"relayer"`: **Relayer pays for all transaction fees** using SOL from the relayer's account
+- `allowed_tokens`: List of SPL tokens supported for swaps and fee payments. Restrict relayer operations to specific tokens. Optional.
+  * **When not set or empty, all tokens are allowed** for transactions and fee payments
+  * When configured, only tokens in this list can be used for transfers and fee payments
 - `allowed_programs`, `allowed_accounts`, `disallowed_accounts`: Restrict relayer operations to specific programs/accounts
 - `swap_config`: Automated token swap settings (see below)
+
 
 
 You can check all options in xref:index.adoc#3_relayers[User Documentation - Relayers].
@@ -174,6 +180,15 @@ Common endpoints:
 - `signAndSendTransaction`,
 - `getSupportedTokens`
 - `getSupportedFeatures`
+
+[NOTE]
+====
+**Fee Token Parameter Behavior:**
+
+When using `fee_payment_strategy: "relayer"`, the `fee_token` parameter in RPC methods becomes **informational only**. The relayer pays all transaction fees in SOL regardless of the specified fee token. In this mode, you can use either `"So11111111111111111111111111111112"` (WSOL) or `"11111111111111111111111111111111"` (native SOL) as the fee_token value.
+
+When using `fee_payment_strategy: "user"`, the `fee_token` parameter determines which token the user will pay fees in, and must be a supported token from the `allowed_tokens` list (if configured).
+====
 
 Example: Estimate fee for a transaction
 [source,bash]

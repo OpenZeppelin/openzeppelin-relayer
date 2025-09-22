@@ -3,7 +3,7 @@
 //! ensuring proper transaction state management on failure.
 
 use chrono::Utc;
-use log::{info, warn};
+use tracing::{info, warn};
 
 use super::{utils::is_bad_sequence_error, StellarRelayerTransaction};
 use crate::{
@@ -32,7 +32,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("Submitting Stellar transaction: {:?}", tx.id);
+        info!("submitting stellar transaction");
 
         // Call core submission logic with error handling
         match self.submit_core(tx.clone()).await {
@@ -103,39 +103,27 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let error_reason = format!("Submission failed: {}", error);
         let tx_id = tx.id.clone();
-        warn!("Transaction {} submission failed: {}", tx_id, error_reason);
+        warn!(reason = %error_reason, "transaction submission failed");
 
         if is_bad_sequence_error(&error_reason) {
             // For bad sequence errors, sync sequence from chain first
             if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
-                info!(
-                    "Syncing sequence from chain after bad sequence error for transaction {}",
-                    tx_id
-                );
+                info!("syncing sequence from chain after bad sequence error");
                 match self
                     .sync_sequence_from_chain(&stellar_data.source_account)
                     .await
                 {
                     Ok(()) => {
-                        info!(
-                            "Successfully synced sequence from chain for transaction {}",
-                            tx_id
-                        );
+                        info!("successfully synced sequence from chain");
                     }
                     Err(sync_error) => {
-                        warn!(
-                            "Failed to sync sequence from chain for transaction {}: {}",
-                            tx_id, sync_error
-                        );
+                        warn!(error = %sync_error, "failed to sync sequence from chain");
                     }
                 }
             }
 
             // Reset the transaction and re-enqueue it
-            info!(
-                "Bad sequence error detected for transaction {}. Resetting and re-enqueueing.",
-                tx_id
-            );
+            info!("bad sequence error detected, resetting and re-enqueueing");
 
             // Reset the transaction to pending state
             match self.reset_transaction_for_retry(tx.clone()).await {
@@ -148,25 +136,16 @@ where
                         )
                         .await
                     {
-                        warn!(
-                            "Failed to re-enqueue transaction {} after reset: {}",
-                            tx_id, e
-                        );
+                        warn!(error = %e, "failed to re-enqueue transaction after reset");
                     } else {
-                        info!(
-                            "Transaction {} reset and re-enqueued for retry through pipeline",
-                            tx_id
-                        );
+                        info!("transaction reset and re-enqueued for retry through pipeline");
                     }
 
                     // Return success since we're handling the retry
                     return Ok(reset_tx);
                 }
                 Err(reset_error) => {
-                    warn!(
-                        "Failed to reset transaction {} for retry: {}",
-                        tx_id, reset_error
-                    );
+                    warn!(error = %reset_error, "failed to reset transaction for retry");
                     // Fall through to normal failure handling
                 }
             }
@@ -185,26 +164,17 @@ where
         {
             Ok(updated_tx) => updated_tx,
             Err(finalize_error) => {
-                warn!(
-                    "Failed to mark transaction {} as failed: {}. Continuing with lane cleanup.",
-                    tx_id, finalize_error
-                );
+                warn!(error = %finalize_error, "failed to mark transaction as failed, continuing with lane cleanup");
                 tx
             }
         };
 
         // Attempt to enqueue next pending transaction or release lane
         if let Err(enqueue_error) = self.enqueue_next_pending_transaction(&tx_id).await {
-            warn!(
-                "Failed to enqueue next pending transaction after {} submission failure: {}.",
-                tx_id, enqueue_error
-            );
+            warn!(error = %enqueue_error, "failed to enqueue next pending transaction after submission failure");
         }
 
-        info!(
-            "Transaction {} submission failure handled. Error: {}",
-            tx_id, error_reason
-        );
+        info!(error = %error_reason, "transaction submission failure handled");
 
         Err(error)
     }

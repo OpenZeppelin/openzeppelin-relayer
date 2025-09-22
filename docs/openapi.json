@@ -12,7 +12,7 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "paths": {
     "/api/v1/notifications": {
@@ -4274,6 +4274,31 @@
           }
         }
       },
+      "CdpSignerRequestConfig": {
+        "type": "object",
+        "description": "CDP signer configuration for API requests",
+        "required": [
+          "api_key_id",
+          "api_key_secret",
+          "wallet_secret",
+          "account_address"
+        ],
+        "properties": {
+          "account_address": {
+            "type": "string"
+          },
+          "api_key_id": {
+            "type": "string"
+          },
+          "api_key_secret": {
+            "type": "string"
+          },
+          "wallet_secret": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "ContractSource": {
         "oneOf": [
           {
@@ -4601,8 +4626,7 @@
             "minimum": 0
           },
           "gas_price": {
-            "type": "integer",
-            "minimum": 0
+            "type": "string"
           },
           "hash": {
             "type": "string"
@@ -4611,12 +4635,10 @@
             "type": "string"
           },
           "max_fee_per_gas": {
-            "type": "integer",
-            "minimum": 0
+            "type": "string"
           },
           "max_priority_fee_per_gas": {
-            "type": "integer",
-            "minimum": 0
+            "type": "string"
           },
           "nonce": {
             "type": "integer",
@@ -6285,6 +6307,9 @@
             "$ref": "#/components/schemas/TurnkeySignerRequestConfig"
           },
           {
+            "$ref": "#/components/schemas/CdpSignerRequestConfig"
+          },
+          {
             "$ref": "#/components/schemas/GoogleCloudKmsSignerRequestConfig"
           }
         ],
@@ -6393,6 +6418,21 @@
           {
             "type": "object",
             "required": [
+              "api_key_id",
+              "account_address"
+            ],
+            "properties": {
+              "account_address": {
+                "type": "string"
+              },
+              "api_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
               "service_account",
               "key"
             ],
@@ -6465,7 +6505,8 @@
           "google_cloud_kms",
           "vault",
           "vault_transit",
-          "turnkey"
+          "turnkey",
+          "cdp"
         ]
       },
       "SignerTypeRequest": {
@@ -6477,6 +6518,7 @@
           "vault",
           "vault_transit",
           "turnkey",
+          "cdp",
           "google_cloud_kms"
         ]
       },
