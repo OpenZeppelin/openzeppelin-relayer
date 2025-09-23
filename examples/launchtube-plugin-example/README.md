@@ -122,7 +122,7 @@ The LaunchTube plugin and relayer configurations are already set up for testnet.
 
 **LaunchTube Configuration** (via environment variables):
 
-LaunchTube is now configured entirely through environment variables in your `.env` file:
+LaunchTube is configured through environment variables in your `.env` file:
 
 - `STELLAR_NETWORK=testnet` - Sets the Stellar network
 - `SOROBAN_RPC_URL=https://soroban-testnet.stellar.org` - RPC endpoint
