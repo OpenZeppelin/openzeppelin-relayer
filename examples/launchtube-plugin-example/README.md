@@ -377,7 +377,7 @@ This example uses multiple Stellar accounts (fund account + sequence accounts) w
 ### Common issues
 
 - **Plugin not found**: Verify the plugin `id` and `path` in `examples/launchtube-plugin-example/config/config.json`.
-- **Missing LaunchTube config**: Ensure `examples/launchtube-plugin-example/launchtube/config.json` exists and is correctly filled.
+- **Missing LaunchTube config**: Ensure required environment variables are set in `.env` and that sequence accounts are configured via the Management API.
 - **API authentication**: Ensure the `Authorization` header is present and the `API_KEY` is set in `.env`.
 - **Webhook not received**: Ensure the `notifications[0].url` is set to a reachable URL.
 
