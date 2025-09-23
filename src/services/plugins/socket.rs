@@ -61,6 +61,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot;
+use tracing::debug;
 
 use super::{
     relayer_api::{RelayerApiTrait, Request},
@@ -148,7 +149,7 @@ impl SocketService {
                     }
                 }
                 _ = &mut shutdown => {
-                    println!("Shutdown signal received. Closing listener.");
+                    debug!("Shutdown signal received. Closing listener.");
                     break;
                 }
             }
@@ -304,6 +305,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
+            http_request_id: None,
         };
 
         let request_json = serde_json::to_string(&request).unwrap() + "\n";

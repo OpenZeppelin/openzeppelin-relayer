@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::observability::request_id::get_request_id;
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -120,6 +121,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 script_path,
                 plugin.timeout,
                 script_params,
+                get_request_id(),
                 state,
             )
             .await;
@@ -239,7 +241,7 @@ mod tests {
 
         plugin_runner
             .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
-            .returning(|_, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _| {
                 Ok(ScriptResult {
                     logs: vec![LogEntry {
                         level: LogLevel::Log,

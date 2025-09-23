@@ -43,6 +43,7 @@ impl ScriptExecutor {
         script_path: String,
         socket_path: String,
         script_params: String,
+        http_request_id: Option<String>,
     ) -> Result<ScriptResult, PluginError> {
         if Command::new("ts-node")
             .arg("--version")
@@ -67,6 +68,7 @@ impl ScriptExecutor {
             .arg(plugin_id)           // Plugin ID (argv[3])
             .arg(script_params)       // Plugin parameters (argv[4])
             .arg(script_path)         // User script path (argv[5])
+            .arg(http_request_id.unwrap_or_default()) // HTTP x-request-id (argv[6], optional)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -151,6 +153,7 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
         )
         .await;
 
@@ -192,6 +195,7 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
         )
         .await;
 
@@ -223,6 +227,7 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
         )
         .await;
 
@@ -260,6 +265,7 @@ mod tests {
             script_path.display().to_string(),
             socket_path.display().to_string(),
             "{}".to_string(),
+            None,
         )
         .await;
 

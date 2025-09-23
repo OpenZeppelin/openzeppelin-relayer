@@ -13,6 +13,7 @@ use crate::models::{
     AppState, NetworkRepoModel, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
     SignerRepoModel, ThinDataAppState, TransactionRepoModel, TransactionResponse,
 };
+use crate::observability::request_id::set_request_id;
 use crate::repositories::{
     ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository, Repository,
     TransactionCounterTrait, TransactionRepository,
@@ -22,6 +23,7 @@ use actix_web::web;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use strum::Display;
+use tracing::instrument;
 
 #[cfg(test)]
 use mockall::automock;
@@ -47,6 +49,7 @@ pub struct Request {
     pub relayer_id: String,
     pub method: PluginMethod,
     pub payload: serde_json::Value,
+    pub http_request_id: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -123,6 +126,7 @@ where
 pub struct RelayerApi;
 
 impl RelayerApi {
+    #[instrument(name = "Plugin::handle_request", skip_all, fields(method = %request.method, relayer_id = %request.relayer_id, plugin_req_id = %request.request_id))]
     pub async fn handle_request<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         &self,
         request: Request,
@@ -143,6 +147,11 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
+        // Restore original HTTP request id onto this span if provided
+        if let Some(http_rid) = request.http_request_id.clone() {
+            set_request_id(http_rid);
+        }
+
         match self.process_request(request.clone(), state).await {
             Ok(response) => response,
             Err(e) => Response {
@@ -506,6 +515,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -536,6 +546,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -566,6 +577,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -608,6 +620,7 @@ mod tests {
             payload: serde_json::json!(GetTransactionRequest {
                 transaction_id: "test".to_string(),
             }),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -639,6 +652,7 @@ mod tests {
             payload: serde_json::json!(GetTransactionRequest {
                 transaction_id: "test".to_string(),
             }),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -671,6 +685,7 @@ mod tests {
             payload: serde_json::json!(GetTransactionRequest {
                 transaction_id: "test".to_string(),
             }),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -701,6 +716,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -733,6 +749,7 @@ mod tests {
             payload: serde_json::json!({
                 "unsigned_xdr": "test_xdr"
             }),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -763,6 +780,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::SignTransaction,
             payload: serde_json::json!({"invalid": "payload"}),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -795,6 +813,7 @@ mod tests {
             payload: serde_json::json!({
                 "unsigned_xdr": "test_xdr"
             }),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -825,6 +844,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::GetRelayer,
             payload: serde_json::json!({}),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
@@ -860,6 +880,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::GetRelayer,
             payload: serde_json::json!({}),
+            http_request_id: None,
         };
 
         let relayer_api = RelayerApi;
