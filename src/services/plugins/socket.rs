@@ -302,6 +302,7 @@ mod tests {
             relayer_id: "test".to_string(),
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
+            http_request_id: None,
         };
 
         let request_json = serde_json::to_string(&request).unwrap() + "\n";

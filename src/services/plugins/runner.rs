@@ -31,7 +31,7 @@ use mockall::automock;
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait PluginRunnerTrait {
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     async fn run<J, RR, TR, NR, NFR, SR, TCR, PR>(
         &self,
         plugin_id: String,
@@ -39,6 +39,7 @@ pub trait PluginRunnerTrait {
         script_path: String,
         timeout_duration: Duration,
         script_params: String,
+        http_request_id: Option<String>,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -61,6 +62,7 @@ pub struct PluginRunner;
 
 #[async_trait]
 impl PluginRunnerTrait for PluginRunner {
+    #[allow(clippy::too_many_arguments)]
     async fn run<J, RR, TR, NR, NFR, SR, TCR, PR>(
         &self,
         plugin_id: String,
@@ -68,6 +70,7 @@ impl PluginRunnerTrait for PluginRunner {
         script_path: String,
         timeout_duration: Duration,
         script_params: String,
+        http_request_id: Option<String>,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR>>,
     ) -> Result<ScriptResult, PluginError>
     where
@@ -101,6 +104,7 @@ impl PluginRunnerTrait for PluginRunner {
                 script_path,
                 socket_path_clone,
                 script_params,
+                http_request_id,
             ),
         )
         .await
@@ -194,6 +198,7 @@ mod tests {
                 script_path_str,
                 Duration::from_secs(10),
                 "{ \"test\": \"test\" }".to_string(),
+                None,
                 Arc::new(web::ThinData(state)),
             )
             .await;
@@ -245,6 +250,7 @@ mod tests {
                 script_path_str,
                 Duration::from_millis(100), // 100ms timeout
                 "{}".to_string(),
+                None,
                 Arc::new(web::ThinData(state)),
             )
             .await;
