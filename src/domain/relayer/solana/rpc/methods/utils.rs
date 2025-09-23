@@ -947,10 +947,11 @@ where
         tx: &TransactionRepoModel,
         delay: Option<i64>,
     ) -> Result<(), SolanaRpcError> {
+        let scheduled_on = delay.map(|seconds| chrono::Utc::now().timestamp() + seconds);
         self.job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                delay,
+                scheduled_on,
             )
             .await
             .map_err(|e| {

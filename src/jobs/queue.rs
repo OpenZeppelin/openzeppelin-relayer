@@ -35,7 +35,9 @@ impl Queue {
         namespace: &str,
         shared: Arc<ConnectionManager>,
     ) -> Result<RedisStorage<T>> {
-        let config = Config::default().set_namespace(namespace);
+        let config = Config::default()
+            .set_namespace(namespace)
+            .set_enqueue_scheduled(Duration::from_secs(1));
 
         Ok(RedisStorage::new_with_config((*shared).clone(), config))
     }

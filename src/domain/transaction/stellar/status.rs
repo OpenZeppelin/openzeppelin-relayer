@@ -9,7 +9,7 @@ use tracing::{info, warn};
 
 use super::StellarRelayerTransaction;
 use crate::{
-    constants::STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS,
+    constants::STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
     jobs::{JobProducerTrait, TransactionStatusCheck},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
@@ -137,7 +137,7 @@ where
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS),
+                Some(Utc::now().timestamp() + STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS),
             )
             .await?;
         Ok(())
@@ -468,7 +468,7 @@ mod tests {
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
                     job.transaction_id == "tx-pending-check"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                        && delay == &Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS)
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -623,7 +623,7 @@ mod tests {
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
                     job.transaction_id == "tx-provider-error"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                        && delay == &Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS)
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -1111,7 +1111,7 @@ mod tests {
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
                     job.transaction_id == "tx-xdr-error-requeue"
-                        && delay == &Some(STELLAR_DEFAULT_STATUS_RETRY_DELAY_SECONDS)
+                        && delay == &Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS)
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));

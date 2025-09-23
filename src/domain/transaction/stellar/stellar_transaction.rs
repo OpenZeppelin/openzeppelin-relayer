@@ -19,6 +19,7 @@ use crate::{
     services::{Signer, StellarProvider, StellarProviderTrait, StellarSigner},
 };
 use async_trait::async_trait;
+use chrono;
 use eyre::Result;
 use std::sync::Arc;
 use tracing::info;
@@ -131,8 +132,9 @@ where
         delay_seconds: Option<i64>,
     ) -> Result<(), TransactionError> {
         let job = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
+        let scheduled_on = delay_seconds.map(|seconds| chrono::Utc::now().timestamp() + seconds);
         self.job_producer()
-            .produce_transaction_request_job(job, delay_seconds)
+            .produce_transaction_request_job(job, scheduled_on)
             .await?;
         Ok(())
     }
@@ -406,7 +408,10 @@ mod tests {
             .job_producer
             .expect_produce_transaction_request_job()
             .withf(|job, delay| {
-                job.transaction_id == "tx-1" && job.relayer_id == "relayer-1" && delay == &Some(60)
+                job.transaction_id == "tx-1"
+                    && job.relayer_id == "relayer-1"
+                    && delay.is_some()
+                    && delay.unwrap() > chrono::Utc::now().timestamp()
             })
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));

@@ -83,7 +83,7 @@ where
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS),
+                Some(Utc::now().timestamp() + STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS),
             )
             .await?;
 
@@ -132,7 +132,7 @@ where
                     if let Err(e) = self
                         .send_transaction_request_job(
                             &reset_tx,
-                            Some(STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS),
+                            Some(Utc::now().timestamp() + STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS),
                         )
                         .await
                     {
