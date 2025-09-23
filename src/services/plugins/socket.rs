@@ -61,6 +61,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot;
+use tracing::debug;
 
 use super::{
     relayer_api::{RelayerApiTrait, Request},
@@ -147,7 +148,7 @@ impl SocketService {
                     }
                 }
                 _ = &mut shutdown => {
-                    println!("Shutdown signal received. Closing listener.");
+                    debug!("Shutdown signal received. Closing listener.");
                     break;
                 }
             }

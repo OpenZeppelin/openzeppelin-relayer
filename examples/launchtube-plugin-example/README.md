@@ -100,23 +100,18 @@ KEYSTORE_PASSPHRASE_SEQ_001=YOUR_PASSWORD
 KEYSTORE_PASSPHRASE_SEQ_002=YOUR_PASSWORD
 WEBHOOK_SIGNING_KEY=<webhook_key_from_above>
 API_KEY=<api_key_from_above>
+# LaunchTube Configuration
+STELLAR_NETWORK=testnet
+LAUNCHTUBE_ADMIN_SECRET=<admin_secret_for_launchtube_mgmt_api>
+SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
+FUND_RELAYER_ID=launchtube-fund
+LOCK_TTL_SECONDS=30
+LOG_LEVEL=info
 ```
 
 ### 3. Verify Configuration
 
 The LaunchTube plugin and relayer configurations are already set up for testnet. The configurations include:
-
-**`launchtube/config.json`** (pre-configured):
-
-```json
-{
-  "fundRelayerId": "launchtube-fund",
-  "sequenceRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"],
-  "maxFee": 1000000,
-  "network": "testnet",
-  "rpcUrl": "https://soroban-testnet.stellar.org"
-}
-```
 
 **`config/config.json`** (pre-configured):
 
@@ -125,17 +120,31 @@ The LaunchTube plugin and relayer configurations are already set up for testnet.
 - Corresponding signers pointing to the key files you'll create
 - Plugin registered as `launchtube-plugin`
 
-> **Note**: If you need mainnet, update `network` in both config files and use mainnet RPC URL
+**LaunchTube Configuration** (via environment variables):
+
+LaunchTube is configured through environment variables in your `.env` file:
+
+- `STELLAR_NETWORK=testnet` - Sets the Stellar network
+- `SOROBAN_RPC_URL=https://soroban-testnet.stellar.org` - RPC endpoint
+- `FUND_RELAYER_ID=launchtube-fund` - ID of the fund relayer
+- `LAUNCHTUBE_ADMIN_SECRET` - Admin secret for LaunchTube operations
+- `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management
 
 ### 4. (Optional) Configure Webhooks
 
-For transaction notifications, edit `config/config.json`:
+For transaction notifications, edit `config/config.json` to add a webhook notification:
 
 ```json
 {
   "notifications": [
     {
-      "url": "https://webhook.site/your-unique-id" // Get a test URL from webhook.site
+      "id": "webhook-notification",
+      "type": "webhook",
+      "url": "https://webhook.site/your-unique-id",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
     }
   ]
 }
@@ -173,7 +182,35 @@ After funding, restart the service for it to recognize the funded accounts:
 docker compose up
 ```
 
-The relayer is now ready at `http://localhost:8080/api/v1` 🚀
+### 7. Initialize Sequence Accounts
+
+**Critical Step**: Before LaunchTube can process transactions, you must configure the sequence accounts using the Management API:
+
+```bash
+# Replace YOUR_API_KEY with your actual API key from the .env file
+# Replace YOUR_ADMIN_SECRET with your LAUNCHTUBE_ADMIN_SECRET from the .env file
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setSequenceAccounts",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "relayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+      }
+    }
+  }'
+```
+
+**Expected Response:**
+
+```json
+{
+  "ok": true,
+  "appliedRelayerIds": ["launchtube-seq-001", "launchtube-seq-002"]
+}
+```
 
 ## Usage
 
@@ -233,6 +270,49 @@ curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
   "hash": "1234567890abcdef..."
 }
 ```
+
+### Management API
+
+LaunchTube provides a management API to dynamically configure sequence accounts. This requires the `LAUNCHTUBE_ADMIN_SECRET` from your `.env` file.
+
+#### List Current Sequence Accounts
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "listSequenceAccounts",
+        "adminSecret": "YOUR_ADMIN_SECRET"
+      }
+    }
+  }'
+```
+
+#### Add or Update Sequence Accounts
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/launchtube-plugin/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "management": {
+        "action": "setSequenceAccounts",
+        "adminSecret": "YOUR_ADMIN_SECRET",
+        "relayerIds": ["launchtube-seq-001", "launchtube-seq-002", "launchtube-seq-003"]
+      }
+    }
+  }'
+```
+
+**Important Notes:**
+
+- You must configure at least one sequence account before LaunchTube can process transactions
+- The management API will prevent removing accounts that are currently locked (in use)
+- All relayer IDs must exist in your OpenZeppelin Relayer configuration
 
 ### Generating XDR for the Relayer
 
@@ -297,7 +377,7 @@ This example uses multiple Stellar accounts (fund account + sequence accounts) w
 ### Common issues
 
 - **Plugin not found**: Verify the plugin `id` and `path` in `examples/launchtube-plugin-example/config/config.json`.
-- **Missing LaunchTube config**: Ensure `examples/launchtube-plugin-example/launchtube/config.json` exists and is correctly filled.
+- **Missing LaunchTube config**: Ensure required environment variables are set in `.env` and that sequence accounts are configured via the Management API.
 - **API authentication**: Ensure the `Authorization` header is present and the `API_KEY` is set in `.env`.
 - **Webhook not received**: Ensure the `notifications[0].url` is set to a reachable URL.
 
