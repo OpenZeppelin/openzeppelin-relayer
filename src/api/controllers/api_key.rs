@@ -139,8 +139,8 @@ where
 /// * `state` - The application state containing the api key repository.
 ///
 pub async fn delete_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    api_key_id: String,
-    state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    _api_key_id: String,
+    _state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -153,9 +153,10 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    state.api_key_repository.delete_by_id(&api_key_id).await?;
+    // state.api_key_repository.delete_by_id(&api_key_id).await?;
 
-    Ok(HttpResponse::Ok().json(ApiResponse::success(api_key_id)))
+    // Ok(HttpResponse::Ok().json(ApiResponse::success(api_key_id)))
+    Ok(HttpResponse::Ok().json(ApiResponse::<String>::error("Not implemented".to_string())))
 }
 
 #[cfg(test)]
@@ -246,19 +247,19 @@ mod tests {
         assert_eq!(response.status(), 200);
     }
 
-    #[actix_web::test]
-    async fn test_delete_api_key() {
-        let api_key = create_test_api_key_model("test-api-key-1");
-        let api_key_id = api_key.id.clone();
-        let app_state =
-            create_mock_app_state(Some(vec![api_key]), None, None, None, None, None).await;
+    // #[actix_web::test]
+    // async fn test_delete_api_key() {
+    //     let api_key = create_test_api_key_model("test-api-key-1");
+    //     let api_key_id = api_key.id.clone();
+    //     let app_state =
+    //         create_mock_app_state(Some(vec![api_key]), None, None, None, None, None).await;
 
-        let result = delete_api_key(api_key_id, ThinData(app_state)).await;
+    //     let result = delete_api_key(api_key_id, ThinData(app_state)).await;
 
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        assert_eq!(response.status(), 200);
-    }
+    //     assert!(result.is_ok());
+    //     let response = result.unwrap();
+    //     assert_eq!(response.status(), 200);
+    // }
 
     #[actix_web::test]
     async fn test_get_permissions_nonexistent_api_key() {
