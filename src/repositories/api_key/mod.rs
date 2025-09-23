@@ -38,6 +38,7 @@ use crate::{
 #[cfg_attr(test, automock)]
 pub trait ApiKeyRepositoryTrait {
     async fn get_by_id(&self, id: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError>;
+    async fn get_by_value(&self, value: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError>;
     async fn create(&self, api_key: ApiKeyRepoModel) -> Result<ApiKeyRepoModel, RepositoryError>;
     async fn list_paginated(
         &self,
@@ -77,6 +78,13 @@ impl ApiKeyRepositoryTrait for ApiKeyRepositoryStorage {
         match self {
             ApiKeyRepositoryStorage::InMemory(repo) => repo.get_by_id(id).await,
             ApiKeyRepositoryStorage::Redis(repo) => repo.get_by_id(id).await,
+        }
+    }
+
+    async fn get_by_value(&self, value: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError> {
+        match self {
+            ApiKeyRepositoryStorage::InMemory(repo) => repo.get_by_value(value).await,
+            ApiKeyRepositoryStorage::Redis(repo) => repo.get_by_value(value).await,
         }
     }
 
@@ -463,5 +471,25 @@ mod tests {
         storage.drop_all_entries().await.unwrap();
         assert!(!storage.has_entries().await.unwrap());
         assert_eq!(storage.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_api_key_repository_storage_get_by_value() {
+        let storage = ApiKeyRepositoryStorage::new_in_memory();
+
+        let api_key = create_test_api_key(
+            "test-api-key",
+            "test-name",
+            "unique-test-value",
+            &["*"],
+            &["relayer:all:execute"],
+        );
+
+        storage.create(api_key.clone()).await.unwrap();
+        let result = storage.get_by_value("unique-test-value").await.unwrap();
+        assert_eq!(result, Some(api_key));
+
+        let result = storage.get_by_value("non-existing-value").await.unwrap();
+        assert_eq!(result, None);
     }
 }

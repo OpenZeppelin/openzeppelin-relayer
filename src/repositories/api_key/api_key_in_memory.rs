@@ -63,6 +63,17 @@ impl ApiKeyRepositoryTrait for InMemoryApiKeyRepository {
         Ok(store.get(id).cloned())
     }
 
+    async fn get_by_value(&self, value: &str) -> Result<Option<ApiKeyRepoModel>, RepositoryError> {
+        let store = Self::acquire_lock(&self.store).await?;
+        for api_key in store.values() {
+            let matches = api_key.value.as_str(|secret_value| secret_value == value);
+            if matches {
+                return Ok(Some(api_key.clone()));
+            }
+        }
+        Ok(None)
+    }
+
     async fn list_paginated(
         &self,
         query: PaginationQuery,
@@ -301,5 +312,54 @@ mod tests {
         assert!(api_key_repository.has_entries().await.unwrap());
         api_key_repository.drop_all_entries().await.unwrap();
         assert!(!api_key_repository.has_entries().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_by_value_existing() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        let api_key = ApiKeyRepoModel {
+            id: "test-api-key".to_string(),
+            value: SecretString::new("test-value-123"),
+            name: "test-name".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
+        };
+
+        api_key_repository.create(api_key.clone()).await.unwrap();
+
+        let result = api_key_repository
+            .get_by_value("test-value-123")
+            .await
+            .unwrap();
+        assert_eq!(result, Some(api_key));
+    }
+
+    #[tokio::test]
+    async fn test_get_by_value_non_existing() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        let api_key = ApiKeyRepoModel {
+            id: "test-api-key".to_string(),
+            value: SecretString::new("test-value-123"),
+            name: "test-name".to_string(),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
+        };
+
+        api_key_repository.create(api_key).await.unwrap();
+
+        let result = api_key_repository
+            .get_by_value("non-existing-value")
+            .await
+            .unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_value_empty_store() {
+        let api_key_repository = Arc::new(InMemoryApiKeyRepository::new());
+        let result = api_key_repository.get_by_value("any-value").await.unwrap();
+        assert_eq!(result, None);
     }
 }

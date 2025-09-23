@@ -48,3 +48,6 @@ openapi.json
 
 # Exclude generated OpenAPI files from the docs directory
 !docs/openapi.json
+
+# Ignore AGENTS.md
+AGENTS.md
