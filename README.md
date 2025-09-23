@@ -50,20 +50,20 @@ View the [Usage](https://docs.openzeppelin.com/relayer#running_the_relayer) docu
 
 The repository includes several ready-to-use examples to help you get started with different configurations:
 
-| Example                                                      | Description                               |
-| ------------------------------------------------------------ | ----------------------------------------- |
-| [`basic-example`](./examples/basic-example/)                 | Simple setup with Redis                   |
-| [`redis-storage`](./examples/redis-storage/)                 | Simple setup with Redis for storage       |
-| [`basic-example-logging`](./examples/basic-example-logging/) | Configuration with file-based logging     |
-| [`basic-example-metrics`](./examples/basic-example-metrics/) | Setup with Prometheus and Grafana metrics |
-| [`vault-secret-signer`](./examples/vault-secret-signer/) | Using HashiCorp Vault for key management      |
-| [`vault-transit-signer`](./examples/vault-transit-signer/) | Using Vault Transit for secure signing      |
-| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/) | Using Turnkey Signer for EVM secure signing     |
-| [`solana-turnkey-signer`](./examples/solana-turnkey-signer/) | Using Turnkey Signer for Solana secure signing |
-| [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/) | Using Google Cloud KMS Signer for Solana secure signing |
-| [`evm-cdp-signer`](./examples/evm-cdp-signer/) | Using CDP Signer for EVM secure signing     |
-| [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file |
-| [`network-configuration-json-file`](./examples/network-configuration-json-file/) | Using Custom network configuration via json file |
+| Example                                                                              | Description                                             |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| [`basic-example`](./examples/basic-example/)                                         | Simple setup with Redis                                 |
+| [`redis-storage`](./examples/redis-storage/)                                         | Simple setup with Redis for storage                     |
+| [`basic-example-logging`](./examples/basic-example-logging/)                         | Configuration with file-based logging                   |
+| [`basic-example-metrics`](./examples/basic-example-metrics/)                         | Setup with Prometheus and Grafana metrics               |
+| [`vault-secret-signer`](./examples/vault-secret-signer/)                             | Using HashiCorp Vault for key management                |
+| [`vault-transit-signer`](./examples/vault-transit-signer/)                           | Using Vault Transit for secure signing                  |
+| [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                               | Using Turnkey Signer for EVM secure signing             |
+| [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                         | Using Turnkey Signer for Solana secure signing          |
+| [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/)       | Using Google Cloud KMS Signer for Solana secure signing |
+| [`evm-cdp-signer`](./examples/evm-cdp-signer/)                                       | Using CDP Signer for EVM secure signing                 |
+| [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file      |
+| [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file        |
 
 
 
@@ -253,6 +253,12 @@ Run the following commands to install pre-commit hooks:
 - Install stable libsodium version from [here](https://download.libsodium.org/libsodium/releases/).
 - Follow steps to install libsodium from the [libsodium installation guide](https://doc.libsodium.org/installation).
 
+
+  > Note (Debian/Ubuntu): If you're compiling libsodium from source, install build-essential first.
+  ```bash
+  sudo apt-get update && sudo apt-get install -y build-essential
+  ```
+
 ### Install Node.js
 
 - Install Node.js from [here](https://nodejs.org/).
@@ -272,6 +278,13 @@ cargo test properties
 cargo test integration
 ```
 
+
+> :warning: Debian/Ubuntu: If you encounter OpenSSL build errors, install the required packages:
+
+```bash
+sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+```
+
 #### Run tests against Redis
 
 1. You can start a Redis instance using the following command:
@@ -289,7 +302,7 @@ docker run -d \
 
 ```bash
 cargo test your_test_regex -- --test-threads=1
-```
+
 
 ### Config files
 
