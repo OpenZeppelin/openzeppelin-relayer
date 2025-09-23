@@ -234,6 +234,7 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
+
         // TypeScript compilation errors are now returned in the error field
         assert!(!result.error.is_empty());
         assert!(result.error.contains("Plugin executor failed"));

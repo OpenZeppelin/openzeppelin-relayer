@@ -13,15 +13,17 @@ pub mod mockutils {
         },
         jobs::MockJobProducerTrait,
         models::{
-            AppState, EvmTransactionData, EvmTransactionRequest, LocalSignerConfigStorage,
-            NetworkConfigData, NetworkRepoModel, NetworkTransactionData, NetworkType,
-            NotificationRepoModel, PluginModel, RelayerEvmPolicy, RelayerNetworkPolicy,
-            RelayerRepoModel, RelayerSolanaPolicy, SecretString, SignerConfigStorage,
-            SignerRepoModel, SolanaTransactionData, TransactionRepoModel, TransactionStatus,
+            ApiKeyRepoModel, AppState, EvmTransactionData, EvmTransactionRequest,
+            LocalSignerConfigStorage, NetworkConfigData, NetworkRepoModel, NetworkTransactionData,
+            NetworkType, NotificationRepoModel, PluginModel, RelayerEvmPolicy,
+            RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SecretString,
+            SignerConfigStorage, SignerRepoModel, SolanaTransactionData, TransactionRepoModel,
+            TransactionStatus,
         },
         repositories::{
-            NetworkRepositoryStorage, NotificationRepositoryStorage, PluginRepositoryStorage,
-            PluginRepositoryTrait, RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
+            ApiKeyRepositoryStorage, ApiKeyRepositoryTrait, NetworkRepositoryStorage,
+            NotificationRepositoryStorage, PluginRepositoryStorage, PluginRepositoryTrait,
+            RelayerRepositoryStorage, Repository, SignerRepositoryStorage,
             TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
         },
     };
@@ -173,6 +175,7 @@ pub mod mockutils {
     }
 
     pub async fn create_mock_app_state(
+        api_keys: Option<Vec<ApiKeyRepoModel>>,
         relayers: Option<Vec<RelayerRepoModel>>,
         signers: Option<Vec<SignerRepoModel>>,
         networks: Option<Vec<NetworkRepoModel>>,
@@ -187,6 +190,7 @@ pub mod mockutils {
         SignerRepositoryStorage,
         TransactionCounterRepositoryStorage,
         PluginRepositoryStorage,
+        ApiKeyRepositoryStorage,
     > {
         let relayer_repository = Arc::new(RelayerRepositoryStorage::new_in_memory());
         if let Some(relayers) = relayers {
@@ -223,6 +227,13 @@ pub mod mockutils {
             }
         }
 
+        let api_key_repository = Arc::new(ApiKeyRepositoryStorage::new_in_memory());
+        if let Some(api_keys) = api_keys {
+            for api_key in api_keys {
+                api_key_repository.create(api_key).await.unwrap();
+            }
+        }
+
         let mut mock_job_producer = MockJobProducerTrait::new();
 
         mock_job_producer
@@ -256,6 +267,7 @@ pub mod mockutils {
             ),
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
+            api_key_repository,
         }
     }
 
@@ -270,6 +282,17 @@ pub mod mockutils {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             valid_until: None,
+        }
+    }
+
+    pub fn create_mock_api_key() -> ApiKeyRepoModel {
+        ApiKeyRepoModel {
+            id: "test-api-key".to_string(),
+            name: "test-name".to_string(),
+            value: SecretString::new("test-value"),
+            allowed_origins: vec!["*".to_string()],
+            permissions: vec!["relayer:all:execute".to_string()],
+            created_at: Utc::now().to_string(),
         }
     }
 

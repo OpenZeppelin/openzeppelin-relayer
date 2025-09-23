@@ -278,11 +278,31 @@ cargo test properties
 cargo test integration
 ```
 
+
 > :warning: Debian/Ubuntu: If you encounter OpenSSL build errors, install the required packages:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 ```
+
+#### Run tests against Redis
+
+1. You can start a Redis instance using the following command:
+
+```bash
+docker run -d \
+  --name redis \
+  -p 6379:6379 \
+  redis:latest
+```
+
+2. Then remove the `#[ignore = "Requires active Redis instance"]` attribute from the tests you want to run.
+
+3. Run the tests using single thread to avoid race conditions within suites:
+
+```bash
+cargo test your_test_regex -- --test-threads=1
+
 
 ### Config files
 
