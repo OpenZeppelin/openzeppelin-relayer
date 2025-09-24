@@ -1,0 +1,26 @@
+{
+  "networks": [
+    {
+      "average_blocktime_ms": 400,
+      "chain_id": 1329,
+      "explorer_urls": ["https://seitrace.com"],
+      "features": ["eip1559"],
+      "is_testnet": false,
+      "network": "sei-mainnet",
+      "required_confirmations": 1,
+      "rpc_urls": ["https://evm-rpc.sei-apis.com"],
+      "symbol": "SEI",
+      "type": "evm"
+    },
+    {
+      "from": "sei-mainnet",
+      "type": "evm",
+      "network": "sei-atlantic-2",
+      "chain_id": 1328,
+      "explorer_urls": ["https://testnet.seitrace.com/"],
+      "is_testnet": true,
+      "rpc_urls": ["https://evm-rpc-testnet.sei-apis.com"],
+      "tags": []
+    }
+  ]
+}
