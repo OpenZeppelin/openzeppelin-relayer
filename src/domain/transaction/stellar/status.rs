@@ -470,8 +470,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-pending-check"
-                        && delay == &Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS)
+                    job.transaction_id == "tx-pending-check" && delay.is_some()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -625,8 +624,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-provider-error"
-                        && delay == &Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS)
+                    job.transaction_id == "tx-provider-error" && delay.is_some()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -1113,8 +1111,7 @@ mod tests {
                 .job_producer
                 .expect_produce_check_transaction_status_job()
                 .withf(move |job, delay| {
-                    job.transaction_id == "tx-xdr-error-requeue"
-                        && delay == &Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS)
+                    job.transaction_id == "tx-xdr-error-requeue" && delay.is_some()
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));

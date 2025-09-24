@@ -245,7 +245,6 @@ mod tests {
         WebhookPayload, U256,
     };
     use crate::utils::calculate_scheduled_timestamp;
-    use chrono;
 
     #[derive(Clone, Debug)]
     // Define a simplified queue for testing without using complex mocks
