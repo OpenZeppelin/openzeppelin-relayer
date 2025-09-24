@@ -151,7 +151,6 @@ mod tests {
             id: "test-api-key".to_string(),
             value: SecretString::new("test-value"),
             name: "test-name".to_string(),
-            allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),
         };
@@ -178,7 +177,6 @@ mod tests {
             id: "test-api-key".to_string(),
             value: SecretString::new("test-value"),
             name: "test-name".to_string(),
-            allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),
         };
@@ -197,7 +195,6 @@ mod tests {
             id: "test-api-key1".to_string(),
             value: SecretString::new("test-value1"),
             name: "test-name1".to_string(),
-            allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),
         };
@@ -206,7 +203,6 @@ mod tests {
             id: "test-api-key2".to_string(),
             value: SecretString::new("test-value2"),
             name: "test-name2".to_string(),
-            allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),
         };
@@ -234,7 +230,6 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
                 permissions: vec!["relayer:all:execute".to_string()],
                 created_at: Utc::now().to_string(),
             })
@@ -254,7 +249,6 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
                 permissions: vec!["relayer:all:execute".to_string()],
                 created_at: Utc::now().to_string(),
             })
@@ -277,7 +271,6 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
                 permissions: vec![
                     "relayer:all:execute".to_string(),
                     "relayer:all:read".to_string(),
@@ -302,7 +295,6 @@ mod tests {
                 id: "test-api-key".to_string(),
                 value: SecretString::new("test-value"),
                 name: "test-name".to_string(),
-                allowed_origins: vec!["*".to_string()],
                 permissions: vec!["relayer:all:execute".to_string()],
                 created_at: Utc::now().to_string(),
             })
@@ -321,7 +313,6 @@ mod tests {
             id: "test-api-key".to_string(),
             value: SecretString::new("test-value-123"),
             name: "test-name".to_string(),
-            allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),
         };
@@ -342,7 +333,6 @@ mod tests {
             id: "test-api-key".to_string(),
             value: SecretString::new("test-value-123"),
             name: "test-name".to_string(),
-            allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),
         };

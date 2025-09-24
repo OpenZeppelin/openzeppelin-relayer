@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
+    constants::SUPER_ADMIN,
     jobs::JobProducerTrait,
     models::{
         ApiKeyRepoModel, NetworkRepoModel, NotificationRepoModel, PluginModel, Relayer,
@@ -38,8 +39,7 @@ where
     let api_key_model = ApiKeyRepoModel::new(
         "default".to_string(),
         server_config.api_key.clone(),
-        vec!["*".to_string()],
-        vec!["*".to_string()],
+        vec![SUPER_ADMIN.to_string()],
     );
 
     app_state

@@ -160,18 +160,6 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
             )));
         }
 
-        // Check if API key value already exists
-        let existing_value: Option<String> = conn
-            .get(&value_index_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "create_api_key_value_check"))?;
-
-        if existing_value.is_some() {
-            return Err(RepositoryError::ConstraintViolation(
-                "API Key with this value already exists".to_string(),
-            ));
-        }
-
         // Use atomic pipeline for consistency
         let mut pipe = redis::pipe();
         pipe.atomic();
@@ -452,7 +440,6 @@ mod tests {
             id: id.to_string(),
             value: SecretString::new(&Uuid::new_v4().to_string()),
             name: "test-name".to_string(),
-            allowed_origins: vec!["*".to_string()],
             permissions: vec!["relayer:all:execute".to_string()],
             created_at: Utc::now().to_string(),
         }
@@ -563,7 +550,6 @@ mod tests {
         assert_eq!(api_key.id, deserialized.id);
         assert_eq!(api_key.value, deserialized.value);
         assert_eq!(api_key.name, deserialized.name);
-        assert_eq!(api_key.allowed_origins, deserialized.allowed_origins);
         assert_eq!(api_key.permissions, deserialized.permissions);
         assert_eq!(api_key.created_at, deserialized.created_at);
 

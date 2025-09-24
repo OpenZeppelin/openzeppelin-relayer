@@ -143,10 +143,7 @@ impl ApiKeyRepositoryTrait for ApiKeyRepositoryStorage {
 
 impl PartialEq for ApiKeyRepoModel {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.name == other.name
-            && self.allowed_origins == other.allowed_origins
-            && self.permissions == other.permissions
+        self.id == other.id && self.name == other.name && self.permissions == other.permissions
     }
 }
 
@@ -163,14 +160,12 @@ mod tests {
         id: &str,
         name: &str,
         value: &str,
-        allowed_origins: &[&str],
         permissions: &[&str],
     ) -> ApiKeyRepoModel {
         ApiKeyRepoModel {
             id: id.to_string(),
             name: name.to_string(),
             value: SecretString::new(value),
-            allowed_origins: allowed_origins.iter().map(|s| s.to_string()).collect(),
             permissions: permissions.iter().map(|s| s.to_string()).collect(),
             created_at: Utc::now().to_string(),
         }
@@ -183,7 +178,6 @@ mod tests {
             "test-api-key",
             "test-name",
             "test-value",
-            &["*"],
             &["relayer:all:execute"],
         );
 
@@ -210,7 +204,6 @@ mod tests {
             "test-api-key",
             "test-name",
             "test-value",
-            &["*"],
             &["relayer:all:execute"],
         );
 
@@ -225,7 +218,6 @@ mod tests {
             "test-api-key",
             "test-name",
             "test-value",
-            &["*"],
             &["relayer:all:execute"],
         );
 
@@ -255,7 +247,6 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -265,7 +256,6 @@ mod tests {
                 "api-key2",
                 "test-name2",
                 "test-value2",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -275,7 +265,6 @@ mod tests {
                 "api-key3",
                 "test-name3",
                 "test-value3",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -302,7 +291,6 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -333,7 +321,6 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -343,7 +330,6 @@ mod tests {
                 "api-key2",
                 "test-name2",
                 "test-value2",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -385,7 +371,6 @@ mod tests {
                 "api-key1",
                 "test-name1",
                 "test-value1",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -395,7 +380,6 @@ mod tests {
                 "api-key2",
                 "test-name2",
                 "test-value2",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -405,7 +389,6 @@ mod tests {
                 "api-key3",
                 "test-name3",
                 "test-value3",
-                &["*"],
                 &["relayer:all:execute"],
             ))
             .await
@@ -436,14 +419,12 @@ mod tests {
             "api-key1",
             "test-name1",
             "test-value1",
-            &["*"],
             &["relayer:all:execute"],
         );
         let api_key2 = create_test_api_key(
             "api-key2",
             "test-name2",
             "test-value2",
-            &["*"],
             &["relayer:all:execute"],
         );
 
@@ -481,7 +462,6 @@ mod tests {
             "test-api-key",
             "test-name",
             "unique-test-value",
-            &["*"],
             &["relayer:all:execute"],
         );
 
