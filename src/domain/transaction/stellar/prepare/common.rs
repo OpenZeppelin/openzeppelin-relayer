@@ -23,6 +23,7 @@ use crate::{
     repositories::TransactionCounterTrait,
     repositories::TransactionRepository,
     services::{Signer, StellarProviderTrait},
+    utils::calculate_scheduled_timestamp,
 };
 
 /// Common helper functions for transaction preparation
@@ -267,7 +268,7 @@ where
     J: JobProducerTrait + Send + Sync,
 {
     let job = TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone());
-    let scheduled_on = delay_seconds.map(|seconds| chrono::Utc::now().timestamp() + seconds);
+    let scheduled_on = delay_seconds.map(calculate_scheduled_timestamp);
     job_producer
         .produce_submit_transaction_job(job, scheduled_on)
         .await?;

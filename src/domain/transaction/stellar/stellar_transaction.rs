@@ -17,9 +17,9 @@ use crate::{
         TransactionCounterTrait, TransactionRepository, TransactionRepositoryStorage,
     },
     services::{Signer, StellarProvider, StellarProviderTrait, StellarSigner},
+    utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
-use chrono;
 use eyre::Result;
 use std::sync::Arc;
 use tracing::info;
@@ -132,7 +132,7 @@ where
         delay_seconds: Option<i64>,
     ) -> Result<(), TransactionError> {
         let job = TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone());
-        let scheduled_on = delay_seconds.map(|seconds| chrono::Utc::now().timestamp() + seconds);
+        let scheduled_on = delay_seconds.map(calculate_scheduled_timestamp);
         self.job_producer()
             .produce_transaction_request_job(job, scheduled_on)
             .await?;

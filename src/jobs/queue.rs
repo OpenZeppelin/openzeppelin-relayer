@@ -37,7 +37,7 @@ impl Queue {
     ) -> Result<RedisStorage<T>> {
         let config = Config::default()
             .set_namespace(namespace)
-            .set_enqueue_scheduled(Duration::from_secs(1));
+            .set_enqueue_scheduled(Duration::from_secs(1)); // Sets the polling interval for scheduled jobs from default 30 seconds
 
         Ok(RedisStorage::new_with_config((*shared).clone(), config))
     }

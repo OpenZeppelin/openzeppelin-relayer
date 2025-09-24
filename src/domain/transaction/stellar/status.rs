@@ -17,6 +17,7 @@ use crate::{
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
+    utils::calculate_scheduled_timestamp,
 };
 
 impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
@@ -137,7 +138,9 @@ where
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                Some(Utc::now().timestamp() + STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS),
+                Some(calculate_scheduled_timestamp(
+                    STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
+                )),
             )
             .await?;
         Ok(())
