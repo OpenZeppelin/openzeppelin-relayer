@@ -26,6 +26,7 @@
 use super::*;
 use std::str::FromStr;
 
+use crate::utils::calculate_scheduled_timestamp;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     hash::Hash,
@@ -38,9 +39,8 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_system_interface::program;
-use tracing::debug;
-
 use spl_token::{amount_to_ui_amount, state::Account};
+use tracing::debug;
 
 use crate::{
     constants::{
@@ -947,10 +947,11 @@ where
         tx: &TransactionRepoModel,
         delay: Option<i64>,
     ) -> Result<(), SolanaRpcError> {
+        let scheduled_on = delay.map(calculate_scheduled_timestamp);
         self.job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),
-                delay,
+                scheduled_on,
             )
             .await
             .map_err(|e| {

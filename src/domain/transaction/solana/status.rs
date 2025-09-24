@@ -17,6 +17,7 @@ use crate::{
     },
     repositories::{transaction::TransactionRepository, RelayerRepository, Repository},
     services::provider::SolanaProviderTrait,
+    utils::calculate_scheduled_timestamp,
 };
 
 /// Default delay for retrying status checks after failures (in seconds)
@@ -153,7 +154,7 @@ where
         tx: &TransactionRepoModel,
         delay_seconds: Option<i64>,
     ) -> Result<(), TransactionError> {
-        let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
+        let delay = delay_seconds.map(calculate_scheduled_timestamp);
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),

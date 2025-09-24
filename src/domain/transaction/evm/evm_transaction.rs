@@ -34,7 +34,7 @@ use crate::{
     services::{
         gas::evm_gas_price::EvmGasPriceService, EvmProvider, EvmProviderTrait, EvmSigner, Signer,
     },
-    utils::get_evm_default_gas_limit_for_tx,
+    utils::{calculate_scheduled_timestamp, get_evm_default_gas_limit_for_tx},
 };
 
 use super::PriceParams;
@@ -144,7 +144,7 @@ where
         tx: &TransactionRepoModel,
         delay_seconds: Option<i64>,
     ) -> Result<(), TransactionError> {
-        let delay = delay_seconds.map(|seconds| Utc::now().timestamp() + seconds);
+        let delay = delay_seconds.map(calculate_scheduled_timestamp);
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone()),

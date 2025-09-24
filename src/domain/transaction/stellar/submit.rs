@@ -15,6 +15,7 @@ use crate::{
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{Signer, StellarProviderTrait},
+    utils::calculate_scheduled_timestamp,
 };
 
 impl<R, T, J, S, P, C> StellarRelayerTransaction<R, T, J, S, P, C>
@@ -83,7 +84,9 @@ where
         self.job_producer()
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(updated_tx.id.clone(), updated_tx.relayer_id.clone()),
-                Some(STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS),
+                Some(calculate_scheduled_timestamp(
+                    STELLAR_STATUS_CHECK_JOB_DELAY_SECONDS,
+                )),
             )
             .await?;
 
@@ -132,7 +135,9 @@ where
                     if let Err(e) = self
                         .send_transaction_request_job(
                             &reset_tx,
-                            Some(STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS),
+                            Some(calculate_scheduled_timestamp(
+                                STELLAR_BAD_SEQUENCE_RETRY_DELAY_SECONDS,
+                            )),
                         )
                         .await
                     {

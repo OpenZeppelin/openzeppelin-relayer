@@ -243,8 +243,11 @@ mod tests {
     use crate::models::{
         EvmTransactionResponse, TransactionResponse, TransactionStatus, WebhookNotification,
         WebhookPayload, U256,
-    }; // Define a simplified queue for testing without using complex mocks
+    };
+    use crate::utils::calculate_scheduled_timestamp;
+
     #[derive(Clone, Debug)]
+    // Define a simplified queue for testing without using complex mocks
     struct TestRedisStorage<T> {
         pub push_called: bool,
         pub schedule_called: bool,
@@ -442,8 +445,9 @@ mod tests {
         // Test scheduled job
         let producer = TestJobProducer::new();
         let request = TransactionRequest::new("tx123", "relayer-1");
+        let scheduled_timestamp = calculate_scheduled_timestamp(10); // Schedule for 10 seconds from now
         let result = producer
-            .produce_transaction_request_job(request, Some(1000))
+            .produce_transaction_request_job(request, Some(scheduled_timestamp))
             .await;
         assert!(result.is_ok());
 
