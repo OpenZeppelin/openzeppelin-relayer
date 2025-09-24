@@ -17,7 +17,7 @@
       "type": "evm",
       "network": "sei-atlantic-2",
       "chain_id": 1328,
-      "explorer_urls": ["https://seitrace.com"],
+      "explorer_urls": ["https://testnet.seitrace.com/"],
       "is_testnet": true,
       "rpc_urls": ["https://evm-rpc-testnet.sei-apis.com"],
       "tags": []
