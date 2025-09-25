@@ -1,11 +1,11 @@
-//! # API Permissions Constants
+//! # API Permissions System
 //!
 //! This module defines all available permissions for API key-based access control.
 //! Permissions follow the format: `{resource}:{action}:{scope}`
 //!
 //! ## Permission Format
 //! - **resource**: The API resource being accessed (relayers, transactions, etc.)
-//! - **action**: The operation being performed (read, write, execute, etc.)
+//! - **action**: The operation being performed (get, create, update, delete, execute)
 //! - **scope**: The scope of access (all, owned, specific_id, etc.)
 //!
 //! ## Permission Hierarchy
@@ -14,155 +14,125 @@
 //! - `{resource}:{action}:*` - Specific action on all instances of a resource
 //! - `{resource}:{action}:{scope}` - Specific action on scoped instances
 
-// =============================================================================
-// HEALTH & SYSTEM PERMISSIONS
-// =============================================================================
+use std::{collections::HashMap, fmt::Display};
 
-/// Permission to access health check endpoints
-pub const HEALTH_READ: &str = "health:read:all";
+/// Represents all possible API permissions
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApiPermission {
+    // Health & System
+    HealthGet,
+    MetricsGet,
+    MetricsDebug,
 
-/// Permission to access system metrics
-pub const METRICS_READ: &str = "metrics:read:all";
+    // Relayers
+    RelayersList,
+    RelayersGetId(String),
+    RelayersCreate,
+    RelayersUpdateId(String),
+    RelayersDeleteId(String),
+    RelayersAdmin,
 
-/// Permission to access specific metric by name
-pub const METRICS_READ_SPECIFIC: &str = "metrics:read:specific";
+    // Transactions
+    TransactionsSubmitId(String),
+    TransactionsGetId(String),
+    TransactionsDeleteId(String),
+    TransactionsAdmin,
 
-/// Permission to access debug metrics endpoints
-pub const METRICS_DEBUG: &str = "metrics:debug:all";
+    // Signing
+    SigningExecuteId(String),
+    SigningAdmin,
 
-// =============================================================================
-// RELAYER PERMISSIONS
-// =============================================================================
+    // Signers
+    SignersList,
+    SignersGetId(String),
+    SignersCreate,
+    SignersUpdateId(String),
+    SignersDeleteId(String),
+    SignersAdmin,
 
-/// Permission to list all relayers
-pub const RELAYERS_LIST: &str = "relayers:read:all";
+    // Notifications
+    NotificationsList,
+    NotificationsGetId(String),
+    NotificationsCreate,
+    NotificationsUpdateId(String),
+    NotificationsDeleteId(String),
+    NotificationsAdmin,
 
-/// Permission to read a specific relayer's details
-pub const RELAYERS_READ: &str = "relayers:read:specific";
+    // Plugins
+    PluginsList,
+    PluginsExecuteId(String),
+    PluginsAdmin,
 
-/// Permission to create new relayers
-pub const RELAYERS_CREATE: &str = "relayers:write:create";
+    // API Keys
+    ApiKeysList,
+    ApiKeysGetId(String),
+    ApiKeysCreate,
+    ApiKeysDeleteId(String),
+    ApiKeysAdmin,
 
-/// Permission to update relayer configuration
-pub const RELAYERS_UPDATE: &str = "relayers:write:update";
+    // Super Admin
+    SuperAdmin,
+}
 
-/// Permission to delete relayers
-pub const RELAYERS_DELETE: &str = "relayers:write:delete";
+impl Display for ApiPermission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // Health & System
+            Self::HealthGet => write!(f, "health:get:all"),
+            Self::MetricsGet => write!(f, "metrics:get:all"),
+            Self::MetricsDebug => write!(f, "metrics:debug:all"),
 
-/// Full relayer management access (all operations)
-pub const RELAYERS_ADMIN: &str = "relayers:*:*";
+            // Relayers
+            Self::RelayersList => write!(f, "relayers:get:all"),
+            Self::RelayersGetId(id) => write!(f, "relayers:get:{}", id),
+            Self::RelayersCreate => write!(f, "relayers:create:all"),
+            Self::RelayersUpdateId(id) => write!(f, "relayers:update:{}", id),
+            Self::RelayersDeleteId(id) => write!(f, "relayers:delete:{}", id),
+            Self::RelayersAdmin => write!(f, "relayers:*:*"),
 
-// =============================================================================
-// TRANSACTION PERMISSIONS
-// =============================================================================
+            // Transactions
+            Self::TransactionsSubmitId(id) => write!(f, "transactions:execute:{}", id),
+            Self::TransactionsGetId(id) => write!(f, "transactions:get:{}", id),
+            Self::TransactionsDeleteId(id) => write!(f, "transactions:delete:{}", id),
+            Self::TransactionsAdmin => write!(f, "transactions:*:*"),
 
-/// Permission to submit new transactions
-pub const TRANSACTIONS_SUBMIT: &str = "transactions:execute:submit";
+            // Signing
+            Self::SigningExecuteId(id) => write!(f, "signing:execute:{}", id),
+            Self::SigningAdmin => write!(f, "signing:*:*"),
 
-/// Permission to read transaction details
-pub const TRANSACTIONS_READ: &str = "transactions:read:specific";
+            // Signers
+            Self::SignersList => write!(f, "signers:get:all"),
+            Self::SignersGetId(id) => write!(f, "signers:get:{}", id),
+            Self::SignersCreate => write!(f, "signers:create:all"),
+            Self::SignersUpdateId(id) => write!(f, "signers:update:{}", id),
+            Self::SignersDeleteId(id) => write!(f, "signers:delete:{}", id),
+            Self::SignersAdmin => write!(f, "signers:*:*"),
 
-/// Permission to list transactions for a relayer
-pub const TRANSACTIONS_LIST: &str = "transactions:read:list";
+            // Notifications
+            Self::NotificationsList => write!(f, "notifications:get:all"),
+            Self::NotificationsGetId(id) => write!(f, "notifications:get:{}", id),
+            Self::NotificationsCreate => write!(f, "notifications:create:all"),
+            Self::NotificationsUpdateId(id) => write!(f, "notifications:update:{}", id),
+            Self::NotificationsDeleteId(id) => write!(f, "notifications:delete:{}", id),
+            Self::NotificationsAdmin => write!(f, "notifications:*:*"),
 
-/// Permission to delete specific transactions
-pub const TRANSACTIONS_DELETE: &str = "transactions:write:delete";
+            // Plugins
+            Self::PluginsList => write!(f, "plugins:get:all"),
+            Self::PluginsExecuteId(id) => write!(f, "plugins:execute:{}", id),
+            Self::PluginsAdmin => write!(f, "plugins:*:*"),
 
-/// Full transaction management access
-pub const TRANSACTIONS_ADMIN: &str = "transactions:*:*";
+            // API Keys
+            Self::ApiKeysList => write!(f, "api_keys:get:all"),
+            Self::ApiKeysGetId(id) => write!(f, "api_keys:get:{}", id),
+            Self::ApiKeysCreate => write!(f, "api_keys:create:all"),
+            Self::ApiKeysDeleteId(id) => write!(f, "api_keys:delete:{}", id),
+            Self::ApiKeysAdmin => write!(f, "api_keys:*:*"),
 
-// =============================================================================
-// SIGNING PERMISSIONS
-// =============================================================================
-
-/// Permission to sign arbitrary data
-pub const SIGN_DATA: &str = "signing:execute:data";
-
-/// Full signing access
-pub const SIGNING_ADMIN: &str = "signing:*:*";
-
-// =============================================================================
-// SIGNER PERMISSIONS
-// =============================================================================
-
-/// Permission to list all signers
-pub const SIGNERS_LIST: &str = "signers:read:all";
-
-/// Permission to read specific signer details
-pub const SIGNERS_READ: &str = "signers:read:specific";
-
-/// Permission to create new signers
-pub const SIGNERS_CREATE: &str = "signers:write:create";
-
-/// Permission to update signer configuration
-pub const SIGNERS_UPDATE: &str = "signers:write:update";
-
-/// Permission to delete signers
-pub const SIGNERS_DELETE: &str = "signers:write:delete";
-
-/// Full signer management access
-pub const SIGNERS_ADMIN: &str = "signers:*:*";
-
-// =============================================================================
-// NOTIFICATION PERMISSIONS
-// =============================================================================
-
-/// Permission to list all notifications
-pub const NOTIFICATIONS_LIST: &str = "notifications:read:all";
-
-/// Permission to read specific notification details
-pub const NOTIFICATIONS_READ: &str = "notifications:read:specific";
-
-/// Permission to create new notifications
-pub const NOTIFICATIONS_CREATE: &str = "notifications:write:create";
-
-/// Permission to update notification configuration
-pub const NOTIFICATIONS_UPDATE: &str = "notifications:write:update";
-
-/// Permission to delete notifications
-pub const NOTIFICATIONS_DELETE: &str = "notifications:write:delete";
-
-/// Full notification management access
-pub const NOTIFICATIONS_ADMIN: &str = "notifications:*:*";
-
-// =============================================================================
-// PLUGIN PERMISSIONS
-// =============================================================================
-
-/// Permission to list all plugins
-pub const PLUGINS_LIST: &str = "plugins:read:all";
-
-/// Permission to call/execute plugin functions
-pub const PLUGINS_EXECUTE: &str = "plugins:execute:call";
-
-/// Full plugin access
-pub const PLUGINS_ADMIN: &str = "plugins:*:*";
-
-// =============================================================================
-// API KEY PERMISSIONS
-// =============================================================================
-
-/// Permission to list all API keys
-pub const API_KEYS_LIST: &str = "api_keys:read:all";
-
-/// Permission to read API key permissions
-pub const API_KEYS_READ: &str = "api_keys:read:specific";
-
-/// Permission to create new API keys
-pub const API_KEYS_CREATE: &str = "api_keys:write:create";
-
-/// Permission to delete API keys
-pub const API_KEYS_DELETE: &str = "api_keys:write:delete";
-
-/// Full API key management access
-pub const API_KEYS_ADMIN: &str = "api_keys:*:*";
-
-// =============================================================================
-// SUPER ADMIN PERMISSIONS
-// =============================================================================
-
-/// Super admin permission - grants access to everything
-pub const SUPER_ADMIN: &str = "*:*:*";
+            // Super Admin
+            Self::SuperAdmin => write!(f, "*:*:*"),
+        }
+    }
+}
 
 // =============================================================================
 // PERMISSION VALIDATION HELPERS
@@ -173,7 +143,7 @@ pub const SUPER_ADMIN: &str = "*:*:*";
 /// This function supports wildcard matching:
 /// - `*:*:*` matches everything
 /// - `relayers:*:*` matches all relayer operations
-/// - `relayers:read:*` matches all relayer read operations
+/// - `relayers:get:*` matches all relayer get operations
 ///
 /// # Arguments
 /// * `granted_permission` - The permission granted to the API key
@@ -182,7 +152,7 @@ pub const SUPER_ADMIN: &str = "*:*:*";
 /// # Returns
 /// `true` if the granted permission covers the required permission
 pub fn permission_grants_access(granted_permission: &str, required_permission: &str) -> bool {
-    if granted_permission == SUPER_ADMIN {
+    if granted_permission == ApiPermission::SuperAdmin.to_string() {
         return true;
     }
 
@@ -221,76 +191,394 @@ pub fn has_permission(api_key_permissions: &[String], required_permission: &str)
         .any(|granted| permission_grants_access(granted, required_permission))
 }
 
+/// Check if an API key has the required permission with dynamic parameter substitution
+///
+/// This function handles permission templates with {param_name} placeholders by substituting
+/// them with actual parameter values before checking permissions.
+///
+/// # Arguments
+/// * `api_key_permissions` - List of permissions granted to the API key
+/// * `required_permission` - The permission template (e.g., "relayers:write:{relayer_id}")
+/// * `param_values` - Map of parameter names to their values (e.g., "relayer_id" -> "abc-123")
+///
+/// # Returns
+/// `true` if the API key has the required permission with parameters substituted
+pub fn has_permission_with_params(
+    api_key_permissions: &[String],
+    required_permission: &str,
+    param_values: &HashMap<String, String>,
+) -> bool {
+    // If no parameters in the permission string, use regular check
+    if !required_permission.contains('{') {
+        return has_permission(api_key_permissions, required_permission);
+    }
+
+    // Substitute parameters in the required permission
+    let mut substituted_permission = required_permission.to_string();
+    for (param_name, param_value) in param_values {
+        let placeholder = format!("{{{}}}", param_name);
+        substituted_permission = substituted_permission.replace(&placeholder, param_value);
+    }
+
+    tracing::debug!(
+        "Permission check: template='{}', substituted='{}', api_key_permissions={:?}",
+        required_permission,
+        substituted_permission,
+        api_key_permissions
+    );
+
+    // Check if API key has the substituted permission
+    has_permission(api_key_permissions, &substituted_permission)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_super_admin_grants_all_access() {
-        assert!(permission_grants_access(SUPER_ADMIN, RELAYERS_LIST));
-        assert!(permission_grants_access(SUPER_ADMIN, TRANSACTIONS_SUBMIT));
+        let super_admin = ApiPermission::SuperAdmin.to_string();
+        let relayers_list = ApiPermission::RelayersList.to_string();
+        let transactions_submit =
+            ApiPermission::TransactionsSubmitId("test-relayer".to_string()).to_string();
+
+        assert!(permission_grants_access(&super_admin, &relayers_list));
+        assert!(permission_grants_access(&super_admin, &transactions_submit));
         assert!(permission_grants_access(
-            SUPER_ADMIN,
+            &super_admin,
             "custom:permission:test"
         ));
     }
 
     #[test]
     fn test_exact_permission_match() {
-        assert!(permission_grants_access(RELAYERS_LIST, RELAYERS_LIST));
-        assert!(!permission_grants_access(RELAYERS_LIST, RELAYERS_READ));
+        let relayers_list = ApiPermission::RelayersList.to_string();
+        let relayers_get_id = ApiPermission::RelayersGetId("test-id".to_string()).to_string();
+
+        assert!(permission_grants_access(&relayers_list, &relayers_list));
+        assert!(!permission_grants_access(&relayers_list, &relayers_get_id));
     }
 
     #[test]
     fn test_wildcard_resource_match() {
-        assert!(permission_grants_access(RELAYERS_ADMIN, RELAYERS_LIST));
-        assert!(permission_grants_access(RELAYERS_ADMIN, RELAYERS_CREATE));
-        assert!(permission_grants_access(RELAYERS_ADMIN, RELAYERS_DELETE));
+        let relayers_admin = ApiPermission::RelayersAdmin.to_string();
+        let relayers_list = ApiPermission::RelayersList.to_string();
+        let relayers_create = ApiPermission::RelayersCreate.to_string();
+        let relayers_delete = ApiPermission::RelayersDeleteId("test-id".to_string()).to_string();
+        let transactions_submit =
+            ApiPermission::TransactionsSubmitId("test-id".to_string()).to_string();
+
+        assert!(permission_grants_access(&relayers_admin, &relayers_list));
+        assert!(permission_grants_access(&relayers_admin, &relayers_create));
+        assert!(permission_grants_access(&relayers_admin, &relayers_delete));
         assert!(!permission_grants_access(
-            RELAYERS_ADMIN,
-            TRANSACTIONS_SUBMIT
+            &relayers_admin,
+            &transactions_submit
         ));
     }
 
     #[test]
     fn test_wildcard_action_match() {
-        assert!(permission_grants_access("relayers:read:*", RELAYERS_LIST));
-        assert!(permission_grants_access("relayers:read:*", RELAYERS_READ));
+        let relayers_list = ApiPermission::RelayersList.to_string();
+        let relayers_get_id = ApiPermission::RelayersGetId("test-id".to_string()).to_string();
+        let relayers_create = ApiPermission::RelayersCreate.to_string();
+
+        assert!(permission_grants_access("relayers:get:*", &relayers_list));
+        assert!(permission_grants_access("relayers:get:*", &relayers_get_id));
         assert!(!permission_grants_access(
-            "relayers:read:*",
-            RELAYERS_CREATE
+            "relayers:get:*",
+            &relayers_create
         ));
     }
 
     #[test]
     fn test_has_permission_with_multiple_grants() {
-        let permissions = vec![RELAYERS_LIST.to_string(), TRANSACTIONS_SUBMIT.to_string()];
+        let relayers_list = ApiPermission::RelayersList.to_string();
+        let transactions_submit =
+            ApiPermission::TransactionsSubmitId("test-relayer".to_string()).to_string();
+        let relayers_create = ApiPermission::RelayersCreate.to_string();
 
-        assert!(has_permission(&permissions, RELAYERS_LIST));
-        assert!(has_permission(&permissions, TRANSACTIONS_SUBMIT));
-        assert!(!has_permission(&permissions, RELAYERS_CREATE));
+        let permissions = vec![relayers_list.clone(), transactions_submit.clone()];
+
+        assert!(has_permission(&permissions, &relayers_list));
+        assert!(has_permission(&permissions, &transactions_submit));
+        assert!(!has_permission(&permissions, &relayers_create));
     }
 
     #[test]
     fn test_has_permission_with_wildcard() {
-        let permissions = vec![RELAYERS_ADMIN.to_string()];
+        let relayers_admin = ApiPermission::RelayersAdmin.to_string();
+        let relayers_list = ApiPermission::RelayersList.to_string();
+        let relayers_create = ApiPermission::RelayersCreate.to_string();
+        let relayers_delete = ApiPermission::RelayersDeleteId("test-id".to_string()).to_string();
+        let transactions_submit =
+            ApiPermission::TransactionsSubmitId("test-id".to_string()).to_string();
 
-        assert!(has_permission(&permissions, RELAYERS_LIST));
-        assert!(has_permission(&permissions, RELAYERS_CREATE));
-        assert!(has_permission(&permissions, RELAYERS_DELETE));
-        assert!(!has_permission(&permissions, TRANSACTIONS_SUBMIT));
+        let permissions = vec![relayers_admin];
+
+        assert!(has_permission(&permissions, &relayers_list));
+        assert!(has_permission(&permissions, &relayers_create));
+        assert!(has_permission(&permissions, &relayers_delete));
+        assert!(!has_permission(&permissions, &transactions_submit));
     }
 
     #[test]
-    fn test_permission_groups() {
-        // Test that permission groups contain expected permissions
-        assert!(READ_ONLY_PERMISSIONS.contains(&RELAYERS_LIST));
-        assert!(READ_ONLY_PERMISSIONS.contains(&TRANSACTIONS_READ));
-        assert!(!READ_ONLY_PERMISSIONS.contains(&RELAYERS_CREATE));
+    fn test_has_permission_with_params_basic() {
+        let mut param_values = HashMap::new();
+        param_values.insert("relayer_id".to_string(), "test-relayer-123".to_string());
 
-        assert!(TRANSACTION_EXECUTOR_PERMISSIONS.contains(&TRANSACTIONS_SUBMIT));
+        let template_permission = "relayers:get:{relayer_id}";
 
-        assert!(ADMIN_PERMISSIONS.contains(&RELAYERS_ADMIN));
-        assert!(ADMIN_PERMISSIONS.contains(&TRANSACTIONS_ADMIN));
+        // Test exact match with parameter substitution
+        let permissions = vec!["relayers:get:test-relayer-123".to_string()];
+        assert!(has_permission_with_params(
+            &permissions,
+            template_permission,
+            &param_values
+        ));
+
+        // Test no match with different relayer ID
+        let permissions = vec!["relayers:get:different-relayer".to_string()];
+        assert!(!has_permission_with_params(
+            &permissions,
+            template_permission,
+            &param_values
+        ));
+
+        // Test wildcard match
+        let permissions = vec!["relayers:get:*".to_string()];
+        assert!(has_permission_with_params(
+            &permissions,
+            template_permission,
+            &param_values
+        ));
+    }
+
+    #[test]
+    fn test_has_permission_with_params_multiple_resources() {
+        let mut param_values = HashMap::new();
+        param_values.insert("relayer_id".to_string(), "relayer-abc".to_string());
+
+        let permissions = vec![
+            "relayers:get:relayer-abc".to_string(),
+            "transactions:execute:relayer-abc".to_string(),
+            "signing:execute:relayer-abc".to_string(),
+        ];
+
+        // Test relayer permissions
+        assert!(has_permission_with_params(
+            &permissions,
+            "relayers:get:{relayer_id}",
+            &param_values
+        ));
+
+        // Test transaction permissions
+        assert!(has_permission_with_params(
+            &permissions,
+            "transactions:execute:{relayer_id}",
+            &param_values
+        ));
+
+        // Test signing permissions
+        assert!(has_permission_with_params(
+            &permissions,
+            "signing:execute:{relayer_id}",
+            &param_values
+        ));
+
+        // Test permissions for different relayer should fail
+        param_values.insert("relayer_id".to_string(), "different-relayer".to_string());
+        assert!(!has_permission_with_params(
+            &permissions,
+            "relayers:get:{relayer_id}",
+            &param_values
+        ));
+        assert!(!has_permission_with_params(
+            &permissions,
+            "transactions:execute:{relayer_id}",
+            &param_values
+        ));
+    }
+
+    #[test]
+    fn test_has_permission_with_params_no_templates() {
+        let param_values = HashMap::new();
+
+        // Test permissions without templates should work normally
+        let relayers_list = ApiPermission::RelayersList.to_string();
+        let relayers_create = ApiPermission::RelayersCreate.to_string();
+        let permissions = vec![relayers_list.clone(), relayers_create.clone()];
+
+        assert!(has_permission_with_params(
+            &permissions,
+            &relayers_list,
+            &param_values
+        ));
+        assert!(has_permission_with_params(
+            &permissions,
+            &relayers_create,
+            &param_values
+        ));
+        assert!(!has_permission_with_params(
+            &permissions,
+            "relayers:get:specific-id",
+            &param_values
+        ));
+    }
+
+    #[test]
+    fn test_has_permission_with_params_plugin_scoping() {
+        let mut param_values = HashMap::new();
+        param_values.insert("plugin_id".to_string(), "my-plugin-123".to_string());
+
+        // Test plugin-specific permissions
+        let permissions = vec![
+            "plugins:execute:my-plugin-123".to_string(),
+            "plugins:get:all".to_string(),
+        ];
+
+        assert!(has_permission_with_params(
+            &permissions,
+            "plugins:execute:{plugin_id}",
+            &param_values
+        ));
+        assert!(has_permission_with_params(
+            &permissions,
+            "plugins:get:all",
+            &param_values
+        ));
+
+        // Test different plugin ID should fail
+        param_values.insert("plugin_id".to_string(), "different-plugin".to_string());
+        assert!(!has_permission_with_params(
+            &permissions,
+            "plugins:execute:{plugin_id}",
+            &param_values
+        ));
+    }
+
+    #[test]
+    fn test_has_permission_with_params_admin_wildcard() {
+        let mut param_values = HashMap::new();
+        param_values.insert("relayer_id".to_string(), "any-relayer".to_string());
+
+        // Test that admin permissions work with any relayer ID
+        let relayers_admin = ApiPermission::RelayersAdmin.to_string();
+        let permissions = vec![relayers_admin];
+
+        assert!(has_permission_with_params(
+            &permissions,
+            "relayers:get:{relayer_id}",
+            &param_values
+        ));
+        assert!(has_permission_with_params(
+            &permissions,
+            "relayers:update:{relayer_id}",
+            &param_values
+        ));
+        assert!(has_permission_with_params(
+            &permissions,
+            "relayers:delete:{relayer_id}",
+            &param_values
+        ));
+
+        // Change relayer ID and verify it still works
+        param_values.insert(
+            "relayer_id".to_string(),
+            "completely-different-relayer".to_string(),
+        );
+        assert!(has_permission_with_params(
+            &permissions,
+            "relayers:get:{relayer_id}",
+            &param_values
+        ));
+        assert!(has_permission_with_params(
+            &permissions,
+            "relayers:update:{relayer_id}",
+            &param_values
+        ));
+    }
+
+    /// Test that simulates how the macro processes permission validation
+    /// This simulates the exact flow: parameter extraction -> template substitution -> permission check
+    #[test]
+    fn test_macro_simulation_with_scoped_permissions() {
+        // Simulate API key with scoped permission for specific relayer
+        let api_key_permissions = vec!["relayers:get:sepolia-example".to_string()];
+
+        // Simulate the macro extracting relayer_id parameter from web::Path
+        let relayer_id_from_path = "sepolia-example";
+
+        // Simulate the macro building the parameter map
+        let mut param_values = HashMap::new();
+        param_values.insert("relayer_id".to_string(), relayer_id_from_path.to_string());
+
+        // Simulate the macro checking against the template permission
+        let required_permission_template = "relayers:get:{relayer_id}";
+
+        // This should pass because:
+        // 1. Template: "relayers:get:{relayer_id}"
+        // 2. Parameter substitution: "relayers:get:sepolia-example"
+        // 3. API key has: "relayers:get:sepolia-example"
+        assert!(has_permission_with_params(
+            &api_key_permissions,
+            required_permission_template,
+            &param_values
+        ));
+
+        // Test with different relayer_id should fail
+        param_values.insert("relayer_id".to_string(), "different-relayer".to_string());
+        assert!(!has_permission_with_params(
+            &api_key_permissions,
+            required_permission_template,
+            &param_values
+        ));
+
+        // Test with wildcard permission should work for any relayer_id
+        let wildcard_permissions = vec!["relayers:get:*".to_string()];
+        assert!(has_permission_with_params(
+            &wildcard_permissions,
+            required_permission_template,
+            &param_values
+        ));
+
+        // Test with admin permission should work for any relayer_id
+        let admin_permissions = vec![ApiPermission::RelayersAdmin.to_string()]; // "relayers:*:*"
+        assert!(has_permission_with_params(
+            &admin_permissions,
+            required_permission_template,
+            &param_values
+        ));
+    }
+
+    /// Test multiple parameter extraction (like TransactionPath with relayer_id + transaction_id)
+    #[test]
+    fn test_macro_simulation_multiple_params() {
+        // API key with scoped permission for specific relayer
+        let api_key_permissions = vec!["transactions:get:sepolia-example".to_string()];
+
+        // Simulate extracting multiple parameters from path
+        let mut param_values = HashMap::new();
+        param_values.insert("relayer_id".to_string(), "sepolia-example".to_string());
+        param_values.insert("transaction_id".to_string(), "tx-123".to_string());
+
+        // Test transaction permission (only uses relayer_id parameter)
+        let required_permission = "transactions:get:{relayer_id}"; // "transactions:get:{relayer_id}"
+
+        assert!(has_permission_with_params(
+            &api_key_permissions,
+            required_permission,
+            &param_values
+        ));
+
+        // Even though we have transaction_id in params, it shouldn't affect the result
+        // since the permission template only uses relayer_id
+        param_values.insert("transaction_id".to_string(), "different-tx".to_string());
+        assert!(has_permission_with_params(
+            &api_key_permissions,
+            required_permission,
+            &param_values
+        ));
     }
 }

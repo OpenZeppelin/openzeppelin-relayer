@@ -8,11 +8,14 @@ use crate::{
         DefaultAppState, NotificationCreateRequest, NotificationUpdateRequest, PaginationQuery,
     },
 };
-use actix_web::{delete, get, patch, post, web, Responder};
+use actix_web::{delete, get, patch, post, web, HttpRequest, Responder};
+use relayer_macros::require_permissions;
 
 /// Lists all notifications with pagination support.
+#[require_permissions(["notifications:get:all"])]
 #[get("/notifications")]
 async fn list_notifications(
+    raw_request: HttpRequest,
     query: web::Query<PaginationQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
@@ -20,28 +23,34 @@ async fn list_notifications(
 }
 
 /// Retrieves details of a specific notification by ID.
+#[require_permissions(["notifications:get:{notification_id}"])]
 #[get("/notifications/{notification_id}")]
 async fn get_notification(
     notification_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     notification::get_notification(notification_id.into_inner(), data).await
 }
 
 /// Creates a new notification.
+#[require_permissions(["notifications:create:all"])]
 #[post("/notifications")]
 async fn create_notification(
     request: web::Json<NotificationCreateRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     notification::create_notification(request.into_inner(), data).await
 }
 
 /// Updates an existing notification.
+#[require_permissions(["notifications:update:{notification_id}"])]
 #[patch("/notifications/{notification_id}")]
 async fn update_notification(
     notification_id: web::Path<String>,
     request: web::Json<NotificationUpdateRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     notification::update_notification(notification_id.into_inner(), request.into_inner(), data)
@@ -49,9 +58,11 @@ async fn update_notification(
 }
 
 /// Deletes a notification by ID.
+#[require_permissions(["notifications:delete:{notification_id}"])]
 #[delete("/notifications/{notification_id}")]
 async fn delete_notification(
     notification_id: web::Path<String>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     notification::delete_notification(notification_id.into_inner(), data).await
