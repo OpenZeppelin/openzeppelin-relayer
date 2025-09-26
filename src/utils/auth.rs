@@ -74,6 +74,13 @@ pub async fn validate_api_key_permissions(
         return Err(ApiError::Unauthorized("Empty API key".to_string()));
     }
 
+    // Check if this is the environment API key (full access)
+    if let Ok(env_api_key) = std::env::var("API_KEY") {
+        if token == env_api_key {
+            return Ok(());
+        }
+    }
+
     // Look up the API key
     let api_key = match api_key_repo.get_by_value(token).await {
         Ok(Some(key)) => key,
@@ -136,7 +143,14 @@ pub async fn validate_api_key_permissions_with_params(
         return Err(ApiError::Unauthorized("Empty API key".to_string()));
     }
 
-    // Look up the API key
+    // Check if this is the environment API key (full access)
+    if let Ok(env_api_key) = std::env::var("API_KEY") {
+        if token == env_api_key {
+            return Ok(());
+        }
+    }
+
+    // Look up the API key from repository
     let api_key = match api_key_repo.get_by_value(token).await {
         Ok(Some(key)) => key,
         Ok(None) => {
