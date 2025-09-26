@@ -5,11 +5,14 @@ use crate::{
     api::controllers::plugin,
     models::{DefaultAppState, PaginationQuery, PluginCallRequest},
 };
-use actix_web::{get, post, web, Responder};
+use actix_web::{get, post, web, HttpRequest, Responder};
+use relayer_macros::require_permissions;
 
 /// List plugins
+#[require_permissions(["plugins:get:all"])]
 #[get("/plugins")]
 async fn list_plugins(
+    raw_request: HttpRequest,
     query: web::Query<PaginationQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
@@ -17,10 +20,12 @@ async fn list_plugins(
 }
 
 /// Calls a plugin method.
+#[require_permissions(["plugins:execute:{plugin_id}"])]
 #[post("/plugins/{plugin_id}/call")]
 async fn plugin_call(
     plugin_id: web::Path<String>,
     req: web::Json<PluginCallRequest>,
+    raw_request: HttpRequest,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     plugin::call_plugin(plugin_id.into_inner(), req.into_inner(), data).await

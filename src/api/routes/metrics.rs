@@ -12,9 +12,13 @@
 //! These endpoints are designed to be used with a Prometheus server to scrape and monitor system
 //! metrics.
 
-use crate::metrics::{update_system_metrics, REGISTRY};
-use actix_web::{get, web, HttpResponse, Responder};
+use crate::{
+    metrics::{update_system_metrics, REGISTRY},
+    models::DefaultAppState,
+};
+use actix_web::{get, web, HttpRequest, HttpResponse};
 use prometheus::{Encoder, TextEncoder};
+use relayer_macros::require_permissions;
 
 /// Metrics routes implementation
 ///
@@ -33,15 +37,19 @@ use prometheus::{Encoder, TextEncoder};
         (status = 401, description = "Unauthorized"),
     )
 )]
+#[require_permissions(["metrics:get:all"])]
 #[get("/metrics")]
-async fn list_metrics() -> impl Responder {
+async fn list_metrics(
+    raw_request: HttpRequest,
+    data: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, actix_web::Error> {
     // Gather the metric families from the registry and extract metric names.
     let metric_families = REGISTRY.gather();
     let metric_names: Vec<String> = metric_families
         .iter()
         .map(|mf| mf.name().to_string())
         .collect();
-    HttpResponse::Ok().json(metric_names)
+    Ok(HttpResponse::Ok().json(metric_names))
 }
 
 /// Returns the details of a specific metric in plain text format.
@@ -72,8 +80,13 @@ async fn list_metrics() -> impl Responder {
         ("bearer_auth" = ["metrics:read"])
     )
 )]
+#[require_permissions(["metrics:get:{metric_name}"])]
 #[get("/metrics/{metric_name}")]
-async fn metric_detail(path: web::Path<String>) -> impl Responder {
+async fn metric_detail(
+    path: web::Path<String>,
+    raw_request: HttpRequest,
+    data: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, actix_web::Error> {
     let metric_name = path.into_inner();
     let metric_families = REGISTRY.gather();
 
@@ -82,14 +95,16 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
             let encoder = TextEncoder::new();
             let mut buffer = Vec::new();
             if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-                return HttpResponse::InternalServerError().body(format!("Encoding error: {}", e));
+                return Ok(
+                    HttpResponse::InternalServerError().body(format!("Encoding error: {}", e))
+                );
             }
-            return HttpResponse::Ok()
+            return Ok(HttpResponse::Ok()
                 .content_type(encoder.format_type())
-                .body(buffer);
+                .body(buffer));
         }
     }
-    HttpResponse::NotFound().body("Metric not found")
+    Ok(HttpResponse::NotFound().body("Metric not found"))
 }
 
 /// Triggers an update of system metrics and returns the result in plain text format.
@@ -107,12 +122,16 @@ async fn metric_detail(path: web::Path<String>) -> impl Responder {
         (status = 401, description = "Unauthorized")
     )
 )]
+#[require_permissions(["metrics:debug:all"])]
 #[get("/debug/metrics/scrape")]
-async fn scrape_metrics() -> impl Responder {
+async fn scrape_metrics(
+    raw_request: HttpRequest,
+    data: web::ThinData<DefaultAppState>,
+) -> Result<HttpResponse, actix_web::Error> {
     update_system_metrics();
     match crate::metrics::gather_metrics() {
-        Ok(body) => HttpResponse::Ok().content_type("text/plain;").body(body),
-        Err(e) => HttpResponse::InternalServerError().body(format!("Error: {}", e)),
+        Ok(body) => Ok(HttpResponse::Ok().content_type("text/plain;").body(body)),
+        Err(e) => Ok(HttpResponse::InternalServerError().body(format!("Error: {}", e))),
     }
 }
 
@@ -130,7 +149,7 @@ pub fn init(cfg: &mut web::ServiceConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, App};
+    use actix_web::{test, App, Responder};
     use prometheus::{Counter, Opts, Registry};
 
     // Helper function to create a test registry with a sample metric
