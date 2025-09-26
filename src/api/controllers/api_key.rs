@@ -155,6 +155,19 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
+    // Check if this is the admin API key from environment - prevent deletion
+    if let Ok(env_api_key) = std::env::var("API_KEY") {
+        // Get the API key to check its value
+        if let Ok(Some(api_key)) = state.api_key_repository.get_by_id(&api_key_id).await {
+            let api_key_value = api_key.value.as_str(|s| s.to_string());
+            if api_key_value == env_api_key {
+                return Err(ApiError::ForbiddenError(
+                    "Cannot delete the admin API key from environment variable".to_string(),
+                ));
+            }
+        }
+    }
+
     state.api_key_repository.delete_by_id(&api_key_id).await?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(api_key_id)))
