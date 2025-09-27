@@ -61,12 +61,23 @@ impl From<PluginError> for String {
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PluginCallResponse {
-    pub success: bool,
+    /// Deprecated: only present when legacy compatibility is enabled
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
+    /// The return value produced by the plugin
     pub return_value: String,
-    pub message: String,
-    pub logs: Vec<LogEntry>,
-    pub error: String,
-    pub traces: Vec<serde_json::Value>,
+    /// Deprecated: only present when legacy compatibility is enabled
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Optional logs captured during plugin execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs: Option<Vec<LogEntry>>,
+    /// Optional error message from the plugin
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Optional traces captured during plugin execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traces: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Default)]
@@ -127,14 +138,45 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             .await;
 
         match result {
-            Ok(script_result) => Ok(PluginCallResponse {
-                success: true,
-                message: "Plugin called successfully".to_string(),
-                return_value: script_result.return_value,
-                logs: script_result.logs,
-                error: script_result.error,
-                traces: script_result.trace,
-            }),
+            Ok(script_result) => {
+                // Determine legacy payload toggle: per-plugin or global env
+                let legacy_enabled = plugin.legacy_payload
+                    || std::env::var("OZ_LEGACY_PLUGIN_PAYLOAD")
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false);
+
+                // Include logs/traces only if enabled via plugin config
+                let logs = if plugin.emit_logs {
+                    Some(script_result.logs)
+                } else {
+                    None
+                };
+                let traces = if plugin.emit_traces {
+                    Some(script_result.trace)
+                } else {
+                    None
+                };
+
+                // Normalize empty error string to None
+                let error = if script_result.error.trim().is_empty() {
+                    None
+                } else {
+                    Some(script_result.error)
+                };
+
+                Ok(PluginCallResponse {
+                    success: if legacy_enabled { Some(true) } else { None },
+                    message: if legacy_enabled {
+                        Some("Plugin called successfully".to_string())
+                    } else {
+                        None
+                    },
+                    return_value: script_result.return_value,
+                    logs,
+                    error,
+                    traces,
+                })
+            }
             Err(e) => Err(PluginError::PluginExecutionError(e.to_string())),
         }
     }
@@ -233,6 +275,9 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: true,
+            emit_traces: false,
+            legacy_payload: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -265,8 +310,13 @@ mod tests {
             .await;
         assert!(result.is_ok());
         let result = result.unwrap();
-        assert!(result.success);
+        // In compact mode, legacy fields are None
+        assert!(result.success.is_none());
         assert_eq!(result.return_value, "test-result");
+        // emit_logs=true -> logs should be present
+        assert!(result.logs.is_some());
+        // error is non-empty string in mock; should be Some
+        assert!(result.error.is_some());
     }
 
     #[tokio::test]

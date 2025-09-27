@@ -12,6 +12,16 @@ pub struct PluginModel {
     /// Plugin timeout
     #[schema(value_type = u64)]
     pub timeout: Duration,
+    /// Whether to include logs in the HTTP response
+    #[serde(default)]
+    pub emit_logs: bool,
+    /// Whether to include traces in the HTTP response
+    #[serde(default)]
+    pub emit_traces: bool,
+    /// Enable legacy payload fields (success/message) for backward compatibility
+    /// Defaults to false (new compact payload)
+    #[serde(default)]
+    pub legacy_payload: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

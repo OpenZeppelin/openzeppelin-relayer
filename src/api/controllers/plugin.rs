@@ -123,6 +123,9 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+            legacy_payload: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;

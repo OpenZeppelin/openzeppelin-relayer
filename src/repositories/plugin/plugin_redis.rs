@@ -336,6 +336,9 @@ mod tests {
             id: id.to_string(),
             path: path.to_string(),
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+            emit_logs: false,
+            emit_traces: false,
+            legacy_payload: false,
         }
     }
 

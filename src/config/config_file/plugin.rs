@@ -14,6 +14,14 @@ pub struct PluginFileConfig {
     pub id: String,
     pub path: String,
     pub timeout: Option<u64>,
+    #[serde(default)]
+    pub emit_logs: bool,
+    #[serde(default)]
+    pub emit_traces: bool,
+    /// When true, include legacy fields (success/message) in plugin response payload
+    /// Defaults to false (new compact payload)
+    #[serde(default)]
+    pub legacy_payload: bool,
 }
 
 pub struct PluginsFileConfig {
