@@ -13,9 +13,11 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    services::plugins::{PluginCallResponse, PluginRunner, PluginService, PluginServiceTrait},
+    services::plugins::{
+        PluginError, PluginHandlerError, PluginRunner, PluginService, PluginServiceTrait,
+    },
 };
-use actix_web::HttpResponse;
+use actix_web::{http::StatusCode, HttpResponse};
 use eyre::Result;
 use std::sync::Arc;
 
@@ -60,7 +62,31 @@ where
 
     match result {
         Ok(plugin_result) => Ok(HttpResponse::Ok().json(ApiResponse::success(plugin_result))),
-        Err(e) => Ok(HttpResponse::Ok().json(ApiResponse::<PluginCallResponse>::error(e))),
+        Err(PluginError::HandlerError {
+            ref message,
+            status,
+            ref code,
+            ref details,
+        }) => {
+            // This is an intentional error thrown by the plugin handler - log at debug level
+            tracing::debug!("Plugin handler error (status {}): {}", status, message);
+            let http_status =
+                StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            // Return structured error payload (status lives in HTTP status code only)
+            let payload = PluginHandlerError {
+                code: code.clone(),
+                details: details.clone(),
+            };
+            Ok(HttpResponse::build(http_status).json(ApiResponse::new(
+                Some(payload),
+                Some(message.clone()),
+                None,
+            )))
+        }
+        Err(e) => {
+            tracing::error!("Plugin error: {:?}", e);
+            Ok(HttpResponse::InternalServerError().json(ApiResponse::<String>::error(e)))
+        }
     }
 }
 

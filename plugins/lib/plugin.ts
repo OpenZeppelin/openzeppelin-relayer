@@ -340,7 +340,11 @@ export async function loadAndExecutePlugin<T, R>(
     // when it was required. We just return an empty result.
     return undefined as any;
   } catch (error) {
-    throw new Error(`Failed to execute user plugin ${userScriptPath}: ${(error as Error).message}`);
+    // Preserve the error with its statusCode if present
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Failed to execute user plugin ${userScriptPath}: ${String(error)}`);
   }
 }
 
@@ -508,8 +512,18 @@ export async function runUserPlugin<T = any, R = any>(
 
   try {
     const result: R = await loadAndExecutePlugin<T, R>(userScriptPath, plugin, kv, pluginParams);
-
     return result;
+  } catch (error) {
+    // If plugin threw an error, write normalized error to stderr
+    const anyErr = error as any;
+    const errorInfo = {
+      code: typeof anyErr?.code === 'string' ? anyErr.code : 'PLUGIN_ERROR',
+      message: error instanceof Error ? error.message : String(error),
+      status: typeof anyErr?.status === 'number' ? anyErr.status : 500,
+      details: anyErr?.details,
+    };
+    process.stderr.write(JSON.stringify(errorInfo) + '\n');
+    process.exit(1); // Non-zero exit code indicates error
   } finally {
     plugin.close();
   }

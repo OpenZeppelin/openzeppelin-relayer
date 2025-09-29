@@ -9,14 +9,13 @@ Under the hood, the relayer will execute the plugin code in a separate process u
 ### 1. Writing your plugin
 
 ```typescript
-import { Speed, PluginContext } from '@openzeppelin/relayer-sdk';
+import { Speed, PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
 
 type Params = {
   destinationAddress: string;
 };
 
 type Result = {
-  success: boolean;
   transactionId: string;
 };
 
@@ -37,7 +36,7 @@ export async function handler(context: PluginContext): Promise<Result> {
   await kv.set('last_tx_id', result.id);
 
   await result.wait();
-  return { success: true, transactionId: result.id };
+  return { transactionId: result.id, confirmed: true };
 }
 ```
 
@@ -106,29 +105,29 @@ curl -X POST "http://localhost:8080/api/v1/plugins/example/call" \
   }'
 ```
 
-Then the response will include:
+Responses use the API envelope `{ success, data, error }`.
 
-- `logs`: The logs from the plugin execution.
-- `return_value`: The returned value of the plugin execution.
-- `error`: An error message if the plugin execution failed.
-- `traces`: A list of payloads that were sent between the plugin and the relayer. e.g. the `sendTransaction` payloads.
+- Success (HTTP 200):
+  - `data.result`: your plugin return value
+  - `data.logs?` and `data.traces?`: included if enabled for the plugin
+  - `error: null`
+- Plugin error (HTTP 4xx):
+  - `error`: human-readable message
+  - `data`: `{ code?: string, details?: any }`
 
-Example response:
+Example success:
 
 ```json
 {
   "success": true,
   "data": {
-    "success": true,
-    "return_value": "\"done!\"",
-    "message": "Plugin called successfully",
+    "result": "done!",
     "logs": [
       {
         "level": "info",
         "message": "Plugin started..."
       }
     ],
-    "error": "",
     "traces": [
       {
         "method": "sendTransaction",
@@ -145,6 +144,16 @@ Example response:
     ]
   },
   "error": null
+}
+```
+
+Example error (HTTP 422):
+
+```json
+{
+  "success": false,
+  "data": { "code": "VALIDATION_FAILED", "details": { "field": "email" } },
+  "error": "Validation failed"
 }
 ```
 

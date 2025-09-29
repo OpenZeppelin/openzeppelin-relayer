@@ -1,7 +1,7 @@
 use crate::{
     models::{ApiResponse, PluginCallRequest, PluginModel},
     repositories::PaginatedResult,
-    services::plugins::PluginCallResponse,
+    services::plugins::{PluginCallResponse, PluginHandlerError},
 };
 
 /// Calls a plugin method.
@@ -25,12 +25,12 @@ use crate::{
         ),
         (
             status = 400,
-            description = "BadRequest",
-            body = ApiResponse<String>,
+            description = "BadRequest (plugin-provided)",
+            body = ApiResponse<PluginHandlerError>,
             example = json!({
                 "success": false,
-                "message": "Bad Request",
-                "data": null
+                "error": "Validation failed",
+                "data": { "code": "VALIDATION_FAILED", "details": { "field": "email" } }
             })
         ),
         (

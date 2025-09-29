@@ -43,11 +43,8 @@ mod tests {
 
     async fn mock_plugin_call() -> impl Responder {
         HttpResponse::Ok().json(PluginCallResponse {
-            success: None,
-            message: None,
-            return_value: String::from(""),
+            result: serde_json::Value::Null,
             logs: None,
-            error: None,
             traces: None,
         })
     }
@@ -98,7 +95,7 @@ mod tests {
 
         let body = test::read_body(resp).await;
         let plugin_call_response: PluginCallResponse = serde_json::from_slice(&body).unwrap();
-        assert!(plugin_call_response.error.is_none());
+        assert!(plugin_call_response.result.is_null());
     }
 
     #[actix_web::test]

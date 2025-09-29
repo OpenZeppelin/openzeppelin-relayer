@@ -51,6 +51,15 @@ pub enum PluginError {
     InvalidMethod(String),
     #[error("Invalid payload: {0}")]
     InvalidPayload(String),
+    #[error("{message}")]
+    HandlerError {
+        message: String,
+        status: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<serde_json::Value>,
+    },
 }
 
 impl From<PluginError> for String {
@@ -61,23 +70,22 @@ impl From<PluginError> for String {
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PluginCallResponse {
-    /// Deprecated: only present when legacy compatibility is enabled
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub success: Option<bool>,
-    /// The return value produced by the plugin
-    pub return_value: String,
-    /// Deprecated: only present when legacy compatibility is enabled
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    /// The plugin result, parsed as JSON when possible; otherwise a string
+    pub result: serde_json::Value,
     /// Optional logs captured during plugin execution
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logs: Option<Vec<LogEntry>>,
-    /// Optional error message from the plugin
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
     /// Optional traces captured during plugin execution
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traces: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema, Clone)]
+pub struct PluginHandlerError {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 
 #[derive(Default)]
@@ -139,12 +147,6 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
         match result {
             Ok(script_result) => {
-                // Determine legacy payload toggle: per-plugin or global env
-                let legacy_enabled = plugin.legacy_payload
-                    || std::env::var("OZ_LEGACY_PLUGIN_PAYLOAD")
-                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                        .unwrap_or(false);
-
                 // Include logs/traces only if enabled via plugin config
                 let logs = if plugin.emit_logs {
                     Some(script_result.logs)
@@ -157,27 +159,40 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                     None
                 };
 
-                // Normalize empty error string to None
-                let error = if script_result.error.trim().is_empty() {
-                    None
+                // Parse return_value string into JSON when possible; otherwise string
+                let result = if script_result.return_value.trim() == "undefined" {
+                    serde_json::Value::Null
                 } else {
-                    Some(script_result.error)
+                    serde_json::from_str::<serde_json::Value>(&script_result.return_value)
+                        .unwrap_or(serde_json::Value::String(script_result.return_value))
                 };
 
                 Ok(PluginCallResponse {
-                    success: if legacy_enabled { Some(true) } else { None },
-                    message: if legacy_enabled {
-                        Some("Plugin called successfully".to_string())
-                    } else {
-                        None
-                    },
-                    return_value: script_result.return_value,
+                    result,
                     logs,
-                    error,
                     traces,
                 })
             }
-            Err(e) => Err(PluginError::PluginExecutionError(e.to_string())),
+            Err(e) => {
+                // Log differently based on error type
+                match &e {
+                    PluginError::HandlerError {
+                        message, status, ..
+                    } => {
+                        // This is an intentional error thrown by the plugin handler
+                        tracing::debug!(
+                            "Plugin handler returned error (status {}): {}",
+                            status,
+                            message
+                        );
+                    }
+                    _ => {
+                        // This is an actual execution/infrastructure failure
+                        tracing::error!("Plugin execution failed: {:?}", e);
+                    }
+                }
+                Err(e)
+            }
         }
     }
 }
@@ -310,13 +325,13 @@ mod tests {
             .await;
         assert!(result.is_ok());
         let result = result.unwrap();
-        // In compact mode, legacy fields are None
-        assert!(result.success.is_none());
-        assert_eq!(result.return_value, "test-result");
+        // result should be the string since it is not JSON
+        assert_eq!(
+            result.result,
+            serde_json::Value::String("test-result".to_string())
+        );
         // emit_logs=true -> logs should be present
         assert!(result.logs.is_some());
-        // error is non-empty string in mock; should be Some
-        assert!(result.error.is_some());
     }
 
     #[tokio::test]
