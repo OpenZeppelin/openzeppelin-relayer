@@ -7,8 +7,8 @@ use super::StellarSignTrait;
 use crate::{
     domain::{
         attach_signatures_to_envelope, parse_transaction_xdr,
-        stellar::convert_v0_to_v1_transaction, SignTransactionResponse,
-        SignXdrTransactionResponseStellar,
+        stellar::{create_signature_payload, create_transaction_signature_payload},
+        SignTransactionResponse, SignXdrTransactionResponseStellar,
     },
     models::{Address, NetworkTransactionData, SignerError},
     services::{
@@ -80,7 +80,10 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> Signer
             crate::models::TransactionInput::Operations(_) => {
                 // Build transaction from operations and sign
                 let transaction = Transaction::try_from(stellar_data).map_err(|e| {
-                    SignerError::SigningError(format!("invalid transaction data: {}", e))
+                    SignerError::SigningError(format!(
+                        "Failed to build Stellar transaction from operations: {}",
+                        e
+                    ))
                 })?;
 
                 self.sign_transaction_directly(&transaction, &network_id)
@@ -91,7 +94,11 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> Signer
                 // Parse the XDR envelope and sign
                 let envelope =
                     TransactionEnvelope::from_xdr_base64(xdr, Limits::none()).map_err(|e| {
-                        SignerError::SigningError(format!("Invalid envelope XDR: {}", e))
+                        SignerError::SigningError(format!(
+                            "Failed to parse Stellar transaction XDR '{}...': {}",
+                            &xdr[..std::cmp::min(50, xdr.len())],
+                            e
+                        ))
                     })?;
 
                 self.sign_envelope(&envelope, &network_id).await?
@@ -114,7 +121,8 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
         use crate::services::GoogleCloudKmsStellarService;
 
         // Create the appropriate signature payload based on envelope type
-        let payload = create_signature_payload(envelope, network_id)?;
+        let payload = create_signature_payload(envelope, network_id)
+            .map_err(|e| SignerError::SigningError(format!("Failed to create payload: {}", e)))?;
 
         // Serialize and hash the payload
         let payload_bytes = payload.to_xdr(Limits::none()).map_err(|e| {
@@ -129,44 +137,12 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
             &hash,
         )
         .await
-        .map_err(|e| SignerError::SigningError(format!("Failed to sign: {}", e)))?;
+        .map_err(|e| {
+            SignerError::SigningError(format!("Google Cloud KMS signing operation failed: {}", e))
+        })?;
 
-        // Ensure signature is 64 bytes for Ed25519
-        if signature_bytes.len() != 64 {
-            return Err(SignerError::SigningError(format!(
-                "Invalid signature length: expected 64 bytes, got {}",
-                signature_bytes.len()
-            )));
-        }
-
-        // Get the public key to derive the hint (last 4 bytes)
-        let stellar_address =
-            GoogleCloudKmsStellarService::get_stellar_address(&self.google_cloud_kms_service)
-                .await
-                .map_err(|e| SignerError::SigningError(format!("Failed to get address: {}", e)))?;
-
-        // Extract hint from the public key
-        let hint = match stellar_address {
-            Address::Stellar(addr) => {
-                // Parse the Stellar address to get the public key
-                use stellar_strkey::ed25519::PublicKey;
-                let pk = PublicKey::from_string(&addr)
-                    .map_err(|e| SignerError::SigningError(format!("Invalid address: {}", e)))?;
-                let pk_bytes = pk.0;
-                let hint_bytes: [u8; 4] = pk_bytes[pk_bytes.len() - 4..].try_into().unwrap();
-                SignatureHint(hint_bytes)
-            }
-            _ => {
-                return Err(SignerError::SigningError(
-                    "Expected Stellar address".to_string(),
-                ))
-            }
-        };
-
-        Ok(DecoratedSignature {
-            hint,
-            signature: Signature(signature_bytes.try_into().unwrap()),
-        })
+        // Create decorated signature with improved error handling
+        self.create_decorated_signature(signature_bytes).await
     }
 
     /// Sign a transaction directly from Transaction struct
@@ -176,17 +152,9 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
         network_id: &Hash,
     ) -> Result<DecoratedSignature, SignerError> {
         use crate::services::GoogleCloudKmsStellarService;
-        use soroban_rs::xdr::{
-            TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
-        };
 
         // Create signature payload for the transaction
-        let payload = TransactionSignaturePayload {
-            network_id: network_id.clone(),
-            tagged_transaction: TransactionSignaturePayloadTaggedTransaction::Tx(
-                transaction.clone(),
-            ),
-        };
+        let payload = create_transaction_signature_payload(transaction, network_id);
 
         // Serialize and hash the payload
         let payload_bytes = payload.to_xdr(Limits::none()).map_err(|e| {
@@ -201,44 +169,93 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
             &hash,
         )
         .await
-        .map_err(|e| SignerError::SigningError(format!("Failed to sign: {}", e)))?;
+        .map_err(|e| {
+            SignerError::SigningError(format!("Google Cloud KMS signing operation failed: {}", e))
+        })?;
 
-        // Ensure signature is 64 bytes for Ed25519
+        // Create decorated signature with improved error handling
+        self.create_decorated_signature(signature_bytes).await
+    }
+
+    /// Helper function to create a DecoratedSignature from signature bytes
+    async fn create_decorated_signature(
+        &self,
+        signature_bytes: Vec<u8>,
+    ) -> Result<DecoratedSignature, SignerError> {
+        // Validate signature length for Ed25519
         if signature_bytes.len() != 64 {
             return Err(SignerError::SigningError(format!(
-                "Invalid signature length: expected 64 bytes, got {}",
+                "Google Cloud KMS returned invalid Ed25519 signature length: expected 64 bytes, got {}",
                 signature_bytes.len()
             )));
         }
 
-        // Get the public key to derive the hint (last 4 bytes)
-        let stellar_address =
-            GoogleCloudKmsStellarService::get_stellar_address(&self.google_cloud_kms_service)
-                .await
-                .map_err(|e| SignerError::SigningError(format!("Failed to get address: {}", e)))?;
+        let hint = self.get_signature_hint().await?;
 
-        // Extract hint from the public key
-        let hint = match stellar_address {
-            Address::Stellar(addr) => {
-                // Parse the Stellar address to get the public key
-                use stellar_strkey::ed25519::PublicKey;
-                let pk = PublicKey::from_string(&addr)
-                    .map_err(|e| SignerError::SigningError(format!("Invalid address: {}", e)))?;
-                let pk_bytes = pk.0;
-                let hint_bytes: [u8; 4] = pk_bytes[pk_bytes.len() - 4..].try_into().unwrap();
-                SignatureHint(hint_bytes)
-            }
-            _ => {
-                return Err(SignerError::SigningError(
-                    "Expected Stellar address".to_string(),
-                ))
-            }
-        };
+        // Convert signature bytes to BytesM<64>
+        let signature_bytes_m =
+            soroban_rs::xdr::BytesM::try_from(signature_bytes).map_err(|_| {
+                SignerError::SigningError(
+                    "Failed to convert signature to BytesM format".to_string(),
+                )
+            })?;
 
         Ok(DecoratedSignature {
             hint,
-            signature: Signature(signature_bytes.try_into().unwrap()),
+            signature: Signature(signature_bytes_m),
         })
+    }
+
+    /// Get the signature hint for this signer (last 4 bytes of the public key)
+    /// TODO: This can be cached on a future iteration
+    async fn get_signature_hint(&self) -> Result<SignatureHint, SignerError> {
+        use crate::services::GoogleCloudKmsStellarService;
+
+        // Get the public key to derive the signature hint
+        let stellar_address =
+            GoogleCloudKmsStellarService::get_stellar_address(&self.google_cloud_kms_service)
+                .await
+                .map_err(|e| {
+                    SignerError::SigningError(format!(
+                        "Failed to retrieve Stellar address from Google Cloud KMS: {}",
+                        e
+                    ))
+                })?;
+
+        // Extract hint from the public key (last 4 bytes of public key)
+        match stellar_address {
+            Address::Stellar(addr) => {
+                // Parse the Stellar address to get the public key
+                use stellar_strkey::ed25519::PublicKey;
+                let pk = PublicKey::from_string(&addr).map_err(|e| {
+                    SignerError::SigningError(format!(
+                        "Failed to parse Stellar address '{}': {}",
+                        addr, e
+                    ))
+                })?;
+                let pk_bytes = pk.0;
+
+                // Safety check: ensure we have enough bytes for the hint
+                if pk_bytes.len() < 4 {
+                    return Err(SignerError::SigningError(format!(
+                        "Public key too short for signature hint: {} bytes",
+                        pk_bytes.len()
+                    )));
+                }
+
+                let hint_bytes: [u8; 4] =
+                    pk_bytes[pk_bytes.len() - 4..].try_into().map_err(|_| {
+                        SignerError::SigningError(
+                            "Failed to create signature hint from public key".to_string(),
+                        )
+                    })?;
+                Ok(SignatureHint(hint_bytes))
+            }
+            _ => Err(SignerError::SigningError(format!(
+                "Expected Stellar address, got: {:?}",
+                stellar_address
+            ))),
+        }
     }
 }
 
@@ -278,35 +295,6 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> StellarSignTr
             signature,
         })
     }
-}
-
-/// Create a signature payload for the given envelope type
-fn create_signature_payload(
-    envelope: &TransactionEnvelope,
-    network_id: &Hash,
-) -> Result<soroban_rs::xdr::TransactionSignaturePayload, SignerError> {
-    use soroban_rs::xdr::{
-        TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
-    };
-
-    let tagged_transaction = match envelope {
-        TransactionEnvelope::TxV0(e) => {
-            // For V0, convert to V1 transaction format for signing
-            let v1_tx = convert_v0_to_v1_transaction(&e.tx);
-            TransactionSignaturePayloadTaggedTransaction::Tx(v1_tx)
-        }
-        TransactionEnvelope::Tx(e) => {
-            TransactionSignaturePayloadTaggedTransaction::Tx(e.tx.clone())
-        }
-        TransactionEnvelope::TxFeeBump(e) => {
-            TransactionSignaturePayloadTaggedTransaction::TxFeeBump(e.tx.clone())
-        }
-    };
-
-    Ok(TransactionSignaturePayload {
-        network_id: network_id.clone(),
-        tagged_transaction,
-    })
 }
 
 #[cfg(test)]
@@ -593,6 +581,198 @@ mod tests {
                 assert!(msg.contains("Invalid configuration"));
             }
             _ => panic!("Expected KeyError"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_with_invalid_signature_length() {
+        use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
+        let test_pk = StrKeyPublicKey([0u8; 32]);
+        let test_address = test_pk.to_string();
+
+        let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
+        stellar_mock
+            .expect_sign_payload_stellar()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(vec![0u8; 32]) // Invalid length: 32 bytes instead of 64
+                })
+            });
+
+        let service_mock = MockGoogleCloudKmsServiceTrait::new();
+        let combined_service = MockCombinedService {
+            stellar_mock,
+            service_mock,
+        };
+
+        let signer = GoogleCloudKmsSigner::new_for_testing(combined_service);
+        let tx_data = StellarTransactionData {
+            source_account: test_address,
+            fee: Some(100),
+            sequence_number: Some(1),
+            transaction_input: TransactionInput::Operations(vec![]),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: Vec::new(),
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+        };
+
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .await;
+
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("invalid Ed25519 signature length"));
+                assert!(msg.contains("expected 64 bytes, got 32"));
+            }
+            _ => panic!("Expected SigningError about signature length"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_transaction_with_kms_service_error() {
+        use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
+        let test_pk = StrKeyPublicKey([0u8; 32]);
+        let test_address = test_pk.to_string();
+
+        let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
+        stellar_mock
+            .expect_sign_payload_stellar()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(GoogleCloudKmsError::ApiError(
+                        "KMS service unavailable".to_string(),
+                    ))
+                })
+            });
+
+        let service_mock = MockGoogleCloudKmsServiceTrait::new();
+        let combined_service = MockCombinedService {
+            stellar_mock,
+            service_mock,
+        };
+
+        let signer = GoogleCloudKmsSigner::new_for_testing(combined_service);
+        let tx_data = StellarTransactionData {
+            source_account: test_address,
+            fee: Some(100),
+            sequence_number: Some(1),
+            transaction_input: TransactionInput::Operations(vec![]),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: Vec::new(),
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+        };
+
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .await;
+
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("Google Cloud KMS signing operation failed"));
+                assert!(msg.contains("KMS service unavailable"));
+            }
+            _ => panic!("Expected SigningError about KMS service"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_xdr_transaction_with_malformed_xdr() {
+        let stellar_mock = MockGoogleCloudKmsStellarService::new();
+        let service_mock = MockGoogleCloudKmsServiceTrait::new();
+        let combined_service = MockCombinedService {
+            stellar_mock,
+            service_mock,
+        };
+
+        let signer = GoogleCloudKmsSigner::new_for_testing(combined_service);
+
+        let result = signer
+            .sign_xdr_transaction("NOT_VALID_BASE64_XDR", "Test Network")
+            .await;
+
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            SignerError::SigningError(msg) => {
+                // The sign_xdr_transaction method uses parse_transaction_xdr which has different error messages
+                assert!(msg.contains("Invalid XDR"));
+            }
+            _ => panic!("Expected SigningError about XDR parsing"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_handling_with_address_retrieval_failure() {
+        use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
+        let test_pk = StrKeyPublicKey([0u8; 32]);
+        let test_address = test_pk.to_string();
+
+        let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
+        // First call for signing succeeds
+        stellar_mock
+            .expect_sign_payload_stellar()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(vec![0u8; 64]) // Valid 64-byte signature
+                })
+            });
+        // Second call for address retrieval fails
+        stellar_mock
+            .expect_get_stellar_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    Err(GoogleCloudKmsError::ConfigError(
+                        "Invalid credentials".to_string(),
+                    ))
+                })
+            });
+
+        let service_mock = MockGoogleCloudKmsServiceTrait::new();
+        let combined_service = MockCombinedService {
+            stellar_mock,
+            service_mock,
+        };
+
+        let signer = GoogleCloudKmsSigner::new_for_testing(combined_service);
+        let tx_data = StellarTransactionData {
+            source_account: test_address,
+            fee: Some(100),
+            sequence_number: Some(1),
+            transaction_input: TransactionInput::Operations(vec![]),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: Vec::new(),
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+        };
+
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .await;
+
+        assert!(result.is_err());
+        match result.err().unwrap() {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("Failed to retrieve Stellar address from Google Cloud KMS"));
+                assert!(msg.contains("Invalid credentials"));
+            }
+            _ => panic!("Expected SigningError about address retrieval"),
         }
     }
 }

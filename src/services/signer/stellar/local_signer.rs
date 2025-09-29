@@ -15,10 +15,9 @@
 use super::StellarSignTrait;
 use crate::{
     domain::{
-        attach_signatures_to_envelope, parse_transaction_xdr,
-        stellar::convert_v0_to_v1_transaction, SignDataRequest, SignDataResponse,
-        SignTransactionResponse, SignTransactionResponseStellar, SignTypedDataRequest,
-        SignXdrTransactionResponseStellar,
+        attach_signatures_to_envelope, parse_transaction_xdr, stellar::create_signature_payload,
+        SignDataRequest, SignDataResponse, SignTransactionResponse, SignTransactionResponseStellar,
+        SignTypedDataRequest, SignXdrTransactionResponseStellar,
     },
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerError, TransactionInput,
@@ -66,32 +65,6 @@ impl LocalSigner {
         })
     }
 
-    /// Create a signature payload for the given envelope type
-    fn create_signature_payload(
-        &self,
-        envelope: &TransactionEnvelope,
-        network_id: &Hash,
-    ) -> Result<TransactionSignaturePayload, SignerError> {
-        let tagged_transaction = match envelope {
-            TransactionEnvelope::TxV0(e) => {
-                // For V0, convert to V1 transaction format for signing
-                let v1_tx = convert_v0_to_v1_transaction(&e.tx);
-                TransactionSignaturePayloadTaggedTransaction::Tx(v1_tx)
-            }
-            TransactionEnvelope::Tx(e) => {
-                TransactionSignaturePayloadTaggedTransaction::Tx(e.tx.clone())
-            }
-            TransactionEnvelope::TxFeeBump(e) => {
-                TransactionSignaturePayloadTaggedTransaction::TxFeeBump(e.tx.clone())
-            }
-        };
-
-        Ok(TransactionSignaturePayload {
-            network_id: network_id.clone(),
-            tagged_transaction,
-        })
-    }
-
     /// Sign a transaction envelope based on its type
     fn sign_envelope(
         &self,
@@ -99,7 +72,8 @@ impl LocalSigner {
         network_id: &Hash,
     ) -> Result<DecoratedSignature, SignerError> {
         // Create the appropriate signature payload based on envelope type
-        let payload = self.create_signature_payload(envelope, network_id)?;
+        let payload = create_signature_payload(envelope, network_id)
+            .map_err(|e| SignerError::SigningError(format!("failed to create payload: {e}")))?;
 
         // Serialize and hash the payload
         let payload_bytes = payload

@@ -87,6 +87,44 @@ pub fn convert_v0_to_v1_transaction(v0_tx: &xdr::TransactionV0) -> xdr::Transact
     }
 }
 
+/// Create a signature payload for the given envelope type
+pub fn create_signature_payload(
+    envelope: &xdr::TransactionEnvelope,
+    network_id: &xdr::Hash,
+) -> Result<xdr::TransactionSignaturePayload, RelayerError> {
+    let tagged_transaction = match envelope {
+        xdr::TransactionEnvelope::TxV0(e) => {
+            // For V0, convert to V1 transaction format for signing
+            let v1_tx = convert_v0_to_v1_transaction(&e.tx);
+            xdr::TransactionSignaturePayloadTaggedTransaction::Tx(v1_tx)
+        }
+        xdr::TransactionEnvelope::Tx(e) => {
+            xdr::TransactionSignaturePayloadTaggedTransaction::Tx(e.tx.clone())
+        }
+        xdr::TransactionEnvelope::TxFeeBump(e) => {
+            xdr::TransactionSignaturePayloadTaggedTransaction::TxFeeBump(e.tx.clone())
+        }
+    };
+
+    Ok(xdr::TransactionSignaturePayload {
+        network_id: network_id.clone(),
+        tagged_transaction,
+    })
+}
+
+/// Create signature payload for a transaction directly (for operations-based signing)
+pub fn create_transaction_signature_payload(
+    transaction: &xdr::Transaction,
+    network_id: &xdr::Hash,
+) -> xdr::TransactionSignaturePayload {
+    xdr::TransactionSignaturePayload {
+        network_id: network_id.clone(),
+        tagged_transaction: xdr::TransactionSignaturePayloadTaggedTransaction::Tx(
+            transaction.clone(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +278,47 @@ mod tests {
             assert!(!is_bad_sequence_error("bad_auth"));
             assert!(!is_bad_sequence_error(""));
         }
+    }
+
+    #[test]
+    fn test_create_signature_payload_functions() {
+        use xdr::{
+            Hash, SequenceNumber, TransactionEnvelope, TransactionV0, TransactionV0Envelope,
+            Uint256,
+        };
+
+        // Test create_transaction_signature_payload
+        let transaction = xdr::Transaction {
+            source_account: xdr::MuxedAccount::Ed25519(Uint256([1u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(123),
+            cond: xdr::Preconditions::None,
+            memo: xdr::Memo::None,
+            operations: vec![].try_into().unwrap(),
+            ext: xdr::TransactionExt::V0,
+        };
+        let network_id = Hash([2u8; 32]);
+
+        let payload = create_transaction_signature_payload(&transaction, &network_id);
+        assert_eq!(payload.network_id, network_id);
+
+        // Test create_signature_payload with V0 envelope
+        let v0_tx = TransactionV0 {
+            source_account_ed25519: Uint256([1u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(123),
+            time_bounds: None,
+            memo: xdr::Memo::None,
+            operations: vec![].try_into().unwrap(),
+            ext: xdr::TransactionV0Ext::V0,
+        };
+        let v0_envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx: v0_tx,
+            signatures: vec![].try_into().unwrap(),
+        });
+
+        let v0_payload = create_signature_payload(&v0_envelope, &network_id).unwrap();
+        assert_eq!(v0_payload.network_id, network_id);
     }
 
     mod convert_v0_to_v1_transaction_tests {
