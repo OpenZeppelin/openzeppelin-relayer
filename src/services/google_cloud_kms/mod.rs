@@ -36,7 +36,7 @@ use mockall::automock;
 use crate::models::{Address, GoogleCloudKmsSignerConfig};
 use crate::utils::{
     self, base64_decode, base64_encode, derive_ethereum_address_from_pem,
-    extract_public_key_from_der,
+    derive_stellar_address_from_pem, extract_public_key_from_der,
 };
 
 #[derive(Debug, thiserror::Error, serde::Serialize)]
@@ -68,6 +68,8 @@ pub trait GoogleCloudKmsServiceTrait: Send + Sync {
     async fn sign_solana(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>>;
     async fn get_evm_address(&self) -> GoogleCloudKmsResult<String>;
     async fn sign_evm(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>>;
+    async fn get_stellar_address(&self) -> GoogleCloudKmsResult<String>;
+    async fn sign_stellar(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>>;
 }
 
 #[async_trait]
@@ -78,6 +80,16 @@ pub trait GoogleCloudKmsEvmService: Send + Sync {
     /// Signs a payload using the EVM signing scheme.
     /// Pre-hashes the message with keccak-256.
     async fn sign_payload_evm(&self, payload: &[u8]) -> GoogleCloudKmsResult<Vec<u8>>;
+}
+
+#[async_trait]
+#[cfg_attr(test, automock)]
+pub trait GoogleCloudKmsStellarService: Send + Sync {
+    /// Returns the Stellar address derived from the configured public key.
+    async fn get_stellar_address(&self) -> GoogleCloudKmsResult<Address>;
+    /// Signs a payload using the Stellar signing scheme.
+    /// Returns the signature in Stellar format.
+    async fn sign_payload_stellar(&self, payload: &[u8]) -> GoogleCloudKmsResult<Vec<u8>>;
 }
 
 #[async_trait]
@@ -113,9 +125,11 @@ impl GoogleCloudKmsService {
             "client_x509_cert_url": config.service_account.client_x509_cert_url,
             "universe_domain": config.service_account.universe_domain,
         });
-        let credentials = GcpCredBuilder::new(credentials_json)
-            .build()
-            .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))?;
+        debug!(credentials_json = ?credentials_json, "kms credentials json");
+        let credentials = GcpCredBuilder::new(credentials_json).build().map_err(|e| {
+            debug!(error = ?e, "kms credentials error");
+            GoogleCloudKmsError::ConfigError(e.to_string())
+        })?;
 
         Ok(Self {
             config: config.clone(),
@@ -136,19 +150,26 @@ impl GoogleCloudKmsService {
 
         #[cfg(not(test))]
         {
-            let cacheable_headers = self
-                .credentials
-                .headers(Extensions::new())
-                .await
-                .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))?;
+            debug!("getting auth headers");
+            let cacheable_headers =
+                self.credentials
+                    .headers(Extensions::new())
+                    .await
+                    .map_err(|e| {
+                        debug!(error = ?e, "kms xx error");
+                        GoogleCloudKmsError::ConfigError(e.to_string())
+                    })?;
+            debug!(cacheable_headers = ?cacheable_headers, "kms auth headers");
 
             match cacheable_headers {
                 google_cloud_auth::credentials::CacheableResource::New { data, .. } => {
+                    debug!(data = ?data, "kms auth headers new");
                     let mut cached = self.cached_headers.write().await;
                     *cached = Some(data.clone());
                     Ok(data)
                 }
                 google_cloud_auth::credentials::CacheableResource::NotModified => {
+                    debug!("kms auth headers not modified");
                     let cached = self.cached_headers.read().await;
                     if let Some(headers) = cached.as_ref() {
                         Ok(headers.clone())
@@ -180,6 +201,7 @@ impl GoogleCloudKmsService {
 
     async fn kms_get(&self, url: &str) -> GoogleCloudKmsResult<Value> {
         let headers = self.get_auth_headers().await?;
+        debug!(headers = ?headers, "kms get headers");
         let resp = self
             .client
             .get(url)
@@ -191,6 +213,7 @@ impl GoogleCloudKmsService {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_else(|_| "".to_string());
 
+        debug!(status = %status, text = %text, "kms get response");
         if !status.is_success() {
             return Err(GoogleCloudKmsError::ApiError(format!(
                 "KMS request failed ({}): {}",
@@ -246,6 +269,7 @@ impl GoogleCloudKmsService {
         debug!(url = %url, "kms public key url");
 
         let body = self.kms_get(&url).await?;
+        debug!(body = ?body, "kms get response");
         let pem_str = body
             .get("pem")
             .and_then(|v| v.as_str())
@@ -398,6 +422,43 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         debug!(signature_b64 = ?signature_b64, "signature b64 decoded");
         Ok(signature_b64)
     }
+
+    async fn get_stellar_address(&self) -> GoogleCloudKmsResult<String> {
+        let pem_str = self.get_pem().await?;
+
+        debug!(pem_str = %pem_str, "pem stellar");
+
+        utils::derive_stellar_address_from_pem(&pem_str).map_err(GoogleCloudKmsError::from)
+    }
+
+    async fn sign_stellar(&self, message: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
+        let base_url = self.get_base_url();
+        let key_path = self.get_key_path();
+
+        let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path);
+        debug!(url = %url, "kms asymmetric sign url for stellar");
+
+        // For Ed25519, we can sign the message directly without pre-hashing
+        let body = serde_json::json!({
+            "name": key_path,
+            "data": base64_encode(message)
+        });
+
+        debug!(body = ?body, "kms asymmetric sign body for stellar");
+
+        let resp = self.kms_post(&url, &body).await?;
+        let signature_b64 = resp
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
+
+        debug!(resp = ?resp, "kms asymmetric sign response for stellar");
+
+        let signature = base64_decode(signature_b64)
+            .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
+
+        Ok(signature)
+    }
 }
 
 #[async_trait]
@@ -411,6 +472,21 @@ impl GoogleCloudKmsEvmService for GoogleCloudKmsService {
 
     async fn sign_payload_evm(&self, payload: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
         self.sign_bytes_evm(payload).await
+    }
+}
+
+#[async_trait]
+impl GoogleCloudKmsStellarService for GoogleCloudKmsService {
+    async fn get_stellar_address(&self) -> GoogleCloudKmsResult<Address> {
+        let pem_str = self.get_pem().await?;
+        let stellar_address = derive_stellar_address_from_pem(&pem_str)
+            .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
+        Ok(Address::Stellar(stellar_address))
+    }
+
+    async fn sign_payload_stellar(&self, payload: &[u8]) -> GoogleCloudKmsResult<Vec<u8>> {
+        // For Stellar/Ed25519, we can sign directly without pre-hashing
+        self.sign_stellar(payload).await
     }
 }
 

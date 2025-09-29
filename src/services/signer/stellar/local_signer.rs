@@ -15,7 +15,8 @@
 use super::StellarSignTrait;
 use crate::{
     domain::{
-        attach_signatures_to_envelope, parse_transaction_xdr, SignDataRequest, SignDataResponse,
+        attach_signatures_to_envelope, parse_transaction_xdr,
+        stellar::convert_v0_to_v1_transaction, SignDataRequest, SignDataResponse,
         SignTransactionResponse, SignTransactionResponseStellar, SignTypedDataRequest,
         SignXdrTransactionResponseStellar,
     },
@@ -74,7 +75,7 @@ impl LocalSigner {
         let tagged_transaction = match envelope {
             TransactionEnvelope::TxV0(e) => {
                 // For V0, convert to V1 transaction format for signing
-                let v1_tx = self.convert_v0_to_v1_transaction(&e.tx);
+                let v1_tx = convert_v0_to_v1_transaction(&e.tx);
                 TransactionSignaturePayloadTaggedTransaction::Tx(v1_tx)
             }
             TransactionEnvelope::Tx(e) => {
@@ -89,24 +90,6 @@ impl LocalSigner {
             network_id: network_id.clone(),
             tagged_transaction,
         })
-    }
-
-    /// Convert a V0 transaction to V1 format
-    fn convert_v0_to_v1_transaction(&self, v0_tx: &soroban_rs::xdr::TransactionV0) -> Transaction {
-        Transaction {
-            source_account: soroban_rs::xdr::MuxedAccount::Ed25519(
-                v0_tx.source_account_ed25519.clone(),
-            ),
-            fee: v0_tx.fee,
-            seq_num: v0_tx.seq_num.clone(),
-            cond: match v0_tx.time_bounds.clone() {
-                Some(tb) => soroban_rs::xdr::Preconditions::Time(tb),
-                None => soroban_rs::xdr::Preconditions::None,
-            },
-            memo: v0_tx.memo.clone(),
-            operations: v0_tx.operations.clone(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
-        }
     }
 
     /// Sign a transaction envelope based on its type
