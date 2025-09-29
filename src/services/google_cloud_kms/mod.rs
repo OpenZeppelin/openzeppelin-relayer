@@ -125,11 +125,9 @@ impl GoogleCloudKmsService {
             "client_x509_cert_url": config.service_account.client_x509_cert_url,
             "universe_domain": config.service_account.universe_domain,
         });
-        debug!(credentials_json = ?credentials_json, "kms credentials json");
-        let credentials = GcpCredBuilder::new(credentials_json).build().map_err(|e| {
-            debug!(error = ?e, "kms credentials error");
-            GoogleCloudKmsError::ConfigError(e.to_string())
-        })?;
+        let credentials = GcpCredBuilder::new(credentials_json)
+            .build()
+            .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))?;
 
         Ok(Self {
             config: config.clone(),
@@ -150,26 +148,19 @@ impl GoogleCloudKmsService {
 
         #[cfg(not(test))]
         {
-            debug!("getting auth headers");
-            let cacheable_headers =
-                self.credentials
-                    .headers(Extensions::new())
-                    .await
-                    .map_err(|e| {
-                        debug!(error = ?e, "kms xx error");
-                        GoogleCloudKmsError::ConfigError(e.to_string())
-                    })?;
-            debug!(cacheable_headers = ?cacheable_headers, "kms auth headers");
+            let cacheable_headers = self
+                .credentials
+                .headers(Extensions::new())
+                .await
+                .map_err(|e| GoogleCloudKmsError::ConfigError(e.to_string()))?;
 
             match cacheable_headers {
                 google_cloud_auth::credentials::CacheableResource::New { data, .. } => {
-                    debug!(data = ?data, "kms auth headers new");
                     let mut cached = self.cached_headers.write().await;
                     *cached = Some(data.clone());
                     Ok(data)
                 }
                 google_cloud_auth::credentials::CacheableResource::NotModified => {
-                    debug!("kms auth headers not modified");
                     let cached = self.cached_headers.read().await;
                     if let Some(headers) = cached.as_ref() {
                         Ok(headers.clone())
@@ -201,7 +192,6 @@ impl GoogleCloudKmsService {
 
     async fn kms_get(&self, url: &str) -> GoogleCloudKmsResult<Value> {
         let headers = self.get_auth_headers().await?;
-        debug!(headers = ?headers, "kms get headers");
         let resp = self
             .client
             .get(url)
@@ -213,7 +203,6 @@ impl GoogleCloudKmsService {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_else(|_| "".to_string());
 
-        debug!(status = %status, text = %text, "kms get response");
         if !status.is_success() {
             return Err(GoogleCloudKmsError::ApiError(format!(
                 "KMS request failed ({}): {}",
@@ -269,7 +258,6 @@ impl GoogleCloudKmsService {
         debug!(url = %url, "kms public key url");
 
         let body = self.kms_get(&url).await?;
-        debug!(body = ?body, "kms get response");
         let pem_str = body
             .get("pem")
             .and_then(|v| v.as_str())
@@ -369,22 +357,17 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let key_path = self.get_key_path();
 
         let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
-        debug!(url = %url, "kms asymmetric sign url");
 
         let body = serde_json::json!({
             "name": key_path,
             "data": base64_encode(message)
         });
 
-        debug!(body = ?body, "kms asymmetric sign body");
-
         let resp = self.kms_post(&url, &body).await?;
         let signature_b64 = resp
             .get("signature")
             .and_then(|v| v.as_str())
             .ok_or_else(|| GoogleCloudKmsError::MissingField("signature".to_string()))?;
-
-        debug!(resp = ?resp, "kms asymmetric sign response");
 
         let signature = base64_decode(signature_b64)
             .map_err(|e| GoogleCloudKmsError::ParseError(e.to_string()))?;
@@ -396,7 +379,6 @@ impl GoogleCloudKmsServiceTrait for GoogleCloudKmsService {
         let base_url = self.get_base_url();
         let key_path = self.get_key_path();
         let url = format!("{}/v1/{}:asymmetricSign", base_url, key_path,);
-        debug!(url = %url, "kms asymmetric sign url");
 
         let hash = Sha256::digest(message);
         let digest = base64_encode(&hash);
