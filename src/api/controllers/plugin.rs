@@ -14,7 +14,8 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::plugins::{
-        PluginError, PluginHandlerError, PluginRunner, PluginService, PluginServiceTrait,
+        split_handler_error, HandlerErrorParts, PluginHandlerError, PluginRunner, PluginService,
+        PluginServiceTrait,
     },
 };
 use actix_web::{http::StatusCode, HttpResponse};
@@ -62,31 +63,50 @@ where
 
     match result {
         Ok(plugin_result) => Ok(HttpResponse::Ok().json(ApiResponse::success(plugin_result))),
-        Err(PluginError::HandlerError {
-            ref message,
-            status,
-            ref code,
-            ref details,
-        }) => {
-            // This is an intentional error thrown by the plugin handler - log at debug level
-            tracing::debug!("Plugin handler error (status {}): {}", status, message);
-            let http_status =
-                StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            // Return structured error payload (status lives in HTTP status code only)
-            let payload = PluginHandlerError {
-                code: code.clone(),
-                details: details.clone(),
-            };
-            Ok(HttpResponse::build(http_status).json(ApiResponse::new(
-                Some(payload),
-                Some(message.clone()),
-                None,
-            )))
-        }
-        Err(e) => {
-            tracing::error!("Plugin error: {:?}", e);
-            Ok(HttpResponse::InternalServerError().json(ApiResponse::<String>::error(e)))
-        }
+        Err(error) => match split_handler_error(error) {
+            Ok(parts) => {
+                let status = parts.status;
+                let http_status =
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let derived_message = parts.derived_message();
+                let HandlerErrorParts {
+                    code,
+                    details,
+                    logs,
+                    traces,
+                    ..
+                } = parts;
+                let log_count = logs.as_ref().map(|logs| logs.len()).unwrap_or(0);
+                let trace_count = traces.as_ref().map(|traces| traces.len()).unwrap_or(0);
+                let payload = PluginHandlerError {
+                    code,
+                    details,
+                    logs,
+                    traces,
+                };
+
+                // This is an intentional error thrown by the plugin handler - log at debug level
+                tracing::debug!(
+                    status,
+                    message = %derived_message,
+                    code = ?payload.code.as_ref(),
+                    details = ?payload.details.as_ref(),
+                    log_count,
+                    trace_count,
+                    "Plugin handler error"
+                );
+
+                Ok(HttpResponse::build(http_status).json(ApiResponse::new(
+                    Some(payload),
+                    Some(derived_message),
+                    None,
+                )))
+            }
+            Err(e) => {
+                tracing::error!("Plugin error: {:?}", e);
+                Ok(HttpResponse::InternalServerError().json(ApiResponse::<String>::error(e)))
+            }
+        },
     }
 }
 

@@ -59,6 +59,10 @@ pub enum PluginError {
         code: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        logs: Option<Vec<LogEntry>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        traces: Option<Vec<serde_json::Value>>,
     },
 }
 
@@ -80,12 +84,105 @@ pub struct PluginCallResponse {
     pub traces: Option<Vec<serde_json::Value>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema, Clone)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PluginHandlerError {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs: Option<Vec<LogEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traces: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Debug)]
+pub struct HandlerErrorParts {
+    pub message: String,
+    pub status: u16,
+    pub code: Option<String>,
+    pub details: Option<serde_json::Value>,
+    pub logs: Option<Vec<LogEntry>>,
+    pub traces: Option<Vec<serde_json::Value>>,
+}
+
+impl HandlerErrorParts {
+    pub fn derived_message(&self) -> String {
+        if !self.message.trim().is_empty() {
+            return self.message.clone();
+        }
+
+        if let Some(logs) = &self.logs {
+            if let Some(entry) = logs
+                .iter()
+                .rev()
+                .find(|entry| matches!(entry.level, LogLevel::Error | LogLevel::Warn))
+            {
+                return entry.message.clone();
+            }
+
+            if let Some(entry) = logs.last() {
+                return entry.message.clone();
+            }
+        }
+
+        "Plugin execution failed".to_string()
+    }
+
+    pub fn with_visibility(mut self, emit_logs: bool, emit_traces: bool) -> Self {
+        if !emit_logs {
+            self.logs = None;
+        }
+
+        if !emit_traces {
+            self.traces = None;
+        }
+
+        self
+    }
+}
+
+pub fn split_handler_error(error: PluginError) -> Result<HandlerErrorParts, PluginError> {
+    match error {
+        PluginError::HandlerError {
+            message,
+            status,
+            code,
+            details,
+            logs,
+            traces,
+        } => Ok(HandlerErrorParts {
+            message,
+            status,
+            code,
+            details,
+            logs,
+            traces,
+        }),
+        other => Err(other),
+    }
+}
+
+impl From<HandlerErrorParts> for PluginError {
+    fn from(parts: HandlerErrorParts) -> Self {
+        let HandlerErrorParts {
+            message,
+            status,
+            code,
+            details,
+            logs,
+            traces,
+        } = parts;
+
+        PluginError::HandlerError {
+            message,
+            status,
+            code,
+            details,
+            logs,
+            traces,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -174,24 +271,34 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 })
             }
             Err(e) => {
-                // Log differently based on error type
-                match &e {
-                    PluginError::HandlerError {
-                        message, status, ..
-                    } => {
-                        // This is an intentional error thrown by the plugin handler
+                match split_handler_error(e) {
+                    Ok(parts) => {
+                        // Log full context before applying visibility filters
+                        let log_count = parts.logs.as_ref().map(|logs| logs.len()).unwrap_or(0);
+                        let trace_count = parts
+                            .traces
+                            .as_ref()
+                            .map(|traces| traces.len())
+                            .unwrap_or(0);
                         tracing::debug!(
-                            "Plugin handler returned error (status {}): {}",
-                            status,
-                            message
+                            status = parts.status,
+                            message = %parts.message,
+                            code = ?parts.code,
+                            details = ?parts.details,
+                            log_count,
+                            trace_count,
+                            "Plugin handler returned error"
                         );
+
+                        let filtered = parts.with_visibility(plugin.emit_logs, plugin.emit_traces);
+                        Err(filtered.into())
                     }
-                    _ => {
+                    Err(other) => {
                         // This is an actual execution/infrastructure failure
-                        tracing::error!("Plugin execution failed: {:?}", e);
+                        tracing::error!("Plugin execution failed: {:?}", other);
+                        Err(other)
                     }
                 }
-                Err(e)
             }
         }
     }

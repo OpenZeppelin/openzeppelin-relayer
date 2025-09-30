@@ -8,7 +8,9 @@
 //!
 use std::{sync::Arc, time::Duration};
 
-use crate::services::plugins::{RelayerApi, ScriptExecutor, ScriptResult, SocketService};
+use crate::services::plugins::{
+    split_handler_error, RelayerApi, ScriptExecutor, ScriptResult, SocketService,
+};
 use crate::{
     jobs::JobProducerTrait,
     models::{
@@ -98,7 +100,7 @@ impl PluginRunnerTrait for PluginRunner {
             socket_service.listen(shutdown_rx, state, relayer_api).await
         });
 
-        let mut script_result = match timeout(
+        let exec_outcome = match timeout(
             timeout_duration,
             ScriptExecutor::execute_typescript(
                 plugin_id,
@@ -110,7 +112,7 @@ impl PluginRunnerTrait for PluginRunner {
         )
         .await
         {
-            Ok(result) => result?,
+            Ok(result) => result,
             Err(_) => {
                 // ensures the socket gets closed.
                 let _ = shutdown_tx.send(());
@@ -124,16 +126,28 @@ impl PluginRunnerTrait for PluginRunner {
             .await
             .map_err(|e| PluginError::SocketError(e.to_string()))?;
 
-        match server_handle {
-            Ok(traces) => {
+        let traces = match server_handle {
+            Ok(traces) => traces,
+            Err(e) => return Err(PluginError::SocketError(e.to_string())),
+        };
+
+        match exec_outcome {
+            Ok(mut script_result) => {
+                // attach traces on success
                 script_result.trace = traces;
+                Ok(script_result)
             }
-            Err(e) => {
-                return Err(PluginError::SocketError(e.to_string()));
+            Err(err) => {
+                let err = match split_handler_error(err) {
+                    Ok(mut parts) => {
+                        parts.traces = Some(traces);
+                        parts.into()
+                    }
+                    Err(other) => other,
+                };
+                Err(err)
             }
         }
-
-        Ok(script_result)
     }
 }
 

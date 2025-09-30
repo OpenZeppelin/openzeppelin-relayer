@@ -108,6 +108,8 @@ impl ScriptExecutor {
                         status,
                         code,
                         details,
+                        logs: Some(logs),
+                        traces: None,
                     });
                 }
             }
@@ -117,6 +119,8 @@ impl ScriptExecutor {
                 status: 500,
                 code: None,
                 details: None,
+                logs: Some(logs),
+                traces: None,
             });
         }
 
@@ -326,6 +330,8 @@ mod tests {
                 status,
                 code,
                 details,
+                logs: _,
+                traces: _,
             }) => {
                 assert_eq!(message, "Validation failed");
                 assert_eq!(status, 422);

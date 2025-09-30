@@ -31,6 +31,7 @@ import {
   ApiResponseRelayerResponseData,
   ApiResponseRelayerStatusData,
   NetworkTransactionRequest,
+  pluginError,
   SignTransactionRequest,
   SignTransactionResponse,
   TransactionResponse,
@@ -425,32 +426,39 @@ export class DefaultPluginAPI implements PluginAPI {
     options?: TransactionWaitOptions
   ): Promise<TransactionResponse> {
     const waitOptions: TransactionWaitOptions = {
-      interval: options?.interval || 5000,
-      timeout: options?.timeout || 60000,
+      interval: options?.interval ?? 5000,
+      timeout: options?.timeout ?? 60000,
     };
 
     const relayer = this.useRelayer(transaction.relayer_id);
-    let transactionResult: TransactionResponse = await relayer.getTransaction({ transactionId: transaction.id });
 
-    // timeout to avoid infinite waiting
-    const timeout = setTimeout(() => {
-      throw new Error(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`);
-    }, waitOptions.timeout);
+    const poll = async (): Promise<TransactionResponse> => {
+      let tx: TransactionResponse = await relayer.getTransaction({ transactionId: transaction.id });
+      while (
+        tx.status !== TransactionStatus.MINED &&
+        tx.status !== TransactionStatus.CONFIRMED &&
+        tx.status !== TransactionStatus.CANCELED &&
+        tx.status !== TransactionStatus.EXPIRED &&
+        tx.status !== TransactionStatus.FAILED
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, waitOptions.interval));
+        tx = await relayer.getTransaction({ transactionId: transaction.id });
+      }
+      return tx;
+    };
 
-    // poll for transaction status until mined/confirmed, failed, cancelled or expired.
-    while (
-      transactionResult.status !== TransactionStatus.MINED &&
-      transactionResult.status !== TransactionStatus.CONFIRMED &&
-      transactionResult.status !== TransactionStatus.CANCELED &&
-      transactionResult.status !== TransactionStatus.EXPIRED &&
-      transactionResult.status !== TransactionStatus.FAILED
-    ) {
-      transactionResult = await relayer.getTransaction({ transactionId: transaction.id });
-      await new Promise((resolve) => setTimeout(resolve, waitOptions.interval));
-    }
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(pluginError(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`, { status: 504 }));
+      }, waitOptions.timeout);
+    });
 
-    clearTimeout(timeout);
-    return transactionResult;
+    return Promise.race([poll(), timeoutPromise]).finally(() => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    });
   }
 
   async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
