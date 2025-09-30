@@ -6,7 +6,7 @@
 //! - Transaction status checks
 //! - Notifications
 //! - Solana swap requests
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use apalis_redis::{Config, ConnectionManager, RedisStorage};
 use color_eyre::{eyre, Result};
@@ -58,19 +58,32 @@ impl Queue {
         };
 
         let shared = Arc::new(conn);
+        // use REDIS_KEY_PREFIX only if set, otherwise do not use it
+        let redis_key_prefix = env::var("REDIS_KEY_PREFIX")
+            .map_or_else(|_| "".to_string(), |value| format!("{value}:queue:"));
         Ok(Self {
-            transaction_request_queue: Self::storage("transaction_request_queue", shared.clone())
-                .await?,
-            transaction_submission_queue: Self::storage(
-                "transaction_submission_queue",
+            transaction_request_queue: Self::storage(
+                &format!("{}transaction_request_queue", redis_key_prefix),
                 shared.clone(),
             )
             .await?,
-            transaction_status_queue: Self::storage("transaction_status_queue", shared.clone())
-                .await?,
-            notification_queue: Self::storage("notification_queue", shared.clone()).await?,
+            transaction_submission_queue: Self::storage(
+                &format!("{}transaction_submission_queue", redis_key_prefix),
+                shared.clone(),
+            )
+            .await?,
+            transaction_status_queue: Self::storage(
+                &format!("{}transaction_status_queue", redis_key_prefix),
+                shared.clone(),
+            )
+            .await?,
+            notification_queue: Self::storage(
+                &format!("{}notification_queue", redis_key_prefix),
+                shared.clone(),
+            )
+            .await?,
             solana_token_swap_request_queue: Self::storage(
-                "solana_token_swap_request_queue",
+                &format!("{}solana_token_swap_request_queue", redis_key_prefix),
                 shared.clone(),
             )
             .await?,
