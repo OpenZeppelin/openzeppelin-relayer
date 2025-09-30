@@ -1,13 +1,13 @@
 //! Plugins service module for handling plugins execution and interaction with relayer
 
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use crate::observability::request_id::get_request_id;
 use crate::{
     jobs::JobProducerTrait,
     models::{
-        AppState, NetworkRepoModel, NotificationRepoModel, PluginCallRequest, PluginModel,
-        RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
+        AppState, NetworkRepoModel, NotificationRepoModel, PluginCallRequest, PluginMetadata,
+        PluginModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState, TransactionRepoModel,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -51,19 +51,22 @@ pub enum PluginError {
     InvalidMethod(String),
     #[error("Invalid payload: {0}")]
     InvalidPayload(String),
-    #[error("{message}")]
-    HandlerError {
-        message: String,
-        status: u16,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        logs: Option<Vec<LogEntry>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        traces: Option<Vec<serde_json::Value>>,
-    },
+    #[error("{0}")]
+    HandlerError(PluginHandlerPayload),
+}
+
+impl PluginError {
+    /// Enriches the error with traces if it's a HandlerError variant.
+    /// For other variants, returns the error unchanged.
+    pub fn with_traces(self, traces: Vec<serde_json::Value>) -> Self {
+        match self {
+            PluginError::HandlerError(mut payload) => {
+                payload.append_traces(traces);
+                PluginError::HandlerError(payload)
+            }
+            other => other,
+        }
+    }
 }
 
 impl From<PluginError> for String {
@@ -76,12 +79,9 @@ impl From<PluginError> for String {
 pub struct PluginCallResponse {
     /// The plugin result, parsed as JSON when possible; otherwise a string
     pub result: serde_json::Value,
-    /// Optional logs captured during plugin execution
+    /// Optional metadata captured during plugin execution (logs/traces)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub logs: Option<Vec<LogEntry>>,
-    /// Optional traces captured during plugin execution
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub traces: Option<Vec<serde_json::Value>>,
+    pub metadata: Option<PluginMetadata>,
 }
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -90,99 +90,100 @@ pub struct PluginHandlerError {
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logs: Option<Vec<LogEntry>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub traces: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug)]
-pub struct HandlerErrorParts {
-    pub message: String,
+pub struct PluginHandlerResponse {
     pub status: u16,
+    pub message: String,
+    pub error: PluginHandlerError,
+    pub metadata: Option<PluginMetadata>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PluginHandlerPayload {
+    pub status: u16,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logs: Option<Vec<LogEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub traces: Option<Vec<serde_json::Value>>,
 }
 
-impl HandlerErrorParts {
-    pub fn derived_message(&self) -> String {
-        if !self.message.trim().is_empty() {
-            return self.message.clone();
+impl PluginHandlerPayload {
+    fn append_traces(&mut self, traces: Vec<serde_json::Value>) {
+        match &mut self.traces {
+            Some(existing) => existing.extend(traces),
+            None => self.traces = Some(traces),
         }
-
-        if let Some(logs) = &self.logs {
-            if let Some(entry) = logs
-                .iter()
-                .rev()
-                .find(|entry| matches!(entry.level, LogLevel::Error | LogLevel::Warn))
-            {
-                return entry.message.clone();
-            }
-
-            if let Some(entry) = logs.last() {
-                return entry.message.clone();
-            }
-        }
-
-        "Plugin execution failed".to_string()
     }
 
-    pub fn with_visibility(mut self, emit_logs: bool, emit_traces: bool) -> Self {
-        if !emit_logs {
-            self.logs = None;
-        }
+    fn into_response(self, emit_logs: bool, emit_traces: bool) -> PluginHandlerResponse {
+        let logs = if emit_logs { self.logs } else { None };
+        let traces = if emit_traces { self.traces } else { None };
+        let message = derive_handler_message(&self.message, logs.as_deref());
+        let metadata = build_metadata(logs, traces);
 
-        if !emit_traces {
-            self.traces = None;
+        PluginHandlerResponse {
+            status: self.status,
+            message,
+            error: PluginHandlerError {
+                code: self.code,
+                details: self.details,
+            },
+            metadata,
         }
-
-        self
     }
 }
 
-pub fn split_handler_error(error: PluginError) -> Result<HandlerErrorParts, PluginError> {
-    match error {
-        PluginError::HandlerError {
-            message,
-            status,
-            code,
-            details,
-            logs,
-            traces,
-        } => Ok(HandlerErrorParts {
-            message,
-            status,
-            code,
-            details,
-            logs,
-            traces,
-        }),
-        other => Err(other),
+impl fmt::Display for PluginHandlerPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
     }
 }
 
-impl From<HandlerErrorParts> for PluginError {
-    fn from(parts: HandlerErrorParts) -> Self {
-        let HandlerErrorParts {
-            message,
-            status,
-            code,
-            details,
-            logs,
-            traces,
-        } = parts;
+fn derive_handler_message(message: &str, logs: Option<&[LogEntry]>) -> String {
+    if !message.trim().is_empty() {
+        return message.to_string();
+    }
 
-        PluginError::HandlerError {
-            message,
-            status,
-            code,
-            details,
-            logs,
-            traces,
+    if let Some(logs) = logs {
+        if let Some(entry) = logs
+            .iter()
+            .rev()
+            .find(|entry| matches!(entry.level, LogLevel::Error | LogLevel::Warn))
+        {
+            return entry.message.clone();
+        }
+
+        if let Some(entry) = logs.last() {
+            return entry.message.clone();
         }
     }
+
+    "Plugin execution failed".to_string()
+}
+
+fn build_metadata(
+    logs: Option<Vec<LogEntry>>,
+    traces: Option<Vec<serde_json::Value>>,
+) -> Option<PluginMetadata> {
+    if logs.is_some() || traces.is_some() {
+        Some(PluginMetadata { logs, traces })
+    } else {
+        None
+    }
+}
+
+#[derive(Debug)]
+pub enum PluginCallResult {
+    Success(PluginCallResponse),
+    Handler(PluginHandlerResponse),
+    Fatal(PluginError),
 }
 
 #[derive(Default)]
@@ -209,7 +210,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
-    ) -> Result<PluginCallResponse, PluginError>
+    ) -> PluginCallResult
     where
         J: JobProducerTrait + Send + Sync + 'static,
         RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -255,6 +256,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 } else {
                     None
                 };
+                let metadata = build_metadata(logs, traces);
 
                 // Parse return_value string into JSON when possible; otherwise string
                 let result = if script_result.return_value.trim() == "undefined" {
@@ -264,42 +266,40 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                         .unwrap_or(serde_json::Value::String(script_result.return_value))
                 };
 
-                Ok(PluginCallResponse {
-                    result,
-                    logs,
-                    traces,
-                })
+                PluginCallResult::Success(PluginCallResponse { result, metadata })
             }
-            Err(e) => {
-                match split_handler_error(e) {
-                    Ok(parts) => {
-                        // Log full context before applying visibility filters
-                        let log_count = parts.logs.as_ref().map(|logs| logs.len()).unwrap_or(0);
-                        let trace_count = parts
-                            .traces
-                            .as_ref()
-                            .map(|traces| traces.len())
-                            .unwrap_or(0);
-                        tracing::debug!(
-                            status = parts.status,
-                            message = %parts.message,
-                            code = ?parts.code,
-                            details = ?parts.details,
-                            log_count,
-                            trace_count,
-                            "Plugin handler returned error"
-                        );
+            Err(e) => match e {
+                PluginError::HandlerError(payload) => {
+                    let failure = payload.into_response(plugin.emit_logs, plugin.emit_traces);
+                    let has_logs = failure
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.logs.as_ref())
+                        .is_some();
+                    let has_traces = failure
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.traces.as_ref())
+                        .is_some();
 
-                        let filtered = parts.with_visibility(plugin.emit_logs, plugin.emit_traces);
-                        Err(filtered.into())
-                    }
-                    Err(other) => {
-                        // This is an actual execution/infrastructure failure
-                        tracing::error!("Plugin execution failed: {:?}", other);
-                        Err(other)
-                    }
+                    tracing::debug!(
+                        status = failure.status,
+                        message = %failure.message,
+                        code = ?failure.error.code.as_ref(),
+                        details = ?failure.error.details.as_ref(),
+                        has_logs,
+                        has_traces,
+                        "Plugin handler returned error"
+                    );
+
+                    PluginCallResult::Handler(failure)
                 }
-            }
+                other => {
+                    // This is an actual execution/infrastructure failure
+                    tracing::error!("Plugin execution failed: {:?}", other);
+                    PluginCallResult::Fatal(other)
+                }
+            },
         }
     }
 }
@@ -324,7 +324,7 @@ where
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>>,
-    ) -> Result<PluginCallResponse, PluginError>;
+    ) -> PluginCallResult;
 }
 
 #[async_trait]
@@ -350,7 +350,7 @@ where
         plugin: PluginModel,
         plugin_call_request: PluginCallRequest,
         state: Arc<web::ThinData<AppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>>,
-    ) -> Result<PluginCallResponse, PluginError> {
+    ) -> PluginCallResult {
         self.call_plugin(plugin, plugin_call_request, state).await
     }
 }
@@ -399,7 +399,6 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: true,
             emit_traces: false,
-            legacy_payload: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
@@ -421,7 +420,7 @@ mod tests {
             });
 
         let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
-        let result = plugin_service
+        let outcome = plugin_service
             .call_plugin(
                 plugin,
                 PluginCallRequest {
@@ -430,15 +429,20 @@ mod tests {
                 Arc::new(web::ThinData(app_state)),
             )
             .await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        // result should be the string since it is not JSON
-        assert_eq!(
-            result.result,
-            serde_json::Value::String("test-result".to_string())
-        );
-        // emit_logs=true -> logs should be present
-        assert!(result.logs.is_some());
+        match outcome {
+            PluginCallResult::Success(result) => {
+                // result should be the string since it is not JSON
+                assert_eq!(
+                    result.result,
+                    serde_json::Value::String("test-result".to_string())
+                );
+                // emit_logs=true -> logs should be present in metadata
+                assert!(result.metadata.and_then(|meta| meta.logs).is_some());
+            }
+            PluginCallResult::Handler(_) | PluginCallResult::Fatal(_) => {
+                panic!("expected success outcome")
+            }
+        }
     }
 
     #[tokio::test]

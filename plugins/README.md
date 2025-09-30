@@ -105,23 +105,36 @@ curl -X POST "http://localhost:8080/api/v1/plugins/example/call" \
   }'
 ```
 
-Responses use the API envelope `{ success, data, error }`.
+Responses use the API envelope `{ success, data, error, metadata }`.
+
+> **Visibility controls**
+>
+> Runtime logs and traces are only returned when the plugin entry in the relayer config enables `emit_logs`
+> and/or `emit_traces`. The Rust service trims these fields before responding so callers never see data
+> that a plugin has opted out of exposing.
+
+> **Handler errors**
+>
+> Throwing `pluginError(...)` (or any `Error`) is normalized into a stable HTTP payload. The relayer derives a
+> client-facing message, preserves `code`/`details`, and attaches metadata subject to the same visibility
+> rules above.
 
 - Success (HTTP 200):
-  - `data.result`: your plugin return value
-  - `data.logs?` and `data.traces?`: included if enabled for the plugin
+  - `data`: your plugin return value
+  - `metadata.logs?` and `metadata.traces?`: included if enabled for the plugin
   - `error: null`
 - Plugin error (HTTP 4xx):
   - `error`: human-readable message
   - `data`: `{ code?: string, details?: any }`
+  - `metadata.logs?` and `metadata.traces?`: included when available
 
 Example success:
 
 ```json
 {
   "success": true,
-  "data": {
-    "result": "done!",
+  "data": { "result": "done!" },
+  "metadata": {
     "logs": [
       {
         "level": "info",
@@ -153,6 +166,14 @@ Example error (HTTP 422):
 {
   "success": false,
   "data": { "code": "VALIDATION_FAILED", "details": { "field": "email" } },
+  "metadata": {
+    "logs": [
+      {
+        "level": "error",
+        "message": "Validation failed for field: email"
+      }
+    ]
+  },
   "error": "Validation failed"
 }
 ```

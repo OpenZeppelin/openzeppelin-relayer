@@ -1071,7 +1071,6 @@ mod tests {
                 timeout: None,
                 emit_logs: false,
                 emit_traces: false,
-                legacy_payload: false,
             },
             PluginFileConfig {
                 id: "test-plugin-2".to_string(),
@@ -1079,7 +1078,6 @@ mod tests {
                 timeout: Some(12),
                 emit_logs: false,
                 emit_traces: false,
-                legacy_payload: false,
             },
         ];
 
@@ -1192,7 +1190,6 @@ mod tests {
             timeout: None,
             emit_logs: false,
             emit_traces: false,
-            legacy_payload: false,
         }];
 
         // Create config

@@ -14,7 +14,7 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::plugins::{
-        split_handler_error, HandlerErrorParts, PluginHandlerError, PluginRunner, PluginService,
+        PluginCallResponse, PluginCallResult, PluginHandlerResponse, PluginRunner, PluginService,
         PluginServiceTrait,
     },
 };
@@ -62,52 +62,53 @@ where
         .await;
 
     match result {
-        Ok(plugin_result) => Ok(HttpResponse::Ok().json(ApiResponse::success(plugin_result))),
-        Err(error) => match split_handler_error(error) {
-            Ok(parts) => {
-                let status = parts.status;
-                let http_status =
-                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                let derived_message = parts.derived_message();
-                let HandlerErrorParts {
-                    code,
-                    details,
-                    logs,
-                    traces,
-                    ..
-                } = parts;
-                let log_count = logs.as_ref().map(|logs| logs.len()).unwrap_or(0);
-                let trace_count = traces.as_ref().map(|traces| traces.len()).unwrap_or(0);
-                let payload = PluginHandlerError {
-                    code,
-                    details,
-                    logs,
-                    traces,
-                };
+        PluginCallResult::Success(plugin_result) => {
+            let PluginCallResponse { result, metadata } = plugin_result;
 
-                // This is an intentional error thrown by the plugin handler - log at debug level
-                tracing::debug!(
-                    status,
-                    message = %derived_message,
-                    code = ?payload.code.as_ref(),
-                    details = ?payload.details.as_ref(),
-                    log_count,
-                    trace_count,
-                    "Plugin handler error"
-                );
+            let mut response = ApiResponse::success(result);
+            response.metadata = metadata;
+            Ok(HttpResponse::Ok().json(response))
+        }
+        PluginCallResult::Handler(handler) => {
+            let PluginHandlerResponse {
+                status,
+                message,
+                error,
+                metadata,
+            } = handler;
 
-                Ok(HttpResponse::build(http_status).json(ApiResponse::new(
-                    Some(payload),
-                    Some(derived_message),
-                    None,
-                )))
-            }
-            Err(e) => {
-                tracing::error!("Plugin error: {:?}", e);
-                Ok(HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error("Internal server error")))
-            }
-        },
+            let log_count = metadata
+                .as_ref()
+                .and_then(|meta| meta.logs.as_ref().map(|logs| logs.len()))
+                .unwrap_or(0);
+            let trace_count = metadata
+                .as_ref()
+                .and_then(|meta| meta.traces.as_ref().map(|traces| traces.len()))
+                .unwrap_or(0);
+
+            let http_status =
+                StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
+            // This is an intentional error thrown by the plugin handler - log at debug level
+            tracing::debug!(
+                status,
+                message = %message,
+                code = ?error.code.as_ref(),
+                details = ?error.details.as_ref(),
+                log_count,
+                trace_count,
+                "Plugin handler error"
+            );
+
+            let mut response = ApiResponse::new(Some(error), Some(message.clone()), None);
+            response.metadata = metadata;
+            Ok(HttpResponse::build(http_status).json(response))
+        }
+        PluginCallResult::Fatal(error) => {
+            tracing::error!("Plugin error: {:?}", error);
+            Ok(HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("Internal server error")))
+        }
     }
 }
 
@@ -172,7 +173,6 @@ mod tests {
             timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
             emit_logs: false,
             emit_traces: false,
-            legacy_payload: false,
         };
         let app_state =
             create_mock_app_state(None, None, None, None, Some(vec![plugin]), None).await;

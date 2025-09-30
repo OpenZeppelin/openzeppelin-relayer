@@ -431,10 +431,12 @@ export class DefaultPluginAPI implements PluginAPI {
     };
 
     const relayer = this.useRelayer(transaction.relayer_id);
+    let shouldContinue = true;
 
     const poll = async (): Promise<TransactionResponse> => {
       let tx: TransactionResponse = await relayer.getTransaction({ transactionId: transaction.id });
       while (
+        shouldContinue &&
         tx.status !== TransactionStatus.MINED &&
         tx.status !== TransactionStatus.CONFIRMED &&
         tx.status !== TransactionStatus.CANCELED &&
@@ -442,6 +444,7 @@ export class DefaultPluginAPI implements PluginAPI {
         tx.status !== TransactionStatus.FAILED
       ) {
         await new Promise((resolve) => setTimeout(resolve, waitOptions.interval));
+        if (!shouldContinue) break;
         tx = await relayer.getTransaction({ transactionId: transaction.id });
       }
       return tx;
@@ -450,11 +453,13 @@ export class DefaultPluginAPI implements PluginAPI {
     let timeoutId: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
-        reject(pluginError(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`, { status: 504 }));
+        shouldContinue = false;
+        reject(pluginError(`Transaction ${transaction.id} timed out after ${waitOptions.timeout}ms`, 504));
       }, waitOptions.timeout);
     });
 
     return Promise.race([poll(), timeoutPromise]).finally(() => {
+      shouldContinue = false;
       if (timeoutId) {
         clearTimeout(timeoutId);
       }

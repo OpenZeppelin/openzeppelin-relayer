@@ -1,15 +1,20 @@
 use crate::{
     models::{ApiResponse, PluginCallRequest, PluginModel},
     repositories::PaginatedResult,
-    services::plugins::{PluginCallResponse, PluginHandlerError},
+    services::plugins::PluginHandlerError,
 };
 
 /// Calls a plugin method.
+///
+/// Logs and traces are only returned when the plugin is configured with `emit_logs` / `emit_traces`.
+/// Plugin-provided errors are normalized into a consistent payload (`code`, `details`) and a derived
+/// message so downstream clients receive a stable shape regardless of how the handler threw.
 #[utoipa::path(
     post,
     path = "/api/v1/plugins/{plugin_id}/call",
     tag = "Plugins",
     operation_id = "callPlugin",
+    summary = "Execute a plugin and receive the sanitized result",
     security(
         ("bearer_auth" = [])
     ),
@@ -21,7 +26,27 @@ use crate::{
         (
             status = 200,
             description = "Plugin call successful",
-            body = ApiResponse<PluginCallResponse>
+            body = ApiResponse<serde_json::Value>,
+            example = json!({
+                "success": true,
+                "data": "done!",
+                "metadata": {
+                    "logs": [
+                        {
+                            "level": "info",
+                            "message": "Plugin started..."
+                        }
+                    ],
+                    "traces": [
+                        {
+                            "method": "sendTransaction",
+                            "relayerId": "sepolia-example",
+                            "requestId": "6c1f336f-3030-4f90-bd99-ada190a1235b"
+                        }
+                    ]
+                },
+                "error": null
+            })
         ),
         (
             status = 400,
@@ -30,7 +55,15 @@ use crate::{
             example = json!({
                 "success": false,
                 "error": "Validation failed",
-                "data": { "code": "VALIDATION_FAILED", "details": { "field": "email" } }
+                "data": { "code": "VALIDATION_FAILED", "details": { "field": "email" } },
+                "metadata": {
+                    "logs": [
+                        {
+                            "level": "error",
+                            "message": "Validation failed for field: email"
+                        }
+                    ]
+                }
             })
         ),
         (

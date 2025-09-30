@@ -104,8 +104,10 @@ impl Modify for SecurityAddon {
         domain::SignTransactionRequest,
         domain::SignTransactionExternalResponse,
         models::PluginCallRequest,
-        plugins::PluginCallResponse,
-        plugins::PluginHandlerError
+        models::PluginMetadata,
+        plugins::PluginHandlerError,
+        plugins::LogEntry,
+        plugins::LogLevel
     ))
 )]
 pub struct ApiDoc;

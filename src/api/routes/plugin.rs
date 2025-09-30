@@ -44,8 +44,7 @@ mod tests {
     async fn mock_plugin_call() -> impl Responder {
         HttpResponse::Ok().json(PluginCallResponse {
             result: serde_json::Value::Null,
-            logs: None,
-            traces: None,
+            metadata: None,
         })
     }
 
@@ -57,7 +56,6 @@ mod tests {
                 timeout: Duration::from_secs(69),
                 emit_logs: false,
                 emit_traces: false,
-                legacy_payload: false,
             },
             PluginModel {
                 id: "test-plugin2".to_string(),
@@ -65,7 +63,6 @@ mod tests {
                 timeout: Duration::from_secs(69),
                 emit_logs: false,
                 emit_traces: false,
-                legacy_payload: false,
             },
         ])
     }

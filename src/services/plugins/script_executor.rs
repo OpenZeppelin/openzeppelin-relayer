@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 
 use super::PluginError;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Log,
@@ -21,7 +21,7 @@ pub enum LogLevel {
     Result,
 }
 
-#[derive(Serialize, Deserialize, Debug, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ToSchema)]
 pub struct LogEntry {
     pub level: LogLevel,
     pub message: String,
@@ -103,25 +103,25 @@ impl ScriptExecutor {
                         .get("details")
                         .cloned()
                         .or_else(|| error_info.get("data").cloned());
-                    return Err(PluginError::HandlerError {
+                    return Err(PluginError::HandlerError(super::PluginHandlerPayload {
                         message,
                         status,
                         code,
                         details,
                         logs: Some(logs),
                         traces: None,
-                    });
+                    }));
                 }
             }
             // Fallback to stderr as error message
-            return Err(PluginError::HandlerError {
+            return Err(PluginError::HandlerError(super::PluginHandlerPayload {
                 message: stderr.to_string(),
                 status: 500,
                 code: None,
                 details: None,
                 logs: Some(logs),
                 traces: None,
-            });
+            }));
         }
 
         Ok(ScriptResult {
@@ -276,15 +276,12 @@ mod tests {
         // Script errors should now return an Err with PluginFailed
         assert!(result.is_err());
 
-        if let Err(PluginError::HandlerError {
-            message, status, ..
-        }) = result
-        {
+        if let Err(PluginError::HandlerError(ctx)) = result {
             // The error will be from our JSON output or raw stderr
             // It should contain error info about the logger issue
-            assert_eq!(status, 500);
+            assert_eq!(ctx.status, 500);
             // The message should contain something about the error
-            assert!(!message.is_empty());
+            assert!(!ctx.message.is_empty());
         } else {
             panic!("Expected PluginError::HandlerError, got: {:?}", result);
         }
@@ -325,18 +322,11 @@ mod tests {
         .await;
 
         match result {
-            Err(PluginError::HandlerError {
-                message,
-                status,
-                code,
-                details,
-                logs: _,
-                traces: _,
-            }) => {
-                assert_eq!(message, "Validation failed");
-                assert_eq!(status, 422);
-                assert_eq!(code.as_deref(), Some("VALIDATION_FAILED"));
-                let d = details.expect("details should be present");
+            Err(PluginError::HandlerError(ctx)) => {
+                assert_eq!(ctx.message, "Validation failed");
+                assert_eq!(ctx.status, 422);
+                assert_eq!(ctx.code.as_deref(), Some("VALIDATION_FAILED"));
+                let d = ctx.details.expect("details should be present");
                 assert_eq!(d["field"].as_str(), Some("email"));
             }
             other => panic!("Expected HandlerError, got: {:?}", other),

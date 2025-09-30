@@ -217,10 +217,20 @@ The parameters are passed directly to your plugin's `handler` function.
 
 == Responses
 
-API responses use the `ApiResponse` envelope: `{ success, data, error }`.
+API responses use the `ApiResponse` envelope: `{ success, data, error, metadata }`.
 
-- Success (HTTP 200): `data` contains `{ result: <your return>, logs?, traces? }`, `error` is null.
-- Plugin error (HTTP 4xx): `error` contains the message; `data` contains `{ code?: string, details?: any }`.
+=== Success responses (HTTP 200)
+
+- `data` contains your handler return value (decoded from JSON when possible).
+- `metadata.logs?` and `metadata.traces?` are only populated if the plugin configuration enables `emit_logs` / `emit_traces`.
+- `error` is `null`.
+
+=== Plugin errors (HTTP 4xx)
+
+- Throwing `pluginError(...)` (or any `Error`) is normalized into a consistent HTTP payload.
+- `error` provides the client-facing message, derived from the thrown error or from log output when the message is empty.
+- `data` carries `{ code?: string, details?: any }` reported by the plugin.
+- `metadata` follows the same visibility rules (`emit_logs` / `emit_traces`).
 
 === Complete Example
 
@@ -312,13 +322,13 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 {
   "success": true,
   "data": {
-    "result": {
-      "transactionId": "tx-123456",
-      "confirmed": true,
-      "note": "Sent 1000000000000000 wei to 0x742d35Cc..."
-    },
+    "transactionId": "tx-123456",
+    "confirmed": true,
+    "note": "Sent 1000000000000000 wei to 0x742d35Cc..."
+  },
+  "metadata": {
     "logs": [ { "level": "info", "message": "🚀 Example plugin started" } ],
-    "traces": [ { "relayer_id": "my-relayer", "method": "sendTransaction", "payload": { /* ... */ } } ]
+    "traces": [ { "relayerId": "my-relayer", "method": "sendTransaction", "payload": { /* ... */ } } ]
   },
   "error": null
 }
@@ -330,15 +340,18 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 {
   "success": false,
   "data": { "code": "MISSING_PARAM", "details": { "field": "destinationAddress" } },
+  "metadata": {
+    "logs": [ { "level": "error", "message": "destinationAddress is required" } ]
+  },
   "error": "destinationAddress is required"
 }
 ----
 
 == Response Fields
 
-- **`data.result`**: The value returned by your plugin's handler function
-- **`data.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when enabled
-- **`data.traces`**: Messages exchanged between the plugin and the Relayer via PluginAPI when enabled
+- **`data`**: The value returned by your plugin's handler function (decoded from JSON when possible)
+- **`metadata.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when `emit_logs` is true
+- **`metadata.traces`**: Messages exchanged between the plugin and the Relayer via PluginAPI when `emit_traces` is true
 - **`error`**: Error message if the plugin execution failed (business errors)
 
 == Key-Value Storage
