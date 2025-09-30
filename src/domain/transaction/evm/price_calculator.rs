@@ -69,7 +69,7 @@ type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
 
 const PRECISION: u128 = 1_000_000_000; // 10^9 (similar to Gwei)
 const MINUTE_AND_HALF_MS: u128 = 90000;
-const BASE_FEE_INCREASE_FACTOR_PERCENT: u128 = 125; // 12.5% increase per block (as percentage * 10)
+const BASE_FEE_INCREASE_RATE: f64 = 1.125; // 12.5% increase per block (1 + 0.125)
 const MAX_BASE_FEE_MULTIPLIER: u128 = 10 * PRECISION; // 10.0 * PRECISION
 
 #[derive(Debug, Clone)]
@@ -694,30 +694,14 @@ where
 fn get_base_fee_multiplier(network: &EvmNetwork) -> u128 {
     let block_interval_ms = network.average_blocktime().map(|d| d.as_millis()).unwrap();
 
-    // Calculate number of blocks (as integer)
-    let n_blocks_int = MINUTE_AND_HALF_MS / block_interval_ms;
+    // Calculate number of blocks in 90 seconds
+    let n_blocks = MINUTE_AND_HALF_MS / block_interval_ms;
 
-    // Calculate number of blocks (fractional part in thousandths)
-    let n_blocks_frac = ((MINUTE_AND_HALF_MS % block_interval_ms) * 1000) / block_interval_ms;
+    // Calculate multiplier: BASE_FEE_INCREASE_RATE^n_blocks
+    let multiplier_f64 = BASE_FEE_INCREASE_RATE.powi(n_blocks as i32);
 
-    // Calculate multiplier using compound interest formula: (1 + r)^n
-    // For integer part: (1 + 0.125)^n_blocks_int
-    let mut multiplier = PRECISION;
-
-    // Calculate (1.125)^n_blocks_int using repeated multiplication
-    for _ in 0..n_blocks_int {
-        multiplier = (multiplier
-            * (PRECISION + (PRECISION * BASE_FEE_INCREASE_FACTOR_PERCENT) / 1000))
-            / PRECISION;
-    }
-
-    // Handle fractional part with linear approximation
-    // For fractional part: approximately 1 + (fraction * 0.125)
-    if n_blocks_frac > 0 {
-        let frac_increase =
-            (n_blocks_frac * BASE_FEE_INCREASE_FACTOR_PERCENT * PRECISION) / (1000 * 1000);
-        multiplier = (multiplier * (PRECISION + frac_increase)) / PRECISION;
-    }
+    // Convert back to fixed-point u128
+    let multiplier = (multiplier_f64 * PRECISION as f64) as u128;
 
     // Apply maximum cap
     std::cmp::min(multiplier, MAX_BASE_FEE_MULTIPLIER)
@@ -988,13 +972,50 @@ mod tests {
     fn test_get_base_fee_multiplier() {
         let mainnet = create_mock_evm_network("mainnet");
         let multiplier = super::get_base_fee_multiplier(&mainnet);
-        // 90s with ~12s blocks = ~7.5 blocks => ~2.4 multiplier
-        assert!(multiplier > 2_300_000_000 && multiplier < 2_500_000_000);
+        // 90s with ~12s blocks = ~7.5 blocks => ~2.28x multiplier (binary exponentiation result)
+        assert!(multiplier > 2_200_000_000 && multiplier < 2_400_000_000);
 
         let optimism = create_mock_evm_network("optimism");
         let multiplier = super::get_base_fee_multiplier(&optimism);
         // 2s block time => ~45 blocks => capped at 10.0
         assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
+    }
+
+    #[test]
+    fn test_get_base_fee_multiplier_overflow_protection() {
+        // Test multiplier cap for fast blockchains
+        let mut test_network = create_mock_evm_network("test");
+
+        // Test with 1ms block time (90000 blocks in 90s) - astronomical multiplier
+        test_network.average_blocktime_ms = 1;
+        let multiplier = super::get_base_fee_multiplier(&test_network);
+        // (1.125)^90000 would be astronomical, capped at 10x
+        assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
+
+        // Test with 100ms block time (900 blocks in 90s) - very large multiplier
+        test_network.average_blocktime_ms = 100;
+        let multiplier = super::get_base_fee_multiplier(&test_network);
+        // (1.125)^900 would be huge, capped at 10x
+        assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
+
+        // Test with 1s block time (90 blocks in 90s) - large multiplier
+        test_network.average_blocktime_ms = 1000;
+        let multiplier = super::get_base_fee_multiplier(&test_network);
+        // (1.125)^90 would be very large, capped at 10x
+        assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
+
+        // Test with 5s block time (18 blocks in 90s, not capped)
+        test_network.average_blocktime_ms = 5000;
+        let multiplier = super::get_base_fee_multiplier(&test_network);
+        // 18 blocks (under cap): (1.125)^18 ≈ 8.33x, should not be capped
+        assert!(multiplier > 8_000_000_000 && multiplier < 9_000_000_000);
+        assert!(multiplier < MAX_BASE_FEE_MULTIPLIER);
+
+        // Test with 10s block time (9 blocks in 90s, not capped)
+        test_network.average_blocktime_ms = 10000;
+        let multiplier = super::get_base_fee_multiplier(&test_network);
+        // 9 blocks (under cap): (1.125)^9 ≈ 2.89x (actual calculation)
+        assert!(multiplier > 2_500_000_000 && multiplier < 3_000_000_000);
     }
 
     #[test]
@@ -1004,10 +1025,9 @@ mod tests {
         let priority_fee = 2_000_000_000u128; // 2 Gwei
 
         let max_fee = super::calculate_max_fee_per_gas(base_fee, priority_fee, &network);
-        println!("max_fee: {:?}", max_fee);
-        // With mainnet's multiplier (~2.4):
-        // base_fee * multiplier + priority_fee ≈ 100 * 2.4 + 2 ≈ 242 Gwei
-        assert!(max_fee > 240_000_000_000 && max_fee < 245_000_000_000);
+        // With mainnet's multiplier (~2.28):
+        // base_fee * multiplier + priority_fee ≈ 100 * 2.28 + 2 ≈ 230 Gwei
+        assert!(max_fee > 225_000_000_000 && max_fee < 235_000_000_000);
     }
 
     #[tokio::test]
