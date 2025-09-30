@@ -69,7 +69,6 @@ type GasPriceCapResult = (Option<u128>, Option<u128>, Option<u128>);
 
 const PRECISION: u128 = 1_000_000_000; // 10^9 (similar to Gwei)
 const MINUTE_AND_HALF_MS: u128 = 90000;
-const MAX_BLOCKS_TO_PREDICT: u128 = 25; // Cap to prevent unrealistic predictions on fast chains
 const BASE_FEE_INCREASE_RATE: f64 = 1.125; // 12.5% increase per block (1 + 0.125)
 const MAX_BASE_FEE_MULTIPLIER: u128 = 10 * PRECISION; // 10.0 * PRECISION
 
@@ -698,11 +697,8 @@ fn get_base_fee_multiplier(network: &EvmNetwork) -> u128 {
     // Calculate number of blocks in 90 seconds
     let n_blocks = MINUTE_AND_HALF_MS / block_interval_ms;
 
-    // Cap at MAX_BLOCKS_TO_PREDICT to prevent unrealistic predictions for fast chains
-    let n_blocks_capped = std::cmp::min(n_blocks, MAX_BLOCKS_TO_PREDICT);
-
     // Calculate multiplier: BASE_FEE_INCREASE_RATE^n_blocks
-    let multiplier_f64 = BASE_FEE_INCREASE_RATE.powi(n_blocks_capped as i32);
+    let multiplier_f64 = BASE_FEE_INCREASE_RATE.powi(n_blocks as i32);
 
     // Convert back to fixed-point u128
     let multiplier = (multiplier_f64 * PRECISION as f64) as u128;
@@ -986,26 +982,26 @@ mod tests {
     }
 
     #[test]
-    fn test_get_base_fee_multiplier_with_cap() {
-        // Test the 25-block cap for different block speeds
+    fn test_get_base_fee_multiplier_overflow_protection() {
+        // Test multiplier cap for fast blockchains
         let mut test_network = create_mock_evm_network("test");
 
-        // Test with 1ms block time (90000 blocks in 90s, capped at 25)
+        // Test with 1ms block time (90000 blocks in 90s) - astronomical multiplier
         test_network.average_blocktime_ms = 1;
         let multiplier = super::get_base_fee_multiplier(&test_network);
-        // Capped at 25 blocks: (1.125)^25 ≈ 19x, capped at 10x
+        // (1.125)^90000 would be astronomical, capped at 10x
         assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
 
-        // Test with 100ms block time (900 blocks in 90s, capped at 25)
+        // Test with 100ms block time (900 blocks in 90s) - very large multiplier
         test_network.average_blocktime_ms = 100;
         let multiplier = super::get_base_fee_multiplier(&test_network);
-        // Capped at 25 blocks: (1.125)^25 ≈ 19x, capped at 10x
+        // (1.125)^900 would be huge, capped at 10x
         assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
 
-        // Test with 1s block time (90 blocks in 90s, capped at 25)
+        // Test with 1s block time (90 blocks in 90s) - large multiplier
         test_network.average_blocktime_ms = 1000;
         let multiplier = super::get_base_fee_multiplier(&test_network);
-        // Capped at 25 blocks: (1.125)^25 ≈ 19x, capped at 10x
+        // (1.125)^90 would be very large, capped at 10x
         assert_eq!(multiplier, MAX_BASE_FEE_MULTIPLIER);
 
         // Test with 5s block time (18 blocks in 90s, not capped)
