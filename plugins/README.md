@@ -36,7 +36,7 @@ export async function handler(context: PluginContext): Promise<Result> {
   await kv.set('last_tx_id', result.id);
 
   await result.wait();
-  return { transactionId: result.id, confirmed: true };
+  return { transactionId: result.id };
 }
 ```
 

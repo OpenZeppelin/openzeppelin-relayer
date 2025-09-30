@@ -104,7 +104,8 @@ where
             }
             Err(e) => {
                 tracing::error!("Plugin error: {:?}", e);
-                Ok(HttpResponse::InternalServerError().json(ApiResponse::<String>::error(e)))
+                Ok(HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("Internal server error")))
             }
         },
     }

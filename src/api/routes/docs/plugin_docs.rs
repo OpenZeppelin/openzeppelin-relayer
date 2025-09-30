@@ -39,7 +39,7 @@ use crate::{
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Unauthorized",
+                "error": "Unauthorized",
                 "data": null
             })
         ),
@@ -49,7 +49,7 @@ use crate::{
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Plugin with ID plugin_id not found",
+                "error": "Plugin with ID plugin_id not found",
                 "data": null
             })
         ),
@@ -59,7 +59,7 @@ use crate::{
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Too Many Requests",
+                "error": "Too Many Requests",
                 "data": null
             })
         ),
@@ -69,7 +69,7 @@ use crate::{
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Internal Server Error",
+                "error": "Internal Server Error",
                 "data": null
             })
         ),
@@ -103,7 +103,7 @@ fn doc_call_plugin() {}
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Bad Request",
+                "error": "Bad Request",
                 "data": null
             })
         ),
@@ -113,7 +113,7 @@ fn doc_call_plugin() {}
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Unauthorized",
+                "error": "Unauthorized",
                 "data": null
             })
         ),
@@ -123,7 +123,7 @@ fn doc_call_plugin() {}
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Plugin with ID plugin_id not found",
+                "error": "Plugin with ID plugin_id not found",
                 "data": null
             })
         ),
@@ -133,7 +133,7 @@ fn doc_call_plugin() {}
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Too Many Requests",
+                "error": "Too Many Requests",
                 "data": null
             })
         ),
@@ -143,7 +143,7 @@ fn doc_call_plugin() {}
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Internal Server Error",
+                "error": "Internal Server Error",
                 "data": null
             })
         ),
