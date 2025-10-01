@@ -95,7 +95,7 @@ Update the `url` field in the notifications section of `config/config.json`. For
 The example plugin is located in `test-plugin/index.ts`. You can modify it or create new plugins following the same pattern:
 
 ```typescript
-import { Speed, PluginAPI } from "@openzeppelin/relayer-sdk";
+import { Speed, PluginContext, pluginError } from "@openzeppelin/relayer-sdk";
 
 type HandlerParams = {
     destinationAddress: string;
@@ -104,8 +104,11 @@ type HandlerParams = {
     relayerId?: string;
 };
 
-export async function handler(api: PluginAPI, params: HandlerParams): Promise<any> {
+export async function handler({ api, params }: PluginContext): Promise<any> {
     // Your plugin logic here
+    if (!params.destinationAddress) {
+        throw pluginError('destinationAddress is required', { status: 400, code: 'MISSING_PARAM', details: { field: 'destinationAddress' } });
+    }
     const relayer = api.useRelayer(params.relayerId || "sepolia-example");
 
     const result = await relayer.sendTransaction({
@@ -117,7 +120,7 @@ export async function handler(api: PluginAPI, params: HandlerParams): Promise<an
     });
 
     await result.wait();
-    return { success: true, transactionId: result.id };
+    return { transactionId: result.id, confirmed: true };
 }
 ```
 
@@ -194,8 +197,9 @@ Use the new `handler` export pattern:
 
 ```typescript
 // ✅ Recommended: New pattern
-export async function handler(api: PluginAPI, params: any): Promise<any> {
-    // Plugin logic
+export async function handler(context: PluginContext): Promise<any> {
+    const { api, params, kv } = context;
+    // Plugin logic with KV access
 }
 
 // ❌ Deprecated: Old pattern
@@ -214,33 +218,26 @@ type MyParams = {
 };
 
 type MyResult = {
-    success: boolean;
     transactionId: string;
-    message: string;
+    confirmed: boolean;
+    note?: string;
 };
 
-export async function handler(api: PluginAPI, params: MyParams): Promise<MyResult> {
+export async function handler({ api, params }: PluginContext): Promise<MyResult> {
     // Implementation
 }
 ```
 
 ### Error Handling
 
-Implement comprehensive error handling:
+Business errors should throw typed errors:
 
 ```typescript
-export async function handler(api: PluginAPI, params: MyParams): Promise<MyResult> {
-    try {
-        // Plugin logic
-        return { success: true, transactionId: result.id, message: "Success" };
-    } catch (error) {
-        console.error("Plugin execution failed:", error);
-        return {
-            success: false,
-            transactionId: "",
-            message: `Failed: ${error.message}`
-        };
+export async function handler({ api, params }: PluginContext): Promise<MyResult> {
+    if (!params.destinationAddress) {
+        throw pluginError('destinationAddress is required', { status: 400, code: 'MISSING_PARAM' });
     }
+    // Plugin logic
 }
 ```
 

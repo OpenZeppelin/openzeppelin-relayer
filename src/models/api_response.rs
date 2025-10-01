@@ -1,11 +1,21 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::services::plugins::LogEntry;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, ToSchema)]
 pub struct PaginationMeta {
     pub current_page: u32,
     pub per_page: u32,
     pub total_items: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, ToSchema)]
+pub struct PluginMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs: Option<Vec<LogEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traces: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -17,6 +27,9 @@ pub struct ApiResponse<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub pagination: Option<PaginationMeta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub metadata: Option<PluginMetadata>,
 }
 
 #[allow(dead_code)]
@@ -27,6 +40,7 @@ impl<T> ApiResponse<T> {
             data,
             error,
             pagination,
+            metadata: None,
         }
     }
 
@@ -36,6 +50,7 @@ impl<T> ApiResponse<T> {
             data: Some(data),
             error: None,
             pagination: None,
+            metadata: None,
         }
     }
 
@@ -45,6 +60,7 @@ impl<T> ApiResponse<T> {
             data: None,
             error: Some(message.into()),
             pagination: None,
+            metadata: None,
         }
     }
 
@@ -54,6 +70,7 @@ impl<T> ApiResponse<T> {
             data: None,
             error: None,
             pagination: None,
+            metadata: None,
         }
     }
 
@@ -63,6 +80,17 @@ impl<T> ApiResponse<T> {
             data: Some(data),
             error: None,
             pagination: Some(meta),
+            metadata: None,
+        }
+    }
+
+    pub fn with_metadata(data: T, metadata: PluginMetadata) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+            pagination: None,
+            metadata: Some(metadata),
         }
     }
 }

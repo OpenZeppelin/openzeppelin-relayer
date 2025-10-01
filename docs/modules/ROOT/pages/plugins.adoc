@@ -37,7 +37,7 @@ This approach uses a simple `handler` export pattern with a single context param
 [source,typescript]
 ----
 /// Required imports.
-import { Speed, PluginContext } from "@openzeppelin/relayer-sdk";
+import { Speed, PluginContext, pluginError } from "@openzeppelin/relayer-sdk";
 
 /// Define your plugin parameters interface
 type MyPluginParams = {
@@ -49,9 +49,9 @@ type MyPluginParams = {
 
 /// Define your plugin return type
 type MyPluginResult = {
-  success: boolean;
   transactionId: string;
-  message: string;
+  confirmed: boolean;
+  note?: string;
 }
 
 /// Export a handler function - that's it!
@@ -61,7 +61,7 @@ export async function handler(context: PluginContext): Promise<MyPluginResult> {
 
     // Validate parameters
     if (!params.destinationAddress) {
-        throw new Error("destinationAddress is required");
+        throw pluginError("destinationAddress is required", { code: 'MISSING_PARAM', status: 400, details: { field: 'destinationAddress' } });
     }
 
     // Use the relayer API
@@ -87,7 +87,6 @@ export async function handler(context: PluginContext): Promise<MyPluginResult> {
     });
 
     return {
-        success: true,
         transactionId: result.id,
         message: `Successfully sent ${params.amount || 1} wei to ${params.destinationAddress}`
     };
@@ -216,14 +215,22 @@ The endpoint accepts a `POST` request. Example post request body:
 
 The parameters are passed directly to your plugin's `handler` function.
 
-== Debugging
+== Responses
 
-When invoking a plugin, the response will include:
+API responses use the `ApiResponse` envelope: `{ success, data, error, metadata }`.
 
-- `logs`: The logs from the plugin execution.
-- `return_value`: The returned value of the plugin execution.
-- `error`: An error message if the plugin execution failed.
-- `traces`: A list of messages sent between the plugin and the Relayer instance. This includes all the payloads passed through the `PluginAPI` object.
+=== Success responses (HTTP 200)
+
+- `data` contains your handler return value (decoded from JSON when possible).
+- `metadata.logs?` and `metadata.traces?` are only populated if the plugin configuration enables `emit_logs` / `emit_traces`.
+- `error` is `null`.
+
+=== Plugin errors (HTTP 4xx)
+
+- Throwing `pluginError(...)` (or any `Error`) is normalized into a consistent HTTP payload.
+- `error` provides the client-facing message, derived from the thrown error or from log output when the message is empty.
+- `data` carries `{ code?: string, details?: any }` reported by the plugin.
+- `metadata` follows the same visibility rules (`emit_logs` / `emit_traces`).
 
 === Complete Example
 
@@ -231,10 +238,9 @@ When invoking a plugin, the response will include:
 
 [source,typescript]
 ----
-import { Speed, PluginContext } from "@openzeppelin/relayer-sdk";
+import { Speed, PluginContext, pluginError } from "@openzeppelin/relayer-sdk";
 
 type ExampleResult = {
-  success: boolean;
   transactionId: string;
   transactionHash: string | null;
   message: string;
@@ -246,10 +252,9 @@ export async function handler(context: PluginContext): Promise<ExampleResult> {
   console.info("🚀 Example plugin started");
   console.info(`📋 Parameters:`, JSON.stringify(params, null, 2));
 
-  try {
-    if (!params.destinationAddress) {
-      throw new Error("destinationAddress is required");
-    }
+  if (!params.destinationAddress) {
+    throw pluginError("destinationAddress is required", { code: 'MISSING_PARAM', status: 400, details: { field: 'destinationAddress' } });
+  }
 
     const amount = params.amount || 1;
     const message = params.message || "Hello from OpenZeppelin Relayer!";
@@ -270,23 +275,12 @@ export async function handler(context: PluginContext): Promise<ExampleResult> {
 
     const confirmation = await result.wait({ interval: 5000, timeout: 120000 });
 
-    return {
-      success: true,
-      transactionId: result.id,
-      transactionHash: confirmation.hash || null,
-      message: `Successfully sent ${amount} wei to ${params.destinationAddress}. ${message}`,
-      timestamp: new Date().toISOString(),
-    };
-  } catch (error) {
-    console.error("❌ Plugin execution failed:", error);
-    return {
-      success: false,
-      transactionId: "",
-      transactionHash: null,
-      message: `Plugin failed: ${(error as Error).message}`,
-      timestamp: new Date().toISOString(),
-    };
-  }
+  return {
+    transactionId: result.id,
+    transactionHash: confirmation.hash || null,
+    message: `Successfully sent ${amount} wei to ${params.destinationAddress}. ${message}`,
+    timestamp: new Date().toISOString(),
+  };
 }
 ----
 
@@ -321,61 +315,44 @@ curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
 }'
 ----
 
-4. **API Response**:
+4. **API Response (Success)**:
 
 [source,json]
 ----
 {
   "success": true,
-  "message": "Plugin called successfully",
-  "logs": [
-    {
-      "level": "info",
-      "message": "🚀 Example plugin started"
-    },
-    {
-      "level": "info",
-      "message": "💰 Sending 1000000000000000 wei to 0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A"
-    },
-    {
-      "level": "info",
-      "message": "✅ Transaction submitted: tx-123456"
-    },
-    {
-      "level": "info",
-      "message": "🎉 Transaction confirmed: 0xabc123..."
-    }
-  ],
-  "return_value": {
-    "success": true,
+  "data": {
     "transactionId": "tx-123456",
-    "transactionHash": "0xabc123def456...",
-    "message": "Successfully sent 1000000000000000 wei to 0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A. Test transaction from plugin",
-    "timestamp": "2024-01-15T10:30:00.000Z"
+    "confirmed": true,
+    "note": "Sent 1000000000000000 wei to 0x742d35Cc..."
   },
-  "error": "",
-  "traces": [
-    {
-      "relayer_id": "my-relayer",
-      "method": "sendTransaction",
-      "payload": {
-        "to": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
-        "value": "1000000000000000",
-        "data": "0x",
-        "gas_limit": 21000,
-        "speed": "fast"
-      }
-    }
-  ]
+  "metadata": {
+    "logs": [ { "level": "info", "message": "🚀 Example plugin started" } ],
+    "traces": [ { "relayerId": "my-relayer", "method": "sendTransaction", "payload": { /* ... */ } } ]
+  },
+  "error": null
+}
+
+5. **API Response (Error)**:
+
+[source,json]
+----
+{
+  "success": false,
+  "data": { "code": "MISSING_PARAM", "details": { "field": "destinationAddress" } },
+  "metadata": {
+    "logs": [ { "level": "error", "message": "destinationAddress is required" } ]
+  },
+  "error": "destinationAddress is required"
 }
 ----
 
 == Response Fields
 
-- **`logs`**: Terminal output from the plugin (console.log, console.error, etc.)
-- **`return_value`**: The value returned by your plugin's handler function
-- **`error`**: Error message if the plugin execution failed
-- **`traces`**: Messages exchanged between the plugin and the Relayer instance via PluginAPI
+- **`data`**: The value returned by your plugin's handler function (decoded from JSON when possible)
+- **`metadata.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when `emit_logs` is true
+- **`metadata.traces`**: Messages exchanged between the plugin and the Relayer via PluginAPI when `emit_traces` is true
+- **`error`**: Error message if the plugin execution failed (business errors)
 
 == Key-Value Storage
 

@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 
 use super::PluginError;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Log,
@@ -21,7 +21,7 @@ pub enum LogLevel {
     Result,
 }
 
-#[derive(Serialize, Deserialize, Debug, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ToSchema)]
 pub struct LogEntry {
     pub level: LogLevel,
     pub message: String,
@@ -81,6 +81,48 @@ impl ScriptExecutor {
 
         let (logs, return_value) =
             Self::parse_logs(stdout.lines().map(|l| l.to_string()).collect())?;
+
+        // Check if the script failed (non-zero exit code)
+        if !output.status.success() {
+            // Try to parse error info from stderr
+            if let Some(error_line) = stderr.lines().find(|l| !l.trim().is_empty()) {
+                if let Ok(error_info) = serde_json::from_str::<serde_json::Value>(error_line) {
+                    let message = error_info["message"]
+                        .as_str()
+                        .unwrap_or(&stderr)
+                        .to_string();
+                    let status = error_info
+                        .get("status")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(500) as u16;
+                    let code = error_info
+                        .get("code")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let details = error_info
+                        .get("details")
+                        .cloned()
+                        .or_else(|| error_info.get("data").cloned());
+                    return Err(PluginError::HandlerError(super::PluginHandlerPayload {
+                        message,
+                        status,
+                        code,
+                        details,
+                        logs: Some(logs),
+                        traces: None,
+                    }));
+                }
+            }
+            // Fallback to stderr as error message
+            return Err(PluginError::HandlerError(super::PluginHandlerPayload {
+                message: stderr.to_string(),
+                status: 500,
+                code: None,
+                details: None,
+                logs: Some(logs),
+                traces: None,
+            }));
+        }
 
         Ok(ScriptResult {
             logs,
@@ -231,16 +273,65 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok());
+        // Script errors should now return an Err with PluginFailed
+        assert!(result.is_err());
 
-        let result = result.unwrap();
-
-        // TypeScript compilation errors are now returned in the error field
-        assert!(!result.error.is_empty());
-        assert!(result.error.contains("Plugin executor failed"));
-        assert!(result.error.contains("logger"));
+        if let Err(PluginError::HandlerError(ctx)) = result {
+            // The error will be from our JSON output or raw stderr
+            // It should contain error info about the logger issue
+            assert_eq!(ctx.status, 500);
+            // The message should contain something about the error
+            assert!(!ctx.message.is_empty());
+        } else {
+            panic!("Expected PluginError::HandlerError, got: {:?}", result);
+        }
     }
 
+    #[tokio::test]
+    async fn test_execute_typescript_handler_json_error() {
+        let temp_dir = tempdir().unwrap();
+        let ts_config = temp_dir.path().join("tsconfig.json");
+        let script_path = temp_dir
+            .path()
+            .join("test_execute_typescript_handler_json_error.ts");
+        let socket_path = temp_dir
+            .path()
+            .join("test_execute_typescript_handler_json_error.sock");
+
+        // This handler throws an error with code/status/details; our executor should capture
+        // and emit a normalized JSON error to stderr which the Rust side parses.
+        let content = r#"
+            export async function handler(_api: any, _params: any) {
+                const err: any = new Error('Validation failed');
+                err.code = 'VALIDATION_FAILED';
+                err.status = 422;
+                err.details = { field: 'email' };
+                throw err;
+            }
+        "#;
+        fs::write(&script_path, content).unwrap();
+        fs::write(&ts_config, TS_CONFIG.as_bytes()).unwrap();
+
+        let result = ScriptExecutor::execute_typescript(
+            "test-plugin-json-error".to_string(),
+            script_path.display().to_string(),
+            socket_path.display().to_string(),
+            "{}".to_string(),
+            None,
+        )
+        .await;
+
+        match result {
+            Err(PluginError::HandlerError(ctx)) => {
+                assert_eq!(ctx.message, "Validation failed");
+                assert_eq!(ctx.status, 422);
+                assert_eq!(ctx.code.as_deref(), Some("VALIDATION_FAILED"));
+                let d = ctx.details.expect("details should be present");
+                assert_eq!(d["field"].as_str(), Some("email"));
+            }
+            other => panic!("Expected HandlerError, got: {:?}", other),
+        }
+    }
     #[tokio::test]
     async fn test_parse_logs_error() {
         let temp_dir = tempdir().unwrap();

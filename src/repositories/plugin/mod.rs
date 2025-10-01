@@ -136,6 +136,8 @@ impl TryFrom<PluginFileConfig> for PluginModel {
             id: config.id.clone(),
             path: config.path.clone(),
             timeout,
+            emit_logs: config.emit_logs,
+            emit_traces: config.emit_traces,
         })
     }
 }
@@ -159,6 +161,8 @@ mod tests {
             id: "test-plugin".to_string(),
             path: "test-path".to_string(),
             timeout: None,
+            emit_logs: false,
+            emit_traces: false,
         };
         let result = PluginModel::try_from(plugin);
         assert!(result.is_ok());
@@ -168,6 +172,8 @@ mod tests {
                 id: "test-plugin".to_string(),
                 path: "test-path".to_string(),
                 timeout: Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS),
+                emit_logs: false,
+                emit_traces: false,
             }
         );
     }
@@ -178,6 +184,8 @@ mod tests {
             id: id.to_string(),
             path: path.to_string(),
             timeout: Duration::from_secs(30),
+            emit_logs: false,
+            emit_traces: false,
         }
     }
 

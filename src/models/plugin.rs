@@ -12,6 +12,12 @@ pub struct PluginModel {
     /// Plugin timeout
     #[schema(value_type = u64)]
     pub timeout: Duration,
+    /// Whether to include logs in the HTTP response
+    #[serde(default)]
+    pub emit_logs: bool,
+    /// Whether to include traces in the HTTP response
+    #[serde(default)]
+    pub emit_traces: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
